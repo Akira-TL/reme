@@ -4,10 +4,10 @@ Reme is a privacy-first care agent that aims to preserve a person's dignity whil
 
 ## MVP hypothesis
 
-An existing camera can provide useful care signals without exposing the full scene to family members:
+Derived human-motion data can provide useful care signals without exposing the full scene to family members:
 
-1. Process the camera feed locally.
-2. Replace the person with a skeleton or abstract avatar.
+1. Extract normalized pose or motion data from an offline source.
+2. Keep raw video outside the core event and decision pipeline.
 3. Detect a small set of event candidates, beginning with fall-like motion and prolonged inactivity.
 4. Emit a structured event payload.
 5. Let a decision agent choose whether to ask the person, notify family, or escalate.
@@ -38,14 +38,24 @@ Discovery and technical validation. The repository intentionally starts small so
 uv sync --extra dev
 uv run pytest
 uv run ruff check .
+uv run mypy src
 ```
+
+Run the deterministic motion-data demo:
+
+```bash
+uv run reme-demo --scenario fall-no-response
+uv run reme-demo --input examples/motion/fall_like.jsonl --response no_response
+```
+
+The JSONL exchange format is documented in `docs/motion-data-format.md`.
 
 ## Immediate milestone
 
-Build a laptop-webcam tracer bullet:
+Build a motion-data tracer bullet:
 
 ```text
-camera frame -> pose landmarks -> privacy view -> event candidate JSON -> decision stub
+motion data -> pose observations -> event candidate JSON -> staged decision
 ```
 
-Success means the pipeline runs locally, its latency is measured, raw frames are not persisted, and at least one scripted event can be reproduced reliably enough for a live demo.
+Success means the pipeline runs locally from JSON/JSONL motion data, creates no raw-media artifacts, and reproduces at least one fall-like event and response sequence. A later adapter will extract the same observation format from the team-supplied offline video.

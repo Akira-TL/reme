@@ -12,6 +12,9 @@ license = { text = "Proprietary" }
 authors = [{ name = "Reme Team" }]
 dependencies = []
 
+[project.scripts]
+reme-demo = "reme.demo:entrypoint"
+
 [project.optional-dependencies]
 dev = [
   "mypy>=1.14",

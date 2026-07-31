@@ -4,9 +4,9 @@ Date: 2026-08-01
 
 ## Current product statement
 
-Reme is a privacy-first care agent that turns a local camera feed into a skeleton-based privacy view, emits structured event candidates, and uses a decision layer to choose a staged response.
+Reme is a privacy-first care agent that consumes derived human-motion data, emits structured event candidates, and uses a decision layer to choose a staged response.
 
-Primary demo scenario: one older adult, one indoor camera, one reproducible fall-like event.
+Primary demo scenario: one older adult, one offline motion sequence, one reproducible fall-like event. A team-supplied human video will later be used by a separate video-to-motion adapter.
 
 ## Decisions already made
 
@@ -16,8 +16,9 @@ Primary demo scenario: one older adult, one indoor camera, one reproducible fall
 - Use `AGENTS.md` for agent instructions.
 - Use local Markdown files under `.scratch/` for specs, tickets, handoffs, and investigation logs.
 - Use a single root `CONTEXT.md` and root `docs/adr/`.
-- Begin with Python and a small event contract; add CV dependencies only after the pose-model spike chooses them.
-- Keep raw video local and ephemeral in the MVP.
+- Begin with Python and a small event contract; add CV dependencies only for the later offline video-to-motion adapter.
+- Keep raw video outside the core event and decision pipeline.
+- Do not use a live camera in the MVP; use motion data as the stable input contract.
 
 ## Ask Matt routing decision
 
@@ -26,35 +27,42 @@ This effort is greenfield, but the hackathon destination and primary user story 
 Recommended route:
 
 1. `grill-with-docs` to settle the MVP acceptance criteria and demo story.
-2. `handoff` into a fresh prototype session for the runnable uncertainty.
-3. `prototype` a laptop-webcam pipeline and measure candidate pose models.
-4. `handoff` the findings back into the product thread.
+2. Implement a narrow motion-data tracer bullet to settle the event and decision interfaces.
+3. Use the supplied offline human video to prototype and measure a video-to-motion adapter.
+4. Fold the adapter findings back into the product thread.
 5. `to-spec`, then `to-tickets` because the build spans multiple sessions and owners.
 6. Run `implement` per ticket, blockers first, with tests for deterministic logic.
 
 ## First runnable question
 
-Can a laptop webcam produce a stable privacy skeleton and a reproducible fall-like event candidate at demo-acceptable latency, without writing raw frames to disk?
+Can normalized motion data produce a transparent and reproducible fall-like event candidate and staged response without raw media entering the core pipeline?
 
 ## Prototype acceptance evidence
 
 Record all results rather than relying on impressions:
 
+For the motion-data core:
+
+- exact JSONL schema and fixture;
+- deterministic normal, fall-like, safe-response, no-response, and low-visibility results;
+- whether any raw-media files or network requests are created.
+
+For the later video adapter:
+
 - model and version;
-- machine and camera used;
+- machine and supplied source video;
 - average and p95 frame latency;
-- approximate frames per second;
+- approximate processing frames per second;
 - CPU and memory observations;
 - behaviour under partial occlusion;
-- false triggers during scripted stand/sit/lie sequences;
-- whether the privacy view leaks raw scene pixels;
-- whether any frame files or network requests are created.
+- false triggers during annotated stand/sit/lie/fall-like sequences;
+- whether any decoded frame files or network requests are created.
 
 ## Questions for the next `grill-with-docs` session
 
-1. What exact 60–90 second live demo should the judges see?
-2. Is laptop execution sufficient for judging, or must Raspberry Pi 4B execution be demonstrated?
-3. What response should follow a possible fall in the demo: local voice check, family notification, or both?
-4. Which MiMo capability must be real rather than mocked?
-5. What is the minimum successful result if fall classification is unreliable?
-6. Which claims are safe to make in the presentation, and which need measured evidence first?
+1. The first 60–90 second demo uses motion data rather than a live camera.
+2. Raspberry Pi 4B compatibility remains unclaimed until measured.
+3. A possible fall triggers local check-in, then family notification after no response.
+4. MiMo capability remains a later integration decision; deterministic safety policy is authoritative for the MVP.
+5. If offline video extraction is unreliable, the truthful fallback is the derived-motion pipeline with the adapter marked unavailable.
+6. Accuracy, latency, and hardware claims require measured evidence before entering the presentation.

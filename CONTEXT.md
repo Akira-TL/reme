@@ -8,13 +8,13 @@ The product value is not "a clearer camera." It is the minimum observation neede
 
 ## Primary user story
 
-A family member wants to know whether an older adult living alone is safe. The older adult should not need to expose clothing, body details, facial expression, or the full state of the room during routine monitoring.
+A family member wants to know whether an older adult living alone is safe. The older adult should not need to expose clothing, body details, facial expression, or the full state of the room during routine monitoring. The core system therefore consumes derived motion data rather than raw video.
 
 ## Core terms
 
-### Raw frame
+### Raw media
 
-An unmodified image from a camera. Raw frames are sensitive data and remain local by default. The MVP does not persist them.
+An unmodified video or image source. Raw media is sensitive data and remains outside the core event and decision pipeline. The MVP does not persist extracted raw frames.
 
 ### Privacy view
 
@@ -22,7 +22,7 @@ A derived visual representation that removes appearance and scene detail while r
 
 ### Observation
 
-A time-stamped machine-readable description produced by perception, such as body landmarks, pose state, motion features, and confidence. An observation is not yet a safety conclusion.
+A time-stamped machine-readable description produced from motion data, such as pose state, body geometry, motion features, and visibility. An observation is not yet a safety conclusion.
 
 ### Event candidate
 
@@ -42,10 +42,10 @@ A staged response that increases only when evidence or lack of response warrants
 
 ## MVP boundary
 
-The MVP targets one person in one indoor camera view and demonstrates:
+The MVP targets one person in one offline motion sequence and demonstrates:
 
-- local pose extraction;
-- privacy-view rendering;
+- normalized motion-data ingestion;
+- privacy-preserving pose representation;
 - one reproducible fall-like event;
 - one prolonged-inactivity event if time permits;
 - structured event output;
@@ -65,10 +65,10 @@ The MVP targets one person in one indoor camera view and demonstrates:
 
 ## Open decisions
 
-1. Which pose model gives acceptable laptop performance and can later run on Raspberry Pi 4B?
+1. Which offline pose extractor best converts the supplied human video into the motion-observation contract?
 2. Is a blank-background skeleton sufficient, or must the scene also be abstracted for spatial context?
 3. Which measurements define a fall-like event in the demo without pretending to be clinically validated?
-4. What exact JSON contract connects perception to the decision agent?
+4. What exact JSON contract connects motion observations to the decision agent?
 5. Which actions should MiMo decide, and which must remain deterministic safety policy?
-6. How will the demo prove that raw frames are not stored or uploaded?
-7. What is the fallback when the body is occluded or pose confidence is low?
+6. How will the demo prove that raw video remains outside event and decision processing?
+7. What is the fallback when motion data is incomplete, occluded, or low visibility?

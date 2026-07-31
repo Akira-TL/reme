@@ -2,7 +2,7 @@
 
 ## Project intent
 
-Reme is a privacy-first care agent for home monitoring. The MVP should prove that an existing camera feed can be transformed into a privacy-preserving skeleton view, converted into structured event candidates, and passed to a decision layer that chooses an appropriate response.
+Reme is a privacy-first care agent for home monitoring. The MVP should prove that derived human-motion data can be converted into structured event candidates and passed to a decision layer that chooses an appropriate response. Offline video extraction is an adapter, not a dependency of the core pipeline.
 
 The primary scenario is an older adult living alone or spending time alone at home. Other scenarios are extensions, not the MVP narrative.
 
@@ -16,7 +16,7 @@ The primary scenario is an older adult living alone or spending time alone at ho
 ## Engineering rules
 
 - Prefer a thin end-to-end tracer bullet over isolated subsystems.
-- Keep raw video local by default. Do not add cloud upload or persistent raw-video storage without an explicit ADR.
+- Keep raw video outside the core event and decision pipeline. Do not add cloud upload or persistent raw-video storage without an explicit ADR.
 - Never invent accuracy, latency, supported-behaviour, or privacy claims. Record measured results and test conditions.
 - Separate perception from decision-making: vision produces structured observations; the decision agent chooses actions.
 - Keep event schemas explicit, versioned, and testable.
