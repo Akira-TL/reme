@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local models, recordings, and generated data
+models/
+recordings/
+data/raw/
+artifacts/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# CodeGraph local index
+.codegraph/
