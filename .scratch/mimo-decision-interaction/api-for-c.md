@@ -1,0 +1,77 @@
+# B 决策服务 · 给 C 的接入文档
+
+- 服务：`reme-decision-server`（stdlib，零依赖），默认 `127.0.0.1:8100`
+- 合同：`reme-care-decision/v0-experiment` / `reme-interaction-response/v0-experiment`（唯一出处 `.scratch/abc-interface/spec.md` §10/§11；本文只讲怎么调）
+- 启动（live 模式，key 在服务端环境变量，不进浏览器）：
+
+```bash
+source ~/.config/reme/mimo.env
+uv run reme-decision-server <scenes目录> --static <C构建产物目录> \
+  --cert certs/lan.pem --key certs/lan-key.pem
+```
+
+`<scenes目录>` 下每个子目录是一个 SceneBundle（含 manifest.json）。`--mode mock|record` 切模式；`--record-output` 在 live 上捕获 `recorded_decisions.jsonl`；`--visual` 启用 ADR-0003 V 路径（bundle 需有 `derived/visual_context.mp4`，用 `uv run reme-visual-precut <manifest> --start-ms … --end-ms …` 预剪）。
+
+## 端点
+
+### `POST /api/decision` — 拉取当前决策（C 的 getCareDecision）
+
+```bash
+curl -s localhost:8100/api/decision -H 'Content-Type: application/json' \
+  -d '{"scene_id":"fall_demo_01","timestamp_ms":13000}'
+```
+
+返回完整 CareDecision JSON（合同 §10 全字段）。**幂等语义**：同一会话阶段内重复调用返回**同一 `decision_id`**（C 按 id 去重渲染即可、可随播放进度轮询）；只有状态变迁才产生新 id。`timestamp_ms` 是视频毫秒偏移；大幅回退（>3s）而未 reset 会得到 409 `timeline_rewind`——seek 前先调 reset。
+
+### `POST /api/response` — 提交回应，返回下一条决策（submitInteractionResponse）
+
+```bash
+curl -s localhost:8100/api/response -H 'Content-Type: application/json' \
+  -d '{"schema_version":"reme-interaction-response/v0-experiment","scene_id":"fall_demo_01",
+       "decision_id":"decision-0001","timestamp_ms":21000,"response":"none",
+       "source":"timeout","demo_mode":"live","text":null}'
+```
+
+要点：`decision_id` 必须是触发本次询问的那条决策；倒计时由 C 按 `response_timeout_ms`（相对毫秒）渲染，超时提交 `response=none, source=timeout`；老人原话放 `text`（仅 `user_input|script` 可非空）；家属确认行动卡用 `response=card_confirmed, source=family_input`。
+
+### `POST /api/scene/reset` — 重置场景会话
+
+`{"scene_id":"fall_demo_01"}`。切场景、seek、重跑演示前调用。
+
+### `GET /api/health` — 模式与各场景流完备性
+
+### `GET /scenes/<scene_id>/<相对路径>` — bundle 静态资产
+
+mp4 支持 Range（手机浏览器可拖进度条）。C 用它取 manifest/media/各 jsonl，同源无 CORS。`GET /` 伺服 `--static` 目录（C 的构建产物）。
+
+## 错误约定
+
+统一 `{"error":{"code":…,"message":…}}`：
+
+| HTTP | code | C 的处理 |
+|---|---|---|
+| 400 | bad_json / bad_request | 修请求 |
+| 404 | unknown_scene / not_found | 检查 scene_id |
+| 409 | stale_decision | 丢弃本地旧决策，重新 `POST /api/decision` |
+| 409 | timeline_rewind | 先 reset 再继续 |
+| 409 | episode_resolved | 本场景剧终，reset 或换场景 |
+| 422 | invalid_response | 当前阶段不接受该回应枚举（如无 consent 挂起时发 consent_granted） |
+| 422 | no_pending_decision | 先 `POST /api/decision` |
+| 422 | contract_violation | 回应载荷不合合同（message 里有具体字段） |
+
+**degraded 约定**：收到 `state=degraded, fallback_used=true` 表示 MiMo 暂不可用——会话停在原地、原 pending 决策仍有效；C 明确展示降级状态（不伪装在线），可切 `--mode mock` 重启服务或稍后**用同一 decision_id 重发同一回应**继续。
+
+## 附录：mkcert HTTPS（手机摄像头硬前提）
+
+手机浏览器只在安全上下文开放 `getUserMedia`；`http://内网IP` 不算。一次性配置：
+
+```bash
+brew install mkcert && mkcert -install
+mkdir -p certs && cd certs
+mkcert -cert-file lan.pem -key-file lan-key.pem localhost 127.0.0.1 $(ipconfig getifaddr en0)
+```
+
+- 证书 SAN 里必须含笔记本的热点/局域网 IP（上面命令已带）；换网络后 IP 变了要重签。
+- 演示手机装 CA：`mkcert -CAROOT` 找到 `rootCA.pem` 传到手机——Android：设置→安全→安装证书（CA）；iOS：AirDrop 后 设置→已下载描述文件→安装，再到 通用→关于本机→证书信任设置 打开开关。**优先用 Android 演示机**。
+- 兜底：评委机/电脑直接开 `https://localhost:8100`（或明文 `http://127.0.0.1:8100`，localhost 天然是安全上下文）。
+- 评委扫码看页面可以承诺；评委自有手机调摄像头不承诺（他们没装我们的 CA）。
