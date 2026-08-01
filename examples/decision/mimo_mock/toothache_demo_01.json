@@ -1,0 +1,55 @@
+{
+  "compose_check_in": {
+    "state": "check_in_required",
+    "risk_level": 2,
+    "need_dialogue": true,
+    "dialogue_goal": "understand_need",
+    "elder_message": "王奶奶，坐了挺久啦，今天午饭吃得还顺口吗？",
+    "family_notification": null,
+    "consent_required": false,
+    "reason_summary": "长时间静坐，例行轻量问候",
+    "uncertainty": "medium",
+    "privacy_mode": null,
+    "action_card": null
+  },
+  "interpret_response": {
+    "state": "consent_required",
+    "risk_level": 2,
+    "need_dialogue": true,
+    "dialogue_goal": "request_consent",
+    "elder_message": "王奶奶，要不要把牙疼的事告诉家人，让他们帮您约个牙科？",
+    "family_notification": null,
+    "consent_required": true,
+    "reason_summary": "主诉牙疼影响进食，非紧急，先征求授权",
+    "uncertainty": "medium",
+    "privacy_mode": null,
+    "action_card": {
+      "event": "长时间静坐 + 主诉牙疼",
+      "elder_quote": "牙疼，饭咬不动。",
+      "system_judgment": "疑似口腔问题影响进食，非紧急",
+      "suggested_action": "本周内预约口腔科检查",
+      "time_window": "3 天内",
+      "status": "pending"
+    }
+  },
+  "compose_card": {
+    "state": "family_notification_required",
+    "risk_level": 3,
+    "need_dialogue": true,
+    "dialogue_goal": null,
+    "elder_message": "王奶奶，好的，我已经把这件事告诉家人了。",
+    "family_notification": "老人主诉牙疼、进食困难，已同意告知家人，请尽快帮忙安排口腔科检查并确认行动卡。",
+    "consent_required": false,
+    "reason_summary": "老人已授权，生成家人行动卡",
+    "uncertainty": "low",
+    "privacy_mode": null,
+    "action_card": {
+      "event": "长时间静坐 + 主诉牙疼",
+      "elder_quote": "牙疼，饭咬不动。",
+      "system_judgment": "疑似口腔问题影响进食，非紧急",
+      "suggested_action": "本周内预约口腔科检查",
+      "time_window": "3 天内",
+      "status": "pending"
+    }
+  }
+}
