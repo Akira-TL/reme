@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from reme.pose.scene_bundle import SceneManifest, load_scene_manifest
 
@@ -224,6 +224,23 @@ def load_transition_events(
     return tuple(events)
 
 
+class PerceptionStreams(Protocol):
+    """What the context builder needs from any stream source.
+
+    Satisfied by :class:`SceneStreams` (prerecorded bundles) and by the live
+    ingest's ``LiveStreams`` snapshot — the decision layer treats both alike.
+    """
+
+    @property
+    def scene_id(self) -> str: ...
+
+    @property
+    def postures(self) -> tuple[PostureObservation, ...]: ...
+
+    @property
+    def transitions(self) -> tuple[TransitionEvent, ...]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SceneStreams:
     """A's validated perception streams for one scene."""
@@ -282,7 +299,7 @@ class DecisionContext:
 
 
 def build_decision_context(
-    streams: SceneStreams,
+    streams: PerceptionStreams,
     *,
     timestamp_ms: float,
     transition_grace_ms: float = DEFAULT_TRANSITION_GRACE_MS,

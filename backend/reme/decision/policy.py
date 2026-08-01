@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -22,6 +22,7 @@ from typing import Any, Protocol
 from reme.decision.audit import AuditLog
 from reme.decision.context import (
     DecisionContext,
+    PerceptionStreams,
     SceneStreams,
     build_decision_context,
 )
@@ -67,6 +68,12 @@ class DecisionRejectedError(ValueError):
 
 class UnknownSceneError(KeyError):
     """Raised when a scene_id has no loaded bundle."""
+
+
+class DecisionPublisher(Protocol):
+    """Pushes newly emitted decisions onto the runtime event stream (§14)."""
+
+    def publish_decision(self, decision: CareDecision) -> None: ...
 
 
 class MimoDecisionClient(Protocol):
@@ -250,11 +257,15 @@ class DecisionService:
         config: PolicyConfig,
         mimo: MimoDecisionClient | None = None,
         audit: AuditLog | None = None,
+        publisher: DecisionPublisher | None = None,
+        live_streams: Callable[[str], PerceptionStreams | None] | None = None,
     ) -> None:
         self._scenes = dict(scenes)
         self._config = config
         self._mimo = mimo
         self._audit = audit
+        self._publisher = publisher
+        self._live_streams = live_streams
         self._lock = threading.Lock()
         self._runtimes: dict[str, _SceneRuntime] = {}
         self._replays: dict[str, tuple[CareDecision, ...]] = {}
@@ -267,7 +278,12 @@ class DecisionService:
         return tuple(sorted(self._scenes))
 
     def scene_streams(self, scene_id: str) -> SceneStreams:
-        return self._streams(scene_id)
+        """Bundle-backed streams only (assets/health); live scenes raise."""
+
+        try:
+            return self._scenes[scene_id]
+        except KeyError as exc:
+            raise UnknownSceneError(scene_id) from exc
 
     def get_decision(self, *, scene_id: str, timestamp_ms: float) -> CareDecision:
         """Evaluate the scene at one video timestamp and return the live decision."""
@@ -280,18 +296,23 @@ class DecisionService:
         )
         with self._lock:
             runtime = self._runtime(scene_id)
+            previous_id = None if runtime.pending is None else runtime.pending.decision_id
             directive = on_tick(runtime.session, context, config=self._config.trigger)
             outcome = self._commit_rule_directive(runtime, directive, timestamp_ms)
-            if outcome is not None:
-                return outcome
-            snapshot = (runtime.epoch, runtime.session)
-        return self._run_mimo_transition(
+            if outcome is None:
+                snapshot = (runtime.epoch, runtime.session)
+        if outcome is not None:
+            self._publish(outcome, previous_id)
+            return outcome
+        decision = self._run_mimo_transition(
             scene_id,
             directive,
             timestamp_ms,
             snapshot,
             elder_text=None,
         )
+        self._publish(decision, previous_id)
+        return decision
 
     def submit_response(self, response: InteractionResponse) -> CareDecision:
         """Apply one InteractionResponse and return the next decision."""
@@ -301,18 +322,23 @@ class DecisionService:
             return self._replay_advance(response.scene_id, response.decision_id)
         with self._lock:
             runtime = self._runtime(response.scene_id)
+            previous_id = None if runtime.pending is None else runtime.pending.decision_id
             directive = on_response(runtime.session, response, config=self._config.trigger)
             outcome = self._commit_rule_directive(runtime, directive, response.timestamp_ms)
-            if outcome is not None:
-                return outcome
-            snapshot = (runtime.epoch, runtime.session)
-        return self._run_mimo_transition(
+            if outcome is None:
+                snapshot = (runtime.epoch, runtime.session)
+        if outcome is not None:
+            self._publish(outcome, previous_id)
+            return outcome
+        decision = self._run_mimo_transition(
             response.scene_id,
             directive,
             response.timestamp_ms,
             snapshot,
             elder_text=response.text,
         )
+        self._publish(decision, previous_id)
+        return decision
 
     def reset_scene(self, scene_id: str) -> None:
         """Forget the episode state so the scene can replay from the top."""
@@ -333,11 +359,29 @@ class DecisionService:
 
     # -- shared plumbing ----------------------------------------------------
 
-    def _streams(self, scene_id: str) -> SceneStreams:
+    def _streams(self, scene_id: str) -> PerceptionStreams:
         try:
             return self._scenes[scene_id]
         except KeyError as exc:
+            if self._live_streams is not None:
+                live = self._live_streams(scene_id)
+                if live is not None:
+                    return live
             raise UnknownSceneError(scene_id) from exc
+
+    def _publish(self, decision: CareDecision, previous_id: str | None) -> None:
+        """Push a newly emitted decision to the runtime stream, best-effort.
+
+        Duplicate pushes are possible on rare CAS races; C de-duplicates by
+        decision_id (documented in the C-facing API notes).
+        """
+
+        if self._publisher is None or decision.decision_id == previous_id:
+            return
+        try:
+            self._publisher.publish_decision(decision)
+        except Exception as exc:  # noqa: BLE001 - stream must never break decisions
+            print(f"warning: decision publish failed: {exc}")
 
     def _runtime(self, scene_id: str) -> _SceneRuntime:
         runtime = self._runtimes.get(scene_id)
@@ -468,6 +512,9 @@ class DecisionService:
         if not self._config.visual_enabled:
             return None
         streams = self._streams(scene_id)
+        if not isinstance(streams, SceneStreams):
+            # Live scenes have no bundle to pre-cut from.
+            return None
         asset = load_visual_asset(streams.manifest.path.parent)
         if asset is None:
             return None
@@ -694,7 +741,10 @@ class DecisionService:
             # Degraded notices are not committed session states; replaying one
             # would wedge the recorded timeline (Codex review P2).
             return
-        streams = self._scenes[decision.scene_id]
+        streams = self._scenes.get(decision.scene_id)
+        if streams is None:
+            # Live scenes have no bundle directory to capture into.
+            return
         target = streams.manifest.path.parent / "recorded_decisions.jsonl"
         try:
             append_recorded_decision(target, decision)
