@@ -72,8 +72,11 @@ def parse_session_request(payload: object) -> RuntimeSessionRequest:
         raise SessionRegistryError(
             "bad_request", f"schema_version must be {REQUEST_SCHEMA_VERSION!r}"
         )
+    profile_raw = payload.get("profile")
+    if not isinstance(profile_raw, str):
+        raise SessionRegistryError("bad_request", "profile must be a string")
     try:
-        profile = ModeProfile(payload.get("profile"))
+        profile = ModeProfile(profile_raw)
     except ValueError as exc:
         raise SessionRegistryError(
             "bad_request", f"profile must be one of {[p.value for p in ModeProfile]}"
