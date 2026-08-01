@@ -73,8 +73,15 @@ _VISUAL_ADDENDUM = (
 )
 
 
+_CONTEXT_ADDENDUM = (
+    "\n6. 附加的【行为特征】【长期记忆】【居家上下文】是系统整理的既定观察："
+    "用它们判断行为目的与轻重缓急，可自然延续记忆中的关怀话题，"
+    "但不得罗列监控细节，不得据此下诊断或编造记忆里没有的事。"
+)
+
+
 def build_system_prompt(
-    task: MimoTask, *, persona: PersonaConfig, visual: bool = False
+    task: MimoTask, *, persona: PersonaConfig, visual: bool = False, context_aware: bool = False
 ) -> str:
     """Assemble the per-task system prompt."""
 
@@ -96,7 +103,7 @@ def build_system_prompt(
         "可空字段没有内容时用 null（不是空字符串），不要输出任何解释文字或代码块围栏。",
         "输出字段定义：\n"
         f"- state: {_TASK_STATES[task]}\n"
-        "- risk_level: 0..4 的整数（state 为 \"consent_required\" 时必须为 2）\n"
+        '- risk_level: 0..4 的整数（state 为 "consent_required" 时必须为 2）\n'
         "- need_dialogue: true | false\n"
         '- dialogue_goal: "confirm_safety" | "understand_need" | "request_consent" | null\n'
         f"- elder_message: 对老人说的一句话（口语、简短、以「{persona.elder_name}」开头）| null\n"
@@ -113,6 +120,8 @@ def build_system_prompt(
     ]
     if visual:
         sections[2] += _VISUAL_ADDENDUM
+    if context_aware:
+        sections[2] += _CONTEXT_ADDENDUM
     return "\n\n".join(sections)
 
 
@@ -122,14 +131,23 @@ def build_user_prompt(
     perception_summary: Mapping[str, object],
     interaction_summary: Mapping[str, object],
     elder_text: str | None,
+    context_sections: Mapping[str, str] | None = None,
 ) -> str:
-    """Assemble the structured user message body."""
+    """Assemble the structured user message body.
+
+    ``context_sections`` carries the optional cognition layers (ADR-0006):
+    each ``title -> content`` pair renders as one ``【title】content`` line in
+    the caller-given order, between the interaction state and the elder's
+    words.  ``None`` or empty keeps the v1 body byte-identical.
+    """
 
     lines = [
         f"【任务】{_TASK_DUTY[task]}",
         f"【感知摘要】{json.dumps(dict(perception_summary), ensure_ascii=False)}",
         f"【交互状态】{json.dumps(dict(interaction_summary), ensure_ascii=False)}",
     ]
+    if context_sections:
+        lines.extend(f"【{title}】{content}" for title, content in context_sections.items())
     if elder_text is not None:
         lines.append(f"【老人回话】{json.dumps(elder_text, ensure_ascii=False)}")
     lines.append("只输出 JSON 对象。")
