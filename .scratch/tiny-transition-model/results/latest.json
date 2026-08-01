@@ -1,0 +1,340 @@
+{
+  "experiment": "gate5-synthetic-transition-baseline-vs-tiny-models",
+  "data_source": "synthetic (.scratch/tiny-transition-model/synth.py)",
+  "config": {
+    "seed": 20260801,
+    "sequences_per_scenario": 60,
+    "total_sequences": 540,
+    "train_size": 324,
+    "validation_size": 108,
+    "test_size": 108,
+    "unusable_test_sequences": 5,
+    "feature_names": [
+      "net_angle_change_deg",
+      "max_window_angle_change_deg",
+      "center_drop",
+      "max_window_center_drop",
+      "peak_angular_velocity_deg_s",
+      "transition_duration_s",
+      "impulsiveness",
+      "peak_velocity_position",
+      "recovery_ratio"
+    ]
+  },
+  "models": {
+    "logistic_regression": {
+      "name": "logistic_regression",
+      "weights": [
+        -1.540558,
+        1.053836,
+        0.499866,
+        0.782061,
+        2.88905,
+        -2.609086,
+        -0.810618,
+        1.194813,
+        0.289241
+      ],
+      "bias": -1.210203,
+      "feature_means": [
+        48.53932,
+        58.666248,
+        0.207925,
+        0.237648,
+        142.643427,
+        2.304516,
+        2.467291,
+        0.695167,
+        0.208995
+      ],
+      "feature_deviations": [
+        31.950436,
+        27.171032,
+        0.134053,
+        0.114548,
+        89.077532,
+        2.317892,
+        1.324077,
+        0.306124,
+        0.300576
+      ],
+      "abstention_margin": 0.0,
+      "validation_macro_f1": 0.914
+    },
+    "tiny_mlp": {
+      "name": "tiny_mlp",
+      "hidden_units": 8,
+      "parameter_count": 89,
+      "abstention_margin": 0.15,
+      "validation_macro_f1": 0.9368
+    }
+  },
+  "reports": [
+    {
+      "name": "geometric_baseline",
+      "macro_f1": 0.8237,
+      "abstention_rate": 0.0,
+      "decided_accuracy": 0.8241,
+      "per_class": {
+        "fall_like_transition": {
+          "support": 48,
+          "precision": 0.7231,
+          "recall": 0.9792,
+          "f1": 0.8319
+        },
+        "normal_transition": {
+          "support": 60,
+          "precision": 0.9767,
+          "recall": 0.7,
+          "f1": 0.8155
+        }
+      },
+      "confusion": {
+        "fall_like_transition": {
+          "fall_like_transition": 47,
+          "normal_transition": 1,
+          "uncertain_transition": 0
+        },
+        "normal_transition": {
+          "fall_like_transition": 18,
+          "normal_transition": 42,
+          "uncertain_transition": 0
+        }
+      }
+    },
+    {
+      "name": "logistic_regression",
+      "macro_f1": 0.9201,
+      "abstention_rate": 0.0463,
+      "decided_accuracy": 0.9417,
+      "per_class": {
+        "fall_like_transition": {
+          "support": 48,
+          "precision": 0.9184,
+          "recall": 0.9375,
+          "f1": 0.9278
+        },
+        "normal_transition": {
+          "support": 60,
+          "precision": 0.963,
+          "recall": 0.8667,
+          "f1": 0.9123
+        }
+      },
+      "confusion": {
+        "fall_like_transition": {
+          "fall_like_transition": 45,
+          "normal_transition": 2,
+          "uncertain_transition": 1
+        },
+        "normal_transition": {
+          "fall_like_transition": 4,
+          "normal_transition": 52,
+          "uncertain_transition": 4
+        }
+      }
+    },
+    {
+      "name": "tiny_mlp",
+      "macro_f1": 0.9283,
+      "abstention_rate": 0.0833,
+      "decided_accuracy": 0.9697,
+      "per_class": {
+        "fall_like_transition": {
+          "support": 48,
+          "precision": 0.9773,
+          "recall": 0.8958,
+          "f1": 0.9348
+        },
+        "normal_transition": {
+          "support": 60,
+          "precision": 0.9636,
+          "recall": 0.8833,
+          "f1": 0.9217
+        }
+      },
+      "confusion": {
+        "fall_like_transition": {
+          "fall_like_transition": 43,
+          "normal_transition": 2,
+          "uncertain_transition": 3
+        },
+        "normal_transition": {
+          "fall_like_transition": 1,
+          "normal_transition": 53,
+          "uncertain_transition": 6
+        }
+      }
+    }
+  ],
+  "scenario_breakdown": {
+    "geometric_baseline": {
+      "forward_collapse": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      },
+      "backward_fall": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      },
+      "slip_from_sitting": {
+        "support": 12,
+        "correct": 11,
+        "wrong": 1,
+        "uncertain": 0
+      },
+      "slow_slide": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      },
+      "controlled_lie_down": {
+        "support": 12,
+        "correct": 6,
+        "wrong": 6,
+        "uncertain": 0
+      },
+      "fast_lie_down": {
+        "support": 12,
+        "correct": 1,
+        "wrong": 11,
+        "uncertain": 0
+      },
+      "sit_down": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      },
+      "bend_pick_up": {
+        "support": 12,
+        "correct": 11,
+        "wrong": 1,
+        "uncertain": 0
+      },
+      "stand_idle": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      }
+    },
+    "logistic_regression": {
+      "forward_collapse": {
+        "support": 12,
+        "correct": 11,
+        "wrong": 1,
+        "uncertain": 0
+      },
+      "backward_fall": {
+        "support": 12,
+        "correct": 11,
+        "wrong": 0,
+        "uncertain": 1
+      },
+      "slip_from_sitting": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      },
+      "slow_slide": {
+        "support": 12,
+        "correct": 11,
+        "wrong": 1,
+        "uncertain": 0
+      },
+      "controlled_lie_down": {
+        "support": 12,
+        "correct": 11,
+        "wrong": 0,
+        "uncertain": 1
+      },
+      "fast_lie_down": {
+        "support": 12,
+        "correct": 7,
+        "wrong": 4,
+        "uncertain": 1
+      },
+      "sit_down": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      },
+      "bend_pick_up": {
+        "support": 12,
+        "correct": 10,
+        "wrong": 0,
+        "uncertain": 2
+      },
+      "stand_idle": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      }
+    },
+    "tiny_mlp": {
+      "forward_collapse": {
+        "support": 12,
+        "correct": 11,
+        "wrong": 1,
+        "uncertain": 0
+      },
+      "backward_fall": {
+        "support": 12,
+        "correct": 11,
+        "wrong": 0,
+        "uncertain": 1
+      },
+      "slip_from_sitting": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      },
+      "slow_slide": {
+        "support": 12,
+        "correct": 9,
+        "wrong": 1,
+        "uncertain": 2
+      },
+      "controlled_lie_down": {
+        "support": 12,
+        "correct": 11,
+        "wrong": 0,
+        "uncertain": 1
+      },
+      "fast_lie_down": {
+        "support": 12,
+        "correct": 8,
+        "wrong": 1,
+        "uncertain": 3
+      },
+      "sit_down": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      },
+      "bend_pick_up": {
+        "support": 12,
+        "correct": 10,
+        "wrong": 0,
+        "uncertain": 2
+      },
+      "stand_idle": {
+        "support": 12,
+        "correct": 12,
+        "wrong": 0,
+        "uncertain": 0
+      }
+    }
+  }
+}

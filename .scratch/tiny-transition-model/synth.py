@@ -184,11 +184,18 @@ def _visibility_track(rng: random.Random) -> list[float]:
     count = SEQUENCE_DURATION_MS // SAMPLE_INTERVAL_MS
     base = rng.uniform(0.82, 0.97)
     track = [min(max(base + rng.gauss(0.0, 0.02), 0.0), 1.0) for _ in range(count)]
-    if rng.random() < 0.20:
-        dropout_start = rng.randrange(0, max(count - 12, 1))
+    draw = rng.random()
+    if draw < 0.08:
+        # Severe occlusion or the person leaving frame: no system should answer.
+        dropout_len = rng.randrange(55, 95)
+    elif draw < 0.28:
         dropout_len = rng.randrange(6, 30)
-        for index in range(dropout_start, min(dropout_start + dropout_len, count)):
-            track[index] = min(max(rng.uniform(0.08, 0.48), 0.0), 1.0)
+    else:
+        return track
+
+    dropout_start = rng.randrange(0, max(count - 12, 1))
+    for index in range(dropout_start, min(dropout_start + dropout_len, count)):
+        track[index] = min(max(rng.uniform(0.08, 0.48), 0.0), 1.0)
     return track
 
 
