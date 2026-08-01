@@ -18,13 +18,17 @@ Frozen decisions:
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from reme.pose.runtime import (
+    Component,
     ModeProfile,
     RuntimeSessionError,
     RuntimeSessionRequest,
+    RuntimeSessionState,
     RuntimeSessionStatus,
+    ensure_new_session,
 )
 
 REQUEST_SCHEMA_VERSION = "reme-runtime-session-request/v0-experiment"
@@ -114,7 +118,10 @@ class RuntimeSessionRegistry:
     """Thread-safe single-active-session registry for the decision component."""
 
     def __init__(self) -> None:
-        raise NotImplementedError
+        self._lock = threading.Lock()
+        self._request: RuntimeSessionRequest | None = None
+        self._status: RuntimeSessionStatus | None = None
+        self._sequence = 0
 
     def start(self, request: RuntimeSessionRequest) -> RuntimeSessionStatus:
         """Activate a new session; the previous one must be stopped first.
@@ -124,27 +131,70 @@ class RuntimeSessionRegistry:
         for the DECISION component.
         """
 
-        raise NotImplementedError
+        with self._lock:
+            active = self._active_session_id_locked()
+            if active is not None:
+                raise SessionRegistryError(
+                    "session_conflict",
+                    f"session {active!r} is still active; stop it before starting a new one",
+                )
+            previous = self._request
+            if previous is not None:
+                try:
+                    ensure_new_session(previous, request)
+                except RuntimeSessionError as exc:
+                    raise SessionRegistryError("session_conflict", str(exc)) from exc
+            status = RuntimeSessionStatus(
+                session_id=request.session_id,
+                component=Component.DECISION,
+                requested_profile=request.profile,
+                effective_profile=request.profile,
+                state=RuntimeSessionState.RUNNING,
+            )
+            self._request = request
+            self._status = status
+            self._sequence = 0
+            return status
 
     def stop(self, session_id: str) -> RuntimeSessionStatus:
         """Stop the session (idempotent); returns a STOPPED status."""
 
-        raise NotImplementedError
+        with self._lock:
+            request = self._request
+            status = self._status
+            if request is None or status is None or request.session_id != session_id:
+                raise SessionRegistryError(
+                    "unknown_session", f"unknown session_id: {session_id!r}"
+                )
+            if status.state is RuntimeSessionState.STOPPED:
+                return status
+            stopped = RuntimeSessionStatus(
+                session_id=request.session_id,
+                component=Component.DECISION,
+                requested_profile=request.profile,
+                effective_profile=None,
+                state=RuntimeSessionState.STOPPED,
+            )
+            self._status = stopped
+            return stopped
 
     def current_status(self) -> RuntimeSessionStatus | None:
         """The latest status for the active (or last) session, if any."""
 
-        raise NotImplementedError
+        with self._lock:
+            return self._status
 
     def active_session_id(self) -> str | None:
         """The running session id, or None."""
 
-        raise NotImplementedError
+        with self._lock:
+            return self._active_session_id_locked()
 
     def is_active(self, session_id: str) -> bool:
         """True when ``session_id`` is the currently running session."""
 
-        raise NotImplementedError
+        with self._lock:
+            return self._active_session_id_locked() == session_id
 
     def next_sequence(self, session_id: str) -> int:
         """Monotonic outbound-event sequence for the given active session.
@@ -153,9 +203,40 @@ class RuntimeSessionRegistry:
         the active session.
         """
 
-        raise NotImplementedError
+        with self._lock:
+            if self._active_session_id_locked() != session_id:
+                raise SessionRegistryError(
+                    "unknown_session", f"{session_id!r} is not the active session"
+                )
+            self._sequence += 1
+            return self._sequence
 
     def mark_degraded(self, reason: str) -> RuntimeSessionStatus:
         """Report the decision component degraded without changing sessions."""
 
-        raise NotImplementedError
+        with self._lock:
+            request = self._request
+            if request is None or self._active_session_id_locked() is None:
+                raise SessionRegistryError("unknown_session", "no active session to degrade")
+            if not reason.strip():
+                raise SessionRegistryError("bad_request", "degraded reason must be non-empty")
+            status = RuntimeSessionStatus(
+                session_id=request.session_id,
+                component=Component.DECISION,
+                requested_profile=request.profile,
+                effective_profile=None,
+                state=RuntimeSessionState.DEGRADED,
+                reason=reason,
+            )
+            self._status = status
+            return status
+
+    def _active_session_id_locked(self) -> str | None:
+        """Session id when the latest status is RUNNING/DEGRADED; else None."""
+
+        status = self._status
+        if status is None:
+            return None
+        if status.state in (RuntimeSessionState.RUNNING, RuntimeSessionState.DEGRADED):
+            return status.session_id
+        return None
