@@ -34,7 +34,7 @@ from reme.decision.policy import (
     DecisionService,
     UnknownSceneError,
 )
-from reme.decision.records import DecisionRecordError, parse_interaction_response
+from reme.decision.records import DecisionRecordError, DemoMode, parse_interaction_response
 from reme.decision.runtime_glue import (
     RuntimeDecisionPublisher,
     live_streams_resolver,
@@ -47,7 +47,7 @@ from reme.decision.session import (
 )
 from reme.decision.stream import EventIngest, IngestError
 from reme.decision.websocket import DecisionEventHub, WebSocketError
-from reme.pose.runtime import RuntimeSessionStatus
+from reme.pose.runtime import ModeProfile, RuntimeSessionStatus
 
 _REJECT_STATUS: dict[str, HTTPStatus] = {
     "stale_decision": HTTPStatus.CONFLICT,
@@ -93,6 +93,18 @@ def build_decision_handler(
         protocol_version = "HTTP/1.1"
 
         # -- plumbing -------------------------------------------------------
+
+        def setup(self) -> None:
+            # TLS handshakes are deferred out of the accept loop (Codex
+            # review P1: a stalled ClientHello must not block new
+            # connections); build_server wraps the listener with
+            # do_handshake_on_connect=False, so the handshake runs here on
+            # this connection's own worker thread, with a bounded timeout.
+            if isinstance(self.request, ssl.SSLSocket):
+                self.request.settimeout(10)
+                self.request.do_handshake()
+                self.request.settimeout(None)
+            super().setup()
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -201,6 +213,10 @@ def build_decision_handler(
                 )
                 return
             service.reset_scene(scene_id)
+            if ingest is not None:
+                # Live buffers reset with the episode, or replays from an
+                # earlier timestamp would trip the ingest watermark.
+                ingest.reset_scene(scene_id)
             self._send_json(HTTPStatus.OK, {"reset": scene_id})
 
         # -- runtime routes -------------------------------------------------
@@ -213,10 +229,12 @@ def build_decision_handler(
             )
 
         def _announce_session(self, status: RuntimeSessionStatus) -> None:
-            # Buffers are dropped before the status goes out so C can never
-            # observe a new session's status next to the old session's events.
+            # Buffers, episodes and in-flight MiMo work are all dropped before
+            # the status goes out, so nothing computed for the previous
+            # session can surface under the new one (Codex review P1).
             if ingest is not None:
                 ingest.reset_all()
+            service.reset_all_scenes()
             if hub is not None:
                 hub.broadcast_json(status.to_payload())
 
@@ -224,7 +242,25 @@ def build_decision_handler(
             if registry is None:
                 self._send_runtime_disabled("session control")
                 return
-            status = registry.start(parse_session_request(payload))
+            request = parse_session_request(payload)
+            # The requested profile must match how this server actually runs,
+            # or a RUNNING status would claim a mode nobody is executing
+            # (Codex review P1): record replay serves recorded_video only,
+            # live/mock serve live_camera only.
+            expected = (
+                ModeProfile.RECORDED_VIDEO
+                if service.demo_mode is DemoMode.RECORD
+                else ModeProfile.LIVE_CAMERA
+            )
+            if request.profile is not expected:
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "profile_mismatch",
+                    f"server demo_mode={service.demo_mode.value} only serves "
+                    f"profile={expected.value}",
+                )
+                return
+            status = registry.start(request)
             self._announce_session(status)
             self._send_json(HTTPStatus.OK, status.to_payload())
 
@@ -458,7 +494,9 @@ def build_server(
     server = ThreadingHTTPServer((config.host, config.port), handler)
     if config.certfile is not None and config.keyfile is not None:
         context = build_ssl_context(config.certfile, config.keyfile)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.socket = context.wrap_socket(
+            server.socket, server_side=True, do_handshake_on_connect=False
+        )
     return server
 
 

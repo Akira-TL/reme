@@ -29,37 +29,41 @@ class RuntimeDecisionPublisher:
     def __init__(self, *, registry: RuntimeSessionRegistry, hub: DecisionEventHub) -> None:
         self._registry = registry
         self._hub = hub
+        # Sequence allocation and the broadcast must be one ordered step, or
+        # concurrent publishers can put n+1 on the wire before n (Codex P1).
+        self._order_lock = threading.Lock()
 
     def publish_decision(self, decision: CareDecision) -> None:
-        session_id = self._registry.active_session_id()
-        if session_id is None:
-            # Prerecorded HTTP-only flows run without a runtime session.
-            return
-        try:
-            sequence = self._registry.next_sequence(session_id)
-        except SessionRegistryError:
-            return
-        event = RuntimeEvent(
-            session_id=session_id,
-            sequence=sequence,
-            event_type=RuntimeEventType.CARE_DECISION,
-            payload=decision.to_payload(),
-        )
-        self._hub.broadcast_json(event.to_payload())
+        with self._order_lock:
+            session_id = self._registry.active_session_id()
+            if session_id is None:
+                # Prerecorded HTTP-only flows run without a runtime session.
+                return
+            try:
+                sequence = self._registry.next_sequence(session_id)
+            except SessionRegistryError:
+                return
+            event = RuntimeEvent(
+                session_id=session_id,
+                sequence=sequence,
+                event_type=RuntimeEventType.CARE_DECISION,
+                payload=decision.to_payload(),
+            )
+            self._hub.broadcast_json(event.to_payload())
 
 
 def live_streams_resolver(
     registry: RuntimeSessionRegistry, ingest: EventIngest
 ) -> Callable[[str], LiveStreams | None]:
-    """Resolve unknown scene_ids to live ingest snapshots while a session runs.
+    """Resolve the active session's scene to a live ingest snapshot.
 
-    Note: with an active session any scene_id resolves (empty snapshot when
-    unseen) — a mistyped live scene yields observe-grade decisions instead of
-    404. Accepted for demo scale; bundle scenes keep strict 404 semantics.
+    Scene-bound (Codex review P2): only the scene named in the active
+    session request resolves; every other scene_id keeps strict 404
+    semantics, live or not.
     """
 
     def resolve(scene_id: str) -> LiveStreams | None:
-        if registry.active_session_id() is None:
+        if registry.active_scene_id() != scene_id:
             return None
         return ingest.snapshot(scene_id)
 

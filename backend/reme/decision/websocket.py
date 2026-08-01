@@ -72,6 +72,14 @@ class _EndOfStream(WebSocketError):
     """
 
 
+class _MessageTooBig(WebSocketError):
+    """A declared frame length exceeds the message cap; close with 1009.
+
+    Raised before the payload is read so an attacker-declared multi-GiB
+    length never gets buffered (Codex review P1).
+    """
+
+
 class HandlerLike(Protocol):
     """The slice of BaseHTTPRequestHandler the hub is allowed to touch."""
 
@@ -155,6 +163,9 @@ def read_frame(rfile: BufferedIOBase) -> Frame:
         (length,) = struct.unpack("!Q", _read_exact(rfile, 8))
         if length >> 63:
             raise WebSocketError("64-bit payload length must have the high bit clear")
+    if length > MAX_MESSAGE_BYTES:
+        # Checked before the payload read: never buffer an oversize frame.
+        raise _MessageTooBig(f"declared frame length {length} exceeds {MAX_MESSAGE_BYTES}")
     if not masked:
         raise WebSocketError("client frames must be masked")
     mask = _read_exact(rfile, _MASK_KEY_BYTES)
@@ -235,6 +246,13 @@ class ServerConnection:
             self._write_locked(encode_frame(OPCODE_CLOSE, struct.pack("!H", code)))
             self._closed = True
 
+    def shutdown_socket(self) -> None:
+        """Force the transport closed so a blocked recv loop wakes up."""
+
+        self._closed = True
+        with suppress(OSError):
+            self._connection.shutdown(socket.SHUT_RDWR)
+
     def serve(self, on_text: Callable[[str], None] | None = None) -> None:
         """Blocking recv loop: pong pings, honour close, feed text upstream."""
 
@@ -291,6 +309,8 @@ class ServerConnection:
         except (_EndOfStream, OSError):
             # The peer vanished; a close frame would go nowhere.
             pass
+        except _MessageTooBig:
+            self.send_close(_CLOSE_MESSAGE_TOO_BIG)
         except WebSocketError:
             self.send_close(_CLOSE_PROTOCOL_ERROR)
         finally:
@@ -323,6 +343,12 @@ def _handshake(handler: HandlerLike) -> ServerConnection:
     key = headers.get("Sec-WebSocket-Key")
     if not isinstance(key, str) or not key.strip():
         raise WebSocketError("Sec-WebSocket-Key header is required")
+    try:
+        decoded_key = base64.b64decode(key.strip(), validate=True)
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise WebSocketError("Sec-WebSocket-Key must be valid base64") from exc
+    if len(decoded_key) != 16:
+        raise WebSocketError("Sec-WebSocket-Key must decode to 16 bytes")
     version = headers.get("Sec-WebSocket-Version")
     if not isinstance(version, str) or version.strip() != "13":
         raise WebSocketError("Sec-WebSocket-Version must be 13")
@@ -353,12 +379,19 @@ class DecisionEventHub:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._connections: list[ServerConnection] = []
+        self._closing = False
 
     def accept(self, handler: HandlerLike) -> None:
         """Full WS lifecycle on an upgrade request; blocks until disconnect."""
 
+        with self._lock:
+            if self._closing:
+                raise WebSocketError("hub is shutting down")
         connection = _handshake(handler)
         with self._lock:
+            if self._closing:
+                connection.send_close()
+                return
             self._connections.append(connection)
         try:
             connection.serve()
@@ -398,10 +431,18 @@ class DecisionEventHub:
             return len(self._connections)
 
     def close_all(self) -> None:
-        """Graceful close of every connection (server shutdown/tests)."""
+        """Graceful close of every connection (server shutdown/tests).
+
+        Also shuts the underlying sockets down so recv loops blocked in
+        ``rfile.read()`` wake up instead of pinning their threads (Codex
+        review P1), and refuses registrations from then on.
+        """
 
         with self._lock:
+            self._closing = True
             targets = list(self._connections)
             self._connections = []
         for connection in targets:
             connection.send_close()
+            with suppress(OSError):
+                connection.shutdown_socket()

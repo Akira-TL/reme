@@ -170,6 +170,9 @@ class _Peer:
     def send(self, opcode: int, payload: bytes, *, fin: bool = True) -> None:
         self._sock.sendall(_client_frame(opcode, payload, fin=fin))
 
+    def send_raw(self, data: bytes) -> None:
+        self._sock.sendall(data)
+
     def read_handshake(self) -> str:
         lines: list[bytes] = []
         while True:
@@ -433,10 +436,26 @@ def test_client_close_is_echoed_and_ends_the_loop() -> None:
 
 
 def test_oversized_message_closes_1009() -> None:
+    # A message assembled from in-budget fragments that crosses the cap: the
+    # single-frame case is refused earlier, on the declared length alone.
     link = _Link()
     try:
         link.serve_in_thread()
-        link.peer.send(OPCODE_TEXT, b"x" * (MAX_MESSAGE_BYTES + 1))
+        half = b"x" * (MAX_MESSAGE_BYTES // 2 + 1)
+        link.peer.send(OPCODE_TEXT, half, fin=False)
+        link.peer.send(OPCODE_CONTINUATION, half, fin=True)
+        assert link.peer.read_frame() == (True, OPCODE_CLOSE, _close_payload(1009))
+    finally:
+        link.close()
+
+
+def test_oversized_single_frame_closes_1009_without_payload() -> None:
+    link = _Link()
+    try:
+        link.serve_in_thread()
+        # Header only: declared length beyond the cap, no payload bytes sent.
+        header = bytes([0x81, 0xFF]) + struct.pack("!Q", MAX_MESSAGE_BYTES + 1)
+        link.peer.send_raw(header)
         assert link.peer.read_frame() == (True, OPCODE_CLOSE, _close_payload(1009))
     finally:
         link.close()
@@ -498,3 +517,46 @@ def test_close_all_closes_and_clears_every_connection() -> None:
     finally:
         first.close()
         second.close()
+
+
+def test_read_frame_rejects_oversize_declared_length_before_payload() -> None:
+    # Header claims 2 MiB; no payload bytes follow. The reader must refuse
+    # on the declared length alone instead of buffering (Codex review P1).
+    raw = bytes([0x81, 0xFF]) + struct.pack("!Q", 2 * 1024 * 1024)
+    with pytest.raises(WebSocketError, match="exceeds"):
+        read_frame(BytesIO(raw))
+
+
+def test_handshake_rejects_non_base64_key_without_writing() -> None:
+    hub = DecisionEventHub()
+    handler = _fake_handler(headers=_handshake_headers(key="x"))
+    with pytest.raises(WebSocketError, match="base64"):
+        hub.accept(handler)
+    assert handler.wfile.getvalue() == b""
+
+
+def test_handshake_rejects_short_decoded_key_without_writing() -> None:
+    hub = DecisionEventHub()
+    handler = _fake_handler(headers=_handshake_headers(key="c2hvcnQ="))
+    with pytest.raises(WebSocketError, match="16 bytes"):
+        hub.accept(handler)
+    assert handler.wfile.getvalue() == b""
+
+
+def test_close_all_wakes_a_blocked_recv_loop_and_blocks_new_accepts() -> None:
+    hub = DecisionEventHub()
+    link = _Link(hub=hub)
+    try:
+        _await_connections(hub, 1)
+        # The serve loop is blocked in rfile.read(); close_all must both send
+        # the close frame and shut the socket down so the thread exits.
+        hub.close_all()
+        assert link.thread is not None
+        link.thread.join(timeout=_TIMEOUT_S)
+        assert not link.thread.is_alive()
+        late = _fake_handler(headers=_handshake_headers())
+        with pytest.raises(WebSocketError, match="shutting down"):
+            hub.accept(late)
+        assert late.wfile.getvalue() == b""
+    finally:
+        link.peer.close()

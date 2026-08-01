@@ -277,6 +277,26 @@ class DecisionService:
     def scene_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._scenes))
 
+    @property
+    def demo_mode(self) -> DemoMode:
+        return self._config.demo_mode
+
+    def reset_all_scenes(self) -> None:
+        """Invalidate every episode and in-flight MiMo call (session switches).
+
+        The epoch bump makes every outstanding CAS snapshot stale, so a MiMo
+        result computed for the previous session can never commit or be
+        published under the new one (Codex review P1).
+        """
+
+        with self._lock:
+            for scene_id, runtime in list(self._runtimes.items()):
+                self._runtimes[scene_id] = _SceneRuntime(
+                    session=SessionState(scene_id=scene_id),
+                    sequence=runtime.sequence,
+                    epoch=runtime.epoch + 1,
+                )
+
     def scene_streams(self, scene_id: str) -> SceneStreams:
         """Bundle-backed streams only (assets/health); live scenes raise."""
 

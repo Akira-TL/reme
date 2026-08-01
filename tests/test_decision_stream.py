@@ -255,10 +255,12 @@ def test_bounded_buffer_evicts_the_oldest_observation() -> None:
 def test_scenes_are_buffered_independently() -> None:
     ingest = EventIngest()
     ingest.submit(
-        _posture_event(scene_id="scene-a", timestamp_ms=5000.0), active_session_id=SESSION_ID
+        _posture_event(sequence=1, scene_id="scene-a", timestamp_ms=5000.0),
+        active_session_id=SESSION_ID,
     )
     ingest.submit(
-        _posture_event(scene_id="scene-b", timestamp_ms=10.0), active_session_id=SESSION_ID
+        _posture_event(sequence=2, scene_id="scene-b", timestamp_ms=10.0),
+        active_session_id=SESSION_ID,
     )
 
     assert len(ingest.snapshot("scene-a").postures) == 1
@@ -271,15 +273,19 @@ def test_scenes_are_buffered_independently() -> None:
 
 def test_reset_scene_clears_the_snapshot_and_allows_replay() -> None:
     ingest = EventIngest()
-    ingest.submit(_posture_event(timestamp_ms=8000.0), active_session_id=SESSION_ID)
-    ingest.submit(_transition_event(), active_session_id=SESSION_ID)
+    ingest.submit(
+        _posture_event(sequence=1, timestamp_ms=8000.0), active_session_id=SESSION_ID
+    )
+    ingest.submit(_transition_event(sequence=2), active_session_id=SESSION_ID)
 
     ingest.reset_scene(SCENE_ID)
 
     streams = ingest.snapshot(SCENE_ID)
     assert streams.postures == ()
     assert streams.transitions == ()
-    ingest.submit(_posture_event(timestamp_ms=10.0), active_session_id=SESSION_ID)
+    ingest.submit(
+        _posture_event(sequence=3, timestamp_ms=10.0), active_session_id=SESSION_ID
+    )
     assert len(ingest.snapshot(SCENE_ID).postures) == 1
 
 
@@ -288,9 +294,13 @@ def test_live_streams_duck_align_with_build_decision_context() -> None:
     # .scene_id/.postures/.transitions. Widening its annotation is L-integration's job.
     ingest = EventIngest()
     ingest.submit(
-        _posture_event(timestamp_ms=1000.0, posture="lying"), active_session_id=SESSION_ID
+        _posture_event(sequence=1, timestamp_ms=1000.0, posture="lying"),
+        active_session_id=SESSION_ID,
     )
-    ingest.submit(_transition_event(start_ms=1500.0, end_ms=1800.0), active_session_id=SESSION_ID)
+    ingest.submit(
+        _transition_event(sequence=2, start_ms=1500.0, end_ms=1800.0),
+        active_session_id=SESSION_ID,
+    )
 
     context = build_decision_context(ingest.snapshot(SCENE_ID), timestamp_ms=2000.0)
 
@@ -303,10 +313,26 @@ def test_live_streams_duck_align_with_build_decision_context() -> None:
 
 def test_reset_all_drops_every_scene() -> None:
     ingest = EventIngest()
-    ingest.submit(_posture_event(scene_id="scene-a"), active_session_id=SESSION_ID)
-    ingest.submit(_posture_event(scene_id="scene-b"), active_session_id=SESSION_ID)
+    ingest.submit(_posture_event(sequence=1, scene_id="scene-a"), active_session_id=SESSION_ID)
+    ingest.submit(_posture_event(sequence=2, scene_id="scene-b"), active_session_id=SESSION_ID)
 
     ingest.reset_all()
 
     assert ingest.snapshot("scene-a").postures == ()
     assert ingest.snapshot("scene-b").postures == ()
+
+
+def test_duplicate_or_reordered_sequence_is_rejected() -> None:
+    ingest = EventIngest()
+    ingest.submit(_posture_event(sequence=5, timestamp_ms=1000.0), active_session_id=SESSION_ID)
+    with pytest.raises(IngestError, match="strictly increasing") as duplicate:
+        ingest.submit(
+            _posture_event(sequence=5, timestamp_ms=2000.0), active_session_id=SESSION_ID
+        )
+    assert duplicate.value.code == "bad_event"
+    with pytest.raises(IngestError, match="strictly increasing"):
+        ingest.submit(
+            _posture_event(sequence=4, timestamp_ms=3000.0), active_session_id=SESSION_ID
+        )
+    ingest.reset_all()
+    ingest.submit(_posture_event(sequence=1, timestamp_ms=4000.0), active_session_id=SESSION_ID)

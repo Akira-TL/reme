@@ -190,6 +190,18 @@ class RuntimeSessionRegistry:
         with self._lock:
             return self._active_session_id_locked()
 
+    def active_scene_id(self) -> str | None:
+        """The scene bound to the active session, or None.
+
+        Live decisions must stay scene-bound (Codex review P2): the resolver
+        only serves snapshots for this scene.
+        """
+
+        with self._lock:
+            if self._active_session_id_locked() is None or self._request is None:
+                return None
+            return self._request.scene_id
+
     def is_active(self, session_id: str) -> bool:
         """True when ``session_id`` is the currently running session."""
 

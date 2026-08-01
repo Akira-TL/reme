@@ -398,12 +398,14 @@ def _stopped_status(session_id: str = "session-0001") -> RuntimeSessionStatus:
 
 
 def _session_body(session_id: str = "session-0001") -> dict[str, Any]:
+    # live_camera matches the default (live) service demo_mode; the
+    # profile/demo_mode coherence gate rejects mismatches with 409.
     return {
         "schema_version": "reme-runtime-session-request/v0-experiment",
         "session_id": session_id,
-        "profile": "recorded_video",
+        "profile": "live_camera",
         "scene_id": "fall_demo_01",
-        "manifest_path": "scenes/fall_demo_01/manifest.json",
+        "camera_id": "default",
     }
 
 
@@ -571,7 +573,7 @@ def test_session_start_returns_status_and_resets_runtime_state(tmp_path: Path) -
         assert calls == ["registry.start", "ingest.reset_all", "hub.broadcast_json"]
         assert hub.broadcasts == [body]
         assert registry.started[0].session_id == "session-0001"
-        assert registry.started[0].profile is ModeProfile.RECORDED_VIDEO
+        assert registry.started[0].profile is ModeProfile.LIVE_CAMERA
     finally:
         _stop_server(server, thread)
 
@@ -763,5 +765,30 @@ def test_websocket_upgrade_hands_the_socket_to_the_hub(tmp_path: Path) -> None:
         assert calls == ["hub.accept"]
         assert hub.close_connection_at_accept is True
         assert len(hub.accepted) == 1
+    finally:
+        _stop_server(server, thread)
+
+
+def test_session_start_rejects_profile_mismatched_with_demo_mode(tmp_path: Path) -> None:
+    manifest_path = _write_fall_bundle(tmp_path)
+    service = DecisionService(
+        scenes={"fall_demo_01": load_scene_streams(manifest_path)}, config=PolicyConfig()
+    )
+    server, thread = _start_runtime_server(service, registry=RuntimeSessionRegistry())
+    try:
+        status, body = _post(
+            server.server_address[1],
+            "/api/session",
+            {
+                "schema_version": "reme-runtime-session-request/v0-experiment",
+                "session_id": "session-video-001",
+                "profile": "recorded_video",
+                "scene_id": "fall_demo_01",
+                "camera_id": None,
+                "manifest_path": "scenes/fall_demo_01/manifest.json",
+            },
+        )
+        assert status == 409
+        assert body["error"]["code"] == "profile_mismatch"
     finally:
         _stop_server(server, thread)

@@ -111,6 +111,7 @@ class EventIngest:
         self._lock = threading.Lock()
         self._postures: dict[str, deque[PostureObservation]] = {}
         self._transitions: dict[str, deque[TransitionEvent]] = {}
+        self._session_sequences: dict[str, int] = {}
 
     def submit(self, payload: object, *, active_session_id: str | None) -> RuntimeEvent:
         """Validate and buffer one inbound RuntimeEvent envelope.
@@ -130,13 +131,23 @@ class EventIngest:
                 event.require_session(active_session_id)
             except RuntimeSessionError as exc:
                 raise IngestError("stale_session", str(exc)) from exc
-            if event.event_type not in _BUFFERED_EVENT_TYPES:
-                return event
-            label = f"runtime event {event.sequence}"
-            if event.event_type is RuntimeEventType.POSTURE_OBSERVATION:
-                self._buffer_posture(event.payload, label=label)
-            else:
-                self._buffer_transition(event.payload, label=label)
+            # Contract section 4: sequences are strictly increasing per sender
+            # and session; duplicates and reordering are rejected, and the
+            # watermark only advances once an event is fully accepted.
+            last_sequence = self._session_sequences.get(event.session_id)
+            if last_sequence is not None and event.sequence <= last_sequence:
+                raise IngestError(
+                    "bad_event",
+                    f"sequence must be strictly increasing per session "
+                    f"({event.sequence} <= {last_sequence})",
+                )
+            if event.event_type in _BUFFERED_EVENT_TYPES:
+                label = f"runtime event {event.sequence}"
+                if event.event_type is RuntimeEventType.POSTURE_OBSERVATION:
+                    self._buffer_posture(event.payload, label=label)
+                else:
+                    self._buffer_transition(event.payload, label=label)
+            self._session_sequences[event.session_id] = event.sequence
             return event
 
     def snapshot(self, scene_id: str) -> LiveStreams:
@@ -155,11 +166,12 @@ class EventIngest:
             self._transitions.pop(scene_id, None)
 
     def reset_all(self) -> None:
-        """Drop every buffer (called on session changes)."""
+        """Drop every buffer and sequence watermark (called on session changes)."""
 
         with self._lock:
             self._postures.clear()
             self._transitions.clear()
+            self._session_sequences.clear()
 
     def _buffer_posture(self, payload: dict[str, Any], *, label: str) -> None:
         """Append one posture observation; caller holds the lock."""
