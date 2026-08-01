@@ -14,6 +14,9 @@ dependencies = []
 
 [project.scripts]
 reme-demo = "reme.demo:entrypoint"
+reme-decision-server = "reme.decision.server:main"
+reme-decision-smoke = "reme.decision.mimo.adapter:main"
+reme-visual-precut = "reme.decision.visual:main"
 
 [project.optional-dependencies]
 dev = [

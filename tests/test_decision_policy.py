@@ -509,3 +509,31 @@ def test_unknown_scene_raises_dedicated_error(tmp_path: Path) -> None:
     service = DecisionService(scenes={}, config=PolicyConfig())
     with pytest.raises(UnknownSceneError):
         service.get_decision(scene_id="ghost", timestamp_ms=0.0)
+
+
+def test_visual_flag_attaches_clip_and_records_context(tmp_path: Path) -> None:
+    scenes = _toothache_scenes(tmp_path)
+    bundle_dir = scenes["toothache_demo_01"].manifest.path.parent
+    derived = bundle_dir / "derived"
+    derived.mkdir()
+    (derived / "visual_context.mp4").write_bytes(b"fakemp4")
+    (derived / "visual_context.json").write_text(
+        json.dumps({"start_ms": 30000.0, "end_ms": 33000.0}), encoding="utf-8"
+    )
+
+    captured: list[Any] = []
+
+    class _CapturingMimo(_FakeMimo):
+        def complete_task(self, **kwargs: Any) -> MimoCallResult:
+            captured.append(kwargs["user_content"])
+            return super().complete_task(**kwargs)
+
+    service = DecisionService(
+        scenes=scenes, config=PolicyConfig(visual_enabled=True), mimo=_CapturingMimo()
+    )
+    decision = service.get_decision(scene_id="toothache_demo_01", timestamp_ms=41000.0)
+    assert isinstance(captured[0], list)
+    assert captured[0][1]["type"] == "video_url"
+    assert decision.visual_context is not None
+    assert decision.visual_context.sent_to_mimo is True
+    assert decision.visual_context.start_ms == 30000.0

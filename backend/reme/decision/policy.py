@@ -26,7 +26,7 @@ from reme.decision.context import (
     build_decision_context,
 )
 from reme.decision.guardrails import TriggerConfig, violates_risk_floor
-from reme.decision.mimo.adapter import MimoCallResult, MimoTransportError
+from reme.decision.mimo.adapter import MimoCallResult, MimoClient, MimoTransportError
 from reme.decision.mimo.prompts import PersonaConfig, build_system_prompt, build_user_prompt
 from reme.decision.mimo.schema import MimoProposal, MimoSchemaError, parse_mimo_proposal
 from reme.decision.records import (
@@ -40,6 +40,7 @@ from reme.decision.records import (
     InteractionResponse,
     PrivacyMode,
     Uncertainty,
+    VisualContext,
     append_recorded_decision,
     as_recorded,
     load_recorded_decisions,
@@ -53,6 +54,7 @@ from reme.decision.state_machine import (
     on_response,
     on_tick,
 )
+from reme.decision.visual import load_visual_asset, visual_context_record, visual_payload
 
 
 class DecisionRejectedError(ValueError):
@@ -89,6 +91,7 @@ class PolicyConfig:
     demo_mode: DemoMode = DemoMode.LIVE
     scene_privacy: Mapping[str, PrivacyMode] = field(default_factory=dict)
     record_capture: bool = False
+    visual_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +180,23 @@ _TEMPLATES: dict[TemplateId, _Template] = {
 }
 
 
+class LiveMimoDecisionClient:
+    """Adapt the transport-level MimoClient to the per-task protocol."""
+
+    def __init__(self, client: MimoClient) -> None:
+        self._client = client
+
+    def complete_task(
+        self,
+        *,
+        scene_id: str,
+        task: MimoTask,
+        system_prompt: str,
+        user_content: str | list[dict[str, Any]],
+    ) -> MimoCallResult:
+        return self._client.complete(system_prompt=system_prompt, user_content=user_content)
+
+
 class MockMimoClient:
     """Scripted proposals per (scene, task); walks the real parse and validation."""
 
@@ -201,6 +221,14 @@ class MockMimoClient:
             raise MimoTransportError(f"mock script for {scene_id!r} lacks task {task.value!r}")
         content = json.dumps(payload, ensure_ascii=False)
         return MimoCallResult(content=content, latency_ms=0.0, attempts=1)
+
+
+@dataclass(frozen=True, slots=True)
+class VisualContextBundle:
+    """A loaded visual payload plus its truthful wire record."""
+
+    record: VisualContext
+    payload: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -360,8 +388,9 @@ class DecisionService:
         latency_ms: float | None = None
         attempts: int | None = None
         failure: str | None = None
+        visual = self._visual_context(scene_id)
         try:
-            result = self._call_mimo(scene_id, task, directive, elder_text)
+            result = self._call_mimo(scene_id, task, directive, elder_text, visual)
             latency_ms, attempts = result.latency_ms, result.attempts
             proposal = parse_mimo_proposal(result.content, task=task)
         except MimoTransportError as exc:
@@ -382,7 +411,9 @@ class DecisionService:
                     raise DecisionRejectedError("no_pending_decision")
                 return runtime.pending
             if proposal is None:
-                decision = self._build_degraded(runtime, scene_id, timestamp_ms, failure)
+                decision = self._build_degraded(
+                    runtime, scene_id, timestamp_ms, failure, visual=visual
+                )
                 self._record_capture(runtime, decision)
                 self._audit_event(
                     kind="degraded",
@@ -390,6 +421,7 @@ class DecisionService:
                     decision_id=decision.decision_id,
                     latency_ms=latency_ms,
                     mimo_attempts=attempts,
+                    visual_sent=visual is not None,
                     note=failure,
                 )
                 return decision
@@ -403,6 +435,7 @@ class DecisionService:
                     if self._config.demo_mode is DemoMode.MOCK
                     else DecisionSource.MIMO
                 ),
+                visual=visual,
             )
             self._commit_emission(runtime, directive, decision, proposal=proposal)
             self._audit_event(
@@ -411,8 +444,20 @@ class DecisionService:
                 decision_id=decision.decision_id,
                 latency_ms=latency_ms,
                 mimo_attempts=attempts,
+                visual_sent=visual is not None,
             )
             return decision
+
+    def _visual_context(self, scene_id: str) -> VisualContextBundle | None:
+        if not self._config.visual_enabled:
+            return None
+        streams = self._streams(scene_id)
+        asset = load_visual_asset(streams.manifest.path.parent)
+        if asset is None:
+            return None
+        return VisualContextBundle(
+            record=visual_context_record(asset), payload=visual_payload(asset)
+        )
 
     def _call_mimo(
         self,
@@ -420,14 +465,17 @@ class DecisionService:
         task: MimoTask,
         directive: Directive,
         elder_text: str | None,
+        visual: VisualContextBundle | None,
     ) -> MimoCallResult:
         assert self._mimo is not None and directive.skeleton is not None
         streams = self._streams(scene_id)
         context = build_decision_context(
             streams, timestamp_ms=directive.next_state.context_high_water_ms
         )
-        system_prompt = build_system_prompt(task, persona=self._config.persona)
-        user_content = build_user_prompt(
+        system_prompt = build_system_prompt(
+            task, persona=self._config.persona, visual=visual is not None
+        )
+        text_body = build_user_prompt(
             task,
             perception_summary=_perception_summary(context),
             interaction_summary={
@@ -437,6 +485,9 @@ class DecisionService:
             },
             elder_text=elder_text,
         )
+        user_content: str | list[dict[str, Any]] = text_body
+        if visual is not None:
+            user_content = [{"type": "text", "text": text_body}, visual.payload]
         return self._mimo.complete_task(
             scene_id=scene_id,
             task=task,
@@ -476,6 +527,7 @@ class DecisionService:
         *,
         proposal: MimoProposal | None,
         source: DecisionSource,
+        visual: VisualContextBundle | None = None,
     ) -> CareDecision:
         skeleton = directive.skeleton
         assert skeleton is not None
@@ -527,6 +579,7 @@ class DecisionService:
             consent_required=skeleton.consent_required,
             response_timeout_ms=skeleton.response_timeout_ms,
             action_card=card,
+            visual_context=None if visual is None else visual.record,
         )
 
     def _resolve_card(
@@ -552,6 +605,8 @@ class DecisionService:
         scene_id: str,
         timestamp_ms: float,
         failure: str | None,
+        *,
+        visual: VisualContextBundle | None = None,
     ) -> CareDecision:
         return CareDecision(
             scene_id=scene_id,
@@ -570,6 +625,7 @@ class DecisionService:
             fallback_used=True,
             source=DecisionSource.DEGRADED,
             demo_mode=self._config.demo_mode,
+            visual_context=None if visual is None else visual.record,
         )
 
     # -- record mode --------------------------------------------------------
@@ -623,6 +679,7 @@ class DecisionService:
         decision_id: str | None = None,
         latency_ms: float | None = None,
         mimo_attempts: int | None = None,
+        visual_sent: bool = False,
         note: str | None = None,
     ) -> None:
         if self._audit is None:
@@ -634,6 +691,7 @@ class DecisionService:
             decision_id=decision_id,
             latency_ms=latency_ms,
             mimo_attempts=mimo_attempts,
+            visual_sent=visual_sent,
             note=note,
         )
 
