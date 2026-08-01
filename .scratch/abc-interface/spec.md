@@ -2,10 +2,12 @@
 
 - Type: spec
 - Status: accepted-for-demo
+- Acceptance scope: 字段语义、所有权和适配边界已接受
+- End-to-end readiness: implementation-in-progress
 - Date: 2026-08-01
 - Owners: A / B / C
 - Scope: 姿态感知、MiMo 决策与软件演示之间的数据接口
-- Version policy: `v0-experiment`，联合验收前允许修改，不是永久产品合同
+- Version policy: `v0-experiment`，端到端验收前允许兼容性增补，不是永久产品合同
 
 ## 1. 目的
 
@@ -18,7 +20,8 @@
 3. C 不需要理解姿态模型或复制 B 的风险规则；
 4. 离线回放、Mock 和在线 MiMo 使用同一业务数据形状；
 5. `unknown`、低质量、超时和降级结果在接口中显式可见；
-6. 接口冻结后再拆分实现 Ticket，避免把冲突复制到每张票。
+6. 字段语义接受后再拆分实现 Ticket，避免把冲突复制到每张票；
+7. “合同已接受”和“端到端演示已验收”分别记录，不再用一个状态混合表达。
 
 ## 2. 模块与接口
 
@@ -44,7 +47,9 @@ C Demo Module
 - B 消费低频语义结果并输出业务决策，不要求逐帧消费 17 点数据；
 - C 只渲染 A/B 的结果并提交用户回应，不自行分类姿态或推断风险；
 - 原始视频通过受控本地引用交接，不嵌入 JSONL；
-- 在线、Mock、录制回放是同一接口的不同 Adapter。
+- 在线、Mock、录制回放是同一接口的不同 Adapter；
+- 比赛感知输入采用多个预录视频场景包，不依赖现场摄像头实时推断；
+- `demo_mode = live` 仅表示 B/MiMo 决策链路真实运行，不表示视频来源是实时摄像头。
 
 ## 3. 统一领域术语
 
@@ -166,17 +171,19 @@ unknown
   "scene_id": "fall_demo_01",
   "title": "疑似跌倒后无回应",
   "media": {
-    "local_path": "148703662.mp4",
+    "local_path": "media/source.mp4",
+    "source_type": "prerecorded_video",
     "sha256": "6b17dd3c2efdba0e4dff19b6d72836580dafa6bbe632eee5d5430df2eb5743cc",
     "width": 1280,
     "height": 720,
     "fps": 30.0,
     "frame_count": 2370,
-    "duration_ms": 79000
+    "duration_ms": 79000,
+    "demo_time_scale": 30.0
   },
   "streams": {
     "keypoints_2d": "keypoints_2d.jsonl",
-    "keypoints_3d": null,
+    "keypoints_3d": "derived/poses3d.json",
     "posture_observations": "posture_observations.jsonl",
     "transition_events": "transition_events.jsonl",
     "recorded_decisions": null
@@ -187,10 +194,13 @@ unknown
 规则：
 
 - `local_path` 只能是本地或演示包内引用，不是公网 URL；
+- `source_type` 当前固定为 `prerecorded_video`；比赛通过多个 SceneBundle 切换视频场景，不依赖现场摄像头；
+- `demo_time_scale` 为可选正数，默认 `1.0`；它只用于 C 的叙事时长换算，不改变任何真实 `*_ms` 时间戳；
+- B 的规则阈值仍使用真实视频毫秒或独立场景配置，不得用 `demo_time_scale` 伪造感知数据；
 - B 可以按 ADR-0003 从本地媒体抽取最小视觉上下文；
 - A 不负责上传媒体；
 - `streams` 中未提供的可选文件使用 `null`；
-- C 以 manifest 作为场景入口，不猜测文件名。
+- C 以 manifest 作为场景入口，不猜测文件名；切换场景时必须清空上一场景的决策和交互状态。
 
 ## 6. FrameLandmarks：A → C
 
@@ -228,6 +238,46 @@ unknown
 - C 根据 `frame_index` 或 `timestamp_ms` 同步，不重新运行模型。
 
 B 默认不消费此逐帧流。B 需要视觉上下文时，通过 manifest 中的本地媒体引用抽帧，而不是让 A 把像素塞进关键点接口。
+
+### 6.1 Keypoints3D：A → C（可选）
+
+当前 MotionBERT 产物使用一个完整 JSON 文件，而不是 JSONL：
+
+```json
+{
+  "schema_version": "reme-keypoints-3d/v0-experiment",
+  "scene_id": "fall_demo_01",
+  "source_schema": "motionbert-h36m-17/offline-demo-v1",
+  "model": {
+    "name": "MotionBERT DSTFormer",
+    "representation": "monocular root-relative 3D pose estimate"
+  },
+  "video": {
+    "fps": 30.0,
+    "frame_count": 2370,
+    "duration_seconds": 79.0
+  },
+  "coordinate_system": {
+    "root_relative": true,
+    "absolute_room_position": false
+  },
+  "joint_names": ["pelvis", "right_hip", "right_knee"],
+  "edges": [[0, 1], [1, 2]],
+  "frames": [[[0.0, 0.8, 0.0]]],
+  "scores": [[0.9]],
+  "runtime": {},
+  "warning": "单目根节点相对三维估计，不是房间绝对坐标。"
+}
+```
+
+约束：
+
+- `frames` 的完整形状必须为 `frame_count × 17 × 3`；
+- `joint_names` 固定为 H36M 17 点顺序，`edges` 只引用有效点索引；
+- 所有坐标必须为有限数值；
+- `scene_id` 和 `frame_count` 必须与 manifest 一致；
+- C 可以通过 Three.js 渲染，但不得把它描述为真实房间坐标或医学测量；
+- 该流用于可视化，不替代 2D 关键点、姿态观察或转变事件。
 
 ## 7. PostureObservation：A → B / C
 
@@ -319,6 +369,9 @@ A 不需要为 B 再生成一份把所有字段复制到一起的“大 JSON”�
   "dialogue_goal": "confirm_safety",
   "elder_message": "您还好吗？需要我帮您联系家人吗？",
   "family_notification": null,
+  "consent_required": false,
+  "response_timeout_ms": 8000,
+  "action_card": null,
   "action": "ask_elder",
   "reason_summary": "检测到跌倒式转变，随后处于低运动状态。",
   "uncertainty": "medium",
@@ -341,6 +394,7 @@ A 不需要为 B 再生成一份把所有字段复制到一起的“大 JSON”�
 normal
 observe
 check_in_required
+consent_required
 family_notification_required
 urgent_attention
 resolved
@@ -385,10 +439,39 @@ mock
 record
 ```
 
+### 10.6 `action_card`（可选）
+
+行动卡只在“具体需求闭环”视频场景中出现；字段一旦非空，六项内容必须齐全：
+
+```json
+{
+  "event": "长时间静坐 + 主诉牙疼",
+  "elder_quote": "牙疼，饭咬不动。",
+  "system_judgment": "疑似口腔问题影响进食，非紧急",
+  "suggested_action": "本周内预约口腔科检查",
+  "time_window": "3 天内",
+  "status": "pending"
+}
+```
+
+`status` 只允许：
+
+```text
+pending
+confirmed
+done
+```
+
 约束：
 
-- `risk_level` 为 `0..4`；
+- `risk_level` 为 `0..4`；`state = consent_required` 仍属于风险等级 2，它表示等待授权，不表示风险升级；
 - `need_dialogue = false` 时，`elder_message` 应为 `null`；
+- `response_timeout_ms` 是从 C 收到当前 CareDecision 起计算的相对倒计时；使用相对时长是因为比赛输入为预录视频，交互可能发生在视频暂停或结束后；
+- 高置信 `fall_like_transition` 触发询问时，`response_timeout_ms` 不得为 `null`；
+- 超时收到 `response = none` 后，B 必须通过 `source = rule` 输出 `family_notification_required` 或 `urgent_attention`，不得等待 MiMo；
+- MiMo 后到结果不得取消、降级或推迟已经触发的规则家属告警，只能补充解释文本；
+- `consent_required = true` 且尚未收到 `consent_granted` 时，`action` 不得为 `notify_family`；
+- `action_card` 非空时六项字段必须完整；
 - `action = notify_family` 时，`family_notification` 不得为 `null`；
 - MiMo 超时、非法输出或断网时必须输出合法的降级决策；
 - C 根据 `privacy_mode` 渲染，不根据 `reason_summary` 猜测展示方式；
@@ -403,7 +486,8 @@ record
   "scene_id": "fall_demo_01",
   "decision_id": "decision-0007",
   "timestamp_ms": 18600.0,
-  "response": "safe",
+  "response": "need_help",
+  "text": "牙疼，饭咬不动。",
   "source": "user_input",
   "demo_mode": "live"
 }
@@ -416,12 +500,16 @@ safe
 need_help
 unclear
 none
+consent_granted
+consent_denied
+card_confirmed
 ```
 
 ### 11.2 `source`
 
 ```text
 user_input
+family_input
 script
 timeout
 ```
@@ -429,7 +517,10 @@ timeout
 约束：
 
 - `decision_id` 必须对应触发本次询问的 CareDecision；
+- `text` 为可空字段，只能在 `source = user_input | script` 时承载老人主诉或补充说明；`source = timeout` 时必须为 `null`；
 - `none` 只能由超时或明确的脚本无回应触发；
+- `consent_granted`、`consent_denied` 只响应 `consent_required = true` 的决策；
+- `card_confirmed` 只能由家属视图以 `source = family_input` 提交；
 - C 不直接把回应转换为家属通知；C 提交回应，B 返回下一条 CareDecision；
 - B 最多允许一次澄清询问，避免无限交互循环。
 
@@ -438,8 +529,11 @@ timeout
 ```text
 scene-bundle/
 ├── manifest.json
+├── media/
+│   └── source.mp4
 ├── keypoints_2d.jsonl
-├── keypoints_3d.jsonl              # 可选
+├── derived/
+│   └── poses3d.json                # 可选，完整 JSON，不是 JSONL
 ├── posture_observations.jsonl
 ├── transition_events.jsonl
 └── recorded_decisions.jsonl        # record 模式可选
@@ -448,6 +542,7 @@ scene-bundle/
 职责：
 
 - A 生成 manifest、2D/3D 关键点、姿态观察和转变事件；
+- 每个 SceneBundle 对应一个预录视频场景；多个比赛场景通过多个 manifest 切换；
 - B 在 record 模式生成 recorded decisions；
 - C 只通过 manifest 定位其他文件；
 - 大视频和模型产物放入 Git 忽略的 `artifacts/`；
@@ -482,57 +577,93 @@ submitInteractionResponse(response) -> CareDecision
 
 C 页面不得直接依赖 MiMo 请求格式。
 
-## 14. 联合验收场景
+## 14. 离线多视频联合验收场景
 
-### 场景一：正常站立
+比赛使用多个预录视频 SceneBundle，而不是现场摄像头实时输入。每个视频都预计算 A 的感知流；B 可以对该预录数据真实调用 MiMo，也可以切换 Mock/Record Adapter。
 
-- A：`posture = standing`，无转变事件；
+评委侧默认不展示可轻易识别人物的清晰画面：
+
+| 视频场景 | 评委侧默认 `privacy_mode` | 说明 |
+|---|---|---|
+| 正常活动 | `blurred` | 展示系统不打扰，同时保留本地视频与骨架同步关系 |
+| 隐私保护 | `skeleton_only` 或 `hidden` | 主动减少人物与家庭环境暴露 |
+| 具体需求闭环 | `blurred` | 重点展示对话、授权、行动卡与家属回执 |
+| 跌倒式转变 | `blurred` | 重点展示询问、倒计时和规则升级；发送给 MiMo 的视觉上下文与评委画面展示是两件事 |
+
+家属视图默认使用 `skeleton_only`，不因 B 向 MiMo 发送了视觉上下文而自动展示清晰原图。`visible` 仅用于本地调试或经过团队明确批准的演示片段。
+
+### 视频一：正常活动、不打扰
+
+- A：`posture = standing | sitting`，无风险转变事件；
 - B：`state = normal`、`risk_level = 0`、`action = none`；
-- C：同步显示骨架与正常状态，不展示主动询问。
+- C：同步显示模糊视频与骨架，不展示主动询问。
 
-### 场景二：隐私状态
+### 视频二：隐私保护
 
 - A：继续提供骨架和姿态事实；
-- B：输出 `privacy_mode = skeleton_only` 或 `hidden`；
-- C：立即按模式隐藏/遮挡原图，骨架仍可展示。
+- B：输出 `privacy_mode = skeleton_only | hidden`；
+- C：立即隐藏清晰画面，骨架和必要状态仍可展示。
 
-### 场景三：跌倒式转变后无回应
+### 视频三：具体需求与行动卡闭环（素材待制作）
 
-- A：输出 `fall_like_transition`，之后姿态低位且运动低；
-- B：先输出 `check_in_required`；
-- C：展示询问并提交 `response = none`；
-- B：返回 `family_notification_required`；
-- C：展示家属通知。
+- 视频内容：长时间静坐或其他非紧急关怀触发动作；
+- B：输出 `check_in_required + ask_elder`；
+- C：提交 `response = need_help` 和主诉 `text = "牙疼，饭咬不动。"`；
+- B：通过 MiMo 理解需求，输出 `consent_required = true`；
+- C：提交 `consent_granted`；
+- B：输出 `notify_family`、家属通知和六要素 `action_card`；
+- 家属视图：提交 `card_confirmed + family_input`；
+- B：输出 `mark_resolved` 和回执文案，行动卡状态变为 `confirmed | done`。
 
-### 场景四：接口降级
+该视频尚未拍摄不影响字段合同保留，但在素材和 fixture 完成前不得宣称闭环已经端到端完成。
+
+### 视频四：跌倒式转变后无回应
+
+- A：输出高置信 `fall_like_transition`，之后姿态低位且运动低；
+- B：先输出 `check_in_required`，并提供 `response_timeout_ms`；
+- C：展示倒计时，到期提交 `response = none, source = timeout`；
+- B：不等待 MiMo，通过 `source = rule` 返回 `family_notification_required`；
+- C：展示家属告警；若二次超时或规则证据继续上升，可进入 `urgent_attention`；
+- 任何后到的 MiMo 结果都不能撤销已经发出的规则告警。
+
+### 系统模式：接口降级
+
+降级不是独立视频，可在任意上述视频上触发：
 
 - A 数据质量不可用或 B 的 MiMo 超时；
 - B：输出 `state = degraded`、`fallback_used = true`；
-- C：明确展示降级，不伪装为正常在线推理。
+- C：明确展示降级，并切换 Mock 或 Record 兜底，不伪装为正常在线推理。
 
-## 15. 接口冻结条件
+## 15. 合同接受与端到端验收
 
-在拆分 A/B/C 实现 Ticket 前，三方必须确认：
+这里使用两个独立维度，不再要求二选一：
 
-- [ ] 统一使用 `posture`；
-- [ ] 统一使用 `posture_duration_ms`；
-- [ ] 统一使用 `landmark_quality`；
-- [ ] 所有时间均为视频起点毫秒偏移；
-- [ ] A 的逐帧关键点与低频语义结果分流；
-- [ ] 转变事件不重复输出 `possible_fall`；
-- [ ] 持续静止由 A 输出事实、B 解释是否需要关怀；
-- [ ] C 通过 manifest 读取场景；
-- [ ] C 提交回应后由 B 决定下一步；
-- [ ] `live / mock / record` 共用 CareDecision 形状；
-- [ ] Visual 路径真实记录发送窗口和帧数；
-- [ ] 至少准备一组完整样例通过 A→B→C 人工回放评审。
+- `Status: accepted-for-demo` 表示字段语义、所有权和模块边界已被接受，可以据此实现；
+- `End-to-end readiness: implementation-in-progress` 表示运行时代码、视频素材和联合回放尚未全部完成。
 
-三方确认后：
+### 15.1 已接受的语义决议
 
-1. 将 Status 改为 `accepted-for-demo`；
-2. 同步更新 A/B/C 各自规格中的冲突示例；
-3. 为各接口建立可执行契约测试；
-4. 再执行 `/to-tickets` 拆分实现工作。
+- [x] 统一使用 `posture`、`posture_duration_ms`、`landmark_quality`；
+- [x] 所有感知时间均为视频起点毫秒偏移，倒计时使用相对 `response_timeout_ms`；
+- [x] A 的逐帧关键点与低频语义结果分流；
+- [x] 转变事件不重复输出 `possible_fall`；
+- [x] 持续静止由 A 输出事实、B 解释是否需要关怀；
+- [x] C 通过 manifest 读取并切换预录视频场景；
+- [x] C 提交回应后由 B 决定下一步；
+- [x] 具体需求闭环保留 `text / consent / action_card / family_input`；
+- [x] 跌倒无回应采用规则确定性升级，MiMo 不可取消；
+- [x] `live / mock / record` 共用 CareDecision 形状。
+
+### 15.2 尚待端到端验收
+
+- [ ] B/C 对新增可空字段完成契约测试；
+- [ ] Visual 路径真实记录发送窗口、载荷类型和帧数；
+- [ ] 四个预录视频场景的 manifest 和 fixture 准备完成；
+- [ ] 具体需求闭环视频完成拍摄并通过全链路回放；
+- [ ] 跌倒式转变规则倒计时与不可取消升级通过测试；
+- [ ] 至少一组完整样例通过 A→B→C 人工回放评审。
+
+端到端项目完成时，只更新 `End-to-end readiness` 和本节勾选项，不回退已经接受的字段语义。
 
 ## 16. 暂不冻结的内容
 

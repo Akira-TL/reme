@@ -129,6 +129,9 @@ B 必须向 C 返回稳定、结构化、已校验的结果，而不是只返回
   "dialogue_goal": "confirm_safety",
   "elder_message": "您还好吗？需要我帮您联系家人吗？",
   "family_notification": null,
+  "consent_required": false,
+  "response_timeout_ms": 8000,
+  "action_card": null,
   "action": "ask_elder",
   "reason_summary": "检测到疑似跌倒式转变，随后处于低运动状态。",
   "uncertainty": "medium",
@@ -147,6 +150,9 @@ B 必须向 C 返回稳定、结构化、已校验的结果，而不是只返回
 - `dialogue_goal`：询问目的；
 - `elder_message`：老人端提示；
 - `family_notification`：家属端通知内容；
+- `consent_required`：是否需要先获得老人授权；
+- `response_timeout_ms`：从 C 收到决策后开始计算的相对回应倒计时；
+- `action_card`：具体需求场景中的六要素行动卡，可空；
 - `action`：当前动作；
 - `reason_summary`：页面可展示的简短原因；
 - `uncertainty`：不确定性；
@@ -163,6 +169,7 @@ B 必须向 C 返回稳定、结构化、已校验的结果，而不是只返回
 | 0 | `normal` | 不主动打扰 |
 | 1 | `observe` | 继续观察，显示轻度异常 |
 | 2 | `check_in_required` | 主动询问老人 |
+| 2 | `consent_required` | 等待老人授权，尚不得通知家属 |
 | 3 | `family_notification_required` | 生成家属通知 |
 | 4 | `urgent_attention` | 展示紧急关注状态，不接入真实急救服务 |
 
@@ -184,13 +191,18 @@ observe
 
 check_in_required
   ├─ 老人回应 safe → resolved
-  ├─ 老人回应 need_help → family_notification_required
-  ├─ 超时无回应 → family_notification_required
+  ├─ 老人回应 need_help + 具体主诉 → consent_required
+  ├─ 老人回应 need_help + 无需授权的紧急帮助 → family_notification_required
+  ├─ 超时无回应 → 规则直接 family_notification_required
   └─ 输入不可用 → degraded
 
+consent_required
+  ├─ consent_granted → family_notification_required + action_card
+  └─ consent_denied → resolved 或仅本地建议
+
 family_notification_required
-  ├─ 家属已确认 → resolved
-  └─ 风险继续上升 → urgent_attention
+  ├─ 家属 card_confirmed → resolved
+  └─ 风险继续上升或二次超时 → urgent_attention
 ```
 
 ### 6.1 老人回应枚举
@@ -198,16 +210,20 @@ family_notification_required
 C 向 B 回传的模拟或真实回应应使用固定枚举：
 
 - `safe`：老人明确表示无事；
-- `need_help`：老人请求帮助；
+- `need_help`：老人请求帮助，可携带主诉 `text`；
 - `unclear`：回应无法理解；
-- `none`：超时无回应。
+- `none`：超时无回应；
+- `consent_granted / consent_denied`：老人授权或拒绝向家属发送具体需求；
+- `card_confirmed`：家属确认行动卡，只能来自 `family_input`。
 
 ### 6.2 响应原则
 
 - `safe`：停止升级，记录已确认安全；
 - `need_help`：生成家属通知；
 - `unclear`：最多进行一次澄清询问，随后进入人工确认；
-- `none`：按演示规则升级家属通知；
+- `none`：高风险场景由确定性规则升级家属通知，不等待 MiMo；
+- MiMo 后到结果不得撤销、降低或推迟规则已经发出的家属告警；
+- `consent_required = true` 时，收到授权前不得输出 `notify_family`；
 - 不允许无限多轮追问。
 
 ## 7. MiMo 接入模块
@@ -364,7 +380,7 @@ D 据此制作技术架构、PPT 和答辩口径。
 7. 完成超时、非法输出和断网降级；
 8. 完成主动交互状态机；
 9. 向 C 提供可调用接口或本地服务；
-10. 提供三个演示场景的 Mock 数据；
+10. 提供四个预录视频场景的 Mock 数据；
 11. 记录实际发送给 MiMo 的字段、关键帧数量或视频时长；
 12. 记录至少一次端到端运行结果。
 
@@ -468,7 +484,7 @@ B 的工作完成需要同时满足：
 - 提供接口文档和样例；
 - 完成视频时间点与决策事件同步；
 - 验证隐私模式、询问和家属通知；
-- 连续跑通三个场景。
+- 连续跑通正常、隐私、具体需求闭环和跌倒无回应四个预录视频场景。
 
 ### 第五阶段：向 D 提供真实材料
 
@@ -481,7 +497,7 @@ B 的工作完成需要同时满足：
 
 B 当前最先要完成的不是完整业务系统，而是一个可测量的 MiMo 双路径 Smoke Test：
 
-1. 使用正常、隐私、疑似异常三个场景准备结构化事件；
+1. 使用正常、隐私、具体需求闭环和跌倒无回应四个预录视频场景准备结构化事件；
 2. 对同一场景分别调用 Structured 路径和 Visual 路径；
 3. Visual 路径使用最少关键帧或最短可用视频片段；
 4. 验证两条路径都返回统一 JSON；
