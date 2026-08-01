@@ -179,14 +179,17 @@ sequenceDiagram
     Note over S,M: 若 possible_fall：S 直接倒计时/告警，不等待 A 返回
 ```
 
-## 5. live 模式接入清单（对照情报回填）
+## 5. live 模式接入参数（已按 [情报-MiMo-API](情报-MiMo-API.md) 回填，2026-08-01）
 
-| 项 | 冻结会需要拍板 | 依据 |
+| 项 | 冻结会建议值 | 依据 |
 |---|---|---|
-| base URL / 模型名 / 认证 | 现场 API 形态（密钥发放方式） | 情报-MiMo-API.md + 现场公告 |
-| 浏览器直调 or 本地代理转发 | **若 CORS 不放开，需 10 行本地代理**（谭朗 MIMO-01 顺带验证） | 同上（CORS 未确认为默认假设） |
-| 结构化输出手段 | JSON mode / function calling / prompt 约束 三选一 | 情报-MiMo-API.md 实测 |
-| 超时上限与重试预算 | 建议：超时 8s、重试 1、降级模板兜底 | v3.0 校验降级条款 |
-| 限流应对 | 对话轮间 ≥1s 间隔；mock 模式随时可切 | 情报-MiMo-API.md 限流数据 |
+| base URL / 认证 | `https://api.xiaomimimo.com/v1`，`Authorization: Bearer sk-…`（OpenAI 协议兼容，现有 SDK 换 base URL 即用） | 官方文档，情报 §2 |
+| 模型名 | 主力 `mimo-v2.5`（¥1/¥2 每 M）；决策质量不够再 A/B `mimo-v2.5-pro` | 情报 §3 |
+| Key 获取 | 小米账号自助即时创建，无审批；零充值可否调用待实测 | 情报 §2/§9 |
+| 浏览器直调 | **CORS 实测放行（`allow-origin: *`）**，直连可行；key 运行时粘贴存 localStorage，不进源码（用户协议红线） | 情报 §6 |
+| 结构化输出手段 | JSON mode（`response_format: json_object`）+ `thinking: disabled` + prompt 内定义合同字段；**不用 function calling 承载决策**（`tool_choice` 仅 auto） | 情报 §4 |
+| 超时上限与重试预算 | 超时 8s、重试 1、规则模板降级兜底 | v3.0 校验降级条款 |
+| 限流应对 | RPM 100/模型，演示量级无压力；MiMoClient base URL 可配置，留 OpenRouter（`xiaomi/mimo-v2.5`）一键切换防 CORS 收紧 | 情报 §5/§7 |
+| 语音链路 | ASR `mimo-v2.5-asr`、TTS `mimo-v2.5-tts`（限免）同平台同 key，MIMO-14/15 不必另找供应商 | 情报 §3 |
 
-**G-01 实测项（08-01 12:00 前）**：① MIMO-01 最小调用跑通并记录往返延迟 5 次；② 浏览器 fetch 直调验证 CORS；③ 结构化输出试探（同一 prompt 连续 5 次 JSON 解析成功率）；④ 失败即锁定 mock 主演示口径。
+**G-01 剩余实测项（08-01 12:00 前，均需真实 key）**：① 注册并验证零充值状态可调用；② MIMO-01 最小调用跑通、记录往返延迟 5 次；③ 浏览器 fetch 直调复核 CORS；④ 决策 prompt 连续 5 次 JSON 解析成功率；⑤ 失败即锁定 mock 主演示口径。API 形态本身已确认，live 从"加分项"升格为"高可行"。
