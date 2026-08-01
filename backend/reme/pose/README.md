@@ -25,6 +25,8 @@
 ```text
 reme.pose
 ├── runtime.py           # C控制的实时/预录会话和事件信封
+├── camera.py            # 摄像头采集、实时事件流和性能统计
+├── movenet.py           # MoveNet Lightning LiteRT推理与跟踪裁剪
 ├── scene_bundle.py      # 预录 SceneManifest 与 FrameLandmarks 数据包
 ├── review.py            # 原视频与 MotionBERT Three.js 三维骨架验收页
 ├── review_server.py     # 支持视频 Range 请求的本地验收服务器
@@ -38,6 +40,68 @@ reme.pose
 跨角色字段必须遵循 `.scratch/abc-interface/spec.md`。实验产物放入被 Git 忽略的 `artifacts/pose-classification/`，不得将大型视频、模型或逐帧结果提交到 Git。
 
 兼容入口 `reme.scene_bundle` 暂时保留；新代码和新测试应直接使用 `reme.pose.*`。
+
+## 实时摄像头与 MoveNet
+
+当前开发设备已识别：
+
+```text
+/dev/video0  HD Webcam 视频采集节点
+/dev/video1  同一设备的辅助节点，不提供普通视频格式
+```
+
+推荐摄像头配置：
+
+```text
+1280 × 720
+30 FPS
+MJPG
+```
+
+运行依赖当前已安装在项目 `.venv`：
+
+```text
+ai-edge-litert 2.1.6
+opencv-python-headless 5.0.0.93
+numpy 2.4.6
+```
+
+将已验证模型放到 Git 忽略目录，例如：
+
+```text
+models/movenet/movenet_lightning_f16_v4.tflite
+```
+
+持续运行并向标准输出写 RuntimeEvent JSONL：
+
+```bash
+.venv/bin/python -m reme.pose.camera \
+  --session-id live-camera-001 \
+  --scene-id live-camera-001 \
+  --camera 0 \
+  --model models/movenet/movenet_lightning_f16_v4.tflite \
+  --width 1280 \
+  --height 720 \
+  --fps 30 \
+  --score-threshold 0.2 \
+  --num-threads 4
+```
+
+按 `Ctrl+C` 停止。程序会释放摄像头，并把性能摘要写入标准错误。限定短跑时添加：
+
+```bash
+--max-frames 300
+```
+
+隐私边界：
+
+- 默认只在内存中读取原始帧；
+- 不保存原始帧；
+- 不录制原始视频；
+- 标准输出仅包含关键点与会话事件；
+- C切换或重启session后，A必须停止旧流并释放设备。
+
+当前摄像头取景是否能完整包含双膝和双踝由人工验收决定，不在代码中放宽质量阈值掩盖取景问题。
 
 ## MotionBERT 可重复重建
 
