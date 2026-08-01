@@ -23,11 +23,11 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/reme"]
+packages = ["backend/reme"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-pythonpath = ["src"]
+pythonpath = ["backend"]
 testpaths = ["tests"]
 
 [tool.ruff]
@@ -40,4 +40,5 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+mypy_path = "backend"
 packages = ["reme"]
