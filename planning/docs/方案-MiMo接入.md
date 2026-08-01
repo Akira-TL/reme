@@ -193,4 +193,4 @@ sequenceDiagram
 | 限流应对 | RPM 100/模型，演示量级无压力；MiMoClient base URL 可配置，留 OpenRouter（`xiaomi/mimo-v2.5`）一键切换防 CORS 收紧 | 情报 §5/§7 |
 | 语音链路 | ASR `mimo-v2.5-asr`、TTS `mimo-v2.5-tts`（限免）同平台同 key，MIMO-14/15 不必另找供应商 | 情报 §3 |
 
-**G-01 剩余实测项（08-01 12:00 前，均需真实 key）**：① 注册并验证零充值状态可调用；② MIMO-01 最小调用跑通、记录往返延迟 5 次（模型名先按官方 `mimo-v2.5`，404 再试 Miloco 默认写法 `xiaomi/mimo-v2.5`，见 [情报-Miloco-代码剖析](情报-Miloco-代码剖析.md) §3.1）；③ 浏览器 fetch 直调复核 CORS；④ 决策 prompt 连续 5 次 JSON 解析成功率；⑤ 失败即锁定 mock 主演示口径。API 形态本身已确认，live 从"加分项"升格为"高可行"。
+**G-01 实测结果（2026-08-01 真实 key 完成，全绿，详见 [.scratch/handoff/2026-08-01-mimo-api-live-test.md](../../.scratch/handoff/2026-08-01-mimo-api-live-test.md)）**：① 新建 key 即可调用；② 最小调用 200，`mimo-v2.5` 官方名直接可用（无需 `xiaomi/` 前缀），冷连接直连 0.51–2.03s；③ 真实 POST 带 Origin 响应 `allow-origin: *`，浏览器直连无阻碍；④ 决策 prompt JSON mode **5/5 解析成功、九字段全齐**（3.4–5.9s；建议 `temperature≈0.2` 收敛分支波动）；⑤ 附加：`image_url` 与 `video_url`（base64 mp4 data URI + `fps`）均 200——**V 路径视频载荷通道成立**，crosscheck L30 不必降级关键帧。live 可作主路径候选，mock 保底不变。key 寄存 `~/.config/reme/mimo.env`（600，不进 git）。
