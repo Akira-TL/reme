@@ -29,3 +29,5 @@ Downloads*.zip
 # CodeGraph local index
 .codegraph/
 **/*mp4
+# Claude Code local state (agent worktrees, session settings)
+.claude/
