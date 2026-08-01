@@ -2,21 +2,15 @@
 
 Reme is a privacy-first care agent that aims to preserve a person's dignity while still detecting safety-relevant events.
 
-## MVP hypothesis
+## Working hypothesis
 
-Derived human-motion data can provide useful care signals without exposing the full scene to family members:
+A locally processed human-action video may be convertible into a privacy-preserving skeleton or abstract view that retains enough motion information to classify body states and safety-relevant transitions. This is not yet proven on the team's video or hardware.
 
-1. Extract normalized pose or motion data from an offline source.
-2. Keep raw video outside the core event and decision pipeline.
-3. Detect a small set of event candidates, beginning with fall-like motion and prolonged inactivity.
-4. Emit a structured event payload.
-5. Let a decision agent choose whether to ask the person, notify family, or escalate.
-
-The first demo should prove this end-to-end loop. It should not claim clinical-grade accuracy or production-ready privacy guarantees.
+The team has a usable MiMo API. The current uncertainty is pose extraction and posture/transition classification, not API availability. Pose model, classifier, permanent schema, Raspberry Pi role, MiMo input contract, and demo workflow remain open until feasibility experiments are reviewed.
 
 ## Current stage
 
-Discovery and technical validation. The repository intentionally starts small so the team can validate the riskiest assumptions before choosing a larger architecture.
+Feasibility analysis. The current priority is to validate the source video, compare pose extraction routes, classify static postures, and determine whether normal transitions can be distinguished from fall-like transitions.
 
 ## Repository layout
 
@@ -41,21 +35,14 @@ uv run ruff check .
 uv run mypy src
 ```
 
-Run the deterministic motion-data demo:
-
-```bash
-uv run reme-demo --scenario fall-no-response
-uv run reme-demo --input examples/motion/fall_like.jsonl --response no_response
-```
-
-The JSONL exchange format is documented in `docs/motion-data-format.md`.
+The existing `reme-demo` command and motion-data files came from an early exploratory spike. They are not an accepted architecture and should not be used to constrain the feasibility experiments.
 
 ## Immediate milestone
 
-Build a motion-data tracer bullet:
+Run the first feasibility gate after the team supplies a video:
 
 ```text
-motion data -> pose observations -> event candidate JSON -> staged decision
+inspect video -> compare pose extractors -> annotate posture windows -> evaluate posture/transition classifiers -> decide go/no-go
 ```
 
-Success means the pipeline runs locally from JSON/JSONL motion data, creates no raw-media artifacts, and reproduces at least one fall-like event and response sequence. A later adapter will extract the same observation format from the team-supplied offline video.
+Do not define alert policy or a permanent MiMo payload before this gate. See `.scratch/feasibility/feasibility-analysis.md` and `.scratch/feasibility/posture-classification-protocol.md`.

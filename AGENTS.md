@@ -2,7 +2,7 @@
 
 ## Project intent
 
-Reme is a privacy-first care agent for home monitoring. The MVP should prove that derived human-motion data can be converted into structured event candidates and passed to a decision layer that chooses an appropriate response. Offline video extraction is an adapter, not a dependency of the core pipeline.
+Reme is a privacy-first care concept currently validating pose-based posture classification. Local video decoding is allowed, judge/family-facing imagery must not make a person easily identifiable, and a MiMo API is available. No pose extractor, classifier, permanent schema, alert policy, or hardware role is accepted until the relevant feasibility gate is measured and reviewed.
 
 The primary scenario is an older adult living alone or spending time alone at home. Other scenarios are extensions, not the MVP narrative.
 
@@ -15,10 +15,12 @@ The primary scenario is an older adult living alone or spending time alone at ho
 
 ## Engineering rules
 
-- Prefer a thin end-to-end tracer bullet over isolated subsystems.
-- Keep raw video outside the core event and decision pipeline. Do not add cloud upload or persistent raw-video storage without an explicit ADR.
+- Do not implement product architecture before the relevant feasibility question has a written hypothesis, experiment, evidence, and go/no-go result.
+- Treat commit `61f2a9b` as an unaccepted exploratory spike; do not extend its schema or thresholds.
+- Prefer narrow feasibility experiments over end-to-end product code.
+- Keep raw video local during experiments. Do not add cloud upload or persistent decoded-frame storage without an explicit ADR.
 - Never invent accuracy, latency, supported-behaviour, or privacy claims. Record measured results and test conditions.
-- Separate perception from decision-making: vision produces structured observations; the decision agent chooses actions.
+- Separate pose extraction, static posture classification, temporal transition classification, and MiMo interaction; measure each seam independently.
 - Keep event schemas explicit, versioned, and testable.
 - Design the demo around failure visibility: confidence, fallback state, and unavailable capability must be shown rather than hidden.
 - Put temporary investigation notes, local tickets, specs, and handoffs under `.scratch/`; do not leave planning only in chat.

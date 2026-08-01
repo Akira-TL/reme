@@ -2,67 +2,50 @@
 
 Date: 2026-08-01
 
-## Current product statement
+## Current phase
 
-Reme is a privacy-first care agent that consumes derived human-motion data, emits structured event candidates, and uses a decision layer to choose a staged response.
+Feasibility analysis, not implementation.
 
-Primary demo scenario: one older adult, one offline motion sequence, one reproducible fall-like event. A team-supplied human video will later be used by a separate video-to-motion adapter.
+The repository was initialized correctly, but commit `61f2a9b` prematurely selected a motion-data schema, event heuristic, and response flow before the team supplied the video or validated any pose extractor. That commit is now classified as an unaccepted exploratory spike.
 
-## Decisions already made
+## Decisions that remain valid
 
-- Use the existing `/home/Akira/projects/reme` directory.
-- Use Git with `main` as the initial branch.
-- Use CodeGraph for repository navigation once indexed.
-- Use `AGENTS.md` for agent instructions.
-- Use local Markdown files under `.scratch/` for specs, tickets, handoffs, and investigation logs.
-- Use a single root `CONTEXT.md` and root `docs/adr/`.
-- Begin with Python and a small event contract; add CV dependencies only for the later offline video-to-motion adapter.
-- Keep raw video outside the core event and decision pipeline.
-- Do not use a live camera in the MVP; use motion data as the stable input contract.
+- Project directory: `/home/Akira/projects/reme`.
+- Git branch: `main`.
+- CodeGraph is initialized.
+- Agent instructions live in `AGENTS.md`.
+- Specs, research, tickets, experiments, and handoffs live under `.scratch/`.
+- Domain context lives in root `CONTEXT.md`; ADRs live under `docs/adr/`.
+- Claims about accuracy, latency, privacy, hardware, and MiMo require measured evidence.
 
-## Ask Matt routing decision
+## Decisions withdrawn
 
-This effort is greenfield, but the hackathon destination and primary user story are already visible. A full Wayfinder map would add overhead before the most urgent risk is tested.
+The following are not accepted:
 
-Recommended route:
+- JSONL as the motion-data contract;
+- torso angle, body center, and visibility as sufficient fields;
+- any hard-coded fall threshold;
+- a fixed local-check-in then family-notification sequence;
+- Raspberry Pi 4B as the inference device;
+- MiMo as a decision authority;
+- the claim that raw video is outside all processing.
 
-1. `grill-with-docs` to settle the MVP acceptance criteria and demo story.
-2. Implement a narrow motion-data tracer bullet to settle the event and decision interfaces.
-3. Use the supplied offline human video to prototype and measure a video-to-motion adapter.
-4. Fold the adapter findings back into the product thread.
-5. `to-spec`, then `to-tickets` because the build spans multiple sessions and owners.
-6. Run `implement` per ticket, blockers first, with tests for deterministic logic.
+## Ask Matt routing correction
 
-## First runnable question
+The correct route is:
 
-Can normalized motion data produce a transparent and reproducible fall-like event candidate and staged response without raw media entering the core pipeline?
+1. `/research` — identify credible candidate technologies and their platform/licensing constraints.
+2. Wait for the actual video and target environment.
+3. `/prototype` — run a throwaway comparison of MediaPipe Pose Landmarker and MoveNet on that video.
+4. Record a go/conditional-go/no-go decision.
+5. Use `/grill-with-docs` to decide the product and demo around the measured result.
+6. Only then use `/to-spec` and `/to-tickets`.
 
-## Prototype acceptance evidence
+## Active artifact
 
-Record all results rather than relying on impressions:
+- Feasibility report: `.scratch/feasibility/feasibility-analysis.md`
+- First experiment ticket: `.scratch/feasibility/issues/01-video-pose-feasibility.md`
 
-For the motion-data core:
+## Current next action
 
-- exact JSONL schema and fixture;
-- deterministic normal, fall-like, safe-response, no-response, and low-visibility results;
-- whether any raw-media files or network requests are created.
-
-For the later video adapter:
-
-- model and version;
-- machine and supplied source video;
-- average and p95 frame latency;
-- approximate processing frames per second;
-- CPU and memory observations;
-- behaviour under partial occlusion;
-- false triggers during annotated stand/sit/lie/fall-like sequences;
-- whether any decoded frame files or network requests are created.
-
-## Questions for the next `grill-with-docs` session
-
-1. The first 60–90 second demo uses motion data rather than a live camera.
-2. Raspberry Pi 4B compatibility remains unclaimed until measured.
-3. A possible fall triggers local check-in, then family notification after no response.
-4. MiMo capability remains a later integration decision; deterministic safety policy is authoritative for the MVP.
-5. If offline video extraction is unreliable, the truthful fallback is the derived-motion pipeline with the adapter marked unavailable.
-6. Accuracy, latency, and hardware claims require measured evidence before entering the presentation.
+The first experiment is blocked until the team supplies the video. After it arrives, inspect the media and compare pose extraction only. Do not implement fall detection, alert policy, MiMo integration, or Raspberry Pi deployment in that experiment.

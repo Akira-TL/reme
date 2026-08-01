@@ -1,6 +1,8 @@
 # Reme MVP Demo Spec
 
-**Status:** ready-for-agent
+**Status:** rejected draft — written before feasibility analysis
+
+> Do not implement or extend this specification. Its motion schema, fall logic, staged response, and MiMo boundary were assumed before the source video and target environments were tested. The active document is `.scratch/feasibility/feasibility-analysis.md`.
 
 ## Problem Statement
 

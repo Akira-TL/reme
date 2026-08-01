@@ -2,11 +2,11 @@
 
 **What to build:** Use the team-supplied human video to evaluate an offline pose extractor behind the motion-observation seam and record whether it can produce stable derived motion data without placing raw video inside the event and decision pipeline.
 
-**Blocked by:** 01 — Scripted care tracer bullet.
+**Blocked by:** Replaced by the feasibility gate under `.scratch/feasibility/`.
 
-**Status:** ready-for-agent
+**Status:** superseded — do not implement against the existing motion contract
 
-- [ ] The adapter reads a local video file and emits normalized derived landmarks through the existing motion-observation contract.
+- [ ] Superseded: the feasibility experiment must inspect real model outputs before any motion-observation contract is chosen.
 - [ ] The model, runtime, machine, source video, and exact test conditions are recorded.
 - [ ] Average and P95 frame latency, approximate processing FPS, CPU, and memory are measured.
 - [ ] Stand, sit, lie, partial occlusion, and fall-like transitions present in the source are annotated and exercised.

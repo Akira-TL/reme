@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** resolved
+**Status:** rejected — premature implementation
 
 - [x] A normal upright sequence emits no event or escalation.
 - [x] A worked fall-like sequence emits one event candidate with supporting measurements.
@@ -15,9 +15,9 @@
 - [x] The demo runs with one documented command.
 - [x] Tests, lint, and type checking pass.
 
-## Answer
+## Retrospective
 
-The core pipeline now accepts normalized `MotionObservation` values from deterministic scenarios or JSONL files. It emits an explainable `possible_fall` event candidate, chooses local check-in first, and notifies family only after `no_response`. The evidence score is explicitly marked as non-clinical. The synthetic CLI path was tested with network sockets disabled and in an empty working directory; it opened no socket and created no file.
+This implementation proved only that a hand-authored synthetic state machine can run. It did not answer whether the supplied video yields usable pose data, whether the chosen fields represent real model output, whether fall detection is defensible, or whether this response policy fits the product. It is not an accepted project result.
 
 Validated command:
 

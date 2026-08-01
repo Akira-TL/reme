@@ -1,6 +1,6 @@
 # ADR-0002: Use derived motion data as the core pipeline input
 
-- Status: Accepted
+- Status: Rejected as premature
 - Date: 2026-08-01
 
 ## Context
@@ -9,20 +9,15 @@ The first project framing treated a live camera feed as the starting point of th
 
 This change makes the core behaviour reproducible before a specific pose model, camera runtime, or hardware platform is selected.
 
-## Decision
+## Rejection
 
-- The core pipeline accepts normalized `MotionObservation` values rather than images or encoded video.
-- The initial exchange format is JSONL with relative time, torso angle, normalized vertical body center, and visibility.
-- Event detection and staged response logic must be testable using synthetic and recorded motion-data fixtures.
-- Offline video-to-motion extraction is an adapter behind this contract.
-- Raw video and decoded frames do not enter the event or decision modules.
-- The first adapter evaluation will use the human-motion video supplied by the team.
-- Live camera capture is not part of the MVP.
+This decision was made before validating the supplied video, candidate pose models, hardware constraints, or product flow. It incorrectly fixed a motion schema and core boundary before evidence existed.
+
+The JSONL contract, event thresholds, and staged response created under this ADR are exploratory only. They must not constrain the feasibility experiments or be presented as accepted architecture.
 
 ## Consequences
 
-- Development can proceed in WSL2 without camera access or computer-vision dependencies.
-- Demo behaviour is deterministic and can be rehearsed from a committed motion-data fixture.
-- The project cannot yet claim that it extracts stable pose data from real video; that claim requires the separate adapter spike.
-- The initial motion schema is intentionally small and may need an ADR-backed revision after testing the supplied video.
-- ADR-0001's privacy boundary remains in force, but its camera-first implementation assumption is replaced by this adapter-based architecture.
+- Work returns to feasibility analysis.
+- The team will compare pose extractors on the actual source video before defining a data contract.
+- No event detector, response policy, Raspberry Pi role, or MiMo role is accepted yet.
+- The exploratory code may later be deleted, rewritten, or retained only as a historical spike.
