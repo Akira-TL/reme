@@ -153,7 +153,7 @@ artifacts/pose-classification/raw/downloads6/
   --scene-id live-camera-001 \
   --camera 0 \
   --model models/movenet/movenet_lightning_f16_v4.tflite \
-  --posture-model artifacts/pose-classification/models/posture-softmax-v3/model.json \
+  --posture-model artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json \
   --posture-hz 7.5
 ```
 
@@ -169,7 +169,7 @@ artifacts/pose-classification/raw/downloads6/
   --port 8765 \
   --camera 0 \
   --movenet-model models/movenet/movenet_lightning_f16_v4.tflite \
-  --posture-model artifacts/pose-classification/models/posture-softmax-v3/model.json
+  --posture-model artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json
 ```
 
 浏览器打开：
@@ -179,6 +179,31 @@ http://127.0.0.1:8765/live
 ```
 
 左侧通过本机 MJPEG 显示内存中的摄像头帧；右侧将同一帧的 MoveNet 2D 关键点映射到可旋转的浅深度 Three.js 空间。该页面明确标记为“展示型3D”，不声称实时 MotionBERT 三维推断。停止服务使用 `Ctrl+C`。
+
+## C控制的实时事件服务
+
+启动A侧HTTP控制与WebSocket事件流：
+
+```bash
+.venv/bin/python -m reme.pose.runtime_server \
+  --host 127.0.0.1 \
+  --port 8770 \
+  --camera 0 \
+  --movenet-model models/movenet/movenet_lightning_f16_v4.tflite \
+  --posture-model artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json
+```
+
+控制入口：
+
+```text
+POST /api/runtime/start
+POST /api/runtime/stop
+GET  /api/runtime/status
+GET  /api/health
+WS   /ws/events?session_id=<session_id>
+```
+
+`POST /api/runtime/start`只接受共享合同中的`live_camera`请求。HTTP响应先返回`starting`；摄像头成功打开并完成首帧推理后，`GET /api/runtime/status`才返回`running`。WebSocket发送同一`session_id`下的`FrameLandmarks`和`PostureObservation`。替换session时旧连接收到关闭帧，旧事件不会进入新会话。
 
 ## MotionBERT 可重复重建
 

@@ -6,10 +6,10 @@
 
 **Blocked by:** 03 — 将姿态分类接入实时运行时；B/C对应P0实现。
 
-**Status:** ready-for-agent
+**Status:** claimed
 
-- [ ] C启动live_camera后A/B分别回报真实running状态。
-- [ ] A关键点和姿态事件通过WebSocket到达B/C。
+- [ ] C启动live_camera后A/B分别回报真实running状态。A侧HTTP控制已完成：请求先返回starting，摄像头首帧后才回报running；B侧状态仍待联调。
+- [ ] A关键点和姿态事件通过WebSocket到达B/C。A侧send-only WebSocket事件流与本地客户端验收已完成；B/C实际消费者仍待接入。
 - [ ] C显示实时视频、2D骨架和“2D关键点三维可视化”。
 - [ ] B正常稳定时不持续调用MiMo，事件触发时返回CareDecision。
 - [ ] C可以提交safe、need_help、unclear和timeout回应。
