@@ -1,15 +1,17 @@
 # A 姿态感知工作目录
 
-`backend/reme/pose/` 是成员 A 的正式后端实现目录，负责从本地视频和人体关键点中生成可验证、可复现的动作事实。
+`backend/reme/pose/` 是成员 A 的正式后端实现目录，负责从实时摄像头或预录视频中生成可验证、可复现的动作事实。
 
 ## 负责范围
 
+- RuntimeSession 与 RuntimeEvent 合同；
+- 当前电脑的单人摄像头实时感知；
 - 场景数据包与共享接口校验；
-- 2D/3D 关键点适配；
+- 2D关键点推理和预录3D关键点适配；
 - 姿态标注读取与数据划分；
 - 静态姿态特征、基线和分类器；
 - 静止状态与动作转变候选；
-- A 向 B/C 的离线结果生成与验收。
+- A 向 B/C 的实时事件流、离线结果生成与验收。
 
 ## 不负责范围
 
@@ -22,12 +24,14 @@
 
 ```text
 reme.pose
-├── scene_bundle.py      # SceneManifest 与 FrameLandmarks 数据包
+├── runtime.py           # C控制的实时/预录会话和事件信封
+├── scene_bundle.py      # 预录 SceneManifest 与 FrameLandmarks 数据包
 ├── review.py            # 原视频与 MotionBERT Three.js 三维骨架验收页
 ├── review_server.py     # 支持视频 Range 请求的本地验收服务器
 ├── annotations.py       # 姿态和转变标注（后续 Ticket）
 ├── features.py          # 可解释几何特征（后续 Ticket）
 ├── posture.py           # 静态姿态分类（后续 Ticket）
+├── camera.py            # 实时摄像头与MoveNet适配（后续 Ticket）
 └── transitions.py       # 静止与动作转变（后续 Ticket）
 ```
 
