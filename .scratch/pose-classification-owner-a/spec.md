@@ -449,6 +449,16 @@ conda run -n DL python \
 
 命令中的窗口长度和置信度阈值只是实验起点，必须通过验证集校准。
 
+### 10.5 时序转变的比较管线（合成数据，等真实标注）
+
+```bash
+.venv/bin/python .scratch/tiny-transition-model/run.py
+```
+
+几何基线与轻量学习模型的同集比较、拒判校准和指标报告已经跑通，见
+`.scratch/tiny-transition-model/spec.md`。当前数据是合成的，指标不可外用；
+真实 `transition_events.csv` 到位后只需替换数据源。
+
 ## 11. 验收清单
 
 ### 数据与标注
