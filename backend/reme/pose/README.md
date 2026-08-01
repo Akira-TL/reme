@@ -159,6 +159,27 @@ artifacts/pose-classification/raw/downloads6/
 
 `FrameLandmarks` 逐帧输出，`PostureObservation` 以 5–10Hz 输出。下跪、俯卧撑和其他未支持低位动作当前应拒判为 `unknown`。
 
+## 实时网页预览
+
+使用同一个后端摄像头流展示左侧原始画面、右侧 Three.js 节点骨架和姿态分类：
+
+```bash
+.venv/bin/python -m reme.pose.live_preview \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --camera 0 \
+  --movenet-model models/movenet/movenet_lightning_f16_v4.tflite \
+  --posture-model artifacts/pose-classification/models/posture-softmax-v3/model.json
+```
+
+浏览器打开：
+
+```text
+http://127.0.0.1:8765/live
+```
+
+左侧通过本机 MJPEG 显示内存中的摄像头帧；右侧将同一帧的 MoveNet 2D 关键点映射到可旋转的浅深度 Three.js 空间。该页面明确标记为“展示型3D”，不声称实时 MotionBERT 三维推断。停止服务使用 `Ctrl+C`。
+
 ## MotionBERT 可重复重建
 
 MotionBERT 3D 结果不得只保存在 `/tmp`。比赛环境统一使用：
