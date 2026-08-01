@@ -192,4 +192,4 @@ sequenceDiagram
 | 限流应对 | RPM 100/模型，演示量级无压力；MiMoClient base URL 可配置，留 OpenRouter（`xiaomi/mimo-v2.5`）一键切换防 CORS 收紧 | 情报 §5/§7 |
 | 语音链路 | ASR `mimo-v2.5-asr`、TTS `mimo-v2.5-tts`（限免）同平台同 key，MIMO-14/15 不必另找供应商 | 情报 §3 |
 
-**G-01 剩余实测项（08-01 12:00 前，均需真实 key）**：① 注册并验证零充值状态可调用；② MIMO-01 最小调用跑通、记录往返延迟 5 次；③ 浏览器 fetch 直调复核 CORS；④ 决策 prompt 连续 5 次 JSON 解析成功率；⑤ 失败即锁定 mock 主演示口径。API 形态本身已确认，live 从"加分项"升格为"高可行"。
+**G-01 剩余实测项（08-01 12:00 前，均需真实 key）**：① 注册并验证零充值状态可调用；② MIMO-01 最小调用跑通、记录往返延迟 5 次（模型名先按官方 `mimo-v2.5`，404 再试 Miloco 默认写法 `xiaomi/mimo-v2.5`，见 [情报-Miloco-代码剖析](情报-Miloco-代码剖析.md) §3.1）；③ 浏览器 fetch 直调复核 CORS；④ 决策 prompt 连续 5 次 JSON 解析成功率；⑤ 失败即锁定 mock 主演示口径。API 形态本身已确认，live 从"加分项"升格为"高可行"。
