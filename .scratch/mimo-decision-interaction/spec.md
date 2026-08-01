@@ -303,3 +303,15 @@ timeout
 - [ ] 连续实时运行10分钟无阻断错误；
 - [ ] `recorded_video` 不现场调用MiMo；
 - [ ] 输出中不存在牙疼、授权或行动卡强制字段。
+
+## 16. 认知增强层（S10，ADR-0006）
+
+B 内部三层确定性上下文，全部注入 MiMo 提示词并在硬安全界内调制阈值；不改 A/B/C 合同任何字段，C 无需感知：
+
+- **行为语义** `decision/behavior.py`：回看窗口时序特征（体位变化率/静止片段/坐立·躺起转换/主导体位）+ `TransitionEvent.evidence` 休眠超集空间线索（下坠时长/质心下降比/落地残余运动）与跌倒动力学合理性筛查。
+- **长期记忆** `decision/memory.py`：分时段（0-23）EWMA 活动基线 + 里程碑事件史（主诉/跌倒/告知/化解），JSON 持久化跨会话；偏离度 ≥1.5 倍才写进提示词。
+- **全屋上下文** `decision/home.py`：房间×时刻语义翻转（卫生间 0.5×且 LYING 进关注体位；卧室夜间 3×；夜间其余 0.75×），跌倒规则/超时/隐私档位在调制中原样拷贝。
+
+CLI：`--home-script`（时间线 JSONL，示例 `examples/decision/home_context/night_bathroom.jsonl`）或 `--home-room`+`--local-hour`（静态）；`--memory-file`；`--no-cognition` 一键回退 v1 行为。
+
+大样本实验台 `reme-mimo-experiment`（B spec P1-1）：8 场景 × v1-stock/v2-context 变体，度量 JSON 率/schema 率/期望分支命中/称呼合规/P50/P95，结果落 `results/`。
