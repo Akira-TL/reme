@@ -1,0 +1,37 @@
+{
+  "schema_version": "reme-pose-dataset/v0-experiment",
+  "dataset_id": "downloads6-animation-bootstrap-v2",
+  "label_source": "filename_inference",
+  "evidence_level": "weak_label_bootstrap",
+  "root": "artifacts/pose-classification/raw/downloads6",
+  "sample_fps": 10.0,
+  "clips": [
+    {"scene_id":"d6-standing-stretch-01","file":"01 - 【日常动作】[伸懒腰][伸展运动].mp4","split":"train","label":"standing","start_ratio":0.15,"end_ratio":0.85,"notes":"站立伸展，中段弱标签。"},
+    {"scene_id":"d6-standing-exercise-12","file":"12 - 【日常动作】[广播体操（拉伸运动）].mp4","split":"train","label":"standing","start_ratio":0.15,"end_ratio":0.85,"notes":"站立拉伸，中段弱标签。"},
+    {"scene_id":"d6-standing-drink-06","file":"06 - 【日常动作】[喝水][喝酒].mp4","split":"val","label":"standing","start_ratio":0.20,"end_ratio":0.80,"notes":"独立视频验证。"},
+    {"scene_id":"d6-standing-selfie-10","file":"10 - 【日常动作】[自拍].mp4","split":"test","label":"standing","start_ratio":0.20,"end_ratio":0.80,"notes":"独立视频测试。"},
+
+    {"scene_id":"d6-sitting-idle-05","file":"05 - 【日常动作】[消磨时间][坐着摇晃]idleaciton.mp4","split":"train","label":"sitting","start_ratio":0.15,"end_ratio":0.85,"notes":"坐姿动态样本。"},
+    {"scene_id":"d6-sitting-swordsman-11","file":"11 - 【日常动作】[剑士坐姿].mp4","split":"train","label":"sitting","start_ratio":0.45,"end_ratio":0.88,"notes":"避开进入坐姿的前段。"},
+    {"scene_id":"d6-sitting-curled-20","file":"20 - 【日常动作】蜷着腿坐着&女孩子般的坐下.mp4","split":"train","label":"sitting","start_ratio":0.65,"end_ratio":0.92,"notes":"只取坐下完成后的后段。"},
+    {"scene_id":"d6-sitting-crossleg-21","file":"21 - 【日常动作】坐下并翘着二郎腿（女性&高傲）.mp4","split":"train","label":"sitting","start_ratio":0.65,"end_ratio":0.92,"notes":"增加坐姿腿部变化。"},
+    {"scene_id":"d6-sitting-floor-31","file":"31 - 【日常动作】盘腿坐下（男性）.mp4","split":"train","label":"sitting","start_ratio":0.65,"end_ratio":0.92,"notes":"增加地面盘腿坐姿。"},
+    {"scene_id":"d6-sitting-happy-22","file":"22 - 【日常动作】高兴地坐下（淑女&优雅）.mp4","split":"val","label":"sitting","start_ratio":0.68,"end_ratio":0.92,"notes":"独立视频验证。"},
+    {"scene_id":"d6-sitting-smile-23","file":"23 - 【日常动作】微笑坐下（淑女&俏皮）.mp4","split":"test","label":"sitting","start_ratio":0.68,"end_ratio":0.92,"notes":"独立视频测试。"},
+
+    {"scene_id":"d6-lying-goodnight-07","file":"07 - 【日常动作】[晚安].mp4","split":"train","label":"lying","start_ratio":0.75,"end_ratio":0.92,"notes":"按动作语义推断后段躺卧。"},
+    {"scene_id":"d6-lying-down-25","file":"25 - 【日常动作】晚安~~躺下~~.mp4","split":"test","label":"lying","start_ratio":0.75,"end_ratio":0.92,"notes":"独立躺卧测试视频。"},
+
+    {"scene_id":"d6-bending-bow-04","file":"04 - 【日常动作】[鞠躬].mp4","split":"val","label":"bending_or_crouching","start_ratio":0.35,"end_ratio":0.65,"notes":"独立鞠躬验证。"},
+    {"scene_id":"d6-bending-skirt-17","file":"17 - 【日常动作】[裙子鞠躬].mp4","split":"train","label":"bending_or_crouching","start_ratio":0.30,"end_ratio":0.70,"notes":"增加另一种鞠躬低位样本。"},
+    {"scene_id":"d6-bending-shoes-18","file":"18 - 【日常动作】[穿鞋].mp4","split":"train","label":"bending_or_crouching","start_ratio":0.42,"end_ratio":0.68,"notes":"穿鞋动作低位中段。"},
+    {"scene_id":"d6-crouching-squats-28","file":"28 - 【日常动作】三种类型的蹲起.mp4","split":"train","label":"bending_or_crouching","start_ratio":0.20,"end_ratio":0.80,"notes":"混合低位和转变；每视频采样上限防止其主导训练。"},
+    {"scene_id":"d6-bending-curtsy-15","file":"15 - 【日常动作】 [公主礼][高雅的鞠躬].mp4","split":"test","label":"bending_or_crouching","start_ratio":0.35,"end_ratio":0.65,"notes":"独立屈膝礼测试。"},
+    {"scene_id":"d6-bending-kneel-49","file":"49 - 【日常动作】下跪&行大礼 Animation reference by 3D2M动画自研社.mp4","split":"test","label":"unknown","start_ratio":0.40,"end_ratio":0.80,"notes":"v0不承诺下跪分类，作为拒判压力测试。"},
+
+    {"scene_id":"d6-unknown-jump-14","file":"14 - 【日常动作】[广播体操（跳跃）].mp4","split":"train","label":"unknown","start_ratio":0.20,"end_ratio":0.80,"notes":"高动态跳跃作为拒判训练。"},
+    {"scene_id":"d6-unknown-split-09","file":"09 - 【日常动作】[准备运动（一字马）][热身（一字马）].mp4","split":"train","label":"unknown","start_ratio":0.20,"end_ratio":0.80,"notes":"一字马不属于当前四类静态姿态。重复文件只使用一份。"},
+    {"scene_id":"d6-unknown-vsit-29","file":"29 - 【日常动作】V字腹部运动.mp4","split":"val","label":"unknown","start_ratio":0.25,"end_ratio":0.75,"notes":"拒判验证。"},
+    {"scene_id":"d6-unknown-pushup-34","file":"34 - 【日常动作】俯卧撑.mp4","split":"test","label":"unknown","start_ratio":0.25,"end_ratio":0.75,"notes":"人体水平但不属于受支撑躺卧。"}
+  ]
+}
