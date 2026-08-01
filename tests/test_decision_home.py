@@ -295,3 +295,17 @@ def test_home_summary_zh_omits_absent_time_and_sorts_ambient_keys() -> None:
     assert home_summary_zh(default_home_context()) == "环境：位置未知"
     home = _home(local_hour=None, room=RoomLabel.KITCHEN, ambient={"温度": "22", "夜灯": "关"})
     assert home_summary_zh(home) == "环境：厨房，夜灯:关，温度:22"
+
+
+# --- Codex R3 regressions ---------------------------------------------------
+
+
+def test_nan_from_ms_is_rejected(tmp_path: Path) -> None:
+    path = _script(tmp_path, json.dumps({"from_ms": float("nan"), "room": "bedroom"}))
+    with pytest.raises(HomeScriptError):
+        ScriptedHomeProvider.load(path)
+
+
+def test_infinite_from_ms_is_rejected_by_constructor() -> None:
+    with pytest.raises(HomeScriptError):
+        ScriptedHomeProvider(((float("inf"), default_home_context()),))

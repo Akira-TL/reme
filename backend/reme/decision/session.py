@@ -163,9 +163,7 @@ class RuntimeSessionRegistry:
             request = self._request
             status = self._status
             if request is None or status is None or request.session_id != session_id:
-                raise SessionRegistryError(
-                    "unknown_session", f"unknown session_id: {session_id!r}"
-                )
+                raise SessionRegistryError("unknown_session", f"unknown session_id: {session_id!r}")
             if status.state is RuntimeSessionState.STOPPED:
                 return status
             stopped = RuntimeSessionStatus(

@@ -89,9 +89,7 @@ def build_image_part(image_bytes: bytes, *, mime_type: str = "image/jpeg") -> di
 class MimoClient:
     """Thin, retrying JSON-mode client for one configured endpoint."""
 
-    def __init__(
-        self, config: MimoClientConfig, *, transport: TransportFn | None = None
-    ) -> None:
+    def __init__(self, config: MimoClientConfig, *, transport: TransportFn | None = None) -> None:
         self._config = config
         self._transport = _default_transport if transport is None else transport
 

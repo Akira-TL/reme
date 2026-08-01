@@ -111,6 +111,7 @@ class ResponseSource(StrEnum):
     SCRIPT = "script"
     TIMEOUT = "timeout"
 
+
 _TEXT_BEARING_RESPONSE_SOURCES = {ResponseSource.USER_INPUT, ResponseSource.SCRIPT}
 _NONE_RESPONSE_SOURCES = {ResponseSource.TIMEOUT, ResponseSource.SCRIPT}
 _ELDER_RESPONSE_SOURCES = {ResponseSource.USER_INPUT, ResponseSource.SCRIPT}
@@ -338,13 +339,10 @@ class InteractionResponse:
         ):
             raise DecisionRecordError("source=family_input can only confirm the action card")
         if (
-            self.response
-            not in (ResponseValue.NONE, ResponseValue.CARD_CONFIRMED)
+            self.response not in (ResponseValue.NONE, ResponseValue.CARD_CONFIRMED)
             and self.source not in _ELDER_RESPONSE_SOURCES
         ):
-            raise DecisionRecordError(
-                "elder responses must come from user_input or script sources"
-            )
+            raise DecisionRecordError("elder responses must come from user_input or script sources")
 
     def to_payload(self) -> dict[str, Any]:
         return {

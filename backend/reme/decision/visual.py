@@ -137,9 +137,7 @@ def precut(
     if completed.returncode != 0 or not clip_path.is_file():
         raise VisualAssetError(f"ffmpeg failed: {completed.stderr.strip()[:300]}")
     meta = {"start_ms": start_ms, "end_ms": end_ms, "short_edge": short_edge}
-    (derived / VISUAL_META_NAME).write_text(
-        json.dumps(meta, ensure_ascii=False), encoding="utf-8"
-    )
+    (derived / VISUAL_META_NAME).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     return VisualAsset(clip_path=clip_path, start_ms=start_ms, end_ms=end_ms)
 
 

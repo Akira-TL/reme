@@ -13,6 +13,7 @@ switch adapters and replay the same response.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -379,11 +380,14 @@ class DecisionService:
         self._streams(response.scene_id)
         if self._config.demo_mode is DemoMode.RECORD:
             return self._replay_advance(response.scene_id, response.decision_id)
-        home = self._home_context(response.scene_id, response.timestamp_ms)
         with self._lock:
             runtime = self._runtime(response.scene_id)
             previous_id = None if runtime.pending is None else runtime.pending.decision_id
-            directive = on_response(runtime.session, response, config=self._effective_trigger(home))
+            # Response transitions consume only the untouchable timeout fields,
+            # so the base config is used verbatim: a home-context lookup here
+            # could only add failure surface to a deterministic escalation
+            # (Codex R3 P1), never change its outcome.
+            directive = on_response(runtime.session, response, config=self._config.trigger)
             outcome = self._commit_rule_directive(runtime, directive, response.timestamp_ms)
             if outcome is None:
                 snapshot = (runtime.epoch, runtime.session)
@@ -571,10 +575,21 @@ class DecisionService:
     # -- cognition context (ADR-0006) ---------------------------------------
 
     def _home_context(self, scene_id: str, timestamp_ms: float) -> HomeContext:
+        """Provider lookup behind a hard error boundary (Codex R3 P1).
+
+        A broken provider degrades to the neutral default context — it must
+        never abort the deterministic decision path.  With cognition off the
+        provider is not consulted at all.
+        """
+
         provider = self._config.home_provider
-        if provider is None:
+        if provider is None or not self._config.cognition_enabled:
             return default_home_context()
-        return provider.context_at(scene_id, timestamp_ms)
+        try:
+            return provider.context_at(scene_id, timestamp_ms)
+        except Exception as exc:  # noqa: BLE001 - context is optional, decisions are not
+            print(f"warning: home context provider failed: {exc}", file=sys.stderr)
+            return default_home_context()
 
     def _effective_trigger(self, home: HomeContext) -> TriggerConfig:
         """Home-modulated thresholds; the default context is an exact identity."""
@@ -598,7 +613,10 @@ class DecisionService:
         features = extract_behavior_features(
             streams, timestamp_ms=timestamp_ms, window_ms=self._config.behavior_window_ms
         )
-        if features.observation_count == 0:
+        # dominant_posture is None exactly when the window has no *detected*
+        # observation; folding such a window would poison the baseline with
+        # fake zero-activity (Codex R3).
+        if features.observation_count == 0 or features.dominant_posture is None:
             return
         with self._lock:
             runtime = self._runtime(scene_id)

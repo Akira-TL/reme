@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
+import queue
 import sys
 import threading
 from collections.abc import Callable
@@ -87,16 +89,40 @@ class BehaviorMemoryStore:
     ``path=None`` keeps the store purely in-memory.
     """
 
-    def __init__(self, path: Path | None, *, clock: Callable[[], float]) -> None:
+    def __init__(
+        self,
+        path: Path | None,
+        *,
+        clock: Callable[[], float],
+        persist_async: bool = False,
+    ) -> None:
         self._path = path
         self._clock = clock
         self._lock = threading.Lock()
         self._events: list[MemoryEvent] = []
         self._baselines: dict[int, HourBaseline] = {}
+        # persist_async hands writes to one ordered daemon writer so mutations
+        # made on the decision path never wait on the filesystem (Codex R3 P1).
+        self._persist_queue: queue.SimpleQueue[dict[str, object]] | None = None
         if path is not None:
             state = _load_state(path)
             if state is not None:
                 self._events, self._baselines = state
+            if persist_async:
+                self._persist_queue = queue.SimpleQueue()
+                threading.Thread(
+                    target=self._writer_loop, name="behavior-memory-writer", daemon=True
+                ).start()
+
+    def _writer_loop(self) -> None:
+        assert self._persist_queue is not None and self._path is not None
+        while True:
+            payload = self._persist_queue.get()
+            # Coalesce to the newest snapshot; intermediate states are moot.
+            while not self._persist_queue.empty():
+                with contextlib.suppress(queue.Empty):
+                    payload = self._persist_queue.get_nowait()
+            _write_payload(self._path, payload)
 
     def record_event(
         self, kind: MemoryEventKind, *, scene_id: str, detail: str | None = None
@@ -244,18 +270,27 @@ class BehaviorMemoryStore:
                 for baseline in sorted(self._baselines.values(), key=_baseline_hour)
             ],
         }
-        temporary = path.with_name(path.name + ".tmp")
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temporary.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
-            os.replace(temporary, path)
-        except OSError as exc:
-            # A dead disk must never take the care decision down with it.
-            _warn(f"behavior memory write to {path} failed: {exc}")
-            with contextlib.suppress(OSError):
-                temporary.unlink(missing_ok=True)
+        if self._persist_queue is not None:
+            self._persist_queue.put(payload)
+            return
+        _write_payload(path, payload)
+
+
+def _write_payload(path: Path, payload: dict[str, object]) -> None:
+    """Atomic best-effort write; any OSError stays inside this function."""
+
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        os.replace(temporary, path)
+    except OSError as exc:
+        # A dead disk must never take the care decision down with it.
+        _warn(f"behavior memory write to {path} failed: {exc}")
+        with contextlib.suppress(OSError):
+            temporary.unlink(missing_ok=True)
 
 
 def _warn(message: str) -> None:
@@ -315,7 +350,7 @@ def _load_state(path: Path) -> tuple[list[MemoryEvent], dict[int, HourBaseline]]
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         _warn(f"behavior memory read from {path} failed: {exc}; starting empty")
         return None
 
@@ -345,8 +380,10 @@ def _parse_events(value: object) -> list[MemoryEvent]:
             recorded_at_s = float(item["recorded_at_s"])
             kind = MemoryEventKind(item["kind"])
             scene_id = item["scene_id"]
-        except (KeyError, TypeError, ValueError) as exc:
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise _CorruptMemoryError(f"events[{index}] is malformed: {exc}") from exc
+        if not math.isfinite(recorded_at_s):
+            raise _CorruptMemoryError(f"events[{index}].recorded_at_s must be finite")
         detail = item.get("detail")
         if not isinstance(scene_id, str):
             raise _CorruptMemoryError(f"events[{index}].scene_id must be a string")
@@ -365,17 +402,25 @@ def _parse_baselines(value: object) -> dict[int, HourBaseline]:
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             raise _CorruptMemoryError(f"baselines[{index}] must be an object")
+        hour = item.get("hour")
+        samples = item.get("samples")
+        if isinstance(hour, bool) or not isinstance(hour, int):
+            raise _CorruptMemoryError(f"baselines[{index}].hour must be an integer")
+        if isinstance(samples, bool) or not isinstance(samples, int):
+            raise _CorruptMemoryError(f"baselines[{index}].samples must be an integer")
         try:
-            hour = int(item["hour"])
-            samples = int(item["samples"])
             restlessness_ewma = float(item["restlessness_ewma"])
             longest_still_ewma_ms = float(item["longest_still_ewma_ms"])
-        except (KeyError, TypeError, ValueError) as exc:
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
             raise _CorruptMemoryError(f"baselines[{index}] is malformed: {exc}") from exc
         if not 0 <= hour <= 23:
             raise _CorruptMemoryError(f"baselines[{index}].hour out of range: {hour}")
         if samples < 1:
             raise _CorruptMemoryError(f"baselines[{index}].samples must be positive")
+        if not (math.isfinite(restlessness_ewma) and math.isfinite(longest_still_ewma_ms)):
+            raise _CorruptMemoryError(f"baselines[{index}] carries a non-finite ewma")
+        if restlessness_ewma < 0.0 or longest_still_ewma_ms < 0.0:
+            raise _CorruptMemoryError(f"baselines[{index}] carries a negative ewma")
         baselines[hour] = HourBaseline(
             hour=hour,
             samples=samples,

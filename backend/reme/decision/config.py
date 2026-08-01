@@ -131,6 +131,13 @@ def server_config_from_args(argv: Sequence[str] | None = None) -> ServerConfig:
         raise ServerConfigError("--home-script excludes --home-room/--local-hour")
     if args.local_hour is not None and not 0 <= args.local_hour <= 23:
         raise ServerConfigError("--local-hour must be within 0..23")
+    if (
+        args.home_script is not None
+        and args.memory_file is not None
+        and args.home_script.resolve() == args.memory_file.resolve()
+    ):
+        # Memory persistence would silently overwrite the read-only script.
+        raise ServerConfigError("--home-script and --memory-file must be different files")
     return ServerConfig(
         scenes_dir=args.scenes_dir,
         host=args.host,
@@ -176,16 +183,29 @@ def build_home_provider(config: ServerConfig) -> HomeContextProvider | None:
 
 
 def build_policy_config(config: ServerConfig) -> PolicyConfig:
+    persona = PersonaConfig(elder_name=config.elder_name, family_relation=config.family_relation)
+    if not config.cognition_enabled:
+        # The one-switch v1 fallback must boot even when a cognition file is
+        # corrupt or unavailable, so those files are not touched at all.
+        return PolicyConfig(
+            persona=persona,
+            trigger=TriggerConfig(),
+            demo_mode=config.demo_mode,
+            record_capture=config.record_capture,
+            visual_enabled=config.visual_enabled,
+            cognition_enabled=False,
+        )
     memory_store = None
     if config.memory_file is not None:
-        memory_store = BehaviorMemoryStore(config.memory_file, clock=time.time)
+        # persist_async: mutations on the decision path never wait on disk.
+        memory_store = BehaviorMemoryStore(config.memory_file, clock=time.time, persist_async=True)
     return PolicyConfig(
-        persona=PersonaConfig(elder_name=config.elder_name, family_relation=config.family_relation),
+        persona=persona,
         trigger=TriggerConfig(),
         demo_mode=config.demo_mode,
         record_capture=config.record_capture,
         visual_enabled=config.visual_enabled,
-        cognition_enabled=config.cognition_enabled,
+        cognition_enabled=True,
         home_provider=build_home_provider(config),
         memory_store=memory_store,
     )

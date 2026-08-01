@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -396,3 +397,70 @@ def test_unusable_path_is_tolerated_on_both_load_and_save(tmp_path: Path) -> Non
     store.observe(_features(), local_hour=9)
     assert len(store.recent_events()) == 1
     assert store.summary_zh(local_hour=9) == "记忆：今天曾升级为紧急关注"
+
+
+# --- Codex R3 regressions ---------------------------------------------------
+
+
+def test_invalid_utf8_memory_file_starts_empty(tmp_path: Path) -> None:
+    path = tmp_path / "memory.json"
+    path.write_bytes(b"\xff\xfe\x00broken")
+    store = _store(path, [_T0])
+    assert store.recent_events() == ()
+
+
+def test_non_finite_baseline_ewma_is_corrupt(tmp_path: Path) -> None:
+    path = tmp_path / "memory.json"
+    _write_payload(
+        path,
+        {
+            "schema_version": MEMORY_SCHEMA_VERSION,
+            "events": [],
+            "baselines": [
+                {
+                    "hour": 14,
+                    "samples": 5,
+                    "restlessness_ewma": float("nan"),
+                    "longest_still_ewma_ms": 1000.0,
+                }
+            ],
+        },
+    )
+    store = _store(path, [_T0])
+    assert store.deviation(_features(), local_hour=14) is None
+
+
+def test_boolean_hour_in_baseline_is_corrupt(tmp_path: Path) -> None:
+    path = tmp_path / "memory.json"
+    _write_payload(
+        path,
+        {
+            "schema_version": MEMORY_SCHEMA_VERSION,
+            "events": [],
+            "baselines": [
+                {
+                    "hour": True,
+                    "samples": 5,
+                    "restlessness_ewma": 0.2,
+                    "longest_still_ewma_ms": 1000.0,
+                }
+            ],
+        },
+    )
+    store = _store(path, [_T0])
+    assert store.deviation(_features(), local_hour=1) is None
+
+
+def test_async_persistence_eventually_writes(tmp_path: Path) -> None:
+    path = tmp_path / "memory.json"
+    store = BehaviorMemoryStore(path, clock=_clock([_T0]), persist_async=True)
+    store.record_event(MemoryEventKind.COMPLAINT, scene_id="scene", detail="牙疼")
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if path.exists():
+            break
+        time.sleep(0.01)
+    assert path.exists()
+    reloaded = _store(path, [_T0])
+    events = reloaded.recent_events(limit=1)
+    assert len(events) == 1 and events[0].detail == "牙疼"

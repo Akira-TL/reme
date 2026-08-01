@@ -274,9 +274,17 @@ VARIANTS: tuple[PromptVariant, ...] = (
 def _system_prompt_for(
     scenario: ScenarioSpec, variant: PromptVariant, persona: PersonaConfig
 ) -> str:
-    """Stock per-task system prompt plus the variant's optional suffix."""
+    """The production system prompt for this cell, plus the variant's suffix.
 
-    system_prompt = build_system_prompt(scenario.task, persona=persona, visual=False)
+    ``context_aware`` mirrors production exactly (Codex R3): it switches on
+    whenever this cell will actually inject context sections, so v2 is
+    measured with the same system addendum the live service sends.
+    """
+
+    context_aware = bool(variant.include_context_sections and scenario.context_sections)
+    system_prompt = build_system_prompt(
+        scenario.task, persona=persona, visual=False, context_aware=context_aware
+    )
     # An empty suffix is treated as "no suffix" so a variant never grows a
     # dangling blank paragraph that would itself perturb the measurement.
     if variant.system_suffix:
@@ -285,21 +293,16 @@ def _system_prompt_for(
 
 
 def _user_content_for(scenario: ScenarioSpec, variant: PromptVariant) -> str:
-    """Structured body, with the cognitive context sections spliced in for v2."""
+    """Structured body built through the production prompt function (Codex R3)."""
 
-    body = build_user_prompt(
+    sections = scenario.context_sections if variant.include_context_sections else None
+    return build_user_prompt(
         scenario.task,
         perception_summary=scenario.perception_summary,
         interaction_summary=scenario.interaction_summary,
         elder_text=scenario.elder_text,
+        context_sections=sections or None,
     )
-    if not variant.include_context_sections or not scenario.context_sections:
-        return body
-    lines = body.split("\n")
-    sections = [f"【{title}】{content}" for title, content in scenario.context_sections.items()]
-    # The tail line ("只输出 JSON 对象。") must stay last: it is the closing
-    # instruction, and burying it above the context would weaken it.
-    return "\n".join([*lines[:-1], *sections, lines[-1]])
 
 
 def _judge_completion(
@@ -369,7 +372,9 @@ def _run_sample(
         result = client.complete(system_prompt=system_prompt, user_content=user_content)
     except MimoTransportError as exc:
         # The message never carries the key: the adapter only ever reports the
-        # HTTP status or the exception type.
+        # HTTP status or the exception type.  NaN marks "no measurement" so
+        # the percentile selection never has to guess from magnitudes
+        # (Codex R3): a genuine 0ms latency stays countable.
         return SampleOutcome(
             scenario=scenario.name,
             variant=variant.name,
@@ -378,7 +383,7 @@ def _run_sample(
             state=None,
             expected_hit=False,
             appellation_ok=None,
-            latency_ms=0.0,
+            latency_ms=float("nan"),
             error=str(exc),
         )
     return _judge_completion(result, scenario=scenario, variant=variant, persona=persona)
@@ -476,9 +481,9 @@ def _row(
 ) -> tuple[str, ...]:
     total = len(outcomes)
     judged = [o.appellation_ok for o in outcomes if o.appellation_ok is not None]
-    # Transport failures are pinned to 0.0 by run_experiment and carry no
-    # measurement, so they must not drag the latency distribution down.
-    latencies = sorted(o.latency_ms for o in outcomes if o.latency_ms > 0.0)
+    # Transport failures carry NaN ("no measurement"); every finite latency —
+    # including a genuine 0ms and schema-failure rows — counts (Codex R3).
+    latencies = sorted(o.latency_ms for o in outcomes if math.isfinite(o.latency_ms))
     p50 = f"{_percentile(latencies, 0.5):.0f}" if latencies else _EMPTY_CELL
     p95 = f"{_percentile(latencies, 0.95):.0f}" if latencies else _EMPTY_CELL
     return (
@@ -569,7 +574,10 @@ def _select(items: Sequence[_NamedT], names: Sequence[str] | None, label: str) -
     if unknown:
         known = ", ".join(sorted(by_name))
         raise _SelectionError(f"未知的 {label}：{', '.join(unknown)}；可选：{known}")
-    return [by_name[name] for name in names]
+    # Repeated selections would silently double the grid and the live cost
+    # while the report deduplicates by name (Codex R3): keep first occurrence.
+    deduped = dict.fromkeys(names)
+    return [by_name[name] for name in deduped]
 
 
 def _build_parser() -> argparse.ArgumentParser:

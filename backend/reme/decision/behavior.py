@@ -88,7 +88,10 @@ def parse_spatial_hints(evidence: Mapping[str, object]) -> SpatialHints | None:
         value = evidence.get(key)
         if isinstance(value, bool) or not isinstance(value, int | float):
             return None
-        number = float(value)
+        try:
+            number = float(value)
+        except (OverflowError, ValueError):  # ints beyond float range are junk, not a crash
+            return None
         return number if math.isfinite(number) else None
 
     def _ratio(key: str) -> float | None:
@@ -131,6 +134,21 @@ def plausible_fall_dynamics(hints: SpatialHints) -> bool | None:
     return hints.com_drop_ratio is None or hints.com_drop_ratio >= 0.3
 
 
+def _motion_band(level: MotionLevel) -> int:
+    """Collapse motion levels into low/active/unknown bands for flip counting.
+
+    STILL<->LOW jitter inside one continuous rest is categorical noise, not
+    restlessness (Codex R3): only crossing between the low band and the
+    active band (or into UNKNOWN) counts as a motion flip.
+    """
+
+    if level in (MotionLevel.STILL, MotionLevel.LOW):
+        return 0
+    if level in (MotionLevel.MEDIUM, MotionLevel.HIGH):
+        return 1
+    return 2
+
+
 def extract_behavior_features(
     streams: PerceptionStreams,
     *,
@@ -152,14 +170,17 @@ def extract_behavior_features(
 
     Restlessness is ``min(1, (posture_change_count + motion_flip_count) /
     max(1, window_ms / 20000))`` — the churn counts divided by the number of
-    20-second slots in the window.  It rises monotonically with both posture
-    churn and motion-level churn, saturates at 1.0, and stays comparable
-    across window sizes.
+    20-second slots in the window.  Motion flips count band crossings only
+    (:func:`_motion_band`): STILL<->LOW jitter is not restlessness.  It rises
+    monotonically with churn, saturates at 1.0, and stays comparable across
+    window sizes.
 
     A stillness episode is a maximal run of detected observations whose motion
     level is STILL or LOW; its duration is the span between its first and last
     sample, widened to the last sample's own ``posture_duration_ms`` when that
-    reaches further back than the window's own samples do.
+    reaches further back than the window's own samples do, and clamped to
+    ``window_ms`` so one carried-in duration can never claim more stillness
+    than the window it is reported for (Codex R3).
 
     ``spatial_hints`` carries the latest in-window FALL_LIKE transition that
     parses to usable hints (a later fall event with unusable evidence does not
@@ -205,7 +226,7 @@ def extract_behavior_features(
         if previous is not None:
             if observation.posture is not previous.posture:
                 posture_change_count += 1
-            if observation.motion_level is not previous.motion_level:
+            if _motion_band(observation.motion_level) != _motion_band(previous.motion_level):
                 motion_flip_count += 1
             if previous.posture is Posture.SITTING and observation.posture is Posture.STANDING:
                 sit_to_stand_count += 1
@@ -223,7 +244,13 @@ def extract_behavior_features(
         still_episodes.append(open_episode)
 
     episode_durations = [
-        max(episode[-1].timestamp_ms - episode[0].timestamp_ms, episode[-1].posture_duration_ms)
+        min(
+            max(
+                episode[-1].timestamp_ms - episode[0].timestamp_ms,
+                episode[-1].posture_duration_ms,
+            ),
+            window_ms,
+        )
         for episode in still_episodes
     ]
     dominant_posture: Posture | None = None

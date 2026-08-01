@@ -110,9 +110,7 @@ def _optional_bool(payload: dict[str, object], key: str) -> bool | None:
 _EnumT = TypeVar("_EnumT", bound=StrEnum)
 
 
-def _optional_enum(
-    payload: dict[str, object], key: str, enum_cls: type[_EnumT]
-) -> _EnumT | None:
+def _optional_enum(payload: dict[str, object], key: str, enum_cls: type[_EnumT]) -> _EnumT | None:
     value = payload.get(key)
     if value is None:
         return None

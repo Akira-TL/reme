@@ -125,6 +125,17 @@ def build_system_prompt(
     return "\n\n".join(sections)
 
 
+# Context sections may echo remembered elder speech; collapsing whitespace and
+# capping length keeps a crafted complaint from smuggling extra 【标签】 lines
+# or walls of text into the prompt structure (Codex R3).
+_SECTION_MAX_CHARS = 300
+
+
+def _sanitize_section(text: str) -> str:
+    collapsed = " ".join(text.split())
+    return collapsed[:_SECTION_MAX_CHARS]
+
+
 def build_user_prompt(
     task: MimoTask,
     *,
@@ -147,7 +158,10 @@ def build_user_prompt(
         f"【交互状态】{json.dumps(dict(interaction_summary), ensure_ascii=False)}",
     ]
     if context_sections:
-        lines.extend(f"【{title}】{content}" for title, content in context_sections.items())
+        lines.extend(
+            f"【{_sanitize_section(title)}】{_sanitize_section(content)}"
+            for title, content in context_sections.items()
+        )
     if elder_text is not None:
         lines.append(f"【老人回话】{json.dumps(elder_text, ensure_ascii=False)}")
     lines.append("只输出 JSON 对象。")

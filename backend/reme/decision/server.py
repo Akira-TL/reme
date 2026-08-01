@@ -407,9 +407,7 @@ def build_decision_handler(
                 target = target / "index.html"
             self._send_file(target, allow_range=False)
 
-        def _send_file(
-            self, path: Path, *, allow_range: bool, send_body: bool = True
-        ) -> None:
+        def _send_file(self, path: Path, *, allow_range: bool, send_body: bool = True) -> None:
             # Byte-range support mirrors reme.pose.review_server so phone
             # browsers can seek inside bundle mp4 files.
             if not path.is_file():

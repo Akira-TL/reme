@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -204,7 +205,7 @@ def test_expected_hit_is_false_for_a_legal_but_unexpected_branch() -> None:
     assert outcome.expected_hit is False
 
 
-def test_transport_failure_produces_a_scored_zero_latency_row() -> None:
+def test_transport_failure_produces_an_unmeasured_scored_row() -> None:
     report = run_experiment(
         _failing_client(),
         persona=PersonaConfig(),
@@ -220,7 +221,8 @@ def test_transport_failure_produces_a_scored_zero_latency_row() -> None:
     assert outcome.state is None
     assert outcome.expected_hit is False
     assert outcome.appellation_ok is None
-    assert outcome.latency_ms == 0.0
+    # NaN marks "no measurement" so percentiles never ingest it (Codex R3).
+    assert math.isnan(outcome.latency_ms)
     assert outcome.error is not None
     assert "sk-test" not in outcome.error
 
@@ -377,7 +379,7 @@ def test_render_report_md_marks_empty_denominators() -> None:
                 state=None,
                 expected_hit=False,
                 appellation_ok=None,
-                latency_ms=0.0,
+                latency_ms=float("nan"),  # transport failure: no measurement (Codex R3)
                 error="MiMo call failed",
             ),
         )

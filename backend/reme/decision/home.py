@@ -11,6 +11,7 @@ timeouts are never relaxed (ADR-0006).
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -73,8 +74,15 @@ class StaticHomeProvider:
 
 
 def _parse_from_ms(value: object, *, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
-        raise HomeScriptError(f"{label}: from_ms must be a non-negative number, got {value!r}")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(float(value))
+        or value < 0
+    ):
+        raise HomeScriptError(
+            f"{label}: from_ms must be a finite non-negative number, got {value!r}"
+        )
     return float(value)
 
 
@@ -141,8 +149,8 @@ class ScriptedHomeProvider:
     def __init__(self, segments: tuple[tuple[float, HomeContext], ...]) -> None:
         previous: float | None = None
         for index, (from_ms, _context) in enumerate(segments):
-            if from_ms < 0:
-                raise HomeScriptError(f"segment {index}: from_ms must be non-negative")
+            if not math.isfinite(from_ms) or from_ms < 0:
+                raise HomeScriptError(f"segment {index}: from_ms must be finite and non-negative")
             if previous is not None and from_ms <= previous:
                 raise HomeScriptError(f"segment {index}: from_ms must be strictly ascending")
             previous = from_ms

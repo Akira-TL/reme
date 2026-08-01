@@ -479,3 +479,51 @@ def test_summary_uses_whole_minutes_with_a_floor_of_one() -> None:
     long_window = extract_behavior_features(streams, timestamp_ms=11000.0, window_ms=300000.0)
     assert behavior_summary_zh(short).startswith("近1分钟：")
     assert behavior_summary_zh(long_window).startswith("近5分钟：")
+
+
+# --- Codex R3 regressions ---------------------------------------------------
+
+
+def test_huge_integer_evidence_reads_as_absent() -> None:
+    assert parse_spatial_hints({EVIDENCE_DESCENT_KEY: 10**400}) is None
+
+
+def test_still_low_jitter_is_not_restlessness() -> None:
+    postures = tuple(
+        _observation(
+            timestamp_ms=1000.0 * index,
+            motion_level=MotionLevel.STILL if index % 2 == 0 else MotionLevel.LOW,
+        )
+        for index in range(1, 11)
+    )
+    features = extract_behavior_features(_streams(postures=postures), timestamp_ms=10000.0)
+    assert features.restlessness_score == 0.0
+    # 9s of continuous low motion: one run, but below the 10s episode floor.
+    assert features.stillness_episode_count == 0
+    assert features.longest_still_ms == 9000.0
+
+
+def test_medium_to_high_jitter_is_not_restlessness_either() -> None:
+    postures = tuple(
+        _observation(
+            timestamp_ms=1000.0 * index,
+            motion_level=MotionLevel.MEDIUM if index % 2 == 0 else MotionLevel.HIGH,
+        )
+        for index in range(1, 11)
+    )
+    features = extract_behavior_features(_streams(postures=postures), timestamp_ms=10000.0)
+    assert features.restlessness_score == 0.0
+
+
+def test_carried_in_duration_is_clamped_to_the_window() -> None:
+    postures = (
+        _observation(
+            timestamp_ms=40000.0,
+            motion_level=MotionLevel.STILL,
+            posture_duration_ms=999999.0,
+        ),
+    )
+    features = extract_behavior_features(
+        _streams(postures=postures), timestamp_ms=40000.0, window_ms=20000.0
+    )
+    assert features.longest_still_ms == 20000.0

@@ -235,15 +235,10 @@ def _fall_preempts(state: SessionState, context: DecisionContext, config: Trigge
         return False
     if state.phase in _FALL_PREEMPTIBLE_PHASES:
         return True
-    return (
-        state.phase is SessionPhase.AWAITING_ELDER
-        and state.escalation is EscalationKind.CONCERN
-    )
+    return state.phase is SessionPhase.AWAITING_ELDER and state.escalation is EscalationKind.CONCERN
 
 
-def on_tick(
-    state: SessionState, context: DecisionContext, *, config: TriggerConfig
-) -> Directive:
+def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerConfig) -> Directive:
     """Evaluate one perception snapshot; may open or preempt an episode."""
 
     if context.scene_id != state.scene_id:
@@ -255,9 +250,7 @@ def on_tick(
         # A new high-confidence fall outranks any lower-severity episode and
         # reopens a resolved one; family-alert states never de-escalate.
         event = context.active_transition
-        return _fall_check_in(
-            advanced, None if event is None else event.event_id, config=config
-        )
+        return _fall_check_in(advanced, None if event is None else event.event_id, config=config)
     if advanced.phase is not SessionPhase.MONITORING:
         return Directive(next_state=advanced)
 
@@ -430,9 +423,7 @@ def _on_consent_response(state: SessionState, response: InteractionResponse) -> 
     return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
 
 
-def _on_family_notified_response(
-    state: SessionState, response: InteractionResponse
-) -> Directive:
+def _on_family_notified_response(state: SessionState, response: InteractionResponse) -> Directive:
     value = response.response
     if value is ResponseValue.CARD_CONFIRMED:
         include_card = CardStatus.CONFIRMED if state.card_draft is not None else None

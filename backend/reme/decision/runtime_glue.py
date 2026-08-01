@@ -95,7 +95,5 @@ def evaluate_after_ingest(service: DecisionService, event: RuntimeEvent) -> None
 def spawn_post_ingest_evaluation(service: DecisionService, event: RuntimeEvent) -> None:
     """Fire-and-forget wrapper used by the server's /api/events route."""
 
-    thread = threading.Thread(
-        target=evaluate_after_ingest, args=(service, event), daemon=True
-    )
+    thread = threading.Thread(target=evaluate_after_ingest, args=(service, event), daemon=True)
     thread.start()
