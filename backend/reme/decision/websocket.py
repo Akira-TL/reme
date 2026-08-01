@@ -28,7 +28,8 @@ import threading
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, BinaryIO, Protocol
+from io import BufferedIOBase
+from typing import Any, Protocol
 
 OPCODE_CONTINUATION = 0x0
 OPCODE_TEXT = 0x1
@@ -80,7 +81,7 @@ class HandlerLike(Protocol):
     def headers(self) -> Any: ...
 
     @property
-    def rfile(self) -> BinaryIO: ...
+    def rfile(self) -> BufferedIOBase: ...
 
     @property
     def wfile(self) -> Any: ...
@@ -105,7 +106,7 @@ class Frame:
     payload: bytes
 
 
-def _read_exact(rfile: BinaryIO, size: int) -> bytes:
+def _read_exact(rfile: BufferedIOBase, size: int) -> bytes:
     """Read exactly ``size`` bytes; a short read means the peer is gone."""
 
     if size <= 0:
@@ -132,7 +133,7 @@ def _apply_mask(payload: bytes, mask: bytes) -> bytes:
     return unmasked.to_bytes(length, "big")
 
 
-def read_frame(rfile: BinaryIO) -> Frame:
+def read_frame(rfile: BufferedIOBase) -> Frame:
     """Read exactly one client frame; unmasked client frames are a protocol error."""
 
     header = _read_exact(rfile, 2)
@@ -192,7 +193,7 @@ def _echo_close_code(payload: bytes) -> int:
 class ServerConnection:
     """One accepted connection: send lock, recv loop, close handshake."""
 
-    def __init__(self, *, connection: Any, rfile: BinaryIO, wfile: Any) -> None:
+    def __init__(self, *, connection: Any, rfile: BufferedIOBase, wfile: Any) -> None:
         self._connection = connection
         self._rfile = rfile
         self._wfile = wfile

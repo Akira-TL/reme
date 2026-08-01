@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlparse
 
 from reme.decision.audit import AuditLog
@@ -35,13 +35,18 @@ from reme.decision.policy import (
     UnknownSceneError,
 )
 from reme.decision.records import DecisionRecordError, parse_interaction_response
+from reme.decision.runtime_glue import (
+    RuntimeDecisionPublisher,
+    live_streams_resolver,
+    spawn_post_ingest_evaluation,
+)
 from reme.decision.session import (
     RuntimeSessionRegistry,
     SessionRegistryError,
     parse_session_request,
 )
 from reme.decision.stream import EventIngest, IngestError
-from reme.decision.websocket import DecisionEventHub, HandlerLike, WebSocketError
+from reme.decision.websocket import DecisionEventHub, WebSocketError
 from reme.pose.runtime import RuntimeSessionStatus
 
 _REJECT_STATUS: dict[str, HTTPStatus] = {
@@ -256,6 +261,9 @@ def build_decision_handler(
                 self._send_runtime_disabled("event ingest")
                 return
             event = ingest.submit(payload, active_session_id=registry.active_session_id())
+            # Evaluate off-thread so A's event POST never waits on a MiMo
+            # round trip; the resulting decision reaches C over /ws.
+            spawn_post_ingest_evaluation(service, event)
             self._send_json(HTTPStatus.OK, {"accepted": event.event_type.value})
 
         def _handle_websocket(self) -> None:
@@ -280,10 +288,7 @@ def build_decision_handler(
             # another request off it.
             self.close_connection = True
             try:
-                # The cast is a typeshed artifact, not a contract gap: this
-                # handler satisfies HandlerLike at runtime, but typeshed types
-                # ``rfile`` as BufferedIOBase, which is not a nominal BinaryIO.
-                hub.accept(cast("HandlerLike", self))
+                hub.accept(self)
             except WebSocketError as exc:
                 # accept() raises before writing a single byte on handshake
                 # failure, so a plain HTTP error is still a valid response.
@@ -470,15 +475,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: no scene bundles found under {config.scenes_dir}")
         return 2
     audit = None if config.audit_path is None else AuditLog(config.audit_path)
+    registry = RuntimeSessionRegistry()
+    hub = DecisionEventHub()
+    ingest = EventIngest()
     service = DecisionService(
         scenes=scenes,
         config=build_policy_config(config),
         mimo=build_mimo_client(config),
         audit=audit,
+        publisher=RuntimeDecisionPublisher(registry=registry, hub=hub),
+        live_streams=live_streams_resolver(registry, ingest),
     )
-    registry = RuntimeSessionRegistry()
-    hub = DecisionEventHub()
-    ingest = EventIngest()
     handler = build_decision_handler(
         service=service,
         static_dir=config.static_dir,

@@ -61,6 +61,24 @@ mp4 支持 Range（手机浏览器可拖进度条）。C 用它取 manifest/medi
 
 **degraded 约定**：收到 `state=degraded, fallback_used=true` 表示 MiMo 暂不可用——会话停在原地、原 pending 决策仍有效；C 明确展示降级状态（不伪装在线），可切 `--mode mock` 重启服务或稍后**用同一 decision_id 重发同一回应**继续。
 
+## 实时运行时（合同 §3/§4/§14，B 侧已实现）
+
+### `POST /api/session` — 启动会话（C→B 控制面）
+
+请求体 = 合同 §3.2 RuntimeSessionRequest 原样（`live_camera` 必带 `camera_id`、`recorded_video` 必带 `manifest_path`）；返回 §3.3 的 DECISION 组件 status（`running`）。规则：单活跃会话；重启/换 profile 必须换新 `session_id`（否则 409 `session_conflict`）；`POST /api/session/stop` `{"session_id":…}` 停止（幂等）；`GET /api/session/status` 查询（无会话 404 `no_session`）。session 变更会顺带清空实时缓冲并向 WS 广播新 status。
+
+### `POST /api/events` — A 的感知事件入口
+
+请求体 = 合同 §4 RuntimeEvent 信封（`posture_observation`/`transition_event` 会被缓冲并**触发一次后台决策评估**；其他合法类型接受但忽略）。错误：无活跃会话/信封 session 不符 → 409（`no_active_session`/`stale_session`）；坏信封/坏载荷/时间戳回退 → 422 `bad_event`。B 的决策结果不在本响应里——走 WS 流。
+
+### `GET /ws` — B→C 决策事件流（WebSocket）
+
+标准 RFC6455 升级（浏览器 `new WebSocket("wss://…/ws")` 即可）。**线格式**：每帧一个 JSON 对象，按 `schema_version` 区分两种：
+- `reme-runtime-event/v0-experiment`：RuntimeEvent 信封，`event_type=care_decision`，`payload` 为完整 CareDecision，`sequence` 为 B 侧单调序列——**C 按 `payload.decision_id` 去重**（罕见竞态可能重复推送同一决策）；
+- `reme-runtime-session-status/v0-experiment`：会话状态变更。
+
+C→B 的用户回应仍走 `POST /api/response`（HTTP，有明确成败）；`POST /api/decision` 轮询在实时模式下依然可用且与推流同 id 幂等（可作 WS 断线兜底）。live 场景的 `scene_id` 不需要 bundle——会话激活期间任何 scene_id 都按实时缓冲解析。
+
 ## 附录：mkcert HTTPS（手机摄像头硬前提）
 
 手机浏览器只在安全上下文开放 `getUserMedia`；`http://内网IP` 不算。一次性配置：
