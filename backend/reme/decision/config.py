@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from reme.decision.guardrails import TriggerConfig
+from reme.decision.home import (
+    NIGHT_HOURS,
+    HomeContext,
+    HomeContextProvider,
+    HomeScriptError,
+    RoomLabel,
+    ScriptedHomeProvider,
+    StaticHomeProvider,
+)
+from reme.decision.memory import BehaviorMemoryStore
 from reme.decision.mimo.adapter import MimoClient, config_from_environment
 from reme.decision.mimo.prompts import PersonaConfig
 from reme.decision.policy import (
@@ -45,6 +56,11 @@ class ServerConfig:
     elder_name: str = "王奶奶"
     family_relation: str = "家人"
     visual_enabled: bool = False
+    cognition_enabled: bool = True
+    home_script: Path | None = None
+    home_room: str | None = None
+    local_hour: int | None = None
+    memory_file: Path | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,6 +91,35 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="attach the bundle's pre-cut visual context to MiMo calls (ADR-0003 V path)",
     )
+    parser.add_argument(
+        "--no-cognition",
+        action="store_true",
+        help="disable the ADR-0006 cognition layers (behavior/memory/home context)",
+    )
+    parser.add_argument(
+        "--home-script",
+        type=Path,
+        default=None,
+        help="home-context timeline JSONL driving the whole-home semantics (ADR-0006)",
+    )
+    parser.add_argument(
+        "--home-room",
+        choices=[room.value for room in RoomLabel],
+        default=None,
+        help="static room label for the whole demo (alternative to --home-script)",
+    )
+    parser.add_argument(
+        "--local-hour",
+        type=int,
+        default=None,
+        help="static local hour 0..23 for the demo (night rules derive from it)",
+    )
+    parser.add_argument(
+        "--memory-file",
+        type=Path,
+        default=None,
+        help="behavior-memory JSON path; omit to run without longitudinal memory",
+    )
     return parser
 
 
@@ -82,6 +127,10 @@ def server_config_from_args(argv: Sequence[str] | None = None) -> ServerConfig:
     args = build_parser().parse_args(argv)
     if (args.cert is None) != (args.key is None):
         raise ServerConfigError("--cert and --key must be provided together")
+    if args.home_script is not None and (args.home_room is not None or args.local_hour is not None):
+        raise ServerConfigError("--home-script excludes --home-room/--local-hour")
+    if args.local_hour is not None and not 0 <= args.local_hour <= 23:
+        raise ServerConfigError("--local-hour must be within 0..23")
     return ServerConfig(
         scenes_dir=args.scenes_dir,
         host=args.host,
@@ -96,18 +145,49 @@ def server_config_from_args(argv: Sequence[str] | None = None) -> ServerConfig:
         elder_name=args.elder_name,
         family_relation=args.family_relation,
         visual_enabled=args.visual,
+        cognition_enabled=not args.no_cognition,
+        home_script=args.home_script,
+        home_room=args.home_room,
+        local_hour=args.local_hour,
+        memory_file=args.memory_file,
+    )
+
+
+def build_home_provider(config: ServerConfig) -> HomeContextProvider | None:
+    """Timeline script wins; otherwise static flags; otherwise no provider."""
+
+    if config.home_script is not None:
+        try:
+            return ScriptedHomeProvider.load(config.home_script)
+        except HomeScriptError as exc:
+            raise ServerConfigError(f"home script invalid: {exc}") from exc
+    if config.home_room is None and config.local_hour is None:
+        return None
+    room = RoomLabel.UNKNOWN if config.home_room is None else RoomLabel(config.home_room)
+    hour = config.local_hour
+    return StaticHomeProvider(
+        HomeContext(
+            local_hour=hour,
+            room=room,
+            is_night=hour is not None and hour in NIGHT_HOURS,
+            ambient={},
+        )
     )
 
 
 def build_policy_config(config: ServerConfig) -> PolicyConfig:
+    memory_store = None
+    if config.memory_file is not None:
+        memory_store = BehaviorMemoryStore(config.memory_file, clock=time.time)
     return PolicyConfig(
-        persona=PersonaConfig(
-            elder_name=config.elder_name, family_relation=config.family_relation
-        ),
+        persona=PersonaConfig(elder_name=config.elder_name, family_relation=config.family_relation),
         trigger=TriggerConfig(),
         demo_mode=config.demo_mode,
         record_capture=config.record_capture,
         visual_enabled=config.visual_enabled,
+        cognition_enabled=config.cognition_enabled,
+        home_provider=build_home_provider(config),
+        memory_store=memory_store,
     )
 
 

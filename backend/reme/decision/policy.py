@@ -20,6 +20,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from reme.decision.audit import AuditLog
+from reme.decision.behavior import (
+    DEFAULT_WINDOW_MS,
+    behavior_summary_zh,
+    extract_behavior_features,
+)
 from reme.decision.context import (
     DecisionContext,
     PerceptionStreams,
@@ -27,6 +32,14 @@ from reme.decision.context import (
     build_decision_context,
 )
 from reme.decision.guardrails import TriggerConfig, violates_risk_floor
+from reme.decision.home import (
+    HomeContext,
+    HomeContextProvider,
+    adjust_trigger_config,
+    default_home_context,
+    home_summary_zh,
+)
+from reme.decision.memory import BehaviorMemoryStore, MemoryEventKind
 from reme.decision.mimo.adapter import MimoCallResult, MimoClient, MimoTransportError
 from reme.decision.mimo.prompts import PersonaConfig, build_system_prompt, build_user_prompt
 from reme.decision.mimo.schema import MimoProposal, MimoSchemaError, parse_mimo_proposal
@@ -99,6 +112,29 @@ class PolicyConfig:
     scene_privacy: Mapping[str, PrivacyMode] = field(default_factory=dict)
     record_capture: bool = False
     visual_enabled: bool = False
+    cognition_enabled: bool = True
+    behavior_window_ms: float = DEFAULT_WINDOW_MS
+    home_provider: HomeContextProvider | None = None
+    memory_store: BehaviorMemoryStore | None = None
+
+
+# Fold one behavior window into the memory baseline at most this often
+# (scene-clock milliseconds); overlapping windows would otherwise flood the
+# EWMA with near-duplicates and freeze it on the current value.
+MEMORY_OBSERVE_INTERVAL_MS = 60000.0
+
+# Only mention the stillness deviation to MiMo when it is clearly notable;
+# borderline ratios would nudge the model without deterministic backing.
+DEVIATION_MENTION_MIN = 1.5
+
+_MEMORY_STATE_KINDS: dict[DecisionState, MemoryEventKind] = {
+    DecisionState.CHECK_IN_REQUIRED: MemoryEventKind.CHECK_IN_SENT,
+    DecisionState.FAMILY_NOTIFICATION_REQUIRED: MemoryEventKind.FAMILY_NOTIFIED,
+    DecisionState.URGENT_ATTENTION: MemoryEventKind.URGENT,
+    DecisionState.RESOLVED: MemoryEventKind.RESOLVED,
+}
+
+_FALL_TEMPLATES = frozenset({TemplateId.FALL_CHECK_IN, TemplateId.FALL_HELP_ALERT})
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +281,7 @@ class _SceneRuntime:
     sequence: int = 0
     replay_index: int = 0
     epoch: int = 0
+    last_observe_ms: float = float("-inf")
 
 
 class DecisionService:
@@ -311,13 +348,15 @@ class DecisionService:
         streams = self._streams(scene_id)
         if self._config.demo_mode is DemoMode.RECORD:
             return self._replay_current(scene_id)
+        home = self._home_context(scene_id, timestamp_ms)
+        self._memory_observe(scene_id, streams, timestamp_ms, home)
         context = build_decision_context(
             streams, timestamp_ms=timestamp_ms, transition_grace_ms=5000.0
         )
         with self._lock:
             runtime = self._runtime(scene_id)
             previous_id = None if runtime.pending is None else runtime.pending.decision_id
-            directive = on_tick(runtime.session, context, config=self._config.trigger)
+            directive = on_tick(runtime.session, context, config=self._effective_trigger(home))
             outcome = self._commit_rule_directive(runtime, directive, timestamp_ms)
             if outcome is None:
                 snapshot = (runtime.epoch, runtime.session)
@@ -340,10 +379,11 @@ class DecisionService:
         self._streams(response.scene_id)
         if self._config.demo_mode is DemoMode.RECORD:
             return self._replay_advance(response.scene_id, response.decision_id)
+        home = self._home_context(response.scene_id, response.timestamp_ms)
         with self._lock:
             runtime = self._runtime(response.scene_id)
             previous_id = None if runtime.pending is None else runtime.pending.decision_id
-            directive = on_response(runtime.session, response, config=self._config.trigger)
+            directive = on_response(runtime.session, response, config=self._effective_trigger(home))
             outcome = self._commit_rule_directive(runtime, directive, response.timestamp_ms)
             if outcome is None:
                 snapshot = (runtime.epoch, runtime.session)
@@ -528,6 +568,95 @@ class DecisionService:
             )
             return decision
 
+    # -- cognition context (ADR-0006) ---------------------------------------
+
+    def _home_context(self, scene_id: str, timestamp_ms: float) -> HomeContext:
+        provider = self._config.home_provider
+        if provider is None:
+            return default_home_context()
+        return provider.context_at(scene_id, timestamp_ms)
+
+    def _effective_trigger(self, home: HomeContext) -> TriggerConfig:
+        """Home-modulated thresholds; the default context is an exact identity."""
+
+        if not self._config.cognition_enabled:
+            return self._config.trigger
+        return adjust_trigger_config(self._config.trigger, home)
+
+    def _memory_observe(
+        self,
+        scene_id: str,
+        streams: PerceptionStreams,
+        timestamp_ms: float,
+        home: HomeContext,
+    ) -> None:
+        """Fold the current behavior window into the hour baseline, throttled."""
+
+        store = self._config.memory_store
+        if store is None or not self._config.cognition_enabled or home.local_hour is None:
+            return
+        features = extract_behavior_features(
+            streams, timestamp_ms=timestamp_ms, window_ms=self._config.behavior_window_ms
+        )
+        if features.observation_count == 0:
+            return
+        with self._lock:
+            runtime = self._runtime(scene_id)
+            if timestamp_ms - runtime.last_observe_ms < MEMORY_OBSERVE_INTERVAL_MS:
+                return
+            runtime.last_observe_ms = timestamp_ms
+        store.observe(features, local_hour=home.local_hour)
+
+    def _context_sections(
+        self, scene_id: str, streams: PerceptionStreams, timestamp_ms: float
+    ) -> dict[str, str]:
+        """Assemble the ADR-0006 prompt sections; empty when cognition is off."""
+
+        if not self._config.cognition_enabled:
+            return {}
+        home = self._home_context(scene_id, timestamp_ms)
+        features = extract_behavior_features(
+            streams, timestamp_ms=timestamp_ms, window_ms=self._config.behavior_window_ms
+        )
+        behavior_line = behavior_summary_zh(features)
+        store = self._config.memory_store
+        if store is not None and home.local_hour is not None:
+            ratio = store.deviation(features, local_hour=home.local_hour)
+            if ratio is not None and ratio >= DEVIATION_MENTION_MIN:
+                behavior_line += f"；静止时长约为该时段平时的{ratio:.1f}倍"
+        sections = {"行为特征": behavior_line}
+        if store is not None:
+            memory_line = store.summary_zh(local_hour=home.local_hour)
+            if memory_line is not None:
+                sections["长期记忆"] = memory_line
+        if self._config.home_provider is not None:
+            sections["居家上下文"] = home_summary_zh(home)
+        return sections
+
+    def _memory_milestones(
+        self, directive: Directive, decision: CareDecision, previous_complaint: str | None
+    ) -> None:
+        """Record emitted-decision milestones; degraded emissions never reach here."""
+
+        store = self._config.memory_store
+        if store is None or not self._config.cognition_enabled:
+            return
+        complaint = directive.next_state.complaint_text
+        if complaint is not None and complaint != previous_complaint:
+            store.record_event(
+                MemoryEventKind.COMPLAINT, scene_id=decision.scene_id, detail=complaint
+            )
+        skeleton = directive.skeleton
+        if skeleton is not None and skeleton.template in _FALL_TEMPLATES:
+            store.record_event(
+                MemoryEventKind.FALL_ALERT,
+                scene_id=decision.scene_id,
+                detail=decision.reason_summary,
+            )
+        kind = _MEMORY_STATE_KINDS.get(decision.state)
+        if kind is not None:
+            store.record_event(kind, scene_id=decision.scene_id, detail=decision.reason_summary)
+
     def _visual_context(self, scene_id: str) -> VisualContextBundle | None:
         if not self._config.visual_enabled:
             return None
@@ -552,11 +681,14 @@ class DecisionService:
     ) -> MimoCallResult:
         assert self._mimo is not None and directive.skeleton is not None
         streams = self._streams(scene_id)
-        context = build_decision_context(
-            streams, timestamp_ms=directive.next_state.context_high_water_ms
-        )
+        high_water_ms = directive.next_state.context_high_water_ms
+        context = build_decision_context(streams, timestamp_ms=high_water_ms)
+        sections = self._context_sections(scene_id, streams, high_water_ms)
         system_prompt = build_system_prompt(
-            task, persona=self._config.persona, visual=visual is not None
+            task,
+            persona=self._config.persona,
+            visual=visual is not None,
+            context_aware=bool(sections),
         )
         text_body = build_user_prompt(
             task,
@@ -567,6 +699,7 @@ class DecisionService:
                 "complaint_text": directive.next_state.complaint_text,
             },
             elder_text=elder_text,
+            context_sections=sections or None,
         )
         user_content: str | list[dict[str, Any]] = text_body
         if visual is not None:
@@ -586,6 +719,7 @@ class DecisionService:
         *,
         proposal: MimoProposal | None = None,
     ) -> None:
+        previous_complaint = runtime.session.complaint_text
         next_state = replace(directive.next_state, pending_decision_id=decision.decision_id)
         if proposal is not None and proposal.action_card is not None:
             draft = _bind_elder_quote(proposal.action_card, next_state.complaint_text)
@@ -593,15 +727,14 @@ class DecisionService:
         runtime.session = next_state
         runtime.pending = decision
         self._record_capture(runtime, decision)
+        self._memory_milestones(directive, decision, previous_complaint)
 
     def _next_decision_id(self, runtime: _SceneRuntime) -> str:
         runtime.sequence += 1
         return f"decision-{runtime.sequence:04d}"
 
     def _privacy_mode(self, scene_id: str) -> PrivacyMode:
-        return self._config.scene_privacy.get(
-            scene_id, self._config.trigger.default_privacy_mode
-        )
+        return self._config.scene_privacy.get(scene_id, self._config.trigger.default_privacy_mode)
 
     def _build_decision(
         self,
@@ -800,9 +933,7 @@ class DecisionService:
 def _fill(text: str | None, persona: PersonaConfig) -> str | None:
     if text is None:
         return None
-    return text.replace("{name}", persona.elder_name).replace(
-        "{relation}", persona.family_relation
-    )
+    return text.replace("{name}", persona.elder_name).replace("{relation}", persona.family_relation)
 
 
 def _bind_elder_quote(card: ActionCard, complaint_text: str | None) -> ActionCard:
