@@ -23,6 +23,7 @@
 ```text
 reme.pose
 ├── scene_bundle.py      # SceneManifest 与 FrameLandmarks 数据包
+├── review.py            # 原视频与骨架同步视觉验收页
 ├── annotations.py       # 姿态和转变标注（后续 Ticket）
 ├── features.py          # 可解释几何特征（后续 Ticket）
 ├── posture.py           # 静态姿态分类（后续 Ticket）

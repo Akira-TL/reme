@@ -27,4 +27,10 @@
 artifacts/pose-classification/scenes/video_148703662/
 ```
 
-当前只剩人工视觉回放验收。结果报告已经列出优先检查的低置信、低位和高位移候选区间；人工确认后可将本票设为 `resolved`，并开始 Ticket 02。
+当前只剩人工视觉回放验收。已生成同步审核页：
+
+```text
+artifacts/pose-classification/scenes/video_148703662/review.html
+```
+
+结果报告已经列出打开方式以及优先检查的低置信、低位和高位移候选区间；人工确认后可将本票设为 `resolved`，并开始 Ticket 02。
