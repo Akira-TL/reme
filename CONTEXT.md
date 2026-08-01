@@ -9,7 +9,7 @@ The team has confirmed two constraints:
 - Source video may be decoded locally, but judge/family-facing output must not make the person easily identifiable.
 - A usable MiMo API is available.
 
-The current feasibility question is therefore whether human pose sequences from the supplied video can be classified into useful body states and transitions. The pose extractor, classification method, MiMo input contract, Raspberry Pi role, and final demo workflow remain open until measured.
+The current feasibility question is whether the current CUDA development computer can sustain a single-person live-camera pipeline from MoveNet 2D landmarks to posture observations and a complete event-triggered MiMo interaction loop. Recorded video remains a later stability and playback path. The final classifier, transition capability, Raspberry Pi role, and competition story remain open until measured.
 
 ## Primary user story
 
@@ -58,7 +58,7 @@ The classifier must use a sequence window rather than a single frame. It must ex
 
 ### MiMo
 
-MiMo API access is available. MiMo is not responsible for extracting landmarks. Its candidate inputs include a structured summary containing posture labels, confidence, recent state transitions, candidate events, and user response state, plus selected keyframes or short clips when visual context is required. Its candidate role is privacy-state and care-state reasoning, natural-language explanation, check-in dialogue, and summary generation. The exact contract remains open until structured-only and visual-context paths are measured.
+MiMo API access is available. MiMo is not responsible for extracting landmarks. B consumes structured posture and transition results, runs deterministic guardrails, and calls MiMo only when an event requires explanation, communication, or additional reasoning. Selected keyframes or short clips may be sent when visual context is materially useful. MiMo must not be called continuously for every frame, and a late MiMo response cannot cancel a deterministic timeout escalation.
 
 ### Hardware
 
@@ -66,7 +66,10 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 
 ## Canonical runtime terms
 
-- **Frame landmarks**: the human keypoints observed at one source-video time. Landmark confidence describes input quality, not posture or event accuracy.
+- **Runtime session**: one C-controlled execution identified by a unique `session_id`. A and B separately confirm the actually effective profile; events from older sessions are discarded.
+- **Live camera profile**: `camera + live perception + live decision`. This is the current P0 development path.
+- **Recorded video profile**: `video + recorded perception + recorded decision`. This is a later stable playback path and does not rerun A or B during presentation.
+- **Frame landmarks**: the human keypoints observed at one source time. Landmark confidence describes input quality, not posture or event accuracy.
 - **Posture observation**: a static body-state hypothesis at one source-video time, such as `standing` or `lying`. A posture observation is not a care event.
 - **Transition event**: a time-window hypothesis about a change between body states, such as `normal_transition` or `fall_like_transition`. A single `lying` observation cannot establish a transition event.
 - **Care decision**: the decision layer's current recommendation about observation, check-in, family notification, privacy presentation, or degradation. It is distinct from perception output.
@@ -97,14 +100,13 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 
 ## Open decisions
 
-1. Is the supplied video suitable for reliable single-person pose extraction?
-2. Which candidate extractor produces the most stable skeleton?
-3. Which static posture labels are defensible on the available footage?
-4. Can ordinary lying-down motion be distinguished from a fall-like transition?
-5. When must the system return `unknown` or `uncertain_transition`?
-6. What minimal structured classification should be sent to MiMo?
+1. Which static posture classes can be validated with the available and newly recorded labelled data?
+2. What geometric features and thresholds produce a defensible `unknown` policy?
+3. Can the current computer sustain at least 15 FPS MoveNet and 5–10 Hz posture output under the live-camera profile?
+4. Can ordinary lying-down motion be distinguished from a fall-like transition after the static classifier is stable?
+5. What events should trigger MiMo, and when is visual context materially useful?
+6. Which exact prerecorded videos and competition story should be produced after the live pipeline is stable?
 7. Is Raspberry Pi 4B deployment worth the time and risk?
-8. What exact 60–90 second judge experience should be built after the technical gates are answered?
 
 ## Repository status
 
