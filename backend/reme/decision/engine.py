@@ -276,9 +276,10 @@ class DecisionSession:
                 call=None,
             )
         self._clarify_used = True
-        payload, call = self._call_mimo(_CLARIFY_INSTRUCTION)
-        if payload is None:
-            payload = fallback_check_in(self._config, "回应不清，规则模板再确认一次")
+        clarify_payload, call = self._call_mimo(_CLARIFY_INSTRUCTION)
+        if clarify_payload is None:
+            clarify_payload = fallback_check_in(self._config, "回应不清，规则模板再确认一次")
+        payload = clarify_payload
         decision = self._emit(
             payload,
             timestamp_ms=response.timestamp_ms,

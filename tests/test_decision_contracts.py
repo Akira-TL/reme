@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from reme.decision.contracts import (
     ActionCard,
     CareDecision,

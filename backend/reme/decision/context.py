@@ -22,7 +22,8 @@ _SYSTEM_PROMPT = """你是 Reme 的居家关怀决策助手，负责判断是否
 5. 语气自然、简短、有温度，一次只问一件事。
 
 你必须只输出一个 JSON 对象，不含任何其他文字，字段如下：
-{{"state": "normal|observe|check_in_required|consent_required|family_notification_required|urgent_attention|resolved|degraded 之一",
+{{"state": "normal|observe|check_in_required|consent_required|\
+family_notification_required|urgent_attention|resolved|degraded 之一",
 "risk_level": 0 到 4 的整数,
 "privacy_mode": "visible|blurred|skeleton_only|hidden 之一",
 "need_dialogue": true 或 false,
@@ -33,7 +34,8 @@ _SYSTEM_PROMPT = """你是 Reme 的居家关怀决策助手，负责判断是否
 "action": "none|observe|ask_elder|notify_family|show_urgent_attention|mark_resolved 之一",
 "reason_summary": 一句话判断依据,
 "uncertainty": "low|medium|high|unknown 之一",
-"action_card": null 或 {{"event": "...", "elder_quote": "...", "system_judgment": "...", "suggested_action": "...", "time_window": "...", "status": "pending"}}}}"""
+"action_card": null 或 {{"event": "...", "elder_quote": "...", "system_judgment": "...", \
+"suggested_action": "...", "time_window": "...", "status": "pending"}}}}"""
 
 
 @dataclass

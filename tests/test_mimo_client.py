@@ -5,7 +5,6 @@ import urllib.request
 from typing import Any
 
 import pytest
-
 from reme.decision.mimo_client import (
     LiveConfig,
     MiMoClient,

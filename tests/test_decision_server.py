@@ -9,7 +9,6 @@ from http.server import ThreadingHTTPServer
 from typing import Any
 
 import pytest
-
 from reme.decision.mock_scenes import SCENE_NEED_LOOP
 from reme.decision.server import SessionRegistry, build_handler
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from reme.decision.contracts import ContractError, InteractionResponse
 from reme.decision.engine import DecisionSession
 from reme.decision.guardrails import GuardrailConfig
