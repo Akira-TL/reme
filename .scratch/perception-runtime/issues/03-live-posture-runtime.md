@@ -12,8 +12,8 @@
 - [x] 输出posture、confidence、duration、motion_level和landmark_quality。
 - [x] 姿态输出频率为5–10 Hz，不要求每帧分类。
 - [x] 人体不可用或证据不足时输出unknown，不沿用旧标签伪装稳定。
-- [ ] 目标姿态到页面延迟P95不超过500 ms。
+- [x] 目标姿态到页面延迟P95不超过500 ms；2026-08-01 A侧 WebSocket 姿态延迟 P95 为 45.596 ms。
 - [x] 每个session使用独立RealtimePostureTracker，切换后清空持续时长和分类缓存。
 - [x] 提供左侧摄像头、右侧Three.js节点骨架和分类状态的本地实时预览入口。
-- [ ] 连续运行10分钟无阻断错误。
+- [x] 连续运行10分钟无阻断错误；真实摄像头有效运行 600.056 秒，A侧无 runtime error。
 - [ ] 实时与离线同一输入片段的结果差异有自动化对照测试。
