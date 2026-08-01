@@ -6,6 +6,7 @@
 - Date: 2026-08-01
 - 工作目录：`.scratch/software-demo/`
 - 现有可复用原型：`.scratch/motionbert-offline-demo/`
+- Shared interface: [`../abc-interface/spec.md`](../abc-interface/spec.md)
 
 ## 1. 文档目的
 
@@ -156,39 +157,27 @@ D：PPT、路演和产品表达
 
 ## 7. A → C 数据接口
 
-A 至少需要向 C 提供以下内容：
+C 以 `SceneManifest` 作为每个演示场景的唯一入口，并分别读取：
 
-- 原始演示视频；
-- 场景 ID；
-- 视频时间戳；
-- 帧编号；
-- 2D 关键点；
-- 3D 关键点，如该场景可用；
-- 姿态分类；
-- 姿态置信度；
-- 姿态持续时间；
-- 关键点可见性或数据可用状态。
+- 原始演示视频或隐私替代媒体；
+- `FrameLandmarks`：逐帧 2D 关键点；
+- 可选 3D 关键点流；
+- `PostureObservation`：低频姿态、置信度、持续时间和质量；
+- `TransitionEvent`：动作转变时间窗与证据。
 
-候选数据示例：
+C 不再接收把 2D、3D、姿态和事件全部嵌套到单条记录中的候选结构。统一使用共享接口中的字段：
 
-```json
-{
-  "schema_version": "candidate-v1",
-  "scene_id": "fall_demo",
-  "timestamp_ms": 12500,
-  "frame_index": 375,
-  "person_detected": true,
-  "pose_state": "lying",
-  "pose_confidence": 0.91,
-  "pose_duration_ms": 5200,
-  "motion_level": "low",
-  "availability": "available",
-  "keypoints_2d": [],
-  "keypoints_3d": []
-}
+```text
+posture
+posture_confidence
+posture_duration_ms
+motion_level
+landmark_quality
+transition
+transition_confidence
 ```
 
-注意：该结构只是 C 端适配器的候选输入，不是已经冻结的领域合同。A 的实验结果评审后才能冻结字段。
+禁止继续使用 `pose_state`、`pose_confidence`、`pose_duration_ms` 或 `availability` 表达同一含义。
 
 ### C 对 A 接口的要求
 
@@ -215,21 +204,34 @@ B 至少需要向 C 提供：
 - 推理是否可用；
 - 决策时间轴事件。
 
-候选数据示例：
+统一数据示例：
 
 ```json
 {
-  "schema_version": "candidate-v1",
+  "schema_version": "reme-care-decision/v0-experiment",
+  "scene_id": "fall_demo_01",
+  "decision_id": "decision-0007",
   "timestamp_ms": 12500,
-  "privacy_state": "normal",
+  "state": "check_in_required",
   "risk_level": 2,
-  "should_interact": true,
-  "action": "check_in",
-  "reason": "检测到低位姿态并持续静止，需要先进行本地询问",
-  "message_to_elder": "您还好吗？需要我联系家人吗？",
-  "message_to_family": null,
-  "inference_mode": "live",
-  "availability": "available"
+  "privacy_mode": "skeleton_only",
+  "need_dialogue": true,
+  "dialogue_goal": "confirm_safety",
+  "elder_message": "您还好吗？需要我联系家人吗？",
+  "family_notification": null,
+  "action": "ask_elder",
+  "reason_summary": "检测到跌倒式转变，随后处于低运动状态。",
+  "uncertainty": "medium",
+  "fallback_used": false,
+  "source": "mimo",
+  "demo_mode": "live",
+  "visual_context": {
+    "sent_to_mimo": false,
+    "type": null,
+    "start_ms": null,
+    "end_ms": null,
+    "sample_count": 0
+  }
 }
 ```
 
@@ -241,6 +243,33 @@ B 至少需要向 C 提供：
 - 风险等级和动作名称应保持稳定；
 - B 的业务规则应集中在 B 端，C 只负责渲染和触发交互事件；
 - 如果 B 的 MiMo 路径发生变化，C 的页面组件不应整体重写。
+
+## 8.1 C → B 交互回应接口
+
+C 在老人端发生操作或超时时，只提交标准化 `InteractionResponse`：
+
+```json
+{
+  "schema_version": "reme-interaction-response/v0-experiment",
+  "scene_id": "fall_demo_01",
+  "decision_id": "decision-0007",
+  "timestamp_ms": 18600,
+  "response": "safe",
+  "source": "user_input",
+  "demo_mode": "live"
+}
+```
+
+`response` 只允许：
+
+```text
+safe
+need_help
+unclear
+none
+```
+
+C 不直接根据回应生成家属通知或升级风险。C 提交回应后，必须等待 B 返回下一条 `CareDecision`。
 
 ## 9. 软件端目标页面
 

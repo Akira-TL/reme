@@ -8,6 +8,7 @@
   - `CONTEXT.md`
   - `docs/adr/0003-allow-minimal-visual-context-to-mimo.md`
   - `.scratch/handoff/2026-08-01-product-mimo-handoff.md`
+  - `.scratch/abc-interface/spec.md`（A/B/C 共享接口唯一来源）
 
 ## 1. 角色定位
 
@@ -57,47 +58,28 @@ B 的最终责任是：
 
 ### 2.3 合同状态
 
-当前输入输出字段是用于比赛开发的候选合同，不是永久领域标准。A 的分类实验和 MiMo Schema Smoke Test 通过后，再冻结版本。
+A/B/C 的跨角色字段统一以 `.scratch/abc-interface/spec.md` 为准。该合同当前为 `v0-experiment`，不是永久领域标准；A 的分类实验、MiMo Schema Smoke Test 和 C 的回放验收通过后，再冻结比赛版本。
 
 ## 3. B 的输入
 
-B 从 A 接收结构化姿态结果。首轮接口至少需要覆盖以下信息：
+B 不再要求 A 生成把姿态、转变和业务候选重复合并在一起的“大 JSON”。B 通过 `scene_id` 和统一视频时间轴组合两条低频输入流：
 
-```json
-{
-  "schema_version": "pose-event.v0",
-  "scene_id": "fall-demo",
-  "timestamp_ms": 12500,
-  "person_detected": true,
-  "posture": "lying",
-  "posture_confidence": 0.87,
-  "posture_duration_ms": 4200,
-  "transition": "fall_like_transition",
-  "transition_confidence": 0.74,
-  "motion_level": "low",
-  "landmark_quality": "usable",
-  "candidate_event": "possible_fall",
-  "candidate_event_confidence": 0.72
-}
-```
+1. `PostureObservation`：当前姿态、持续时间、运动程度和关键点质量；
+2. `TransitionEvent`：动作转变时间窗、置信度和客观证据。
 
-### 3.1 必需字段
+B 还通过 `SceneManifest` 获取受控本地媒体引用。逐帧 `FrameLandmarks` 主要供 C 可视化，B 默认不消费；需要视觉上下文时，B 按 ADR-0003 从本地媒体引用抽取最小关键帧或短片段。
 
-- `schema_version`：输入合同版本；
-- `scene_id`：演示或测试场景标识；
-- `timestamp_ms`：事件时间；
-- `person_detected`：是否检测到人体；
-- `posture`：当前静态姿态；
-- `posture_confidence`：姿态分类置信度；
-- `posture_duration_ms`：姿态持续时长；
-- `transition`：最近动作转变；
-- `transition_confidence`：转变分类置信度；
-- `motion_level`：运动强度；
-- `landmark_quality`：关键点是否可用；
-- `candidate_event`：A 输出的事件候选；
-- `candidate_event_confidence`：事件证据强度。
+统一字段包括：
 
-### 3.2 可选上下文与视觉输入
+- `scene_id`；
+- `timestamp_ms` 或 `start_ms / end_ms`；
+- `posture / posture_confidence / posture_duration_ms`；
+- `motion_level / landmark_quality`；
+- `transition / transition_confidence / evidence`。
+
+A 不再向 B 重复输出 `candidate_event = possible_fall`。B 可以在内部将 `fall_like_transition`、后续低运动姿态和老人回应组合成 `possible_fall` 决策上下文，但该内部对象不属于 A/C 外部接口。
+
+### 3.1 可选上下文与视觉输入
 
 B 可以追加以下上下文，但不得伪造：
 
@@ -136,7 +118,9 @@ B 必须向 C 返回稳定、结构化、已校验的结果，而不是只返回
 
 ```json
 {
-  "schema_version": "care-decision.v0",
+  "schema_version": "reme-care-decision/v0-experiment",
+  "scene_id": "fall_demo_01",
+  "decision_id": "decision-0007",
   "timestamp_ms": 12500,
   "state": "check_in_required",
   "risk_level": 2,
@@ -371,7 +355,7 @@ D 据此制作技术架构、PPT 和答辩口径。
 
 ### P0：必须完成
 
-1. 固定 `pose-event.v0` 候选输入示例；
+1. 与 A、C 联合确认共享接口中的 `PostureObservation`、`TransitionEvent`、`CareDecision` 和 `InteractionResponse`；
 2. 完成 Structured 路径的 MiMo API Smoke Test；
 3. 完成关键帧或短视频 Visual 路径的 MiMo API Smoke Test；
 4. 比较两条路径的输出稳定性、延迟和隐私状态判断效果；

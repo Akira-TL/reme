@@ -64,6 +64,15 @@ MiMo API access is available. MiMo is not responsible for extracting landmarks. 
 
 Raspberry Pi 4B and the Tuya display board are available assets, not predetermined architecture. Their role must be chosen after laptop feasibility is known and device-specific tests are run.
 
+## Canonical runtime terms
+
+- **Frame landmarks**: the human keypoints observed at one source-video time. Landmark confidence describes input quality, not posture or event accuracy.
+- **Posture observation**: a static body-state hypothesis at one source-video time, such as `standing` or `lying`. A posture observation is not a care event.
+- **Transition event**: a time-window hypothesis about a change between body states, such as `normal_transition` or `fall_like_transition`. A single `lying` observation cannot establish a transition event.
+- **Care decision**: the decision layer's current recommendation about observation, check-in, family notification, privacy presentation, or degradation. It is distinct from perception output.
+- **Interaction response**: the older adult's explicit, scripted, unclear, or absent response to a check-in. The response is an input to the next care decision, not a decision by itself.
+- **Privacy mode**: the presentation instruction that determines whether source imagery is visible, blurred, replaced by a skeleton, or hidden. It does not change the underlying perception result.
+
 ## Feasibility gates
 
 1. Inspect the supplied video's codec, resolution, frame rate, duration, viewpoints, occlusion, and action segments.
