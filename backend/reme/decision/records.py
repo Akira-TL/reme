@@ -498,10 +498,17 @@ def parse_care_decision(data: object) -> CareDecision:
 
 
 def parse_interaction_response(data: object) -> InteractionResponse:
-    """Parse one InteractionResponse payload submitted by C."""
+    """Parse one InteractionResponse payload submitted by C.
+
+    ``demo_mode`` and ``text`` are superset fields kept from the earlier
+    contract revision; the current interface version omits them, so both are
+    optional on the wire (missing ``demo_mode`` defaults to live).
+    """
 
     payload = _require_payload_mapping(data, "interaction response")
     _reject_unknown_fields(payload, _RESPONSE_FIELDS, "interaction response")
+    if payload.get("demo_mode") is None:
+        payload = {**payload, "demo_mode": DemoMode.LIVE.value}
     return InteractionResponse(
         schema_version=payload.get("schema_version", ""),
         scene_id=payload.get("scene_id", ""),

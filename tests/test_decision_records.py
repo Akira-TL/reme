@@ -235,3 +235,18 @@ def test_interaction_response_rejects_elder_answer_from_family_input() -> None:
 def test_visual_context_rejects_sample_count_without_send() -> None:
     with pytest.raises(DecisionRecordError, match="visual_context"):
         VisualContext(sent_to_mimo=False, sample_count=3)
+
+
+def test_parse_interaction_response_accepts_current_contract_shape() -> None:
+    # The current interface revision omits demo_mode and text entirely.
+    payload = {
+        "schema_version": "reme-interaction-response/v0-experiment",
+        "scene_id": "live-camera-001",
+        "decision_id": "decision-0007",
+        "timestamp_ms": 18600.0,
+        "response": "safe",
+        "source": "user_input",
+    }
+    response = parse_interaction_response(payload)
+    assert response.demo_mode is DemoMode.LIVE
+    assert response.text is None

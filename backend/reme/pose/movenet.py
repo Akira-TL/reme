@@ -289,7 +289,7 @@ def _load_runtime() -> tuple[Any, Any, Any]:
     try:
         import cv2
         import numpy as np
-        from ai_edge_litert.interpreter import Interpreter  # type: ignore[import-untyped]
+        from ai_edge_litert.interpreter import Interpreter
     except ImportError as exc:
         raise MoveNetError(
             "MoveNet runtime requires ai-edge-litert, numpy, and opencv-python"
