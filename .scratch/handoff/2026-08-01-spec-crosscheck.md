@@ -77,6 +77,8 @@
 
 ### 8.1 行动卡与授权闭环（闭 P0-4）
 
+> **状态更新（2026-08-01 夜，核对 akira `74980ff`）**：本节五项已全部进合同——① `text` 字段及"仅 `user_input | script` 可非空、`timeout` 必为 `null`"约束原样落地（合同 §11，样例即"牙疼，饭咬不动。"）；② `consent_required`/六要素 `action_card`（含 `status` 三值枚举）与授权前置约束逐条进 §10，合同并增设 `state = consent_required` 档（明确 risk_level 仍为 2，等待授权≠风险升级）；③ 三个 `response` 新枚举与 `source = family_input`（含"`card_confirmed` 仅家属视图提交"）进 §11；④ 回执按 `mark_resolved` + 回执文案 + 行动卡状态 `confirmed|done` 落入场景步骤；⑤ 即合同 §14"视频三：具体需求与行动卡闭环"，并附诚实红线：素材拍摄完成前不得宣称闭环端到端完成（§15.2 留待验收）。**P0-4 就此关闭**，剩余为素材拍摄与契约测试等实现项。
+
 **① `InteractionResponse` 增加可空 `text` 字段**——这是隐藏的先决缺口：老人主诉（"牙疼，饭咬不动"）必须能从 C 传到 B 再进 MiMo 做需求理解，否则"具体需求"分支整体不可运行。
 
 ```json
@@ -152,6 +154,8 @@ B: mark_resolved + elder_message 回执（status=confirmed）
 此节涉及安全叙事根基，**建议由决策层 owner 立 ADR 固化**（"检查-升级-不可取消"三段式），D 的路演话术依赖此 ADR；④ 的双字段演进可作为该 ADR 的"后续工作"附注一并记录。
 
 ### 8.3 演示时钟（闭演示时钟缺口）
+
+> **状态更新（2026-08-01 夜，核对 akira `74980ff`）**：已进合同——`media.demo_time_scale` 为可选正数、默认 `1.0`（合同样例即 `30.0`），且"只用于 C 的叙事时长换算、不改变任何真实 `*_ms`"与"B 规则阈值不得用它伪造感知数据"两条红线原文落地，与本节"数据层不变"原则完全一致；manifest 由 A 侧（SceneBundle 生成方）落字段，owner 分工与提案相同。**演示时钟缺口就此关闭**。
 
 **`SceneManifest` 增加可空 `demo_time_scale`**（数值；如 `30.0` = 1 视频秒代表 30 叙事秒）：
 
