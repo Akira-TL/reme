@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Reme Team" }]
-dependencies = []
+dependencies = [
+  "numpy>=2.0",
+]
 
 [project.scripts]
 reme-demo = "reme.demo:entrypoint"
@@ -20,6 +22,10 @@ dev = [
   "mypy>=1.14",
   "pytest>=8.3",
   "ruff>=0.9",
+]
+pose = [
+  "ai-edge-litert>=2.1",
+  "opencv-python-headless>=5.0",
 ]
 
 [tool.hatch.build.targets.wheel]
