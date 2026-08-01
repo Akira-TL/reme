@@ -1,12 +1,13 @@
 # 方案：Reme 的 MiMo 代码使用方案（数据结构与流转）
 
 > 状态：草案（2026-08-01，配合 0-4h 冻结会使用）
+> 2026-08-01 修订：§1 原则 1 已按 ADR-0003（Accepted）更新为 S/V 双路径。本文合同 JSON 化属 planning 层产品基线；按 `.scratch/team-roles/README.md` §2 文档优先级，执行期字段命名以该索引候选合同（`reme-posture/v0`、`care-decision.v0`）为准，两侧差异与全部待裁决项见 [.scratch/handoff/2026-08-01-spec-crosscheck.md](../../.scratch/handoff/2026-08-01-spec-crosscheck.md)。
 > 依据：[核心产品文档 v3.0](Reme-核心产品文档-v3.0.md) §04 MiMo 固定输入/输出合同、[任务分解](任务分解.md) MIMO-01~16 与三份数据契约、[情报-MiMo-API](情报-MiMo-API.md)、[情报-Miloco-代码剖析](情报-Miloco-代码剖析.md)。
 > 本文回答一个问题：**代码层面怎么用 MiMo**——客户端结构、每一跳的数据结构、完整流转图。API 端点等外部事实以情报文档为准，此处只引用不复述。
 
 ## 1. 总体原则（v3.0 冻结口径）
 
-1. MiMo 只接收**结构化事件与必要对话文本**，永不接收原始视频帧（验收项：原始视频不进入任何网络请求）。
+1. 视觉输入按 **ADR-0003（Accepted，取代 ADR-0001 的绝对禁令）** 执行双路径：默认 **S 路径**（结构化事件与必要对话文本）；B 可在明确事件触发下走 **V 路径**（附加最小视觉上下文：选定关键帧/短视频），必须显式、最小、可观察、记录采样范围，禁止持续后台上传（见 [ADR-0003](../../docs/adr/0003-allow-minimal-visual-context-to-mimo.md) 与 team-roles §5）。验收项相应从"原始视频不进任何网络请求"改为"**每次请求实际发送内容可观察、可审计**"。
 2. 高风险规则状态机 **>** MiMo 输出：MiMo 可生成解释与文案，不能取消确定性告警，不能输出医疗诊断。
 3. 所有 MiMo 输出先做 schema 校验：解析失败重试 1 次 → 降级规则模板，`degraded` 落日志。
 4. MiMoClient 同时支持 **live / mock / record** 三模式，现场断网不影响产品闭环（live 视为加分而非前提）。
@@ -136,7 +137,7 @@ flowchart LR
     end
     RULES -->|CareEvent L3<br/>无图像·无逐帧关键点| SAFE[规则安全层 SAFE-02<br/>风险分级·倒计时·强制告警]
     SAFE -->|MiMoRequest<br/>事件+时段+基线+对话摘要| MC{MiMoClient<br/>live/mock/record}
-    MC -->|仅结构化 JSON 出网| API[(MiMo API)]
+    MC -->|"S:结构化 JSON / V:+最小视觉上下文(ADR-0003)"| API[(MiMo API)]
     API --> MC
     MC -->|MiMoResult<br/>schema 校验→失败降级| FORK{三分支 MIMO-07}
     FORK -->|无需求| LOGV[静默+日志]
@@ -150,7 +151,7 @@ flowchart LR
     MC --> LOG
 ```
 
-隐私红线在图上的位置：`CareEvent` 之左全部留在端内；出网的只有 `MiMoRequest`（结构化 JSON）。这与 Miloco 形成正对照：Miloco 把摄像头画面交给云端多模态模型（见 [情报-Miloco-代码剖析](情报-Miloco-代码剖析.md)），Reme 只让事件出端——**同一生态，Miloco 追求看得更懂，Reme 坚持看得更少**。
+隐私红线在图上的位置：默认（S 路径）`CareEvent` 之左全部留在端内，出网只有 `MiMoRequest`（结构化 JSON）；ADR-0003 后新增 V 路径例外——事件触发的最小关键帧/短视频可随单次请求出网，须显式记录采样范围并在 Demo 中可见。与 Miloco 的对照相应校正：Miloco 每触发窗口把 4s 原画 mp4+人脸 gallery+家庭档案全量送云（见 [情报-Miloco-代码剖析](情报-Miloco-代码剖析.md)），Reme 默认零像素出网、必要时才发送最小可审计的视觉上下文——**同一生态，Miloco 追求看得更懂，Reme 坚持按需最少地看**。（D 路演口径同步：不得声称所有 MiMo 推理完全不接触像素，见 team-roles §5。）
 
 ### 4.2 场景 B（牙疼→行动闭环）调用时序
 
