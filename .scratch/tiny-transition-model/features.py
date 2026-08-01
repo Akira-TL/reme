@@ -13,6 +13,23 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from statistics import fmean, median
+from typing import Protocol
+
+
+class Observation(Protocol):
+    """Structural type shared by synthetic samples and reme.motion.MotionObservation."""
+
+    @property
+    def offset_ms(self) -> int: ...
+
+    @property
+    def torso_angle_deg(self) -> float: ...
+
+    @property
+    def center_y(self) -> float: ...
+
+    @property
+    def visibility(self) -> float: ...
 
 FEATURE_NAMES: tuple[str, ...] = (
     "net_angle_change_deg",
@@ -73,25 +90,21 @@ def _max_window_gain(times_s: Sequence[float], values: Sequence[float], *, windo
     return best
 
 
-def extract_features(samples: Sequence[object]) -> WindowFeatures | None:
-    """Return window features, or None when the sequence cannot support a decision.
-
-    Accepts any object exposing offset_ms, torso_angle_deg, center_y and
-    visibility, so both synthetic samples and reme.motion.MotionObservation work.
-    """
+def extract_features(samples: Sequence[Observation]) -> WindowFeatures | None:
+    """Return window features, or None when the sequence cannot support a decision."""
 
     if not samples:
         return None
 
-    visible = [sample for sample in samples if getattr(sample, "visibility") >= MIN_VISIBILITY]
+    visible = [sample for sample in samples if sample.visibility >= MIN_VISIBILITY]
     visible_ratio = len(visible) / len(samples)
     if len(visible) < MIN_VISIBLE_SAMPLES or visible_ratio < MIN_VISIBLE_RATIO:
         return None
 
-    visible.sort(key=lambda sample: getattr(sample, "offset_ms"))
-    times_s = [getattr(sample, "offset_ms") / 1000.0 for sample in visible]
-    angles = _smooth([float(getattr(sample, "torso_angle_deg")) for sample in visible])
-    centers = _smooth([float(getattr(sample, "center_y")) for sample in visible])
+    visible.sort(key=lambda sample: sample.offset_ms)
+    times_s = [sample.offset_ms / 1000.0 for sample in visible]
+    angles = _smooth([float(sample.torso_angle_deg) for sample in visible])
+    centers = _smooth([float(sample.center_y) for sample in visible])
 
     baseline_angle = _edge_median(angles, fraction=0.2, from_end=False)
     final_angle = _edge_median(angles, fraction=0.2, from_end=True)
@@ -154,9 +167,9 @@ def extract_features(samples: Sequence[object]) -> WindowFeatures | None:
     # Window visibility is measured over every sample in the window, including the
     # dropped ones, so a gap inside the transition still shows up as low quality.
     window_visibility = [
-        float(getattr(sample, "visibility"))
+        float(sample.visibility)
         for sample in samples
-        if transition_start_s <= getattr(sample, "offset_ms") / 1000.0 <= transition_end_s
+        if transition_start_s <= sample.offset_ms / 1000.0 <= transition_end_s
     ]
     return WindowFeatures(
         values=values,

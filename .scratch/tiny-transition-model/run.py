@@ -35,7 +35,11 @@ from evaluate import (  # noqa: E402
 )
 from features import WindowFeatures, extract_features  # noqa: E402
 from models import LogisticRegression, TinyMLP  # noqa: E402
-from reme.motion import MotionObservation, detect_fall_like_event, has_insufficient_motion_data  # noqa: E402
+from reme.motion import (  # noqa: E402
+    MotionObservation,
+    detect_fall_like_event,
+    has_insufficient_motion_data,
+)
 from synth import Sequence_, generate_dataset  # noqa: E402
 
 ABSTENTION_MARGINS = (0.0, 0.05, 0.10, 0.15, 0.20, 0.25)

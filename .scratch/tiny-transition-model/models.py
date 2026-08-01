@@ -78,7 +78,8 @@ class LogisticRegression:
             weight_gradient = [0.0] * width
             bias_gradient = 0.0
             for row, label in zip(scaled, labels, strict=True):
-                error = _sigmoid(sum(w * x for w, x in zip(weights, row, strict=True)) + bias) - label
+                logit = sum(w * x for w, x in zip(weights, row, strict=True)) + bias
+                error = _sigmoid(logit) - label
                 for index, value in enumerate(row):
                     weight_gradient[index] += error * value
                 bias_gradient += error

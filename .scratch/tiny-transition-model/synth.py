@@ -44,7 +44,13 @@ class Sequence_:
 
 
 FALL_SCENARIOS = ("forward_collapse", "backward_fall", "slip_from_sitting", "slow_slide")
-NORMAL_SCENARIOS = ("controlled_lie_down", "fast_lie_down", "sit_down", "bend_pick_up", "stand_idle")
+NORMAL_SCENARIOS = (
+    "controlled_lie_down",
+    "fast_lie_down",
+    "sit_down",
+    "bend_pick_up",
+    "stand_idle",
+)
 
 
 def _ease(u: float, shape: float) -> float:
@@ -108,7 +114,12 @@ def _fall_keys(rng: random.Random, scenario: str) -> list[_Key]:
     return [
         _Key(0.0, angle0, center0),
         _Key(start_ms, angle0, center0),
-        _Key(start_ms + duration, min(angle1 + overshoot, 180.0), center1, shape=rng.uniform(1.9, 2.6)),
+        _Key(
+            start_ms + duration,
+            min(angle1 + overshoot, 180.0),
+            center1,
+            shape=rng.uniform(1.9, 2.6),
+        ),
         _Key(start_ms + duration + rng.uniform(120.0, 260.0), angle1, center1),
         _Key(float(SEQUENCE_DURATION_MS), angle1, center1),
     ]
@@ -176,7 +187,11 @@ def _normal_keys(rng: random.Random, scenario: str) -> list[_Key]:
     drift = rng.uniform(-4.0, 4.0)
     return [
         _Key(0.0, angle0, center0),
-        _Key(float(SEQUENCE_DURATION_MS), max(angle0 + drift, 0.0), center0 + rng.uniform(-0.02, 0.02)),
+        _Key(
+            float(SEQUENCE_DURATION_MS),
+            max(angle0 + drift, 0.0),
+            center0 + rng.uniform(-0.02, 0.02),
+        ),
     ]
 
 
@@ -224,7 +239,11 @@ def generate_sequence(rng: random.Random, scenario: str) -> Sequence_:
                 visibility=vis,
             )
         )
-    return Sequence_(scenario=scenario, label=FALL_LIKE if is_fall else NORMAL, samples=tuple(samples))
+    return Sequence_(
+        scenario=scenario,
+        label=FALL_LIKE if is_fall else NORMAL,
+        samples=tuple(samples),
+    )
 
 
 def generate_dataset(*, seed: int, sequences_per_scenario: int) -> list[Sequence_]:
