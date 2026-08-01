@@ -31,3 +31,6 @@ Downloads*.zip
 **/*mp4
 # Claude Code local state (agent worktrees, session settings)
 .claude/
+
+# Derived keypoint copies used for local analysis (regenerate with git show)
+.scratch/posture-classifier-theory/data/
