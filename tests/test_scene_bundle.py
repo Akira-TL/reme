@@ -2,13 +2,20 @@ import json
 from pathlib import Path
 
 import pytest
-from reme.scene_bundle import (
+from reme.pose.scene_bundle import (
     MOVENET_KEYPOINT_NAMES,
     SceneBundleError,
     build_scene_bundle,
     load_scene_manifest,
     validate_frame_landmarks_jsonl,
 )
+
+
+def test_legacy_scene_bundle_entrypoint_reexports_pose_module() -> None:
+    from reme import scene_bundle as legacy_scene_bundle
+
+    assert legacy_scene_bundle.load_scene_manifest is load_scene_manifest
+    assert legacy_scene_bundle.build_scene_bundle is build_scene_bundle
 
 
 def test_load_scene_manifest_rejects_unknown_schema_version(tmp_path: Path) -> None:

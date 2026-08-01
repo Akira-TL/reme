@@ -6,6 +6,7 @@
 - Date: 2026-08-01
 - Project: Reme
 - Scope: 原始视频、本地人体关键点提取、姿态分类与时序事件候选
+- Implementation directory: `backend/reme/pose/`
 - Shared interface: [`../abc-interface/spec.md`](../abc-interface/spec.md)
 
 ## 1. 角色目标
