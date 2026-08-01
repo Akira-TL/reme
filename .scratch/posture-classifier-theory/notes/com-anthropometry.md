@@ -494,9 +494,11 @@ theta_body = angle(axis_body, g_scene)
 
 ## 附录 B：可复现脚本
 
-- `scratchpad/coco_weights.py` — 从 de Leva/Winter 环节参数折叠出 §4.3 的 14 项系数、噪声增益、覆盖率
-- `scratchpad/com_bias.py` — 五种姿态下四种估计量的偏差（§2.4 论断 L 表）
-- `scratchpad/persp.py` — 透视非交换性的蒙特卡洛上界（§3.1 表）
-- `scratchpad/dempster_ocr.py` / `dempster_ocr2.py` — Dempster 1955 原始 PDF 的分页 OCR
+已落盘到 `/Users/maniforld/Documents/reme/.scratch/posture-classifier-theory/scripts/`：
 
-（脚本位于本次会话的 scratchpad，若需长期保留请复制到 `.scratch/posture-classifier-theory/` 下。）
+- `coco_weights.py` — 从 de Leva/Winter 环节参数折叠出 §4.3 的 14 项系数、噪声增益、覆盖率
+- `com_bias.py` — 五种姿态下四种估计量的偏差（§2.4 论断 L 表）+ 换表敏感性
+- `persp.py` — 透视非交换性的蒙特卡洛上界（§3.1 表）
+- `dempster_ocr.py` / `dempster_ocr2.py` — Dempster 1955 原始 PDF 的分页 OCR（依赖 `pypdf[image]` + `tesseract`）
+
+运行方式：任意带 `numpy` 的 Python 3 环境，`python coco_weights.py` / `python com_bias.py` / `python persp.py`。三者无外部数据依赖，可独立复现本文全部数字。
