@@ -120,7 +120,16 @@ class MimoClient:
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         last_error = "unknown error"
         started = time.perf_counter()
+        # A single monotonic budget bounds the whole call, not each socket op:
+        # urllib's timeout is per blocking operation, so without this cap two
+        # silent attempts could take 2x the configured timeout or worse.
+        deadline = started + config.timeout_seconds * config.max_attempts
+        attempt = 0
         for attempt in range(1, config.max_attempts + 1):
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                last_error = "deadline exhausted"
+                break
             request = urllib.request.Request(
                 url=f"{config.base_url.rstrip('/')}/chat/completions",
                 data=payload,
@@ -132,10 +141,16 @@ class MimoClient:
                 method="POST",
             )
             try:
-                raw = self._transport(request, config.timeout_seconds)
+                raw = self._transport(request, min(config.timeout_seconds, remaining))
                 content, usage = _extract_completion(raw)
             except urllib.error.HTTPError as exc:
                 last_error = f"HTTP {exc.code}"
+                if exc.code != 429 and exc.code < 500:
+                    # Auth/validation failures are not transient; retrying
+                    # only burns the latency budget.
+                    raise MimoTransportError(
+                        f"MiMo call failed: {last_error}", attempts=attempt
+                    ) from exc
                 continue
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last_error = f"{type(exc).__name__}: {exc}"
@@ -148,8 +163,8 @@ class MimoClient:
                 content=content, latency_ms=latency_ms, attempts=attempt, usage=usage
             )
         raise MimoTransportError(
-            f"MiMo call failed after {config.max_attempts} attempts: {last_error}",
-            attempts=config.max_attempts,
+            f"MiMo call failed after {attempt} attempts: {last_error}",
+            attempts=attempt,
         )
 
 

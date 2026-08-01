@@ -113,6 +113,7 @@ class ResponseSource(StrEnum):
 
 _TEXT_BEARING_RESPONSE_SOURCES = {ResponseSource.USER_INPUT, ResponseSource.SCRIPT}
 _NONE_RESPONSE_SOURCES = {ResponseSource.TIMEOUT, ResponseSource.SCRIPT}
+_ELDER_RESPONSE_SOURCES = {ResponseSource.USER_INPUT, ResponseSource.SCRIPT}
 
 
 def _require_non_empty(value: str, label: str) -> None:
@@ -173,7 +174,12 @@ class VisualContext:
         if self.sent_to_mimo:
             if self.type is None:
                 raise DecisionRecordError("visual_context.type is required when sent_to_mimo")
-        elif not (self.type is None and self.start_ms is None and self.end_ms is None):
+        elif not (
+            self.type is None
+            and self.start_ms is None
+            and self.end_ms is None
+            and self.sample_count is None
+        ):
             raise DecisionRecordError("visual_context fields must be null when nothing was sent")
         for label in ("start_ms", "end_ms"):
             value = getattr(self, label)
@@ -314,13 +320,31 @@ class InteractionResponse:
         _require_optional_text(self.text, "text")
         if self.text is not None and self.source not in _TEXT_BEARING_RESPONSE_SOURCES:
             raise DecisionRecordError("text is only allowed when source is user_input or script")
+        # Full response x source cross-whitelist: a timeout can only say "none",
+        # the family view can only confirm cards, and elder answers (including
+        # consent) must come from the elder's own input or an explicit script.
         if self.response is ResponseValue.NONE and self.source not in _NONE_RESPONSE_SOURCES:
             raise DecisionRecordError("response=none is only valid from timeout or script sources")
+        if self.source is ResponseSource.TIMEOUT and self.response is not ResponseValue.NONE:
+            raise DecisionRecordError("source=timeout can only carry response=none")
         if (
             self.response is ResponseValue.CARD_CONFIRMED
             and self.source is not ResponseSource.FAMILY_INPUT
         ):
             raise DecisionRecordError("response=card_confirmed must come from family_input")
+        if (
+            self.source is ResponseSource.FAMILY_INPUT
+            and self.response is not ResponseValue.CARD_CONFIRMED
+        ):
+            raise DecisionRecordError("source=family_input can only confirm the action card")
+        if (
+            self.response
+            not in (ResponseValue.NONE, ResponseValue.CARD_CONFIRMED)
+            and self.source not in _ELDER_RESPONSE_SOURCES
+        ):
+            raise DecisionRecordError(
+                "elder responses must come from user_input or script sources"
+            )
 
     def to_payload(self) -> dict[str, Any]:
         return {

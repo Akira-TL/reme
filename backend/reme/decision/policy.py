@@ -237,6 +237,7 @@ class _SceneRuntime:
     pending: CareDecision | None = None
     sequence: int = 0
     replay_index: int = 0
+    epoch: int = 0
 
 
 class DecisionService:
@@ -283,12 +284,12 @@ class DecisionService:
             outcome = self._commit_rule_directive(runtime, directive, timestamp_ms)
             if outcome is not None:
                 return outcome
-            generation = runtime.session.generation
+            snapshot = (runtime.epoch, runtime.session)
         return self._run_mimo_transition(
             scene_id,
             directive,
             timestamp_ms,
-            generation,
+            snapshot,
             elder_text=None,
         )
 
@@ -297,19 +298,19 @@ class DecisionService:
 
         self._streams(response.scene_id)
         if self._config.demo_mode is DemoMode.RECORD:
-            return self._replay_advance(response.scene_id)
+            return self._replay_advance(response.scene_id, response.decision_id)
         with self._lock:
             runtime = self._runtime(response.scene_id)
             directive = on_response(runtime.session, response, config=self._config.trigger)
             outcome = self._commit_rule_directive(runtime, directive, response.timestamp_ms)
             if outcome is not None:
                 return outcome
-            generation = runtime.session.generation
+            snapshot = (runtime.epoch, runtime.session)
         return self._run_mimo_transition(
             response.scene_id,
             directive,
             response.timestamp_ms,
-            generation,
+            snapshot,
             elder_text=response.text,
         )
 
@@ -321,9 +322,12 @@ class DecisionService:
             runtime = self._runtimes.get(scene_id)
             if runtime is None:
                 return
-            sequence = runtime.sequence
+            # The epoch bump invalidates every in-flight MiMo call started
+            # before the reset (their CAS snapshots carry the old epoch).
             self._runtimes[scene_id] = _SceneRuntime(
-                session=SessionState(scene_id=scene_id), sequence=sequence
+                session=SessionState(scene_id=scene_id),
+                sequence=runtime.sequence,
+                epoch=runtime.epoch + 1,
             )
         self._audit_event(kind="scene_reset", scene_id=scene_id)
 
@@ -353,7 +357,10 @@ class DecisionService:
         if directive.reject_code is not None:
             raise DecisionRejectedError(directive.reject_code)
         if directive.skeleton is None:
-            runtime.session = directive.next_state
+            # Idempotent reuse: deliberately do NOT store the clock-advanced
+            # session — polling ticks must not invalidate an in-flight MiMo
+            # call's CAS snapshot, and the high-water mark re-advances on the
+            # next real emission anyway.
             if runtime.pending is None:
                 raise DecisionRejectedError("no_pending_decision")
             return runtime.pending
@@ -377,7 +384,7 @@ class DecisionService:
         scene_id: str,
         directive: Directive,
         timestamp_ms: float,
-        generation_snapshot: int,
+        snapshot: tuple[int, SessionState],
         *,
         elder_text: str | None,
     ) -> CareDecision:
@@ -392,20 +399,29 @@ class DecisionService:
         try:
             result = self._call_mimo(scene_id, task, directive, elder_text, visual)
             latency_ms, attempts = result.latency_ms, result.attempts
-            proposal = parse_mimo_proposal(result.content, task=task)
+            try:
+                proposal = parse_mimo_proposal(result.content, task=task)
+            except MimoSchemaError:
+                # B spec section 8.4: one full re-ask when a well-formed HTTP
+                # response carries an invalid proposal, then degrade.
+                retry = self._call_mimo(scene_id, task, directive, elder_text, visual)
+                latency_ms = (latency_ms or 0.0) + retry.latency_ms
+                attempts = (attempts or 0) + retry.attempts
+                proposal = parse_mimo_proposal(retry.content, task=task)
         except MimoTransportError as exc:
             failure = f"transport: {exc}"
             attempts = exc.attempts
         except MimoSchemaError as exc:
             failure = f"schema: {exc}"
 
+        snapshot_epoch, snapshot_session = snapshot
         with self._lock:
             runtime = self._runtime(scene_id)
-            if runtime.session.generation != generation_snapshot:
+            if runtime.epoch != snapshot_epoch or runtime.session != snapshot_session:
                 self._audit_event(
                     kind="mimo_discarded",
                     scene_id=scene_id,
-                    note="rule escalation landed while MiMo was in flight",
+                    note="session moved (rule escalation or reset) while MiMo was in flight",
                 )
                 if runtime.pending is None:
                     raise DecisionRejectedError("no_pending_decision")
@@ -505,7 +521,8 @@ class DecisionService:
     ) -> None:
         next_state = replace(directive.next_state, pending_decision_id=decision.decision_id)
         if proposal is not None and proposal.action_card is not None:
-            next_state = replace(next_state, card_draft=proposal.action_card)
+            draft = _bind_elder_quote(proposal.action_card, next_state.complaint_text)
+            next_state = replace(next_state, card_draft=draft)
         runtime.session = next_state
         runtime.pending = decision
         self._record_capture(runtime, decision)
@@ -595,6 +612,9 @@ class DecisionService:
             card = proposal.action_card
         if card is None:
             return None
+        # The quote shown to the family must be the elder's actual words, never
+        # model-generated text (Codex review P1: fabricated-quote risk).
+        card = _bind_elder_quote(card, runtime.session.complaint_text)
         if skeleton.include_card is CardStatus.CONFIRMED:
             return replace(card, status=CardStatus.CONFIRMED)
         return card
@@ -649,10 +669,13 @@ class DecisionService:
             index = min(runtime.replay_index, len(decisions) - 1)
             return as_recorded(decisions[index])
 
-    def _replay_advance(self, scene_id: str) -> CareDecision:
+    def _replay_advance(self, scene_id: str, response_decision_id: str) -> CareDecision:
         with self._lock:
             runtime = self._runtime(scene_id)
             decisions = self._replay_decisions(scene_id)
+            current = decisions[min(runtime.replay_index, len(decisions) - 1)]
+            if response_decision_id != current.decision_id:
+                raise DecisionRejectedError("stale_decision")
             runtime.replay_index = min(runtime.replay_index + 1, len(decisions) - 1)
             return as_recorded(decisions[runtime.replay_index])
 
@@ -667,9 +690,17 @@ class DecisionService:
     def _record_capture(self, runtime: _SceneRuntime, decision: CareDecision) -> None:
         if not self._config.record_capture:
             return
+        if decision.state is DecisionState.DEGRADED:
+            # Degraded notices are not committed session states; replaying one
+            # would wedge the recorded timeline (Codex review P2).
+            return
         streams = self._scenes[decision.scene_id]
         target = streams.manifest.path.parent / "recorded_decisions.jsonl"
-        append_recorded_decision(target, decision)
+        try:
+            append_recorded_decision(target, decision)
+        except OSError as exc:
+            # Observability must never block a committed care decision.
+            print(f"warning: record capture failed for {decision.decision_id}: {exc}")
 
     def _audit_event(
         self,
@@ -702,6 +733,12 @@ def _fill(text: str | None, persona: PersonaConfig) -> str | None:
     return text.replace("{name}", persona.elder_name).replace(
         "{relation}", persona.family_relation
     )
+
+
+def _bind_elder_quote(card: ActionCard, complaint_text: str | None) -> ActionCard:
+    if complaint_text is None or card.elder_quote == complaint_text:
+        return card
+    return replace(card, elder_quote=complaint_text)
 
 
 def _perception_summary(context: DecisionContext) -> dict[str, object]:

@@ -101,6 +101,33 @@ def test_client_rejects_malformed_response_payload() -> None:
         client.complete(system_prompt="系统", user_content="用户")
 
 
+def test_client_does_not_retry_client_errors() -> None:
+    calls: list[int] = []
+
+    def transport(request: urllib.request.Request, timeout: float) -> bytes:
+        calls.append(1)
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", None, None)  # type: ignore[arg-type]
+
+    client = MimoClient(_config(), transport=transport)
+    with pytest.raises(MimoTransportError, match="HTTP 401"):
+        client.complete(system_prompt="系统", user_content="用户")
+    assert len(calls) == 1
+
+
+def test_client_retries_server_errors_once() -> None:
+    calls: list[int] = []
+
+    def transport(request: urllib.request.Request, timeout: float) -> bytes:
+        calls.append(1)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(request.full_url, 500, "boom", None, None)  # type: ignore[arg-type]
+        return _completion_bytes("{}")
+
+    client = MimoClient(_config(), transport=transport)
+    result = client.complete(system_prompt="系统", user_content="用户")
+    assert result.attempts == 2
+
+
 def test_build_video_part_encodes_data_uri_with_fps() -> None:
     part = build_video_part(b"\x00\x01", fps=2)
     assert part["type"] == "video_url"

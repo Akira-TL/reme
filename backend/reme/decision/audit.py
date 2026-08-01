@@ -47,5 +47,9 @@ class AuditLog:
             "note": note,
         }
         line = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
-        with self._lock, self._path.open("a", encoding="utf-8") as stream:
-            stream.write(line + "\n")
+        try:
+            with self._lock, self._path.open("a", encoding="utf-8") as stream:
+                stream.write(line + "\n")
+        except OSError as exc:
+            # Observability must never block or fail a care decision.
+            print(f"warning: audit write failed: {exc}")

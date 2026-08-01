@@ -421,6 +421,107 @@ def test_consent_answer_is_invalid_while_awaiting_elder() -> None:
     assert directive.reject_code == REJECT_INVALID_RESPONSE
 
 
+def test_new_fall_preempts_concern_episode() -> None:
+    state = _awaiting_elder(escalation=EscalationKind.CONCERN)
+    context = _context(
+        latest_posture=_posture(posture=Posture.LYING, motion_level=MotionLevel.STILL),
+        active_transition=_fall_transition(event_id="transition-0009"),
+    )
+    directive = on_tick(state, context, config=_CONFIG)
+    assert directive.skeleton is not None
+    assert directive.skeleton.template is TemplateId.FALL_CHECK_IN
+    assert directive.next_state.escalation is EscalationKind.FALL
+    assert directive.next_state.handled_fall_event_id == "transition-0009"
+
+
+def test_same_fall_event_does_not_retrigger_after_resolution() -> None:
+    state = _state(
+        phase=SessionPhase.RESOLVED,
+        pending_decision_id="decision-0004",
+        last_emitted_state=DecisionState.RESOLVED,
+        handled_fall_event_id="transition-0003",
+    )
+    directive = on_tick(state, _fall_context(), config=_CONFIG)
+    assert directive.skeleton is None
+    assert directive.next_state.phase is SessionPhase.RESOLVED
+
+
+def test_new_fall_reopens_resolved_episode() -> None:
+    state = _state(
+        phase=SessionPhase.RESOLVED,
+        pending_decision_id="decision-0004",
+        last_emitted_state=DecisionState.RESOLVED,
+        handled_fall_event_id="transition-0003",
+    )
+    context = _context(
+        latest_posture=_posture(posture=Posture.LYING, motion_level=MotionLevel.STILL),
+        active_transition=_fall_transition(event_id="transition-0010"),
+    )
+    directive = on_tick(state, context, config=_CONFIG)
+    assert directive.skeleton is not None
+    assert directive.skeleton.state is DecisionState.CHECK_IN_REQUIRED
+    assert directive.next_state.phase is SessionPhase.AWAITING_ELDER
+    assert directive.next_state.timeout_count == 0
+
+
+def test_need_help_without_text_clarifies_before_consent() -> None:
+    first = on_response(
+        _awaiting_elder(escalation=EscalationKind.CONCERN),
+        _response(ResponseValue.NEED_HELP, ResponseSource.USER_INPUT),
+        config=_CONFIG,
+    )
+    assert first.skeleton is not None
+    assert first.skeleton.template is TemplateId.CLARIFY
+    assert first.next_state.phase is SessionPhase.AWAITING_ELDER
+    assert first.mimo_task is None
+
+    clarified = replace(first.next_state, pending_decision_id="decision-0002")
+    second = on_response(
+        clarified,
+        _response(ResponseValue.NEED_HELP, ResponseSource.USER_INPUT, decision_id="decision-0002"),
+        config=_CONFIG,
+    )
+    assert second.skeleton is not None
+    assert second.skeleton.template is TemplateId.UNCLEAR_FAMILY_ALERT
+
+
+def test_consent_unclear_reasks_once_then_closes() -> None:
+    first = on_response(
+        _awaiting_consent(),
+        _response(ResponseValue.UNCLEAR, ResponseSource.USER_INPUT, decision_id="decision-0002"),
+        config=_CONFIG,
+    )
+    assert first.skeleton is not None
+    assert first.skeleton.state is DecisionState.CONSENT_REQUIRED
+    assert first.next_state.clarification_used is True
+
+    reasked = replace(first.next_state, pending_decision_id="decision-0003")
+    second = on_response(
+        reasked,
+        _response(ResponseValue.UNCLEAR, ResponseSource.USER_INPUT, decision_id="decision-0003"),
+        config=_CONFIG,
+    )
+    assert second.skeleton is not None
+    assert second.skeleton.template is TemplateId.CONSENT_TIMEOUT_CLOSE
+
+
+def test_urgent_need_help_keeps_urgent_decision() -> None:
+    state = _state(
+        phase=SessionPhase.URGENT,
+        pending_decision_id="decision-0005",
+        last_emitted_state=DecisionState.URGENT_ATTENTION,
+        risk_floor=4,
+    )
+    directive = on_response(
+        state,
+        _response(ResponseValue.NEED_HELP, ResponseSource.USER_INPUT, decision_id="decision-0005"),
+        config=_CONFIG,
+    )
+    assert directive.reject_code is None
+    assert directive.skeleton is None
+    assert directive.next_state.phase is SessionPhase.URGENT
+
+
 def test_resolved_episode_rejects_further_responses() -> None:
     state = _state(
         phase=SessionPhase.RESOLVED,

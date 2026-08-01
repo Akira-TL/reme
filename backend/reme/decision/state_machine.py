@@ -98,6 +98,7 @@ class SessionState:
     pending_decision_id: str | None = None
     last_emitted_state: DecisionState | None = None
     context_high_water_ms: float = 0.0
+    handled_fall_event_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,37 +190,76 @@ def _family_alert(
     return Directive(next_state=next_state, skeleton=skeleton, mimo_task=mimo_task)
 
 
+# Phases a newly observed fall may preempt: everything below family-alert
+# severity, plus a resolved episode (which a fresh fall reopens).
+_FALL_PREEMPTIBLE_PHASES = {
+    SessionPhase.MONITORING,
+    SessionPhase.AWAITING_CONSENT,
+    SessionPhase.RESOLVED,
+}
+
+
+def _fall_check_in(
+    state: SessionState, event_id: str | None, *, config: TriggerConfig
+) -> Directive:
+    skeleton = DecisionSkeleton(
+        state=DecisionState.CHECK_IN_REQUIRED,
+        risk_level=2,
+        action=DecisionAction.ASK_ELDER,
+        need_dialogue=True,
+        dialogue_goal="confirm_safety",
+        consent_required=False,
+        # Contract: a high-confidence fall check-in must carry a countdown.
+        response_timeout_ms=config.check_in_timeout_ms,
+        template=TemplateId.FALL_CHECK_IN,
+    )
+    next_state = replace(
+        _mark_emitted(state, skeleton),
+        phase=SessionPhase.AWAITING_ELDER,
+        escalation=EscalationKind.FALL,
+        clarification_used=False,
+        timeout_count=0,
+        complaint_text=None,
+        card_draft=None,
+        handled_fall_event_id=event_id,
+    )
+    return Directive(next_state=next_state, skeleton=skeleton)
+
+
+def _fall_preempts(state: SessionState, context: DecisionContext, config: TriggerConfig) -> bool:
+    if not detect_fall_trigger(context, config=config):
+        return False
+    event = context.active_transition
+    event_id = None if event is None else event.event_id
+    if event_id is not None and event_id == state.handled_fall_event_id:
+        return False
+    if state.phase in _FALL_PREEMPTIBLE_PHASES:
+        return True
+    return (
+        state.phase is SessionPhase.AWAITING_ELDER
+        and state.escalation is EscalationKind.CONCERN
+    )
+
+
 def on_tick(
     state: SessionState, context: DecisionContext, *, config: TriggerConfig
 ) -> Directive:
-    """Evaluate one perception snapshot; may open a new episode."""
+    """Evaluate one perception snapshot; may open or preempt an episode."""
 
     if context.scene_id != state.scene_id:
         raise ValueError(f"context scene {context.scene_id!r} does not match session")
     if context.timestamp_ms + config.rewind_tolerance_ms < state.context_high_water_ms:
         return Directive(next_state=state, reject_code=REJECT_TIMELINE_REWIND)
     advanced = _advance_clock(state, context.timestamp_ms)
+    if _fall_preempts(advanced, context, config):
+        # A new high-confidence fall outranks any lower-severity episode and
+        # reopens a resolved one; family-alert states never de-escalate.
+        event = context.active_transition
+        return _fall_check_in(
+            advanced, None if event is None else event.event_id, config=config
+        )
     if advanced.phase is not SessionPhase.MONITORING:
         return Directive(next_state=advanced)
-
-    if detect_fall_trigger(context, config=config):
-        skeleton = DecisionSkeleton(
-            state=DecisionState.CHECK_IN_REQUIRED,
-            risk_level=2,
-            action=DecisionAction.ASK_ELDER,
-            need_dialogue=True,
-            dialogue_goal="confirm_safety",
-            consent_required=False,
-            # Contract: a high-confidence fall check-in must carry a countdown.
-            response_timeout_ms=config.check_in_timeout_ms,
-            template=TemplateId.FALL_CHECK_IN,
-        )
-        next_state = replace(
-            _mark_emitted(advanced, skeleton),
-            phase=SessionPhase.AWAITING_ELDER,
-            escalation=EscalationKind.FALL,
-        )
-        return Directive(next_state=next_state, skeleton=skeleton)
 
     if detect_concern_trigger(context, config=config):
         skeleton = DecisionSkeleton(
@@ -282,6 +322,29 @@ def _on_elder_response(
                 response_timeout_ms=None,
                 need_dialogue=True,
             )
+        complaint = response.text or state.complaint_text
+        if complaint is None:
+            # No concrete complaint yet: nothing specific may be told to the
+            # family, and MiMo must not invent one. Ask once, then alert.
+            if not state.clarification_used:
+                skeleton = DecisionSkeleton(
+                    state=DecisionState.CHECK_IN_REQUIRED,
+                    risk_level=2,
+                    action=DecisionAction.ASK_ELDER,
+                    need_dialogue=True,
+                    dialogue_goal="understand_need",
+                    consent_required=False,
+                    response_timeout_ms=None,
+                    template=TemplateId.CLARIFY,
+                )
+                next_state = replace(_mark_emitted(state, skeleton), clarification_used=True)
+                return Directive(next_state=next_state, skeleton=skeleton)
+            return _family_alert(
+                state,
+                TemplateId.UNCLEAR_FAMILY_ALERT,
+                response_timeout_ms=config.family_ack_timeout_ms,
+                need_dialogue=False,
+            )
         skeleton = DecisionSkeleton(
             state=DecisionState.CONSENT_REQUIRED,
             risk_level=2,
@@ -295,7 +358,7 @@ def _on_elder_response(
         next_state = replace(
             _mark_emitted(state, skeleton),
             phase=SessionPhase.AWAITING_CONSENT,
-            complaint_text=response.text or state.complaint_text,
+            complaint_text=complaint,
         )
         mimo_task = MimoTask.INTERPRET_RESPONSE if response.text is not None else None
         return Directive(next_state=next_state, skeleton=skeleton, mimo_task=mimo_task)
@@ -345,6 +408,21 @@ def _on_consent_response(state: SessionState, response: InteractionResponse) -> 
         )
     if value is ResponseValue.CONSENT_DENIED:
         return _resolve(state, TemplateId.CONSENT_DENIED_CLOSE)
+    if value is ResponseValue.UNCLEAR:
+        if not state.clarification_used:
+            skeleton = DecisionSkeleton(
+                state=DecisionState.CONSENT_REQUIRED,
+                risk_level=2,
+                action=DecisionAction.ASK_ELDER,
+                need_dialogue=True,
+                dialogue_goal="request_consent",
+                consent_required=True,
+                response_timeout_ms=None,
+                template=TemplateId.CONSENT_REQUEST,
+            )
+            next_state = replace(_mark_emitted(state, skeleton), clarification_used=True)
+            return Directive(next_state=next_state, skeleton=skeleton)
+        return _resolve(state, TemplateId.CONSENT_TIMEOUT_CLOSE)
     if value is ResponseValue.NONE:
         # Conservative default the team may revisit: an unanswered consent
         # request never becomes a family notification.
@@ -391,7 +469,9 @@ def _on_urgent_response(state: SessionState, response: InteractionResponse) -> D
         return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=include_card)
     if value is ResponseValue.SAFE:
         return _resolve(state, TemplateId.LATE_SAFE_RESOLVED)
-    if value is ResponseValue.NONE:
+    if value in (ResponseValue.NONE, ResponseValue.NEED_HELP):
+        # An explicit help request cannot raise severity further; keep the
+        # urgent decision on screen rather than erroring at the elder.
         return Directive(next_state=state)
     return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
 

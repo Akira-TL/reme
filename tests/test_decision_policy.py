@@ -511,6 +511,139 @@ def test_unknown_scene_raises_dedicated_error(tmp_path: Path) -> None:
         service.get_decision(scene_id="ghost", timestamp_ms=0.0)
 
 
+def test_reset_invalidates_in_flight_mimo(tmp_path: Path) -> None:
+    fake = _FakeMimo()
+    service = DecisionService(
+        scenes=_toothache_scenes(tmp_path), config=PolicyConfig(), mimo=fake
+    )
+    scene = "toothache_demo_01"
+    fake.on_call = lambda: service.reset_scene(scene)
+    with pytest.raises(DecisionRejectedError, match="no_pending_decision"):
+        service.get_decision(scene_id=scene, timestamp_ms=41000.0)
+    recovered = service.get_decision(scene_id=scene, timestamp_ms=41000.0)
+    assert recovered.state is DecisionState.CHECK_IN_REQUIRED
+
+
+def test_polling_tick_does_not_kill_in_flight_mimo(tmp_path: Path) -> None:
+    fake = _FakeMimo()
+    service = DecisionService(
+        scenes=_toothache_scenes(tmp_path), config=PolicyConfig(), mimo=fake
+    )
+    scene = "toothache_demo_01"
+    check_in = service.get_decision(scene_id=scene, timestamp_ms=41000.0)
+
+    def _poll_during_interpret() -> None:
+        polled = service.get_decision(scene_id=scene, timestamp_ms=52000.0)
+        assert polled.decision_id == check_in.decision_id
+
+    fake.on_call = _poll_during_interpret
+    consent = service.submit_response(
+        _response(
+            scene_id=scene,
+            decision_id=check_in.decision_id,
+            value=ResponseValue.NEED_HELP,
+            text="牙疼，饭咬不动。",
+            timestamp_ms=51000.0,
+        )
+    )
+    assert consent.state is DecisionState.CONSENT_REQUIRED
+
+
+def test_action_card_quote_bound_to_actual_complaint(tmp_path: Path) -> None:
+    fake = _FakeMimo()
+    fabricated = _interpret_payload()
+    card = fabricated["action_card"]
+    assert isinstance(card, dict)
+    card["elder_quote"] = "编造的诊断性引语"
+    fake.scripts[MimoTask.INTERPRET_RESPONSE.value] = fabricated
+    service = DecisionService(
+        scenes=_toothache_scenes(tmp_path), config=PolicyConfig(), mimo=fake
+    )
+    scene = "toothache_demo_01"
+    check_in = service.get_decision(scene_id=scene, timestamp_ms=41000.0)
+    consent = service.submit_response(
+        _response(
+            scene_id=scene,
+            decision_id=check_in.decision_id,
+            value=ResponseValue.NEED_HELP,
+            text="牙疼，饭咬不动。",
+        )
+    )
+    notify = service.submit_response(
+        _response(
+            scene_id=scene,
+            decision_id=consent.decision_id,
+            value=ResponseValue.CONSENT_GRANTED,
+            timestamp_ms=60000.0,
+        )
+    )
+    assert notify.action_card is not None
+    assert notify.action_card.elder_quote == "牙疼，饭咬不动。"
+
+
+def test_schema_failure_consumes_one_reask(tmp_path: Path) -> None:
+    class _FlakySchemaMimo(_FakeMimo):
+        def __init__(self) -> None:
+            super().__init__()
+            self.queue = ["这不是 JSON", json.dumps(_check_in_payload(), ensure_ascii=False)]
+
+        def complete_task(self, **kwargs: Any) -> MimoCallResult:
+            self.calls.append(kwargs["task"].value)
+            return MimoCallResult(content=self.queue.pop(0), latency_ms=1.0, attempts=1)
+
+    fake = _FlakySchemaMimo()
+    service = DecisionService(
+        scenes=_toothache_scenes(tmp_path), config=PolicyConfig(), mimo=fake
+    )
+    decision = service.get_decision(scene_id="toothache_demo_01", timestamp_ms=41000.0)
+    assert decision.state is DecisionState.CHECK_IN_REQUIRED
+    assert len(fake.calls) == 2
+
+
+def test_degraded_not_captured_in_record_stream(tmp_path: Path) -> None:
+    fake = _FakeMimo()
+    fake.fail = True
+    scenes = _toothache_scenes(tmp_path)
+    service = DecisionService(
+        scenes=scenes, config=PolicyConfig(record_capture=True), mimo=fake
+    )
+    scene = "toothache_demo_01"
+    degraded = service.get_decision(scene_id=scene, timestamp_ms=41000.0)
+    assert degraded.state is DecisionState.DEGRADED
+    recorded_path = scenes[scene].manifest.path.parent / "recorded_decisions.jsonl"
+    assert not recorded_path.exists()
+    fake.fail = False
+    service.get_decision(scene_id=scene, timestamp_ms=42000.0)
+    recorded = load_recorded_decisions(recorded_path, expected_scene_id=scene)
+    assert [decision.state for decision in recorded] == [DecisionState.CHECK_IN_REQUIRED]
+
+
+def test_record_replay_validates_decision_id(tmp_path: Path) -> None:
+    scenes = _fall_scenes(tmp_path)
+    live = DecisionService(scenes=scenes, config=PolicyConfig(record_capture=True))
+    scene = "fall_demo_01"
+    check_in = live.get_decision(scene_id=scene, timestamp_ms=13000.0)
+    live.submit_response(
+        _response(
+            scene_id=scene,
+            decision_id=check_in.decision_id,
+            value=ResponseValue.NONE,
+            source=ResponseSource.TIMEOUT,
+            timestamp_ms=21000.0,
+        )
+    )
+    replay = DecisionService(scenes=scenes, config=PolicyConfig(demo_mode=DemoMode.RECORD))
+    first = replay.get_decision(scene_id=scene, timestamp_ms=1.0)
+    with pytest.raises(DecisionRejectedError, match="stale_decision"):
+        replay.submit_response(
+            _response(scene_id=scene, decision_id="decision-9999", value=ResponseValue.SAFE)
+        )
+    advanced = replay.submit_response(
+        _response(scene_id=scene, decision_id=first.decision_id, value=ResponseValue.SAFE)
+    )
+    assert advanced.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
+
+
 def test_visual_flag_attaches_clip_and_records_context(tmp_path: Path) -> None:
     scenes = _toothache_scenes(tmp_path)
     bundle_dir = scenes["toothache_demo_01"].manifest.path.parent

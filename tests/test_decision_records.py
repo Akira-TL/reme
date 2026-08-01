@@ -215,3 +215,23 @@ def test_as_recorded_rewrites_source_and_demo_mode() -> None:
     assert replayed.source is DecisionSource.RECORD
     assert replayed.demo_mode is DemoMode.RECORD
     assert replayed.decision_id == "decision-0007"
+
+
+def test_interaction_response_rejects_consent_from_timeout_source() -> None:
+    with pytest.raises(DecisionRecordError, match="timeout"):
+        _response(response=ResponseValue.CONSENT_GRANTED, source=ResponseSource.TIMEOUT)
+
+
+def test_interaction_response_rejects_safe_from_timeout_source() -> None:
+    with pytest.raises(DecisionRecordError, match="timeout"):
+        _response(response=ResponseValue.SAFE, source=ResponseSource.TIMEOUT)
+
+
+def test_interaction_response_rejects_elder_answer_from_family_input() -> None:
+    with pytest.raises(DecisionRecordError, match="family_input"):
+        _response(response=ResponseValue.CONSENT_GRANTED, source=ResponseSource.FAMILY_INPUT)
+
+
+def test_visual_context_rejects_sample_count_without_send() -> None:
+    with pytest.raises(DecisionRecordError, match="visual_context"):
+        VisualContext(sent_to_mimo=False, sample_count=3)
