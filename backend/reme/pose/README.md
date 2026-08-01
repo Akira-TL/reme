@@ -30,10 +30,10 @@ reme.pose
 ├── scene_bundle.py      # 预录 SceneManifest 与 FrameLandmarks 数据包
 ├── review.py            # 原视频与 MotionBERT Three.js 三维骨架验收页
 ├── review_server.py     # 支持视频 Range 请求的本地验收服务器
-├── annotations.py       # 姿态和转变标注（后续 Ticket）
-├── features.py          # 可解释几何特征（后续 Ticket）
-├── posture.py           # 静态姿态分类（后续 Ticket）
-├── camera.py            # 实时摄像头与MoveNet适配（后续 Ticket）
+├── annotations.py       # 姿态片段与转变窗口标注合同
+├── video_dataset.py     # 解压视频目录的选择、MoveNet提取和数据索引
+├── posture.py           # 68维特征、轻量分类器和unknown拒判
+├── posture_runtime.py   # 5–10Hz姿态事件、持续时间与运动等级
 └── transitions.py       # 静止与动作转变（后续 Ticket）
 ```
 
@@ -102,6 +102,62 @@ models/movenet/movenet_lightning_f16_v4.tflite
 - C切换或重启session后，A必须停止旧流并释放设备。
 
 当前摄像头取景是否能完整包含双膝和双踝由人工验收决定，不在代码中放宽质量阈值掩盖取景问题。
+
+## 解压视频数据与弱标签训练
+
+动作参考视频直接放在：
+
+```text
+artifacts/pose-classification/raw/downloads6/
+```
+
+选择清单：
+
+```text
+.scratch/pose-classification-owner-a/datasets/downloads6-catalog.json
+```
+
+清单只选择代表视频，不会默认处理目录中的全部文件。验证文件存在：
+
+```bash
+.venv/bin/python -m reme.pose.video_dataset validate \
+  .scratch/pose-classification-owner-a/datasets/downloads6-catalog.json
+```
+
+提取 10Hz MoveNet 关键点；已有场景默认复用，只处理新增视频或重写标注：
+
+```bash
+.venv/bin/python -m reme.pose.video_dataset extract \
+  .scratch/pose-classification-owner-a/datasets/downloads6-catalog.json \
+  --model models/movenet/movenet_lightning_f16_v4.tflite \
+  --output-dir artifacts/pose-classification/datasets/downloads6
+```
+
+训练四类已知姿态，并以置信度和特征距离输出 `unknown`：
+
+```bash
+.venv/bin/python -m reme.pose.posture train \
+  artifacts/pose-classification/datasets/downloads6/dataset-index.json \
+  --model-output artifacts/pose-classification/models/posture-softmax-v3/model.json \
+  --metrics-output artifacts/pose-classification/models/posture-softmax-v3/metrics.json \
+  --max-samples-per-scene 400
+```
+
+该数据来自动画动作参考和文件名弱标签，指标只能用于方案筛选与接口联调，不能作为真人准确率。
+
+实时同时输出关键点和姿态观察：
+
+```bash
+.venv/bin/python -m reme.pose.camera \
+  --session-id live-camera-001 \
+  --scene-id live-camera-001 \
+  --camera 0 \
+  --model models/movenet/movenet_lightning_f16_v4.tflite \
+  --posture-model artifacts/pose-classification/models/posture-softmax-v3/model.json \
+  --posture-hz 7.5
+```
+
+`FrameLandmarks` 逐帧输出，`PostureObservation` 以 5–10Hz 输出。下跪、俯卧撑和其他未支持低位动作当前应拒判为 `unknown`。
 
 ## MotionBERT 可重复重建
 

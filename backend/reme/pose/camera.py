@@ -302,6 +302,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-threads", type=int, default=4)
     parser.add_argument("--warmup-runs", type=int, default=3)
     parser.add_argument(
+        "--posture-model",
+        type=Path,
+        default=None,
+        help="Optional trained posture model; emits PostureObservation events when set",
+    )
+    parser.add_argument("--posture-hz", type=float, default=7.5)
+    parser.add_argument(
         "--max-frames",
         type=int,
         default=None,
@@ -335,16 +342,40 @@ def main(argv: Sequence[str] | None = None) -> int:
             frame_source=source,
             estimator=estimator,
         )
+        posture_tracker = None
+        if args.posture_model is not None:
+            from reme.pose.posture import StaticPostureModel
+            from reme.pose.posture_runtime import (
+                PostureRuntimeConfig,
+                RealtimePostureTracker,
+            )
+
+            posture_tracker = RealtimePostureTracker(
+                session_id=args.session_id,
+                predictor=StaticPostureModel.load(args.posture_model),
+                config=PostureRuntimeConfig(output_hz=args.posture_hz),
+            )
+        posture_observations = 0
         events = stream.iter_events(max_frames=args.max_frames)
         try:
             for event in events:
                 print(json.dumps(event.to_payload(), ensure_ascii=False), flush=True)
+                if posture_tracker is not None:
+                    posture_event = posture_tracker.process_frame_event(event)
+                    if posture_event is not None:
+                        posture_observations += 1
+                        print(
+                            json.dumps(posture_event.to_payload(), ensure_ascii=False),
+                            flush=True,
+                        )
         except KeyboardInterrupt:
             events.close()
         if stream.summary is None:
             raise CameraStreamError("live stream completed without a summary")
+        summary_payload = stream.summary.to_payload()
+        summary_payload["posture_observations"] = posture_observations
         print(
-            json.dumps(stream.summary.to_payload(), ensure_ascii=False),
+            json.dumps(summary_payload, ensure_ascii=False),
             file=sys.stderr,
             flush=True,
         )
