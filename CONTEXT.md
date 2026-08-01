@@ -17,13 +17,17 @@ A family member wants timely awareness when an older adult may need help, while 
 
 ## Current evidence boundary
 
-### Raw video
+### Raw video and MiMo visual context
 
-A pose extractor must decode raw frames locally. The project must not claim that raw video is never processed. The intended privacy claim is narrower:
+A pose extractor must decode raw frames locally. The project must not claim that raw video is never processed or that all MiMo reasoning is pixel-free.
 
-- source video stays local during perception;
-- raw frames are not sent to MiMo;
-- presentation and downstream reasoning use skeletons, silhouettes, strongly abstracted views, or structured classifications;
+The current boundary is:
+
+- source video is decoded locally during perception;
+- structured pose events remain a supported MiMo input;
+- selected keyframes or short clips may also be sent to MiMo when visual context materially improves privacy-state or care-state reasoning;
+- visual transmission must be explicit, minimal, and observable in the demo rather than continuous background upload;
+- presentation should still prefer skeletons, silhouettes, strongly abstracted views, or structured classifications;
 - no additional raw-frame files are exported unless explicitly enabled for debugging.
 
 ### Pose extraction
@@ -54,7 +58,7 @@ The classifier must use a sequence window rather than a single frame. It must ex
 
 ### MiMo
 
-MiMo API access is available. MiMo is not responsible for extracting landmarks. Its candidate input is a structured summary containing posture labels, confidence, recent state transitions, candidate events, and user response state. Its candidate role is natural-language explanation, check-in dialogue, and summary generation. The exact contract remains open until classification evidence is reviewed.
+MiMo API access is available. MiMo is not responsible for extracting landmarks. Its candidate inputs include a structured summary containing posture labels, confidence, recent state transitions, candidate events, and user response state, plus selected keyframes or short clips when visual context is required. Its candidate role is privacy-state and care-state reasoning, natural-language explanation, check-in dialogue, and summary generation. The exact contract remains open until structured-only and visual-context paths are measured.
 
 ### Hardware
 
@@ -79,7 +83,6 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 - Accuracy numbers without a labelled evaluation set.
 - Multi-room or multi-person tracking.
 - Identity or emotion recognition.
-- Sending raw video to MiMo.
 - A fixed JSON schema before model and classifier comparison.
 - A fixed staged-alert policy before posture and transition classification are validated.
 

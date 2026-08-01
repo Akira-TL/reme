@@ -9,9 +9,10 @@ The primary scenario is an older adult living alone or spending time alone at ho
 ## Before working
 
 1. Read `CONTEXT.md` for domain language and current boundaries.
-2. Read relevant ADRs under `docs/adr/` before changing architecture or privacy policy.
-3. Read the active work item under `.scratch/<feature>/` before implementing.
-4. When `.codegraph/` exists, use `codegraph explore` before broad grep/find when locating or understanding code.
+2. Read `.scratch/handoff/2026-08-01-product-mimo-handoff.md` for the current product/MiMo discussion baseline; treat it as reviewable, not immutable.
+3. Read relevant ADRs under `docs/adr/` before changing architecture or privacy policy.
+4. Read the active work item under `.scratch/<feature>/` before implementing.
+5. When `.codegraph/` exists, use `codegraph explore` before broad grep/find when locating or understanding code.
 
 ## Engineering rules
 

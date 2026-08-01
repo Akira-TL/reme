@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Reme Pose Viewer Prototype</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three.module.js",
+        "three/addons/": "/vendor/"
+      }
+    }
+  </script>
+</head>
+<body data-variant="A">
+  <!-- Three radically different presentation variants, switchable via ?variant=A|B|C. -->
+  <main id="viewer" aria-busy="true">
+    <header class="topbar">
+      <div class="brand-block">
+        <span class="eyebrow">PRIVACY MOTION VIEW</span>
+        <h1>Reme 动作骨骼</h1>
+      </div>
+      <div class="top-status">
+        <span id="coordinate-badge" class="badge warning">正在读取坐标</span>
+        <span id="data-badge" class="badge">载入中</span>
+      </div>
+    </header>
+
+    <section class="scene-panel" aria-label="人体骨骼三维视图">
+      <canvas id="pose-canvas"></canvas>
+      <div id="loading-panel" class="loading-panel" role="status" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <strong>正在载入骨骼序列</strong>
+        <span>只读取派生关键点，不读取原始视频。</span>
+      </div>
+
+      <div class="stage-caption">
+        <span id="stage-time">00:00.000</span>
+        <span id="stage-frame">FRAME 0</span>
+      </div>
+
+      <div class="scene-actions">
+        <button id="reset-camera" type="button">重置视角</button>
+        <label class="switch-row">
+          <input id="auto-rotate" type="checkbox">
+          <span>自动环绕</span>
+        </label>
+      </div>
+    </section>
+
+    <aside class="inspector-panel" aria-label="数据检查器">
+      <div class="panel-heading">
+        <div>
+          <span class="eyebrow">CURRENT FRAME</span>
+          <h2>关键点状态</h2>
+        </div>
+        <span id="torso-state" class="badge">—</span>
+      </div>
+
+      <div class="metric-grid">
+        <article class="metric">
+          <span>平均置信度</span>
+          <strong id="mean-score">—</strong>
+        </article>
+        <article class="metric">
+          <span>可见关键点</span>
+          <strong id="visible-count">—</strong>
+        </article>
+        <article class="metric">
+          <span>姿态分类</span>
+          <strong id="posture-label">未分类</strong>
+        </article>
+        <article class="metric">
+          <span>事件判断</span>
+          <strong id="event-label">未启用</strong>
+        </article>
+      </div>
+
+      <div class="control-stack">
+        <label>
+          <span>显示模式</span>
+          <select id="depth-mode">
+            <option value="auto">自动选择</option>
+            <option value="plane">2D 投影平面</option>
+            <option value="confidence">置信度景深</option>
+          </select>
+        </label>
+        <label>
+          <span>关键点阈值 <output id="threshold-value">0.20</output></span>
+          <input id="threshold" type="range" min="0" max="0.9" value="0.2" step="0.05">
+        </label>
+        <label>
+          <span>播放速度</span>
+          <select id="speed">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="note-box">
+        <strong id="coordinate-note">坐标说明</strong>
+        <p id="coordinate-detail">正在检测数据是否包含真实 Z 坐标。</p>
+      </div>
+
+      <div class="joint-list-wrap">
+        <div class="list-heading">
+          <span>关键点</span>
+          <span>置信度</span>
+        </div>
+        <ol id="joint-list" class="joint-list"></ol>
+      </div>
+    </aside>
+
+    <section class="story-panel" aria-label="关怀展示信息">
+      <div class="story-status">
+        <span class="eyebrow">CARE STATUS</span>
+        <h2>动作可见，身份不可见</h2>
+        <p>演示层只呈现骨骼与结构化状态。当前尚未接入姿态分类器和跌倒事件判断。</p>
+      </div>
+      <div class="story-steps">
+        <div><span>01</span><strong>本地推理</strong><small>LiteRT / MoveNet</small></div>
+        <div><span>02</span><strong>隐私骨骼</strong><small>17 个关键点</small></div>
+        <div><span>03</span><strong>状态解释</strong><small>等待分类 Gate</small></div>
+      </div>
+    </section>
+
+    <footer class="transport-panel">
+      <button id="play-toggle" class="primary" type="button" aria-label="播放">▶</button>
+      <div class="timeline-wrap">
+        <input id="timeline" type="range" min="0" max="0" value="0" step="1" aria-label="时间轴">
+        <div class="timeline-labels">
+          <span id="current-time">00:00.000</span>
+          <span id="duration">00:00.000</span>
+        </div>
+      </div>
+      <div class="frame-counter">
+        <span id="frame-index">0</span>
+        <span>/</span>
+        <span id="frame-total">0</span>
+      </div>
+    </footer>
+
+    <nav class="prototype-switcher" aria-label="原型版本切换">
+      <button id="variant-prev" type="button" aria-label="上一个版本">←</button>
+      <span id="variant-label">A — 沉浸舞台</span>
+      <button id="variant-next" type="button" aria-label="下一个版本">→</button>
+    </nav>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

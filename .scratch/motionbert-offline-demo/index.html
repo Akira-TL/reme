@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Reme · MotionBERT 3D Demo</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <main id="app" aria-busy="true">
+    <header class="topbar">
+      <div>
+        <span class="eyebrow">PRIVACY-FIRST MOTION INTELLIGENCE</span>
+        <h1>Reme · 单目三维姿态演示</h1>
+      </div>
+      <div class="badges">
+        <span class="badge">MotionBERT</span>
+        <span class="badge">H36M · 17 点</span>
+        <span id="runtime-badge" class="badge accent">载入中</span>
+      </div>
+    </header>
+
+    <section class="stage">
+      <article class="viewer-panel">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">LOCAL SOURCE</span>
+            <h2>原始视频</h2>
+          </div>
+          <span class="status"><i></i> 本机读取</span>
+        </div>
+        <div class="video-wrap">
+          <video id="source-video" preload="metadata" playsinline>
+            <source src="/media/source.mp4" type="video/mp4">
+          </video>
+          <div class="media-label">RAW VIDEO · LOCAL ONLY</div>
+        </div>
+      </article>
+
+      <article class="viewer-panel">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">DERIVED MOTION</span>
+            <h2>三维骨架环境</h2>
+          </div>
+          <span id="pose-status" class="status"><i></i> 载入中</span>
+        </div>
+        <div id="scene-wrap" class="scene-wrap">
+          <canvas id="pose-canvas" aria-label="MotionBERT 三维人体骨架"></canvas>
+          <div class="scene-tip">拖动旋转 · 滚轮缩放</div>
+          <div class="axis-legend" aria-hidden="true">
+            <span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="control-deck">
+      <div class="transport-row">
+        <button id="play-toggle" type="button" class="primary">播放</button>
+        <span id="time-text" class="mono">00:00.000 / 00:00.000</span>
+        <input id="timeline" type="range" min="0" max="1000" value="0" aria-label="视频时间轴">
+        <span id="frame-text" class="mono">Frame 0</span>
+      </div>
+
+      <div class="option-row">
+        <label>速度
+          <select id="speed">
+            <option value="0.5">0.5×</option>
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+          </select>
+        </label>
+        <button type="button" data-view="front">正视</button>
+        <button type="button" data-view="side">侧视</button>
+        <button type="button" data-view="top">俯视</button>
+        <button type="button" data-view="reset">重置视角</button>
+        <label class="check"><input id="grid-toggle" type="checkbox" checked> 地面网格</label>
+        <label class="check"><input id="room-toggle" type="checkbox" checked> 空间边界</label>
+        <label class="check"><input id="rotate-toggle" type="checkbox"> 自动环绕</label>
+      </div>
+
+      <div class="metrics">
+        <article><span>当前帧</span><strong id="metric-frame">—</strong></article>
+        <article><span>平均 2D 置信度</span><strong id="metric-score">—</strong></article>
+        <article><span>三维模式</span><strong>根节点相对</strong></article>
+        <article><span>推断设备</span><strong id="metric-device">—</strong></article>
+      </div>
+
+      <div class="boundary-note">
+        <strong>能力边界：</strong>
+        右侧是单摄像头估计的根节点相对三维姿态，用于动作展示；它不是人物在房间中的绝对坐标，也不是医学级空间测量。
+      </div>
+    </section>
+
+    <div id="loading" class="loading" role="status" aria-live="polite">
+      <div class="spinner"></div>
+      <strong>正在载入 3D 骨架序列</strong>
+      <span>原视频与骨架均从本机读取。</span>
+    </div>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

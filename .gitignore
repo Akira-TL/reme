@@ -27,3 +27,4 @@ artifacts/
 
 # CodeGraph local index
 .codegraph/
+**/*mp4

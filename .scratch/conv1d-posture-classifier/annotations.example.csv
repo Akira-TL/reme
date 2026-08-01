@@ -1,0 +1,5 @@
+start_ms,end_ms,label,split
+0,10000,standing,train
+10000,20000,sitting,train
+20000,30000,lying,val
+30000,40000,bending_or_crouching,test
