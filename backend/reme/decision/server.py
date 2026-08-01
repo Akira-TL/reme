@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from reme.decision.audit import AuditLog
@@ -35,6 +35,14 @@ from reme.decision.policy import (
     UnknownSceneError,
 )
 from reme.decision.records import DecisionRecordError, parse_interaction_response
+from reme.decision.session import (
+    RuntimeSessionRegistry,
+    SessionRegistryError,
+    parse_session_request,
+)
+from reme.decision.stream import EventIngest, IngestError
+from reme.decision.websocket import DecisionEventHub, HandlerLike, WebSocketError
+from reme.pose.runtime import RuntimeSessionStatus
 
 _REJECT_STATUS: dict[str, HTTPStatus] = {
     "stale_decision": HTTPStatus.CONFLICT,
@@ -46,13 +54,33 @@ _REJECT_STATUS: dict[str, HTTPStatus] = {
     "no_pending_decision": HTTPStatus.UNPROCESSABLE_ENTITY,
 }
 
+_SESSION_STATUS: dict[str, HTTPStatus] = {
+    "bad_request": HTTPStatus.BAD_REQUEST,
+    "session_conflict": HTTPStatus.CONFLICT,
+    "unknown_session": HTTPStatus.NOT_FOUND,
+}
+
+_INGEST_STATUS: dict[str, HTTPStatus] = {
+    "stale_session": HTTPStatus.CONFLICT,
+    "no_active_session": HTTPStatus.CONFLICT,
+    "bad_event": HTTPStatus.UNPROCESSABLE_ENTITY,
+}
+
 
 def build_decision_handler(
     *,
     service: DecisionService,
     static_dir: Path | None,
+    registry: RuntimeSessionRegistry | None = None,
+    hub: DecisionEventHub | None = None,
+    ingest: EventIngest | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    """Create the request handler bound to one DecisionService."""
+    """Create the request handler bound to one DecisionService.
+
+    The three realtime collaborators are optional: a server built without
+    them still serves the recorded-bundle routes, and every runtime route
+    answers 503 ``runtime_disabled`` instead of pretending to work.
+    """
 
     static_root = None if static_dir is None else static_dir.resolve()
 
@@ -113,6 +141,12 @@ def build_decision_handler(
                     self._handle_response(payload)
                 elif path == "/api/scene/reset":
                     self._handle_reset(payload)
+                elif path == "/api/session":
+                    self._handle_session_start(payload)
+                elif path == "/api/session/stop":
+                    self._handle_session_stop(payload)
+                elif path == "/api/events":
+                    self._handle_events(payload)
                 else:
                     self._send_error_json(HTTPStatus.NOT_FOUND, "not_found", path)
             except UnknownSceneError as exc:
@@ -126,6 +160,12 @@ def build_decision_handler(
                 self._send_error_json(
                     HTTPStatus.UNPROCESSABLE_ENTITY, "contract_violation", str(exc)
                 )
+            except SessionRegistryError as exc:
+                status = _SESSION_STATUS.get(exc.code, HTTPStatus.BAD_REQUEST)
+                self._send_error_json(status, exc.code, str(exc))
+            except IngestError as exc:
+                status = _INGEST_STATUS.get(exc.code, HTTPStatus.UNPROCESSABLE_ENTITY)
+                self._send_error_json(status, exc.code, str(exc))
 
         def _handle_decision(self, payload: dict[str, Any]) -> None:
             scene_id = payload.get("scene_id")
@@ -158,10 +198,111 @@ def build_decision_handler(
             service.reset_scene(scene_id)
             self._send_json(HTTPStatus.OK, {"reset": scene_id})
 
+        # -- runtime routes -------------------------------------------------
+
+        def _send_runtime_disabled(self, what: str) -> None:
+            self._send_error_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "runtime_disabled",
+                f"{what} is unavailable: the server was built without the realtime runtime",
+            )
+
+        def _announce_session(self, status: RuntimeSessionStatus) -> None:
+            # Buffers are dropped before the status goes out so C can never
+            # observe a new session's status next to the old session's events.
+            if ingest is not None:
+                ingest.reset_all()
+            if hub is not None:
+                hub.broadcast_json(status.to_payload())
+
+        def _handle_session_start(self, payload: dict[str, Any]) -> None:
+            if registry is None:
+                self._send_runtime_disabled("session control")
+                return
+            status = registry.start(parse_session_request(payload))
+            self._announce_session(status)
+            self._send_json(HTTPStatus.OK, status.to_payload())
+
+        def _handle_session_stop(self, payload: dict[str, Any]) -> None:
+            if registry is None:
+                self._send_runtime_disabled("session control")
+                return
+            session_id = payload.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "session_id must be a non-empty string"
+                )
+                return
+            status = registry.stop(session_id)
+            self._announce_session(status)
+            self._send_json(HTTPStatus.OK, status.to_payload())
+
+        def _handle_session_status(self) -> None:
+            if registry is None:
+                self._send_runtime_disabled("session control")
+                return
+            status = registry.current_status()
+            if status is None:
+                self._send_error_json(
+                    HTTPStatus.NOT_FOUND, "no_session", "no runtime session has been started"
+                )
+                return
+            self._send_json(HTTPStatus.OK, status.to_payload())
+
+        def _handle_events(self, payload: dict[str, Any]) -> None:
+            # Ingest needs the registry too: without the active session id
+            # there is nothing to check inbound envelopes against.
+            if registry is None or ingest is None:
+                self._send_runtime_disabled("event ingest")
+                return
+            event = ingest.submit(payload, active_session_id=registry.active_session_id())
+            self._send_json(HTTPStatus.OK, {"accepted": event.event_type.value})
+
+        def _handle_websocket(self) -> None:
+            # Wire format on this socket: every broadcast is one JSON object
+            # in one text frame (the hub never fragments). C tells the two
+            # kinds apart by ``schema_version``:
+            # ``reme-runtime-event/v0-experiment`` is a RuntimeEvent envelope
+            # (session_id / sequence / event_type / payload), while
+            # ``reme-runtime-session-status/v0-experiment`` is a
+            # RuntimeSessionStatus (component / requested_profile /
+            # effective_profile / state / reason).
+            if self.headers.get("Upgrade", "").lower() != "websocket":
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_upgrade", "/ws requires a WebSocket upgrade"
+                )
+                return
+            if hub is None:
+                self._send_runtime_disabled("the decision stream")
+                return
+            # Hand the socket over only after keep-alive is off: once accept()
+            # owns the connection, BaseHTTPRequestHandler must not try to read
+            # another request off it.
+            self.close_connection = True
+            try:
+                # The cast is a typeshed artifact, not a contract gap: this
+                # handler satisfies HandlerLike at runtime, but typeshed types
+                # ``rfile`` as BufferedIOBase, which is not a nominal BinaryIO.
+                hub.accept(cast("HandlerLike", self))
+            except WebSocketError as exc:
+                # accept() raises before writing a single byte on handshake
+                # failure, so a plain HTTP error is still a valid response.
+                self._send_error_json(HTTPStatus.BAD_REQUEST, "bad_upgrade", str(exc))
+
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             if path == "/api/health":
                 self._handle_health()
+                return
+            if path == "/ws":
+                self._handle_websocket()
+                return
+            if path == "/api/session/status":
+                try:
+                    self._handle_session_status()
+                except SessionRegistryError as exc:
+                    status = _SESSION_STATUS.get(exc.code, HTTPStatus.BAD_REQUEST)
+                    self._send_error_json(status, exc.code, str(exc))
                 return
             if path.startswith("/scenes/"):
                 self._handle_scene_asset(path)
@@ -335,7 +476,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         mimo=build_mimo_client(config),
         audit=audit,
     )
-    handler = build_decision_handler(service=service, static_dir=config.static_dir)
+    registry = RuntimeSessionRegistry()
+    hub = DecisionEventHub()
+    ingest = EventIngest()
+    handler = build_decision_handler(
+        service=service,
+        static_dir=config.static_dir,
+        registry=registry,
+        hub=hub,
+        ingest=ingest,
+    )
     server = build_server(config, handler)
     scheme = "https" if config.certfile is not None else "http"
     print(f"Reme B decision service: {scheme}://{config.host}:{config.port}")
@@ -345,6 +495,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
+        # Close the streaming sockets first: server_close() only drops the
+        # listening socket, and blocked WS threads would keep the process up.
+        hub.close_all()
         server.server_close()
     return 0
 
