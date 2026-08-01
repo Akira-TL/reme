@@ -9,18 +9,22 @@ from typing import Any
 
 import pytest
 from reme.pose.biomech import (
+    BODY_AXIS_INDICES,
     COCO17_NAMES,
     LEFT_HIP,
     LEFT_KNEE,
     LEFT_SHOULDER,
     RIGHT_SHOULDER,
+    TRUNK_AXIS_INDICES,
     BiomechError,
     ImageGeometry,
     joint_angle,
     min_segment_length_for_angle_budget,
     parse_frame_record,
+    principal_axis_angle,
     sagittal_observability,
     segment_angle_from_gravity,
+    vertical_order_margin,
 )
 from reme.pose.posture_criteria import DEFAULT_RELEASED_CLASSES, classify_frame
 from reme.pose.posture_store import (
@@ -403,3 +407,72 @@ def test_real_clip_is_predominantly_standing() -> None:
     assert total == 2370
     assert labels.get("standing", 0) / total > 0.95
     assert set(labels) <= {"standing", "unknown"}
+
+
+class TestAxisSeparation:
+    """The trunk axis and the whole-body long axis are different quantities."""
+
+    def test_seated_pose_separates_trunk_from_body_axis(self) -> None:
+        points = upright_person(trunk_deg=0.0, thigh_deg=85.0, shoulder_half_width=6.0)
+        frame = parse_frame_record(build_record(points), image=GEOMETRY)
+        trunk = principal_axis_angle(
+            frame, indices=TRUNK_AXIS_INDICES, name="trunk", minimum_points=3
+        )
+        body = principal_axis_angle(frame, indices=BODY_AXIS_INDICES, name="body")
+        assert trunk is not None and body is not None
+        # The trunk is upright; the L-shaped whole-body cloud is not, so a single
+        # axis cannot serve both roles.
+        assert trunk[0].value < 10.0
+        assert body[0].value > trunk[0].value + 10.0
+
+    def test_upright_pose_leaves_both_axes_agreeing(self) -> None:
+        frame = parse_frame_record(build_record(upright_person()), image=GEOMETRY)
+        trunk = principal_axis_angle(
+            frame, indices=TRUNK_AXIS_INDICES, name="trunk", minimum_points=3
+        )
+        body = principal_axis_angle(frame, indices=BODY_AXIS_INDICES, name="body")
+        assert trunk is not None and body is not None
+        assert abs(trunk[0].value - body[0].value) < 2.0
+
+
+class TestRollTolerance:
+    """Uncalibrated camera roll dominates vertical-order sign tests."""
+
+    def test_horizontally_separated_pair_carries_roll_uncertainty(self) -> None:
+        seated = upright_person(thigh_deg=85.0, shoulder_half_width=6.0)
+        frame = parse_frame_record(build_record(seated), image=GEOMETRY)
+        margin = vertical_order_margin(frame, LEFT_HIP, LEFT_KNEE, name="hip_above_knee")
+        assert margin is not None
+        # Jitter alone would be under 2 px; the roll term must dominate once the
+        # pair is ~100 px apart horizontally.
+        assert margin.sigma > 4.0
+        assert "roll term" in margin.note
+
+    def test_calibrated_gravity_removes_the_roll_term(self) -> None:
+        calibrated = ImageGeometry(
+            width=WIDTH,
+            height=HEIGHT,
+            size_provenance="measured",
+            gravity_provenance="measured",
+        )
+        seated = upright_person(thigh_deg=85.0, shoulder_half_width=6.0)
+        frame = parse_frame_record(build_record(seated), image=calibrated)
+        margin = vertical_order_margin(frame, LEFT_HIP, LEFT_KNEE, name="hip_above_knee")
+        assert margin is not None
+        assert margin.sigma < 2.0
+
+    def test_vertically_aligned_pair_is_barely_affected(self) -> None:
+        """Standing must not pay the roll penalty: hip and knee are nearly plumb."""
+
+        frame = parse_frame_record(build_record(upright_person()), image=GEOMETRY)
+        margin = vertical_order_margin(frame, LEFT_HIP, LEFT_KNEE, name="hip_above_knee")
+        assert margin is not None
+        assert "roll term 0.00 px" in margin.note
+
+        seated = upright_person(thigh_deg=85.0, shoulder_half_width=6.0)
+        seated_frame = parse_frame_record(build_record(seated), image=GEOMETRY)
+        seated_margin = vertical_order_margin(
+            seated_frame, LEFT_HIP, LEFT_KNEE, name="hip_above_knee"
+        )
+        assert seated_margin is not None
+        assert seated_margin.sigma > 2.0 * margin.sigma

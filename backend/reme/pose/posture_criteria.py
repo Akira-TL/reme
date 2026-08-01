@@ -38,12 +38,14 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from reme.pose.biomech import (
+    BODY_AXIS_INDICES,
     LEFT_ANKLE,
     LEFT_HIP,
     LEFT_KNEE,
     RIGHT_ANKLE,
     RIGHT_HIP,
     RIGHT_KNEE,
+    TRUNK_AXIS_INDICES,
     FrameGeometry,
     Provenance,
     Quantity,
@@ -51,9 +53,9 @@ from reme.pose.biomech import (
     joint_angle,
     leg_extension_ratio,
     min_segment_length_for_angle_budget,
+    principal_axis_angle,
     sagittal_observability,
     segment_angle_from_gravity,
-    trunk_axis_angle,
     vertical_order_margin,
 )
 
@@ -285,13 +287,25 @@ def classify_frame(
         )
     )
 
-    axis = trunk_axis_angle(frame)
-    if axis is None:
-        gates.append(Gate("trunk_axis", False, "too few core points for a principal axis"))
-        return _abstain(gates, (), "trunk axis unavailable", quantities)
-    trunk, elongation = axis
-    quantities.extend((trunk, elongation))
-    gates.append(Gate("trunk_axis", True, f"{trunk.note}, sigma {trunk.sigma:.2f} deg"))
+    body = principal_axis_angle(
+        frame, indices=BODY_AXIS_INDICES, name="body_long_axis_from_gravity"
+    )
+    trunk_axis = principal_axis_angle(
+        frame, indices=TRUNK_AXIS_INDICES, name="trunk_from_gravity", minimum_points=3
+    )
+    if body is None or trunk_axis is None:
+        gates.append(Gate("principal_axes", False, "too few points for a principal axis"))
+        return _abstain(gates, (), "trunk or body axis unavailable", quantities)
+    body_axis, elongation = body
+    trunk, _trunk_shape = trunk_axis
+    quantities.extend((trunk, body_axis, elongation))
+    gates.append(
+        Gate(
+            "principal_axes",
+            True,
+            f"trunk {trunk.note} sigma {trunk.sigma:.2f} deg; body {body_axis.note}",
+        )
+    )
 
     sagittal = sagittal_observability(frame)
     if sagittal is not None:
@@ -326,7 +340,7 @@ def classify_frame(
     evidence = (
         _standing_evidence(trunk, support),
         _sitting_evidence(flexed, sagittal_ok),
-        _lying_evidence(trunk, elongation, sagittal_ok),
+        _lying_evidence(body_axis, elongation, sagittal_ok),
         _bending_evidence(trunk, support, sagittal_ok),
     )
 
@@ -584,7 +598,7 @@ def _sitting_evidence(flexed: LegQuantities | None, sagittal_ok: bool) -> ClassE
 
 
 def _lying_evidence(
-    trunk: Quantity, elongation: Quantity, sagittal_ok: bool
+    body_axis: Quantity, elongation: Quantity, sagittal_ok: bool
 ) -> ClassEvidence:
     if not sagittal_ok:
         return ClassEvidence(
@@ -595,7 +609,7 @@ def _lying_evidence(
     criteria = (
         Criterion(
             "long_axis_horizontal",
-            trunk,
+            body_axis,
             "above",
             THRESHOLDS["lying_trunk_min_deg"],
             "recumbency puts the body long axis close to perpendicular to gravity",

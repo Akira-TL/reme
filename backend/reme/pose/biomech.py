@@ -64,10 +64,9 @@ LEFT_HIP, RIGHT_HIP = 11, 12
 LEFT_KNEE, RIGHT_KNEE = 13, 14
 LEFT_ANKLE, RIGHT_ANKLE = 15, 16
 
-#: Points used for the trunk principal axis.  Limbs are excluded on purpose:
-#: arm configuration biases the axis systematically, and that bias is signal
-#: about the arms rather than noise about the trunk.
-CORE_AXIS_INDICES: tuple[int, ...] = (
+#: Points spanning the whole body, used for the *body long axis* that decides
+#: recumbency.  Legs belong here: lying is a statement about the whole body.
+BODY_AXIS_INDICES: tuple[int, ...] = (
     NOSE,
     LEFT_SHOULDER,
     RIGHT_SHOULDER,
@@ -77,6 +76,20 @@ CORE_AXIS_INDICES: tuple[int, ...] = (
     RIGHT_KNEE,
     LEFT_ANKLE,
     RIGHT_ANKLE,
+)
+
+#: Points spanning head and torso only, used for *trunk* orientation.  Legs are
+#: excluded because they are a different rigid body: seated, the whole-body
+#: cloud is L-shaped and its principal axis is a compromise between a vertical
+#: trunk and near-horizontal thighs, which describes neither.  Bending moves the
+#: trunk while the legs stay put, so leg points dilute exactly the signal the
+#: trunk criteria are trying to read.
+TRUNK_AXIS_INDICES: tuple[int, ...] = (
+    NOSE,
+    LEFT_SHOULDER,
+    RIGHT_SHOULDER,
+    LEFT_HIP,
+    RIGHT_HIP,
 )
 
 #: Measured on the project's only real clip (2370 frames, MoveNet Lightning
@@ -397,8 +410,14 @@ def joint_angle(
     )
 
 
-def trunk_axis_angle(frame: FrameGeometry) -> tuple[Quantity, Quantity] | None:
-    """Return the body principal-axis tilt from gravity and its elongation.
+def principal_axis_angle(
+    frame: FrameGeometry,
+    *,
+    indices: tuple[int, ...] = BODY_AXIS_INDICES,
+    name: str = "body_long_axis_from_gravity",
+    minimum_points: int = 4,
+) -> tuple[Quantity, Quantity] | None:
+    """Return a point cloud's principal-axis tilt from gravity and its elongation.
 
     The principal axis of the core keypoint cloud is a markedly more precise
     orientation estimate than the two-point shoulder-to-hip vector, because its
@@ -411,13 +430,13 @@ def trunk_axis_angle(frame: FrameGeometry) -> tuple[Quantity, Quantity] | None:
     foreshortened blob whose axis direction is numerically meaningless.
     """
 
-    indices = [index for index in CORE_AXIS_INDICES if bool(frame.usable[index])]
-    if len(indices) < 4:
+    usable_indices = [index for index in indices if bool(frame.usable[index])]
+    if len(usable_indices) < minimum_points:
         return None
-    points = frame.xy[indices]
+    points = frame.xy[usable_indices]
     centre = points.mean(axis=0)
     centred = points - centre
-    covariance = centred.T @ centred / float(len(indices))
+    covariance = centred.T @ centred / float(len(usable_indices))
     eigenvalues, eigenvectors = np.linalg.eigh(covariance)
     order = np.argsort(eigenvalues)[::-1]
     eigenvalues = eigenvalues[order]
@@ -434,26 +453,26 @@ def trunk_axis_angle(frame: FrameGeometry) -> tuple[Quantity, Quantity] | None:
     spread = float((centred @ principal) @ (centred @ principal))
     if spread <= 1e-9:
         return None
-    sigma_axis = math.degrees(float(frame.sigma_px[indices[0]]) / math.sqrt(spread))
+    sigma_axis = math.degrees(float(frame.sigma_px[usable_indices[0]]) / math.sqrt(spread))
 
     gravity = frame.image.gravity
     cosine = abs(float(np.dot(principal, gravity)))
     angle = math.degrees(math.acos(min(1.0, max(0.0, cosine))))
     axis = Quantity(
-        name="trunk_axis_from_gravity",
+        name=name,
         value=angle,
         sigma=sigma_axis,
         unit="deg",
         provenance="derived",
-        note=f"{len(indices)} core points",
+        note=f"{len(usable_indices)} points",
     )
     shape = Quantity(
-        name="body_elongation",
+        name=f"{name}_elongation",
         value=elongation,
         sigma=0.0,
         unit="ratio",
         provenance="derived",
-        note="sqrt(major/minor) of the core point cloud",
+        note="sqrt(major/minor) of the point cloud",
     )
     return axis, shape
 
@@ -538,27 +557,52 @@ def leg_extension_ratio(frame: FrameGeometry, side: Literal["left", "right"]) ->
     )
 
 
+DEFAULT_ROLL_TOLERANCE_DEG = 3.0
+
+
 def vertical_order_margin(
-    frame: FrameGeometry, upper: int, lower: int, *, name: str
+    frame: FrameGeometry,
+    upper: int,
+    lower: int,
+    *,
+    name: str,
+    roll_tolerance_deg: float = DEFAULT_ROLL_TOLERANCE_DEG,
 ) -> Quantity | None:
     """Return how far ``lower`` sits below ``upper`` along gravity, in pixels.
 
     A positive value means the expected standing order holds.  This is reported
     as a signed margin with an uncertainty rather than a boolean so that a
     near-tie is visible as inconclusive instead of silently deciding.
+
+    Random keypoint jitter is not the dominant error here.  When gravity has not
+    been calibrated, an unknown camera roll rotates the measurement axis, and
+    that error scales with the *perpendicular* separation of the two points: a
+    pair 100 px apart horizontally shifts by about 1.7 px per degree of roll,
+    which swamps the sub-pixel jitter.  Seated, where hip and knee are far apart
+    horizontally and nearly level vertically, this is the difference between a
+    confident wrong answer and an honest abstention, so the roll term is carried
+    in the uncertainty rather than assumed away.
     """
 
     if not frame.has(upper, lower):
         return None
     gravity = frame.image.gravity
-    margin = float(np.dot(frame.xy[lower] - frame.xy[upper], gravity))
-    sigma = math.hypot(float(frame.sigma_px[upper]), float(frame.sigma_px[lower]))
+    delta = frame.xy[lower] - frame.xy[upper]
+    margin = float(np.dot(delta, gravity))
+    perpendicular = abs(float(delta[0] * gravity[1] - delta[1] * gravity[0]))
+    jitter = math.hypot(float(frame.sigma_px[upper]), float(frame.sigma_px[lower]))
+    roll_term = (
+        0.0
+        if frame.image.gravity_provenance == "measured"
+        else perpendicular * math.sin(math.radians(roll_tolerance_deg))
+    )
     return Quantity(
         name=name,
         value=margin,
-        sigma=sigma,
+        sigma=math.hypot(jitter, roll_term),
         unit="px",
         provenance="derived",
+        note=f"jitter {jitter:.2f} px, roll term {roll_term:.2f} px",
     )
 
 
