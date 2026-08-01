@@ -44,3 +44,24 @@
 ## 6. 基线侧已完成的对齐（本次已改，无需裁决）
 
 - `planning/docs/方案-MiMo接入.md`：§1 原则 1 已按 ADR-0003 改为 S/V 双路径；流转图出网标注与 Miloco 对照叙事已同步（"按需最少地看"）；头部已声明执行期字段以 team-roles 候选合同为准。
+
+## 7. 对照更新（2026-08-01 傍晚）：develop/akira `56c3604 统一ABC实验接口合同` 解决情况
+
+> 协调基准变更：`.scratch/abc-interface/spec.md`（548 行，七流接口 + SceneBundle + Adapter seam）自此为 A/B/C 接口的**唯一协调来源**，本清单 §1/§2 中与其重叠的裁决项按下表关闭或收窄。ADR 治理规则同步明确：**ADR 由各层 owner 自行创建**（2、3 层任务的两位 owner 自行确立各自 ADR），本清单只列问题、不代立 ADR。
+
+| 原清单项 | 状态 | 说明 |
+|---|---|---|
+| P0-1 A→B/C 感知合同 | ✅ 已解决 | 统一 `posture/posture_duration_ms/landmark_quality`；`candidate_event` 双层取消（B 内部组合）；**`prolonged_stillness` 归属已定**：A 出 `posture_duration_ms`+`motion_level` 事实、B 判是否构成关怀（abc-interface §7/§8） |
+| P0-2 B→C 决策合同 | ✅ 已解决 | `reme-care-decision/v0` 统一命名，C 的自有字段已在同提交中清除（software-demo/spec.md 同步改） |
+| P0-3 高风险旁路 | ⚠️ 收窄未闭 | 合同场景三事实上选了**询问先行**（fall_like→check_in_required→无回应→family_notification_required）；但"确定性告警不等 MiMo"未显式落地，`urgent_attention` 状态存在却无触发场景。**若坚持基线"规则直接告警"须立刻提出，否则默认被合同锁定**——按治理规则由决策层 owner 立 ADR 裁决 |
+| P0-4 行动卡/授权/回执 | ❌ 仍开放 | `action` 枚举无 action_card，无 consent 字段，InteractionResponse 无授权类响应；§14 四个验收场景不含"牙疼具体需求"分支。D 主故事仍无接口支撑——**当前最大开放项** |
+| P0-5 隐私口径 | ✅ 机制解决 | `privacy_mode` 四档（visible/blurred/skeleton_only/hidden）由 B 指令、C 渲染；`visual_context.sent_to_mimo` 强制真实。剩余：三场景各用哪档的策略 |
+| P0-6 B→C 传输 | ⚠️ 阻塞解除 | Adapter seam 冻结（§13），HTTP/框架明确列入 §16 暂不冻结——降为实现细节 |
+| 接缝-时序关联 | ✅ 已解决 | 全记录强制 `scene_id`；`decision_id` 贯穿 CareDecision↔InteractionResponse |
+| 接缝-degraded | ✅ 已解决 | `state=degraded`/`fallback_used`/`source=degraded` 三者语义分清（§10、场景四） |
+| 接缝-演示时钟 | ❌ 仍开放 | 合同只统一了视频毫秒偏移；分钟级静止在 79s 素材中如何加速演示仍无机制、无 owner |
+| C 自查-废止 ADR-0001 引用 | ❌ 仍在 | software-demo/spec.md 改了 105 行但 line 418 仍引用 ADR-0001 边界 |
+| §4 ADR 撞号 | 不涉及 | akira 未动 docs/adr/；本仓库侧改号 ADR-0004 的义务不变 |
+| pytest 破坏（e35b5bd） | ❌ akira 未修 | develop/akira 不含 pyproject.toml 修复，该分支上测试仍全挂；e35b5bd 仍需尽快进 upstream |
+
+另两处观察：① 合同头部 Status 已标 `accepted-for-demo`，但 §15 冻结条件 checkbox 全部未勾——**Status 与自身流程矛盾**，三方（尤其 A/C）是否真已确认需当面核实；② 935effd 把 A 的工作拆为 7 张顺序票（冻结输入→标注→几何基线→轻量模型→静止/转变基线→评审冻结→ABC 验收），范围仍是全集但有了 06 票的裁剪点，与本清单 §3 对 A 的裁剪建议兼容；③ CONTEXT.md 新增 Canonical runtime terms 七术语，术语层级问题就此关闭。
