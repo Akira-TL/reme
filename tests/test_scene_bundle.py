@@ -157,10 +157,13 @@ def test_build_scene_bundle_converts_legacy_movenet_output(tmp_path: Path) -> No
         skeleton_video_path=skeleton_path,
         run_summary_path=summary_path,
         output_dir=tmp_path / "bundle",
+        demo_time_scale=30.0,
     )
 
     manifest = load_scene_manifest(manifest_path)
     assert manifest.data["media"]["local_path"] == "media/source.mp4"
+    assert manifest.data["media"]["source_type"] == "prerecorded_video"
+    assert manifest.data["media"]["demo_time_scale"] == 30.0
     assert manifest.data["media"]["frame_count"] == 2
     assert manifest.resolve_media_path().read_bytes() == b"video-bytes"
     keypoints_path = manifest.resolve_stream_path("keypoints_2d")
@@ -175,3 +178,38 @@ def test_build_scene_bundle_converts_legacy_movenet_output(tmp_path: Path) -> No
     assert validate_frame_landmarks_jsonl(
         keypoints_path, expected_scene_id="fall_demo_01"
     ).record_count == 2
+
+
+def test_load_scene_manifest_rejects_non_positive_demo_time_scale(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "reme-scene/v0-experiment",
+                "scene_id": "video_01",
+                "title": "test",
+                "media": {
+                    "local_path": "media/source.mp4",
+                    "source_type": "prerecorded_video",
+                    "sha256": "0" * 64,
+                    "width": 1280,
+                    "height": 720,
+                    "fps": 30.0,
+                    "frame_count": 2,
+                    "duration_ms": 66.667,
+                    "demo_time_scale": 0,
+                },
+                "streams": {
+                    "keypoints_2d": "keypoints_2d.jsonl",
+                    "keypoints_3d": None,
+                    "posture_observations": None,
+                    "transition_events": None,
+                    "recorded_decisions": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SceneBundleError, match="demo_time_scale"):
+        load_scene_manifest(manifest_path)

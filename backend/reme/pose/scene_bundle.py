@@ -114,6 +114,7 @@ def build_scene_bundle(
     skeleton_video_path: str | Path,
     run_summary_path: str | Path,
     output_dir: str | Path,
+    demo_time_scale: float = 1.0,
 ) -> Path:
     """Build a self-contained v0 experiment scene bundle from MoveNet outputs."""
 
@@ -125,6 +126,12 @@ def build_scene_bundle(
 
     if not scene_id:
         raise SceneBundleError("scene_id must be non-empty")
+    if (
+        isinstance(demo_time_scale, bool)
+        or not isinstance(demo_time_scale, int | float)
+        or demo_time_scale <= 0
+    ):
+        raise SceneBundleError("demo_time_scale must be a positive number")
     for source in (source_video, source_keypoints, source_skeleton, source_summary):
         if not source.is_file():
             raise SceneBundleError(f"required source file does not exist: {source}")
@@ -159,8 +166,10 @@ def build_scene_bundle(
         "title": title,
         "media": {
             "local_path": "media/source.mp4",
+            "source_type": "prerecorded_video",
             "sha256": _sha256_file(destination_media),
             **video_metadata,
+            "demo_time_scale": float(demo_time_scale),
         },
         "streams": {
             "keypoints_2d": "keypoints_2d.jsonl",
@@ -397,6 +406,16 @@ def _validate_manifest_media(media: object) -> None:
     if not isinstance(local_path, str) or not local_path:
         raise SceneBundleError("media.local_path must be a non-empty string")
     _reject_remote_reference(local_path)
+    source_type = media.get("source_type")
+    if source_type is not None and source_type != "prerecorded_video":
+        raise SceneBundleError("media.source_type must be 'prerecorded_video'")
+    demo_time_scale = media.get("demo_time_scale", 1.0)
+    if (
+        not isinstance(demo_time_scale, int | float)
+        or isinstance(demo_time_scale, bool)
+        or demo_time_scale <= 0
+    ):
+        raise SceneBundleError("media.demo_time_scale must be positive")
     sha256 = media.get("sha256")
     if (
         not isinstance(sha256, str)
@@ -491,6 +510,7 @@ def _build_parser() -> argparse.ArgumentParser:
     package_parser.add_argument("--skeleton-video", type=Path, required=True)
     package_parser.add_argument("--run-summary", type=Path, required=True)
     package_parser.add_argument("--output-dir", type=Path, required=True)
+    package_parser.add_argument("--demo-time-scale", type=float, default=1.0)
 
     validate_parser = subparsers.add_parser("validate", help="validate a scene bundle")
     validate_parser.add_argument("manifest", type=Path)
@@ -511,6 +531,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 skeleton_video_path=args.skeleton_video,
                 run_summary_path=args.run_summary,
                 output_dir=args.output_dir,
+                demo_time_scale=args.demo_time_scale,
             )
             print(manifest_path)
             return 0

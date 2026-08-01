@@ -34,3 +34,47 @@ reme.pose
 跨角色字段必须遵循 `.scratch/abc-interface/spec.md`。实验产物放入被 Git 忽略的 `artifacts/pose-classification/`，不得将大型视频、模型或逐帧结果提交到 Git。
 
 兼容入口 `reme.scene_bundle` 暂时保留；新代码和新测试应直接使用 `reme.pose.*`。
+
+## MotionBERT 可重复重建
+
+MotionBERT 3D 结果不得只保存在 `/tmp`。比赛环境统一使用：
+
+```text
+models/motionbert/repo/
+models/motionbert/checkpoints/motionbert_ft_h36m.pth
+artifacts/pose-classification/scenes/<scene_id>/derived/
+```
+
+仓库版本：
+
+```bash
+git clone https://github.com/Walter0807/MotionBERT.git models/motionbert/repo
+git -C models/motionbert/repo checkout 705d3a95354db8bdb696b3492e47a3b5537174ff
+```
+
+checkpoint 期望 SHA-256：
+
+```text
+d80af32396c60cf66fa5afb7ef7f7c869ae0851afd3d91a75d55e76c5a62cb23
+```
+
+生成持久 3D 源数据：
+
+```bash
+/home/akira/.local/share/mamba/envs/DL/bin/python \
+  .scratch/motionbert-offline-demo/infer_motionbert.py \
+  --keypoints artifacts/pose-classification/extractions/<scene_id>/keypoints.jsonl \
+  --motionbert-repo models/motionbert/repo \
+  --checkpoint models/motionbert/checkpoints/motionbert_ft_h36m.pth \
+  --output artifacts/pose-classification/scenes/<scene_id>/derived/poses3d.source.json \
+  --video-name source.mp4 \
+  --width 1280 \
+  --height 720 \
+  --fps 30 \
+  --device cuda \
+  --window 243 \
+  --stride 81 \
+  --batch-size 4
+```
+
+再由 `reme.pose.review` 校验、转换并安装为共享接口的 `derived/poses3d.json`。CPU 降级时使用 `--device cpu --no-amp`，但必须重新记录运行时间，不能沿用 CUDA 性能数据。
