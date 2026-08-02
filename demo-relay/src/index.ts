@@ -7,6 +7,11 @@ import {
   type DangerVoiceAttemptStart,
 } from "./voice";
 import {
+  handleSceneRecognition,
+  type SceneRecognitionAttemptFinish,
+  type SceneRecognitionAttemptStart,
+} from "./scene";
+import {
   createForwardedMediaSignal,
   DEMO_EVENT_SCHEMA_VERSION,
   isExactObject,
@@ -38,6 +43,9 @@ const KEYPOINT_SCORE_THRESHOLD = 0.2;
 const UNLOCK_ATTEMPT_WINDOW_MS = 60_000;
 const MAX_UNLOCK_ATTEMPTS_PER_WINDOW = 5;
 const MAX_TRACKED_CLIENTS = 1_024;
+const SCENE_RECOGNITION_WINDOW_MS = 60_000;
+const MAX_SCENE_RECOGNITIONS_PER_WINDOW = 6;
+const SCENE_RECOGNITION_INFLIGHT_STALE_MS = 10_000;
 
 const MOVENET_KEYPOINT_NAMES = [
   "nose",
@@ -144,6 +152,15 @@ interface DangerVoiceAttemptRow {
   session_id: string;
   event_id: string;
   alarm_event_sequence: number;
+  attempts: number;
+  inflight_request_id: string | null;
+  inflight_started_at_ms: number | null;
+}
+
+interface SceneRecognitionBudgetRow {
+  [key: string]: SqlStorageValue;
+  session_id: string;
+  window_started_at_ms: number;
   attempts: number;
   inflight_request_id: string | null;
   inflight_started_at_ms: number | null;
@@ -257,7 +274,14 @@ export class DemoRoom extends DurableObject<Env> {
           event_id TEXT NOT NULL,
           event_json TEXT NOT NULL,
           PRIMARY KEY (session_id, event_id)
-        )
+        );
+        CREATE TABLE IF NOT EXISTS scene_recognition_budget (
+          session_id TEXT PRIMARY KEY,
+          window_started_at_ms INTEGER NOT NULL,
+          attempts INTEGER NOT NULL CHECK (attempts >= 1),
+          inflight_request_id TEXT,
+          inflight_started_at_ms INTEGER
+        );
       `);
       await this.backfillLegacyDangerWatchdog();
     });
@@ -465,6 +489,120 @@ export class DemoRoom extends DurableObject<Env> {
       throw new Error("danger watchdog could not be escalated");
     }
     await this.ctx.storage.deleteAlarm();
+  }
+
+  async beginSceneRecognitionAttempt(
+    tokenHash: string,
+    requestId: string,
+  ): Promise<SceneRecognitionAttemptStart> {
+    if (
+      !/^[a-f0-9]{64}$/.test(tokenHash)
+      || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(
+        requestId,
+      )
+    ) {
+      return { ok: false, error: "invalid_control_token" };
+    }
+    const now = Date.now();
+    const lease = this.currentLease(now);
+    if (lease === null || !constantTimeHexEqual(lease.token_hash, tokenHash)) {
+      return { ok: false, error: "invalid_control_token" };
+    }
+
+    const existing = this.ctx.storage.sql.exec<SceneRecognitionBudgetRow>(
+      `SELECT session_id, window_started_at_ms, attempts,
+              inflight_request_id, inflight_started_at_ms
+         FROM scene_recognition_budget
+        WHERE session_id = ?`,
+      lease.session_id,
+    ).toArray()[0];
+    if (
+      existing !== undefined
+      && existing.inflight_request_id !== null
+      && existing.inflight_started_at_ms !== null
+      && now - existing.inflight_started_at_ms < SCENE_RECOGNITION_INFLIGHT_STALE_MS
+    ) {
+      return { ok: false, error: "scene_request_in_progress" };
+    }
+
+    if (
+      existing === undefined
+      || now - existing.window_started_at_ms >= SCENE_RECOGNITION_WINDOW_MS
+    ) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO scene_recognition_budget
+           (session_id, window_started_at_ms, attempts,
+            inflight_request_id, inflight_started_at_ms)
+         VALUES (?, ?, 1, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           window_started_at_ms = excluded.window_started_at_ms,
+           attempts = 1,
+           inflight_request_id = excluded.inflight_request_id,
+           inflight_started_at_ms = excluded.inflight_started_at_ms`,
+        lease.session_id,
+        now,
+        requestId,
+        now,
+      );
+      return { ok: true, session_id: lease.session_id };
+    }
+
+    if (existing.attempts >= MAX_SCENE_RECOGNITIONS_PER_WINDOW) {
+      return {
+        ok: false,
+        error: "scene_rate_limited",
+        retry_after_ms: Math.max(
+          1,
+          SCENE_RECOGNITION_WINDOW_MS - (now - existing.window_started_at_ms),
+        ),
+      };
+    }
+    this.ctx.storage.sql.exec(
+      `UPDATE scene_recognition_budget
+          SET attempts = attempts + 1,
+              inflight_request_id = ?,
+              inflight_started_at_ms = ?
+        WHERE session_id = ?`,
+      requestId,
+      now,
+      lease.session_id,
+    );
+    return { ok: true, session_id: lease.session_id };
+  }
+
+  async finishSceneRecognitionAttempt(
+    tokenHash: string,
+    sessionId: string,
+    requestId: string,
+  ): Promise<SceneRecognitionAttemptFinish> {
+    const attempt = this.ctx.storage.sql.exec<SceneRecognitionBudgetRow>(
+      `SELECT session_id, window_started_at_ms, attempts,
+              inflight_request_id, inflight_started_at_ms
+         FROM scene_recognition_budget
+        WHERE session_id = ?`,
+      sessionId,
+    ).toArray()[0];
+    if (attempt === undefined || attempt.inflight_request_id !== requestId) {
+      return { ok: false, error: "invalid_scene_attempt" };
+    }
+    this.ctx.storage.sql.exec(
+      `UPDATE scene_recognition_budget
+          SET inflight_request_id = NULL,
+              inflight_started_at_ms = NULL
+        WHERE session_id = ? AND inflight_request_id = ?`,
+      sessionId,
+      requestId,
+    );
+
+    const lease = this.currentLease(Date.now());
+    if (
+      lease === null
+      || lease.session_id !== sessionId
+      || !constantTimeHexEqual(lease.token_hash, tokenHash)
+    ) {
+      return { ok: false, error: "invalid_control_token" };
+    }
+    return { ok: true };
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -1835,6 +1973,7 @@ export class DemoRoom extends DurableObject<Env> {
       this.ctx.storage.sql.exec("DELETE FROM media_grant_audience");
       this.ctx.storage.sql.exec("DELETE FROM media_grant");
       this.ctx.storage.sql.exec("DELETE FROM danger_voice_attempt");
+      this.ctx.storage.sql.exec("DELETE FROM scene_recognition_budget");
       this.ctx.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
       this.ctx.storage.sql.exec("DELETE FROM danger_watchdog");
       this.ctx.storage.sql.exec("DELETE FROM demo_event_state");
@@ -2125,6 +2264,7 @@ const worker = {
       url.pathname === "/api/release" ||
       url.pathname === "/api/activity/recognize" ||
       url.pathname === "/api/danger/voice" ||
+      url.pathname === "/api/scene/recognize" ||
       url.pathname === "/ws/viewer" ||
       url.pathname === "/ws/controller";
     if (!knownPath) {
@@ -2169,6 +2309,19 @@ const worker = {
               alarmEventSequence,
               requestId,
             ),
+        });
+        return withCors(response, origin);
+      }
+      if (url.pathname === "/api/scene/recognize") {
+        if (request.method !== "POST") {
+          return withCors(json({ ok: false, error: "method_not_allowed" }, 405), origin);
+        }
+        const response = await handleSceneRecognition(request, env, {
+          authorizeTokenHash: (tokenHash) => stub.authorizeControlTokenHash(tokenHash),
+          beginAttempt: (tokenHash, requestId) =>
+            stub.beginSceneRecognitionAttempt(tokenHash, requestId),
+          finishAttempt: (tokenHash, sessionId, requestId) =>
+            stub.finishSceneRecognitionAttempt(tokenHash, sessionId, requestId),
         });
         return withCors(response, origin);
       }

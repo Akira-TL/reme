@@ -23,6 +23,8 @@ const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
 const VIEWER_PROTOCOL = "reme-viewer-v1";
 const CONTROLLER_PROTOCOL = "reme-controller-v1";
 const ROOM_NAME = "shared-live-demo";
+const MINIMAL_MP4_B64 = "AAAADGZ0eXBpc29t";
+const MINIMAL_JPEG_B64 = "/9j/2Q==";
 
 const sockets: WebSocket[] = [];
 const issuedTokens: string[] = [];
@@ -2113,6 +2115,289 @@ describe("single-room demo relay", () => {
     expect(validateDemoEvent(event, event.session_id)).toBe(true);
   });
 
+  it("classifies one explicit short MP4 and emits metadata-only logs", async () => {
+    const lease = await unlock();
+    const outbound = vi.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => (
+      mimoSceneResponse("kitchen", true, "人物连续切配食材并操作锅具")
+    ));
+    vi.stubGlobal("fetch", outbound);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    try {
+      const response = await recognizeScene(lease.token, {
+        visual_kind: "video_clip",
+        media_format: "mp4",
+        media_b64: MINIMAL_MP4_B64,
+        duration_ms: 2_000,
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        ok: true,
+        scene_id: "kitchen",
+        confidence: 0.87,
+        reason: "人物连续切配食材并操作锅具",
+        temporal_evidence: true,
+        model: "mimo-v2.5",
+        latency_ms: expect.any(Number),
+      });
+      expect(outbound).toHaveBeenCalledTimes(1);
+      const call = outbound.mock.calls[0];
+      expect(String(call?.[0])).toBe("https://api.xiaomimimo.com/v1/chat/completions");
+      const request = JSON.parse(String(call?.[1]?.body)) as {
+        messages: Array<{ content: Array<Record<string, unknown>> }>;
+      };
+      expect(request.messages[1]?.content[1]).toEqual({
+        type: "video_url",
+        video_url: { url: `data:video/mp4;base64,${MINIMAL_MP4_B64}` },
+        fps: 1,
+      });
+      expect(log).toHaveBeenCalledTimes(1);
+      const logged = String(log.mock.calls[0]?.[0]);
+      expect(logged).not.toContain(MINIMAL_MP4_B64);
+      expect(logged).not.toContain("人物连续切配食材并操作锅具");
+      expect(JSON.parse(logged)).toMatchObject({
+        event: "scene_recognition_mimo",
+        provider: "xiaomi_mimo",
+        model: "mimo-v2.5",
+        status: 200,
+        outcome: "success",
+        visual_kind: "video_clip",
+        media_format: "mp4",
+        duration_ms: 2_000,
+        bytes: 12,
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("accepts the exact JPEG keyframe fallback and keeps fall as a classification only", async () => {
+    const lease = await unlock();
+    const outbound = vi.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => (
+      mimoSceneResponse("fall", false, "人物疑似倒地，但单帧没有跨帧证据")
+    ));
+    vi.stubGlobal("fetch", outbound);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    try {
+      const response = await recognizeScene(lease.token, {
+        visual_kind: "keyframe",
+        media_format: "jpeg",
+        media_b64: MINIMAL_JPEG_B64,
+        duration_ms: 0,
+      });
+
+      await expect(response.json()).resolves.toMatchObject({
+        ok: true,
+        scene_id: "fall",
+        temporal_evidence: false,
+      });
+      const call = outbound.mock.calls[0];
+      const request = JSON.parse(String(call?.[1]?.body)) as {
+        messages: Array<{ content: Array<Record<string, unknown>> }>;
+      };
+      expect(request.messages[1]?.content[1]).toEqual({
+        type: "image_url",
+        image_url: { url: `data:image/jpeg;base64,${MINIMAL_JPEG_B64}` },
+      });
+
+      const viewer = await connectViewer();
+      await expectNoMessage(viewer);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("rejects non-exact scene unions, invalid media, and oversized requests before MiMo", async () => {
+    const lease = await unlock();
+    const outbound = vi.fn();
+    vi.stubGlobal("fetch", outbound);
+    const invalidBodies = [
+      {
+        visual_kind: "video_clip",
+        media_format: "jpeg",
+        media_b64: MINIMAL_JPEG_B64,
+        duration_ms: 2_000,
+      },
+      {
+        visual_kind: "video_clip",
+        media_format: "mp4",
+        media_b64: MINIMAL_MP4_B64,
+        duration_ms: 0,
+      },
+      {
+        visual_kind: "keyframe",
+        media_format: "jpeg",
+        media_b64: MINIMAL_JPEG_B64,
+        duration_ms: 1,
+      },
+      {
+        visual_kind: "keyframe",
+        media_format: "jpeg",
+        media_b64: MINIMAL_JPEG_B64,
+        duration_ms: 0,
+        extra: true,
+      },
+    ];
+    for (const body of invalidBodies) {
+      const response = await recognizeScene(lease.token, body);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ ok: false, error: "invalid_request" });
+    }
+
+    const invalidMagic = await recognizeScene(lease.token, {
+      visual_kind: "video_clip",
+      media_format: "mp4",
+      media_b64: MINIMAL_JPEG_B64,
+      duration_ms: 2_000,
+    });
+    expect(invalidMagic.status).toBe(415);
+    await expect(invalidMagic.json()).resolves.toEqual({ ok: false, error: "invalid_media" });
+
+    const oversized = await relayFetch("/api/scene/recognize", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${lease.token}`,
+        "Content-Length": String(3 * 1_024 * 1_024 + 1),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(sceneKeyframeBody()),
+    });
+    expect(oversized.status).toBe(413);
+    await expect(oversized.json()).resolves.toEqual({ ok: false, error: "request_too_large" });
+    expect(outbound).not.toHaveBeenCalled();
+  });
+
+  it("requires the active control token and POST JSON for scene recognition", async () => {
+    const missing = await relayFetch("/api/scene/recognize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sceneKeyframeBody()),
+    });
+    expect(missing.status).toBe(401);
+    await expect(missing.json()).resolves.toEqual({
+      ok: false,
+      error: "missing_control_token",
+    });
+
+    const lease = await unlock();
+    const wrongMethod = await relayFetch("/api/scene/recognize", {
+      headers: { Authorization: `Bearer ${lease.token}` },
+    });
+    expect(wrongMethod.status).toBe(405);
+    await expect(wrongMethod.json()).resolves.toEqual({
+      ok: false,
+      error: "method_not_allowed",
+    });
+    const wrongContentType = await relayFetch("/api/scene/recognize", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${lease.token}`,
+        "Content-Type": "text/plain",
+      },
+      body: JSON.stringify(sceneKeyframeBody()),
+    });
+    expect(wrongContentType.status).toBe(415);
+    await expect(wrongContentType.json()).resolves.toEqual({
+      ok: false,
+      error: "invalid_content_type",
+    });
+  });
+
+  it("strictly rejects malformed MiMo scene verdicts", async () => {
+    const lease = await unlock();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const invalidVerdicts = [
+      { scene_id: "bedroom", confidence: 0.8, reason: "unknown", temporal_evidence: false },
+      { scene_id: "living", confidence: 4, reason: "ordinary", temporal_evidence: false },
+      {
+        scene_id: "living",
+        confidence: 0.8,
+        reason: "ordinary",
+        temporal_evidence: false,
+        extra: true,
+      },
+      { scene_id: "fall", confidence: 0.8, reason: "single frame", temporal_evidence: true },
+    ];
+
+    try {
+      for (const verdict of invalidVerdicts) {
+        vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+          choices: [{ message: { content: JSON.stringify(verdict) } }],
+        })));
+        const response = await recognizeScene(lease.token, sceneKeyframeBody());
+        expect(response.status).toBe(502);
+        await expect(response.json()).resolves.toEqual({
+          ok: false,
+          error: "invalid_mimo_response",
+        });
+      }
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("fails scene recognition closed on MiMo timeout and clears the single-flight marker", async () => {
+    const lease = await unlock();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new DOMException("deadline exceeded", "TimeoutError");
+    }));
+
+    try {
+      const timedOut = await recognizeScene(lease.token, sceneKeyframeBody());
+      expect(timedOut.status).toBe(504);
+      await expect(timedOut.json()).resolves.toEqual({ ok: false, error: "mimo_timeout" });
+
+      vi.stubGlobal("fetch", vi.fn(async () => (
+        mimoSceneResponse("living", false, "普通居家活动")
+      )));
+      const recovered = await recognizeScene(lease.token, sceneKeyframeBody());
+      expect(recovered.status).toBe(200);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("single-flights scene recognition and limits each session to six paid attempts per minute", async () => {
+    const lease = await unlock();
+    const outbound = vi.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      return mimoSceneResponse("living", false, "普通居家活动");
+    });
+    vi.stubGlobal("fetch", outbound);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    try {
+      const first = recognizeScene(lease.token, sceneKeyframeBody());
+      await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
+      const concurrent = await recognizeScene(lease.token, sceneKeyframeBody());
+      expect(concurrent.status).toBe(409);
+      await expect(concurrent.json()).resolves.toEqual({
+        ok: false,
+        error: "scene_request_in_progress",
+      });
+      expect((await first).status).toBe(200);
+
+      vi.stubGlobal("fetch", vi.fn(async () => (
+        mimoSceneResponse("living", false, "普通居家活动")
+      )));
+      for (let attempt = 1; attempt < 6; attempt += 1) {
+        expect((await recognizeScene(lease.token, sceneKeyframeBody())).status).toBe(200);
+      }
+      const limited = await recognizeScene(lease.token, sceneKeyframeBody());
+      expect(limited.status).toBe(429);
+      expect(Number(limited.headers.get("Retry-After"))).toBeGreaterThan(0);
+      await expect(limited.json()).resolves.toMatchObject({
+        ok: false,
+        error: "scene_rate_limited",
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("rate limits repeated unlock attempts from one client address", async () => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const response = await relayFetch("/api/unlock", {
@@ -2717,6 +3002,48 @@ async function recognize(token: string, imageB64: string): Promise<Response> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ image_b64: imageB64 }),
+  });
+}
+
+function sceneKeyframeBody(): Record<string, unknown> {
+  return {
+    visual_kind: "keyframe",
+    media_format: "jpeg",
+    media_b64: MINIMAL_JPEG_B64,
+    duration_ms: 0,
+  };
+}
+
+async function recognizeScene(
+  token: string,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  return relayFetch("/api/scene/recognize", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function mimoSceneResponse(
+  sceneId: "living" | "kitchen" | "bathroom" | "fall" | "uncertain",
+  temporalEvidence: boolean,
+  reason: string,
+): Response {
+  return Response.json({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          scene_id: sceneId,
+          confidence: 0.87,
+          reason,
+          temporal_evidence: temporalEvidence,
+        }),
+      },
+    }],
   });
 }
 

@@ -9,6 +9,8 @@ This isolated Cloudflare Worker provides the single-room data plane for the demo
   `{ "image_b64": "<plain JPEG base64>" }`
 - `POST /api/danger/voice` with the active Bearer token and exact
   `{ "event_id": "<active fall id>", "audio_b64": "<plain WAV base64>", "audio_format": "wav" }`
+- `POST /api/scene/recognize` with the active Bearer token and one exact
+  explicit visual sample: a preferred short MP4 clip or JPEG keyframe fallback
 - `WS /ws/viewer` with subprotocol `reme-viewer-v1`
 - `WS /ws/controller` with subprotocols `reme-controller-v1` and
   `reme-token-<token>`
@@ -112,6 +114,51 @@ persisted as request metadata. Custom structured logs remain enabled. An operato
 running an explicit real-time tail can still inspect transient request metadata;
 that privileged debugging path must not be left running during a live demo.
 
+Scene recognition is a separate explicit MiMo visual request and does not change
+the pose, event, or media-grant WebSocket contracts. The preferred request is a
+short clip:
+
+```json
+{
+  "visual_kind": "video_clip",
+  "media_format": "mp4",
+  "media_b64": "<plain MP4 base64>",
+  "duration_ms": 2000
+}
+```
+
+When short recording is unavailable, the controller may transparently fall back
+to one keyframe:
+
+```json
+{
+  "visual_kind": "keyframe",
+  "media_format": "jpeg",
+  "media_b64": "<plain JPEG base64>",
+  "duration_ms": 0
+}
+```
+
+The union is exact: MP4 duration is a safe integer from 250 through 4000 ms and a
+JPEG duration is exactly zero. JSON is capped at 3 MiB, decoded MP4 at 2 MiB,
+decoded JPEG at 640 KiB, request-body reading at 2 seconds, the complete request at
+8 seconds, and the MiMo response at 64 KiB. The Durable Object permits one request
+in flight and six paid attempts per controller session in each one-minute window;
+upstream failures consume an attempt.
+
+A successful response has the exact result fields `scene_id`, `confidence`,
+`reason`, `temporal_evidence`, `model`, and `latency_ms`, plus `ok=true`.
+`scene_id` is one of `living`, `kitchen`, `bathroom`, `fall`, or `uncertain`.
+A keyframe can never claim temporal evidence. A `fall` result is only a visual
+classification candidate: it does not create an alarm, bypass the local temporal
+pose rule, or authorize family video.
+
+The media exists only in the current MiMo request. It is never placed in Durable
+Object storage, WebSockets, or logs. Custom logs contain only a random request ID,
+provider/model, upstream status, latency, outcome, visual kind, media format,
+declared duration, and decoded byte count; they omit media, Base64, model reason,
+and credentials.
+
 ## Local verification
 
 ```sh
@@ -124,7 +171,7 @@ CONTROL_KEY_SHA256=<64-character-test-digest> npm run dry-run
 
 For local `wrangler dev`, place `CONTROL_KEY_SHA256` in an ignored `.dev.vars` file.
 The value is the lowercase SHA-256 hex digest of the human-entered control key.
-Place `MIMO_API_KEY` there as well when exercising activity or danger voice
+Place `MIMO_API_KEY` there as well when exercising activity, scene, or danger voice
 recognition.
 
 ## Deployment inputs
