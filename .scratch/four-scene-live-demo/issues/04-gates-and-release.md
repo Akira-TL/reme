@@ -13,5 +13,7 @@
 - [x] 390×844、430×932、桌面评委端截图检查。
 - [x] 单控制端 + 至少 3 Viewer；晚加入、断线、过期和越权路径。
 - [ ] 真实做饭/非做饭与真实跌倒/正常动作的条件记录。
-- [ ] 只在 `lbx` 创建描述性提交，只推送 `upstream/lbx`。
-- [ ] 不使用已有 `dist*`；部署前从 lockfile 重建。
+- [x] 只在 `lbx` 创建描述性提交，只推送 `upstream/lbx`（`22778f27`）。
+- [x] 不使用已有 `dist*`；部署前从 lockfile 重建。
+- [x] Cloudflare staging/production Relay 与 Vercel production 已部署并完成基础 smoke。
+- [ ] 为 `monitor.reme.maniforld.com` 补齐 Cloudflare DNS，确认公网解析、TLS 和手机端入口。

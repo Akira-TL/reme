@@ -28,6 +28,13 @@
 - 控制端快速连续切换厨房 → 完全隐私 → 跌倒后，评委端最终为跌倒场景且连接保持；事件序号预留回归通过。
 - 完全隐私场景：评委端 `environment-private`，授权视频不可见，隐私条显示“始终只显示 17 点抽象骨架”。
 
+## 发布结果
+
+- Cloudflare staging Relay：`https://reme-demo-relay-staging.lx-0506.workers.dev`，version `d0cccf95-bb42-485f-8d61-177f4958680a`。
+- Cloudflare production Relay：`https://relay.reme.maniforld.com`，version `873dc201-c44c-4a99-b704-1abd4fbc630c`；授权状态接口 smoke 为 200，越权请求为 403。
+- Vercel production：deployment `dpl_84587MoJd7mU1nmxA1Gq65WSjy6k`，`https://reme-rlxtrqhbl-lx050s-projects.vercel.app`；`https://reme.maniforld.com/` 与兼容监控入口 `https://reme.maniforld.com/monitor` 均为 200，公网模型 SHA-256 与用户权重一致。
+- 阻塞：截至 2026-08-02，`monitor.reme.maniforld.com` 在公共解析器仍为 `NXDOMAIN`；Vercel alias 已配置，但 Cloudflare DNS/TLS 尚未闭环。
+
 ## 尚未关闭的人工 Gate
 
 - 需要使用目标手机各录一次真实做饭与非做饭，记录 MiMo 原始判定、阈值和延迟。
