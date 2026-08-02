@@ -209,7 +209,8 @@ def _fall_check_in(
         need_dialogue=True,
         dialogue_goal="confirm_safety",
         consent_required=False,
-        # Contract: a high-confidence fall check-in must carry a countdown.
+        # Contract: a high-confidence fall check-in must carry a countdown
+        # (as must every other awaiting-elder decision, see on_tick).
         response_timeout_ms=config.check_in_timeout_ms,
         template=TemplateId.FALL_CHECK_IN,
     )
@@ -262,7 +263,13 @@ def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerCon
             need_dialogue=True,
             dialogue_goal="understand_need",
             consent_required=False,
-            response_timeout_ms=None,
+            # Contract section 10 ("需要回应时使用 response_timeout_ms"): every
+            # decision that leaves the episode awaiting the elder carries the
+            # same countdown, so silence always reaches the timeout escalation
+            # below. Without it C renders no countdown, never submits
+            # response=none/source=timeout, and the concern episode — the one
+            # live_camera hits most often — hangs unescalated forever.
+            response_timeout_ms=config.check_in_timeout_ms,
             template=TemplateId.CONCERN_CHECK_IN,
         )
         next_state = replace(
@@ -327,7 +334,10 @@ def _on_elder_response(
                     need_dialogue=True,
                     dialogue_goal="understand_need",
                     consent_required=False,
-                    response_timeout_ms=None,
+                    # Still awaiting the elder: the clarification needs the same
+                    # countdown, or an elder who asked for help and then went
+                    # quiet would never escalate.
+                    response_timeout_ms=config.check_in_timeout_ms,
                     template=TemplateId.CLARIFY,
                 )
                 next_state = replace(_mark_emitted(state, skeleton), clarification_used=True)
@@ -365,7 +375,9 @@ def _on_elder_response(
                 need_dialogue=True,
                 dialogue_goal="confirm_safety" if is_fall else "understand_need",
                 consent_required=False,
-                response_timeout_ms=config.check_in_timeout_ms if is_fall else None,
+                # The wording differs by trigger; the countdown must not. A
+                # concern clarification left unanswered escalates like a fall's.
+                response_timeout_ms=config.check_in_timeout_ms,
                 template=TemplateId.CLARIFY,
             )
             next_state = replace(_mark_emitted(state, skeleton), clarification_used=True)
@@ -378,6 +390,8 @@ def _on_elder_response(
         )
     if value is ResponseValue.NONE:
         # Contract: after a timeout the rules escalate immediately, never MiMo.
+        # Deliberately blind to `state.escalation`: a silent concern check-in
+        # escalates on exactly the same rule as a silent fall check-in.
         return _family_alert(
             state,
             TemplateId.TIMEOUT_FAMILY_ALERT,
