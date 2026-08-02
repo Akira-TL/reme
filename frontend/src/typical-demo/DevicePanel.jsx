@@ -52,6 +52,7 @@ export function DevicePanel({
         cameraReady={camera.cameraReady}
         viewMode={viewMode}
         segmentationReady={camera.segmentationReady}
+        skeletonSource={camera.skeletonSource}
       />
 
       <div className={`device-status status-${danger ? "danger" : scene.tone}`}>

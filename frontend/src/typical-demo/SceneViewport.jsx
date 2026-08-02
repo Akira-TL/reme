@@ -1,7 +1,15 @@
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import WifiRoundedIcon from "@mui/icons-material/WifiRounded";
 
-export function SceneViewport({ sceneId, canvasRef, cameraReady, viewMode, segmentationReady, compact = false }) {
+export function SceneViewport({
+  sceneId,
+  canvasRef,
+  cameraReady,
+  viewMode,
+  segmentationReady,
+  skeletonSource = "c_local",
+  compact = false,
+}) {
   const privacy = sceneId === "bathroom";
   const night = sceneId === "fall";
 
@@ -21,7 +29,11 @@ export function SceneViewport({ sceneId, canvasRef, cameraReady, viewMode, segme
       <div className="set-tiles" />
       <div className="set-bath-shelf"><i /><i /></div>
 
-      <canvas ref={canvasRef} className="live-output" aria-label={viewMode === "video" ? "实时人物抠像" : "实时火柴人骨架"} />
+      <canvas
+        ref={canvasRef}
+        className="live-output"
+        aria-label={viewMode === "video_skeleton" ? "实时原视频与后端骨架叠加" : "实时火柴人骨架"}
+      />
 
       <div className="viewport-pill viewport-live">
         <span className={cameraReady ? "live-dot" : "live-dot is-waiting"} />
@@ -31,7 +43,15 @@ export function SceneViewport({ sceneId, canvasRef, cameraReady, viewMode, segme
       </div>
       <div className="viewport-pill viewport-privacy">
         <LockOutlinedIcon />
-        <span>{privacy ? "隐私锁定" : viewMode === "video" ? (segmentationReady ? "人物抠像" : "原画降级") : "本地骨架"}</span>
+        <span>
+          {privacy
+            ? "隐私锁定"
+            : viewMode === "video_skeleton"
+              ? `${skeletonSource === "a_backend" ? "A 骨架" : "C 后备骨架"} + 原视频`
+              : viewMode === "video"
+                ? (segmentationReady ? "人物抠像" : "原画降级")
+                : skeletonSource === "a_backend" ? "A 返回骨架" : "C 本地后备"}
+        </span>
       </div>
       {night && <div className="night-time">23:47</div>}
       {privacy && <div className="privacy-curtain"><span>隐私幕布</span></div>}

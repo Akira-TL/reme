@@ -3,6 +3,26 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import { useState } from "react";
 import { describePosture } from "../adapters/perception";
 
+const MIMO_MODEL = import.meta.env.VITE_REME_MIMO_MODEL || "mimo-v2.5";
+const MIMO_CONFIGURED = import.meta.env.VITE_REME_MIMO_CONFIGURED === "true";
+
+const SESSION_LABELS = {
+  offline: "会话离线",
+  starting: "会话启动中",
+  running: "会话运行中",
+  input_unavailable: "输入通道降级",
+  degraded: "会话降级",
+  stopped: "会话已停止",
+};
+
+const ACTIVITY_LABELS = {
+  offline: "无实时输入",
+  waiting_input: "等待首帧",
+  stale: "帧流已停滞",
+  no_person: "当前未检测到完整人体",
+  person_detected: "当前检测到人体",
+};
+
 function percent(value) {
   return Number.isFinite(value) ? `${Math.round(value * 100)}%` : "—";
 }
@@ -36,6 +56,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       camera_ready: camera.cameraReady,
       model_ready: camera.modelReady,
       person_detected: camera.personDetected,
+      skeleton_source: camera.skeletonSource || null,
       error: camera.error || null,
     },
     a: {
@@ -48,6 +69,8 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       reason: decisionRuntime.reason || null,
       decision: decision || null,
       history_size: decisionRuntime.history?.length || 0,
+      mimo_model: MIMO_MODEL,
+      mimo_configured: MIMO_CONFIGURED,
     },
   };
 
@@ -84,6 +107,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="摄像头" value={camera.cameraReady ? "online" : "offline"} />
               <DebugValue label="姿态模型" value={camera.modelReady ? "ready" : "loading / degraded"} />
               <DebugValue label="检测到人物" value={camera.personDetected ? "yes" : "no"} />
+              <DebugValue label="骨架显示来源" value={camera.skeletonSource || "—"} />
               {camera.error && <DebugValue label="C 错误" value={camera.error} wide />}
             </div>
           </div>
@@ -91,9 +115,20 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
           <div className="debug-section">
             <h3>A · 感知运行时</h3>
             <div className="debug-grid">
-              <DebugValue label="状态" value={runtime.state || "offline"} />
+              <DebugValue label="会话状态" value={SESSION_LABELS[runtime.state] || runtime.state || "会话离线"} />
+              <DebugValue label="当前活动" value={ACTIVITY_LABELS[runtime.activityState] || "等待状态"} />
+              <DebugValue label="输入通道" value={runtime.inputMode || "—"} />
+              <DebugValue label="支持输入" value={runtime.acceptedInputs?.join(", ") || "—"} wide />
               <DebugValue label="Session ID" value={runtime.sessionId || "—"} wide />
+              <DebugValue label="最新帧" value={runtime.latestFrameIndex ?? "—"} />
+              <DebugValue label="帧龄" value={number(runtime.frameAgeMs, " ms")} />
+              <DebugValue
+                label="A 检测到人物"
+                value={runtime.personDetected === true ? "yes" : runtime.personDetected === false ? "no" : "—"}
+              />
+              <DebugValue label="A 关键点质量" value={runtime.landmarkQuality || "—"} />
               <DebugValue label="姿态分类" value={posture ? describePosture(posture.posture) : "等待事件"} />
+              <DebugValue label="分类来源" value={posture?.classification_source || "—"} />
               <DebugValue label="姿态置信度" value={percent(posture?.posture_confidence)} />
               <DebugValue label="持续时间" value={number(posture?.posture_duration_ms, " ms")} />
               <DebugValue label="运动等级" value={posture?.motion_level || "—"} />
@@ -101,6 +136,9 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="时间戳" value={number(posture?.timestamp_ms, " ms")} />
               <DebugValue label="动作转变" value={transition?.transition || "等待事件"} wide />
               <DebugValue label="转变置信度" value={percent(transition?.transition_confidence)} />
+              <DebugValue label="MIL v3 分数" value={percent(transition?.evidence?.fall_mil_probability)} />
+              <DebugValue label="MIL 候选门" value={transition?.evidence?.fall_mil_candidate_eligible ? "pass" : "abstain"} />
+              <DebugValue label="MIL 已确认" value={transition?.evidence?.fall_mil_confirmed ? "yes" : "no"} />
               <DebugValue label="转变窗口" value={transition ? `${number(transition.start_ms)} → ${number(transition.end_ms)} ms` : "—"} />
               {runtime.reason && <DebugValue label="A 原因" value={runtime.reason} wide />}
             </div>
@@ -110,6 +148,8 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
             <h3>B · 决策与 MiMo</h3>
             <div className="debug-grid">
               <DebugValue label="WebSocket" value={decisionRuntime.connection || "closed"} />
+              <DebugValue label="MiMo 模型" value={MIMO_MODEL} />
+              <DebugValue label="MiMo Key" value={MIMO_CONFIGURED ? "configured" : "missing"} />
               <DebugValue label="决策状态" value={decision?.state || "等待决策"} />
               <DebugValue label="决策来源" value={decision?.source || "—"} />
               <DebugValue label="动作" value={decision?.action || "—"} />
@@ -118,6 +158,8 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="Decision ID" value={decision?.decision_id || "—"} wide />
               <DebugValue label="老人话术" value={decision?.elder_message || "—"} wide />
               <DebugValue label="家属通知" value={decision?.family_notification || "—"} wide />
+              <DebugValue label="语音识别" value={live.voice?.listening ? "listening" : live.voice?.supported ? "ready" : "unsupported"} />
+              <DebugValue label="识别文本" value={live.voice?.transcript || "—"} wide />
               {decisionRuntime.reason && <DebugValue label="B 错误" value={decisionRuntime.reason} wide />}
             </div>
           </div>

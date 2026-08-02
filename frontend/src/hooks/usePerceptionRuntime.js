@@ -55,6 +55,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
   const sceneRef = useRef(sceneId);
   const frameIndexRef = useRef(0);
   const landmarksModeRef = useRef(false);
+  const acceptedInputsRef = useRef([]);
   const lastLandmarksSentRef = useRef(0);
   const retry = useCallback(() => {
     setRuntime({ state: "offline", reason: "正在重新连接 A 感知服务" });
@@ -63,6 +64,27 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
 
   // 关键点直传：A 声明 jpeg_inference=false 且接受 landmarks_frame 时，由浏览器本地
   // MediaPipe 推理结果直接上送，替代 JPEG 帧。节流到 ≤10fps，非直传模式下为空操作。
+  const triggerDebugScenario = useCallback((scenario) => {
+    const socket = inputSocketRef.current;
+    const sessionId = sessionRef.current;
+    if (
+      !socket
+      || socket.readyState !== WebSocket.OPEN
+      || !sessionId
+      || !acceptedInputsRef.current.includes("debug_scenario")
+    ) {
+      return false;
+    }
+    socket.send(JSON.stringify({
+      type: "debug_scenario",
+      session_id: sessionId,
+      scene_id: sceneRef.current,
+      timestamp_ms: performance.now(),
+      scenario,
+    }));
+    return true;
+  }, []);
+
   const sendLandmarks = useCallback((points, timestampMs) => {
     if (!landmarksModeRef.current || !Array.isArray(points) || points.length === 0) return;
     const socket = inputSocketRef.current;
@@ -91,10 +113,6 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
 
   useEffect(() => {
     sceneRef.current = sceneId;
-    const socket = inputSocketRef.current;
-    const sessionId = sessionRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN || !sessionId) return;
-    socket.send(JSON.stringify(createSceneSignal(sessionId, sceneId, "switch", performance.now())));
   }, [sceneId]);
 
   useEffect(() => {
@@ -110,6 +128,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
     let pollTimer = 0;
     let encoding = false;
     sessionRef.current = sessionId;
+    sceneRef.current = sceneId;
     frameIndexRef.current = 0;
     landmarksModeRef.current = false;
     lastLandmarksSentRef.current = 0;
@@ -121,7 +140,27 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
       setRuntime((current) => {
         const inputMissing = current.sessionId === sessionId && current.state === "input_unavailable";
         if (inputMissing && ["starting", "running"].includes(status.state)) return current;
-        return { state: status.state, reason: status.reason || "", sessionId };
+        const frameAgeMs = Number.isFinite(current.lastFrameAt)
+          ? Math.max(0, Date.now() - current.lastFrameAt)
+          : null;
+        let activityState = "waiting_input";
+        if (!["starting", "running", "input_unavailable"].includes(status.state)) {
+          activityState = "offline";
+        } else if (frameAgeMs !== null && frameAgeMs > 3000) {
+          activityState = "stale";
+        } else if (current.personDetected === false) {
+          activityState = "no_person";
+        } else if (current.personDetected === true) {
+          activityState = "person_detected";
+        }
+        return {
+          ...current,
+          state: status.state,
+          reason: status.reason || "",
+          sessionId,
+          frameAgeMs,
+          activityState,
+        };
       });
     }
 
@@ -165,6 +204,9 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
       try {
         await pendingRuntimeStop;
         if (disposed) return;
+        setLandmarkFrame(null);
+        setPosture(null);
+        setTransition(null);
         const capabilities = await getCapabilities(urls.httpBase, abortController.signal);
         if (capabilities?.schemas?.runtime_event !== "reme-runtime-event/v0-experiment") {
           throw new Error("A 的 runtime event schema 不兼容");
@@ -177,6 +219,15 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
           && capabilities.input.accepts.includes("landmarks_frame"),
         );
         landmarksModeRef.current = landmarksMode;
+        acceptedInputsRef.current = Array.isArray(capabilities?.input?.accepts)
+          ? capabilities.input.accepts
+          : [];
+        setRuntime((current) => ({
+          ...current,
+          sessionId,
+          inputMode: landmarksMode ? "landmarks" : "jpeg",
+          acceptedInputs: capabilities?.input?.accepts || [],
+        }));
         const starting = await startRuntime(
           urls.httpBase,
           createSessionRequest(sessionId, sceneRef.current),
@@ -193,7 +244,17 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
             if (!event) return;
             if (event.event_type === "frame_landmarks") {
               const landmarks = mapFrameLandmarks(event.payload);
-              if (landmarks) setLandmarkFrame({ landmarks, receivedAt: performance.now(), payload: event.payload });
+              const receivedAt = performance.now();
+              if (landmarks) setLandmarkFrame({ landmarks, receivedAt, payload: event.payload });
+              setRuntime((current) => ({
+                ...current,
+                latestFrameIndex: event.payload?.frame_index,
+                personDetected: Boolean(event.payload?.person_detected),
+                landmarkQuality: event.payload?.landmark_quality || "unavailable",
+                lastFrameAt: Date.now(),
+                frameAgeMs: 0,
+                activityState: event.payload?.person_detected ? "person_detected" : "no_person",
+              }));
             } else if (event.event_type === "posture_observation" && event.payload?.schema_version === POSTURE_SCHEMA) {
               setPosture(event.payload);
             } else if (event.event_type === "transition_event" && event.payload?.schema_version === TRANSITION_SCHEMA) {
@@ -246,9 +307,18 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
       inputSocket?.close();
       eventsSocket?.close();
       inputSocketRef.current = null;
+      acceptedInputsRef.current = [];
       pendingRuntimeStop = stopRuntime(urls.httpBase, sessionId).catch(() => {});
     };
-  }, [enabled, retryGeneration, videoElement]);
+  }, [enabled, retryGeneration, sceneId, videoElement]);
 
-  return { runtime, landmarkFrame, posture, transition, retry, sendLandmarks };
+  return {
+    runtime,
+    landmarkFrame,
+    posture,
+    transition,
+    retry,
+    sendLandmarks,
+    triggerDebugScenario,
+  };
 }

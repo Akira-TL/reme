@@ -304,6 +304,8 @@ def run_local_demo(config: LocalDemoConfig) -> int:
         f"ws://{config.host}:{config.perception_port}/ws/camera-input"
     )
     env["VITE_REME_DECISION_HTTP_URL"] = config.decision_http_url
+    env["VITE_REME_MIMO_MODEL"] = env.get("MIMO_MODEL", "mimo-v2.5")
+    env["VITE_REME_MIMO_CONFIGURED"] = "true" if env.get("MIMO_API_KEY") else "false"
 
     ensure_frontend_dependencies(config, env)
     commands = build_child_commands(config)

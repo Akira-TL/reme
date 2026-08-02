@@ -47,6 +47,13 @@ export function stopSession(httpBase, sessionId) {
   });
 }
 
+export function resetScene(httpBase, sceneId) {
+  return request(httpBase, "/api/scene/reset", {
+    method: "POST",
+    body: JSON.stringify({ scene_id: sceneId }),
+  });
+}
+
 export function submitResponse(httpBase, response) {
   const payload = { schema_version: RESPONSE_SCHEMA, ...response };
   const expectedSource = RESPONSE_SOURCE_RULES[payload.response];
@@ -71,6 +78,23 @@ export function uploadDangerFrame(httpBase, { sceneId, decisionId, timestampMs, 
       timestamp_ms: timestampMs,
       image_b64: imageB64,
       mime_type: "image/jpeg",
+    }),
+  });
+}
+
+export function uploadDangerVoiceText(httpBase, {
+  sceneId,
+  decisionId,
+  timestampMs,
+  text,
+}) {
+  return request(httpBase, "/api/danger/voice", {
+    method: "POST",
+    body: JSON.stringify({
+      scene_id: sceneId,
+      decision_id: decisionId,
+      timestamp_ms: timestampMs,
+      text,
     }),
   });
 }

@@ -5,6 +5,9 @@ import { createDemoLandmarks, drawSkeleton, mapLandmarks } from "../utils/pose";
 const MP_WASM_URL = "/mediapipe/wasm";
 const POSE_MODEL_URL = "/mediapipe/pose_landmarker_lite.task";
 const MODEL_LOAD_TIMEOUT_MS = 15000;
+const BACKEND_FRAME_TTL_MS = 1600;
+const RENDER_WIDTH = 960;
+const RENDER_HEIGHT = 540;
 
 function withTimeout(promise, ms, label) {
   return Promise.race([
@@ -14,8 +17,6 @@ function withTimeout(promise, ms, label) {
     }),
   ]);
 }
-const RENDER_WIDTH = 960;
-const RENDER_HEIGHT = 540;
 
 function drawCover(context, source, width, height, mirror = true) {
   const sourceWidth = source.videoWidth || source.width;
@@ -54,7 +55,13 @@ function paintTarget(canvas, source) {
   context.drawImage(source, 0, 0, rect.width, rect.height);
 }
 
-export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null }) {
+export function useLiveDemoCamera({
+  deviceViewMode,
+  phoneViewMode,
+  skeletonColor,
+  onLandmarks = null,
+  backendLandmarkFrame = null,
+}) {
   const videoRef = useRef(null);
   const deviceCanvasRef = useRef(null);
   const phoneCanvasRef = useRef(null);
@@ -63,33 +70,49 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
   const renderFrameRef = useRef(0);
   const lastVideoTimeRef = useRef(-1);
   const lastInferenceAtRef = useRef(0);
-  const landmarksRef = useRef([]);
+  const localLandmarksRef = useRef([]);
+  const backendLandmarksRef = useRef([]);
+  const backendReceivedAtRef = useRef(0);
   const maskCanvasRef = useRef(null);
-  const renderCanvasRef = useRef(null);
-  const viewModeRef = useRef(viewMode);
+  const deviceRenderCanvasRef = useRef(null);
+  const phoneRenderCanvasRef = useRef(null);
+  const deviceViewModeRef = useRef(deviceViewMode);
+  const phoneViewModeRef = useRef(phoneViewMode);
   const skeletonColorRef = useRef(skeletonColor);
   const cameraFallbackRef = useRef(false);
   const modelFallbackRef = useRef(false);
   const onLandmarksRef = useRef(onLandmarks);
   const detectedRef = useRef(false);
+  const backendActiveRef = useRef(false);
   const cameraReadyRef = useRef(false);
   const modelReadyRef = useRef(false);
-
-  useEffect(() => {
-    onLandmarksRef.current = onLandmarks;
-  }, [onLandmarks]);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [segmentationReady, setSegmentationReady] = useState(false);
   const [personDetected, setPersonDetected] = useState(false);
+  const [backendSkeletonActive, setBackendSkeletonActive] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [modelError, setModelError] = useState("");
 
   useEffect(() => {
-    viewModeRef.current = viewMode;
+    onLandmarksRef.current = onLandmarks;
+  }, [onLandmarks]);
+
+  useEffect(() => {
+    const landmarks = backendLandmarkFrame?.landmarks;
+    if (!Array.isArray(landmarks) || landmarks.length !== 17) return;
+    backendLandmarksRef.current = landmarks;
+    backendReceivedAtRef.current = Number.isFinite(backendLandmarkFrame.receivedAt)
+      ? backendLandmarkFrame.receivedAt
+      : performance.now();
+  }, [backendLandmarkFrame]);
+
+  useEffect(() => {
+    deviceViewModeRef.current = deviceViewMode;
+    phoneViewModeRef.current = phoneViewMode;
     skeletonColorRef.current = skeletonColor;
-  }, [skeletonColor, viewMode]);
+  }, [deviceViewMode, phoneViewMode, skeletonColor]);
 
   useEffect(() => {
     cameraReadyRef.current = cameraReady;
@@ -122,10 +145,10 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
       setCameraReady(true);
-    } catch (cameraError) {
+    } catch (cameraFailure) {
       cameraFallbackRef.current = true;
       setCameraReady(false);
-      setCameraError(cameraError?.name === "NotAllowedError"
+      setCameraError(cameraFailure?.name === "NotAllowedError"
         ? "摄像头权限被拒绝，请允许权限后重试"
         : "摄像头连接失败，已进入动态骨架演示");
     }
@@ -171,7 +194,6 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
           setModelError("");
         }
       } catch {
-        // 悬挂与失败同等处理：明确降级，不再无限“连接中”。
         modelFallbackRef.current = true;
         if (!cancelled) {
           setModelReady(false);
@@ -192,23 +214,28 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
   }, [startCamera]);
 
   useEffect(() => {
-    const renderCanvas = document.createElement("canvas");
+    const deviceRenderCanvas = document.createElement("canvas");
+    const phoneRenderCanvas = document.createElement("canvas");
     const maskCanvas = document.createElement("canvas");
-    renderCanvasRef.current = renderCanvas;
+    deviceRenderCanvasRef.current = deviceRenderCanvas;
+    phoneRenderCanvasRef.current = phoneRenderCanvas;
     maskCanvasRef.current = maskCanvas;
-    renderCanvas.width = RENDER_WIDTH;
-    renderCanvas.height = RENDER_HEIGHT;
-    const renderContext = renderCanvas.getContext("2d");
+    deviceRenderCanvas.width = RENDER_WIDTH;
+    deviceRenderCanvas.height = RENDER_HEIGHT;
+    phoneRenderCanvas.width = RENDER_WIDTH;
+    phoneRenderCanvas.height = RENDER_HEIGHT;
+    const deviceContext = deviceRenderCanvas.getContext("2d");
+    const phoneContext = phoneRenderCanvas.getContext("2d");
 
     function updateMask(mask) {
       try {
         const values = mask.getAsFloat32Array();
-        const maskCanvas = maskCanvasRef.current;
-        if (maskCanvas.width !== mask.width || maskCanvas.height !== mask.height) {
-          maskCanvas.width = mask.width;
-          maskCanvas.height = mask.height;
+        const target = maskCanvasRef.current;
+        if (target.width !== mask.width || target.height !== mask.height) {
+          target.width = mask.width;
+          target.height = mask.height;
         }
-        const maskContext = maskCanvas.getContext("2d");
+        const maskContext = target.getContext("2d");
         const image = maskContext.createImageData(mask.width, mask.height);
         for (let index = 0; index < values.length; index += 1) {
           const alpha = Math.max(0, Math.min(1, (values[index] - 0.2) / 0.58));
@@ -229,7 +256,7 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
 
     function detect(now) {
       if (cameraFallbackRef.current || modelFallbackRef.current) {
-        landmarksRef.current = createDemoLandmarks(now);
+        localLandmarksRef.current = createDemoLandmarks(now);
         return;
       }
       const video = videoRef.current;
@@ -240,50 +267,64 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
       lastVideoTimeRef.current = video.currentTime;
       try {
         const result = landmarker.detectForVideo(video, now);
-        landmarksRef.current = result?.landmarks?.[0] ? mapLandmarks(result.landmarks[0]) : [];
+        localLandmarksRef.current = result?.landmarks?.[0] ? mapLandmarks(result.landmarks[0]) : [];
         const mask = result?.segmentationMasks?.[0];
         if (mask) updateMask(mask);
-        // Real inference only: scripted fallback skeletons must never feed
-        // the live perception link.
-        if (landmarksRef.current.length === 17) {
-          onLandmarksRef.current?.(landmarksRef.current, now);
+        // 本地真实推理只在 A 明确要求 landmarks 输入时上送；演示骨架永不上送。
+        if (localLandmarksRef.current.length === 17) {
+          onLandmarksRef.current?.(localLandmarksRef.current, now);
         }
       } catch {
-        landmarksRef.current = [];
+        localLandmarksRef.current = [];
       }
     }
 
-    function render(now) {
-      detect(now);
-      renderContext.clearRect(0, 0, RENDER_WIDTH, RENDER_HEIGHT);
-      const video = videoRef.current;
-      const showVideo = viewModeRef.current === "video";
-
+    function drawMode(context, mode, points, video) {
+      context.clearRect(0, 0, RENDER_WIDTH, RENDER_HEIGHT);
+      const showVideo = mode === "video" || mode === "video_skeleton";
       if (showVideo && cameraReadyRef.current && video?.readyState >= 2) {
-        drawCover(renderContext, video, RENDER_WIDTH, RENDER_HEIGHT);
-        if (segmentationReady && maskCanvasRef.current?.width) {
-          renderContext.globalCompositeOperation = "destination-in";
-          drawCover(renderContext, maskCanvasRef.current, RENDER_WIDTH, RENDER_HEIGHT);
-          renderContext.globalCompositeOperation = "source-over";
+        drawCover(context, video, RENDER_WIDTH, RENDER_HEIGHT);
+        if (mode === "video" && segmentationReady && maskCanvasRef.current?.width) {
+          context.globalCompositeOperation = "destination-in";
+          drawCover(context, maskCanvasRef.current, RENDER_WIDTH, RENDER_HEIGHT);
+          context.globalCompositeOperation = "source-over";
         }
-      } else if (!showVideo && landmarksRef.current.length === 17) {
+      }
+      if ((mode === "skeleton" || mode === "video_skeleton") && points.length === 17) {
         drawSkeleton(
-          renderContext,
-          landmarksRef.current,
+          context,
+          points,
           RENDER_WIDTH,
           RENDER_HEIGHT,
           video,
           skeletonColorRef.current,
         );
       }
+    }
 
-      const detected = landmarksRef.current.length === 17;
+    function render(now) {
+      detect(now);
+      const backendActive = backendLandmarksRef.current.length === 17
+        && now - backendReceivedAtRef.current <= BACKEND_FRAME_TTL_MS;
+      const displayLandmarks = backendActive
+        ? backendLandmarksRef.current
+        : localLandmarksRef.current;
+      const video = videoRef.current;
+
+      drawMode(deviceContext, deviceViewModeRef.current, displayLandmarks, video);
+      drawMode(phoneContext, phoneViewModeRef.current, displayLandmarks, video);
+
+      if (backendActive !== backendActiveRef.current) {
+        backendActiveRef.current = backendActive;
+        setBackendSkeletonActive(backendActive);
+      }
+      const detected = displayLandmarks.length === 17;
       if (detected !== detectedRef.current) {
         detectedRef.current = detected;
         setPersonDetected(detected);
       }
-      paintTarget(deviceCanvasRef.current, renderCanvas);
-      paintTarget(phoneCanvasRef.current, renderCanvas);
+      paintTarget(deviceCanvasRef.current, deviceRenderCanvas);
+      paintTarget(phoneCanvasRef.current, phoneRenderCanvas);
       renderFrameRef.current = requestAnimationFrame(render);
     }
 
@@ -299,6 +340,8 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
     modelReady,
     segmentationReady,
     personDetected,
+    backendSkeletonActive,
+    skeletonSource: backendSkeletonActive ? "a_backend" : "c_local",
     error: cameraError || modelError,
     retry: startCamera,
   };

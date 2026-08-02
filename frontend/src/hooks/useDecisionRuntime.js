@@ -6,6 +6,7 @@ import {
 } from "../adapters/perception";
 import {
   getDecisionUrls,
+  resetScene as requestSceneReset,
   startSession,
   stopSession,
   submitResponse,
@@ -58,6 +59,13 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const [history, setHistory] = useState([]);
   const [deadline, setDeadline] = useState(null);
   const [alarm, setAlarm] = useState(null);
+  const [voice, setVoice] = useState({
+    supported: typeof window !== "undefined"
+      && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition),
+    listening: false,
+    transcript: "",
+    error: "",
+  });
 
   const sceneRef = useRef(sceneId);
   const videoRef = useRef(videoElement);
@@ -80,6 +88,12 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         setHistory([]);
         setDeadline(null);
         setAlarm(null);
+        setVoice((current) => ({
+          ...current,
+          listening: false,
+          transcript: "",
+          error: "",
+        }));
       }, 0);
       return () => window.clearTimeout(timer);
     }
@@ -95,6 +109,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     let countdown = { decisionId: null, timer: 0 };
     let vibrateTimer = 0;
     let ring = null;
+    let recognition = null;
 
     function stopAlarmLocal() {
       if (vibrateTimer) {
@@ -186,7 +201,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       if (payload.elder_message && payload.need_dialogue) speakElderMessage(payload.elder_message);
     }
 
-    async function submitFor(target, response, source) {
+    async function submitFor(target, response, source, text = null) {
       try {
         const result = await submitResponse(httpBase, {
           scene_id: target.scene_id || sceneRef.current,
@@ -194,6 +209,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           timestamp_ms: performance.now(),
           response,
           source,
+          ...(text ? { text } : {}),
         });
         if (!disposed) {
           const next = pluckDecision(result);
@@ -294,11 +310,85 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     }
 
     apiRef.current = {
-      respond(response, source) {
+      respond(response, source, text = null) {
         const target = latestDecision;
         if (!target?.decision_id || respondedDecisionIds.has(target.decision_id)) return;
         markResponded(target.decision_id);
-        submitFor(target, response, source);
+        submitFor(target, response, source, text);
+      },
+      replayVoice() {
+        if (latestDecision) playDecisionVoice(latestDecision);
+      },
+      startVoiceReply() {
+        const target = latestDecision;
+        if (!target?.decision_id || respondedDecisionIds.has(target.decision_id)) return;
+        const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!Recognition) {
+          setVoice((current) => ({
+            ...current,
+            supported: false,
+            error: "当前浏览器不支持语音识别",
+          }));
+          return;
+        }
+        try {
+          recognition?.abort?.();
+          recognition = new Recognition();
+          recognition.lang = "zh-CN";
+          recognition.interimResults = false;
+          recognition.continuous = false;
+          recognition.onstart = () => setVoice((current) => ({
+            ...current,
+            supported: true,
+            listening: true,
+            transcript: "",
+            error: "",
+          }));
+          recognition.onerror = (event) => setVoice((current) => ({
+            ...current,
+            listening: false,
+            error: event?.error === "not-allowed" ? "麦克风权限被拒绝" : "语音识别失败",
+          }));
+          recognition.onend = () => setVoice((current) => ({
+            ...current,
+            listening: false,
+          }));
+          recognition.onresult = (event) => {
+            const transcript = Array.from(event.results || [])
+              .map((result) => result?.[0]?.transcript || "")
+              .join("")
+              .trim();
+            setVoice((current) => ({ ...current, transcript, error: "" }));
+            if (!transcript) return;
+            const safe = /(没事|没关系|我很好|不用|安全|还好)/.test(transcript);
+            markResponded(target.decision_id);
+            submitFor(
+              target,
+              safe ? "safe" : "need_help",
+              "user_input",
+              transcript,
+            );
+          };
+          recognition.start();
+        } catch {
+          setVoice((current) => ({
+            ...current,
+            listening: false,
+            error: "无法启动语音识别",
+          }));
+        }
+      },
+      resetScene() {
+        return requestSceneReset(httpBase, sceneRef.current)
+          .then(() => {
+            if (disposed) return;
+            latestDecision = null;
+            clearAlarmState();
+            clearCountdown();
+            setDecision(null);
+            setHistory([]);
+          })
+          .catch(() => {});
       },
       confirmAlarm() {
         const target = latestAlarmDecision || latestDecision;
@@ -325,6 +415,12 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setHistory([]);
       setDeadline(null);
       setAlarm(null);
+      setVoice((current) => ({
+        ...current,
+        listening: false,
+        transcript: "",
+        error: "",
+      }));
       try {
         await pendingSessionStop;
         if (disposed) return;
@@ -359,6 +455,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       if (countdown.timer) window.clearTimeout(countdown.timer);
       countdown = { decisionId: null, timer: 0 };
       stopAlarmLocal();
+      recognition?.abort?.();
       try {
         socket?.close();
       } catch {
@@ -380,6 +477,15 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const dismissAlarm = useCallback(() => {
     apiRef.current.dismissAlarm?.();
   }, []);
+  const replayVoice = useCallback(() => {
+    apiRef.current.replayVoice?.();
+  }, []);
+  const startVoiceReply = useCallback(() => {
+    apiRef.current.startVoiceReply?.();
+  }, []);
+  const resetSceneState = useCallback(() => (
+    apiRef.current.resetScene?.() || Promise.resolve()
+  ), []);
 
   return {
     connection,
@@ -392,5 +498,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     respondNeedHelp,
     confirmAlarm,
     dismissAlarm,
+    replayVoice,
+    startVoiceReply,
+    resetSceneState,
+    voice,
   };
 }

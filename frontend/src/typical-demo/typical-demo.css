@@ -359,6 +359,37 @@ button { font: inherit; }
 .acceptance-result p { margin: 3px 0 0; color: #6f6a65; font-size: 8px; line-height: 1.35; }
 .runtime-inspector .MuiButton-root { margin-top: 7px; border-radius: 10px; font-size: 10px; }
 
+.acceptance-controls {
+  display: grid;
+  grid-template-columns: minmax(230px, .7fr) minmax(0, 2fr) minmax(230px, .8fr);
+  gap: 14px;
+  max-width: 1500px;
+  margin: 14px auto 0;
+  padding: 13px 15px;
+  border: 1px solid #e2ded8;
+  border-radius: 18px;
+  background: rgba(255,255,255,.9);
+  box-shadow: 0 12px 30px rgba(56,45,35,.07);
+}
+.acceptance-control-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.acceptance-control-title > span { display: grid; place-items: center; flex: 0 0 auto; width: 39px; height: 39px; border-radius: 12px; color: #fff; background: var(--accent); }
+.acceptance-control-title svg { width: 21px; height: 21px; }
+.acceptance-control-title small, .acceptance-control-group > small { display: block; color: #9a8171; font-size: 7px; font-weight: 850; letter-spacing: .11em; }
+.acceptance-control-title strong { display: block; margin-top: 2px; font-size: 12px; }
+.acceptance-control-title p { margin: 3px 0 0; color: #817b76; font-size: 8px; line-height: 1.35; }
+.acceptance-control-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.acceptance-control-group { min-width: 0; padding-left: 12px; border-left: 1px solid #eee8e2; }
+.acceptance-control-group > div { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.acceptance-control-group .MuiButton-root { min-height: 31px; padding: 4px 9px; border-radius: 9px; font-size: 8px; white-space: nowrap; }
+.acceptance-control-group .MuiButton-startIcon { margin-right: 4px; }
+.acceptance-control-group .MuiButton-startIcon svg { width: 15px; height: 15px; }
+.acceptance-control-status { display: grid; grid-template-columns: 9px 1fr; align-content: center; column-gap: 7px; min-width: 0; padding: 8px 10px; border-radius: 12px; background: #f6f4f1; }
+.acceptance-control-status > span { width: 8px; height: 8px; border-radius: 50%; background: #aaa39d; }
+.acceptance-control-status > span.is-online { background: #30a845; box-shadow: 0 0 0 4px rgba(48,168,69,.13); }
+.acceptance-control-status b { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.acceptance-control-status p, .acceptance-control-status em { grid-column: 2; margin: 2px 0 0; overflow: hidden; color: #77716c; font-size: 7px; font-style: normal; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.acceptance-control-status em { color: #a05a28; font-weight: 700; }
+
 .runtime-debug { position: fixed; z-index: 120; left: 18px; bottom: 18px; }
 .runtime-debug-trigger {
   display: flex;
@@ -426,6 +457,11 @@ button { font: inherit; }
 .phone-header b { font-size: 16px; }.phone-header span { font-size: 14px; }
 .phone-header i { margin-left: auto; width: 15px; height: 22px; border: 2px solid var(--accent); border-radius: 4px; }
 .phone-shell .scene-viewport { width: calc(100% - 20px); margin: 0 10px; border-radius: 12px; }
+.family-view-control { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 7px 10px 0; }
+.family-view-control .MuiButton-root { min-height: 27px; padding: 3px 8px; border-radius: 8px; font-size: 7px; white-space: nowrap; }
+.family-view-control .MuiButton-startIcon { margin-right: 3px; }
+.family-view-control .MuiButton-startIcon svg { width: 13px; height: 13px; }
+.family-view-control > small { color: #8a847e; font-size: 6px; line-height: 1.2; text-align: right; }
 .scene-viewport.is-compact .viewport-pill { min-height: 20px; padding: 0 5px; gap: 3px; border-radius: 7px; font-size: 6px; }
 .scene-viewport.is-compact .viewport-pill svg { width: 9px; height: 9px; }
 .scene-viewport.is-compact .live-dot { width: 4px; height: 4px; }
@@ -491,6 +527,9 @@ button { font: inherit; }
   .device-panel > .scene-viewport { height: auto; aspect-ratio: 16 / 9; }
   .sync-rail { flex-direction: row; justify-content: center; }.sync-rail i { width: 90px; height: 2px; }.sync-rail b { margin: 0 0 0 8px; writing-mode: horizontal-tb; }
   .phone-shell { width: min(88vw, 330px); }.demo-footer { flex-wrap: wrap; gap: 8px 16px; }
+  .acceptance-controls { grid-template-columns: 1fr; }
+  .acceptance-control-groups { grid-template-columns: 1fr; }
+  .acceptance-control-group { padding-left: 0; border-left: 0; border-top: 1px solid #eee8e2; padding-top: 8px; }
 }
 
 @media (max-width: 560px) {
@@ -502,6 +541,8 @@ button { font: inherit; }
   .device-status { grid-template-columns: 40px 1fr; }.status-symbol { width: 38px; height: 38px; }.processing-label { display: none; }
   .fall-controls, .interaction-card { align-items: flex-start; flex-direction: column; }.fall-controls > div:first-child { max-width: none; }.control-actions { width: 100%; }.control-actions .MuiButton-root { width: 100%; }
   .runtime-debug { left: 10px; bottom: 10px; }.runtime-debug-panel { width: calc(100vw - 20px); max-height: 72vh; }.debug-grid { grid-template-columns: 1fr; }.debug-value.is-wide { grid-column: auto; }
+  .acceptance-control-group > div { align-items: stretch; flex-direction: column; }
+  .acceptance-control-group .MuiButton-root { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
