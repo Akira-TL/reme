@@ -486,6 +486,17 @@ button {
   animation: danger-toast-in 220ms var(--ease) both;
 }
 
+/* 老人应答回执（语音转写原话）：告警卡与解除提示里的引述行。 */
+.danger-reply-quote {
+  display: block;
+  margin: 6px 0 0;
+  font-size: clamp(10px, 2.8vw, 12px);
+  opacity: 0.88;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 @keyframes danger-rise {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }

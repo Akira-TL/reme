@@ -68,7 +68,8 @@ def _post(port: int, path: str, payload: dict[str, Any]) -> tuple[int, dict[str,
         connection.request(
             "POST",
             path,
-            body=json.dumps(payload, ensure_ascii=False),
+            # 显式 UTF-8：http.client 对 str body 走 latin-1，中文会炸。
+            body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
         response = connection.getresponse()
@@ -325,6 +326,53 @@ def _care_decision() -> CareDecision:
         demo_mode=DemoMode.LIVE,
         response_timeout_ms=8000,
     )
+
+
+def test_accepted_reply_streams_as_interaction_response_before_next_decision() -> None:
+    # 老人的应答是对话记录的另一半：被接受的 InteractionResponse（含语音
+    # 转写/文字）必须以 §4 的 interaction_response 信封上线，且先于它引发
+    # 的下一条决策，保证各页面看到的对话顺序正确。
+    os.environ["REME_DEMO_QUIET"] = "1"
+    server, thread, hub = _build_runtime_server()
+    try:
+        port = server.server_address[1]
+        _post(port, "/api/session", _session_request_payload())
+        client = _WsClient(port)
+        try:
+            _post(port, "/api/events", _posture_envelope(sequence=1, timestamp_ms=41000.0))
+            check_in = client.recv_json()
+            assert check_in["event_type"] == "care_decision"
+
+            status, _ = _post(
+                port,
+                "/api/response",
+                {
+                    "schema_version": "reme-interaction-response/v0-experiment",
+                    "scene_id": SCENE_ID,
+                    "decision_id": check_in["payload"]["decision_id"],
+                    "timestamp_ms": 42000.0,
+                    "response": "safe",
+                    "source": "user_input",
+                    "demo_mode": "live",
+                    "text": "我没事，刚坐下歇会儿",
+                },
+            )
+            assert status == 200
+
+            reply = client.recv_json()
+            assert reply["event_type"] == "interaction_response"
+            assert reply["sequence"] == check_in["sequence"] + 1
+            assert reply["payload"]["text"] == "我没事，刚坐下歇会儿"
+            assert reply["payload"]["source"] == "user_input"
+
+            resolved = client.recv_json()
+            assert resolved["event_type"] == "care_decision"
+            assert resolved["sequence"] == reply["sequence"] + 1
+            assert resolved["payload"]["state"] == "resolved"
+        finally:
+            client.close()
+    finally:
+        _stop(server, thread, hub)
 
 
 def test_publisher_stores_the_snapshot_before_broadcasting() -> None:

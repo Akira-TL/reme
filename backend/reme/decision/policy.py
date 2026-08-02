@@ -92,6 +92,8 @@ class DecisionPublisher(Protocol):
 
     def publish_decision(self, decision: CareDecision) -> None: ...
 
+    def publish_response(self, response: InteractionResponse) -> None: ...
+
 
 class MimoDecisionClient(Protocol):
     """One MiMo-compatible cognition backend (live or scripted)."""
@@ -423,6 +425,11 @@ class DecisionService:
                 outcome = self._claim_mimo_or_reuse(runtime)
                 if outcome is None:
                     snapshot = (runtime.epoch, runtime.session)
+        # The accepted reply is a record of its own (rejects raised above):
+        # audited with the transcript, and streamed as an interaction_response
+        # envelope (§4) so every connected page can show what the elder said —
+        # published before the consequent decision to keep dialogue order.
+        self._record_response(response)
         if outcome is not None:
             self._publish(outcome, previous_id)
             return outcome
@@ -552,6 +559,27 @@ class DecisionService:
         if runtime.pending is None:
             raise DecisionRejectedError("no_pending_decision")
         return runtime.pending
+
+    def _record_response(self, response: InteractionResponse) -> None:
+        """Audit and stream one accepted reply, best-effort on both legs.
+
+        The transcript rides in the audit note — before this, an elder's
+        spoken words survived nowhere once the intent was classified.
+        """
+
+        text = "" if response.text is None else f" text={response.text}"
+        self._audit_event(
+            kind="response",
+            scene_id=response.scene_id,
+            decision_id=response.decision_id,
+            note=f"response={response.response.value} source={response.source.value}{text}",
+        )
+        if self._publisher is None:
+            return
+        try:
+            self._publisher.publish_response(response)
+        except Exception as exc:  # noqa: BLE001 - stream must never break decisions
+            print(f"warning: response publish failed: {exc}")
 
     def _publish(self, decision: CareDecision, previous_id: str | None) -> None:
         """Push a newly emitted decision to the runtime stream, best-effort.

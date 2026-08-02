@@ -17,7 +17,7 @@ import {
   getSharedAudioContext,
   playAssetUrl,
 } from "../utils/audioEngine";
-import { recordWav } from "../utils/wavRecorder";
+import { recordVoiceReply } from "../utils/wavRecorder";
 
 function pluckDecision(payload) {
   if (payload?.decision_id) return payload;
@@ -59,6 +59,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const [reason, setReason] = useState("");
   const [decision, setDecision] = useState(null);
   const [history, setHistory] = useState([]);
+  const [replies, setReplies] = useState([]);
   const [deadline, setDeadline] = useState(null);
   const [alarm, setAlarm] = useState(null);
 
@@ -97,6 +98,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         setReason("");
         setDecision(null);
         setHistory([]);
+        setReplies([]);
         setDeadline(null);
         setAlarm(null);
       }, 0);
@@ -114,6 +116,43 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     let countdown = { decisionId: null, timer: 0 };
     let vibrateTimer = 0;
     let ring = null;
+    let voiceCapture = null; // {decisionId, recorder, cancelled, pending}
+
+    function stopVoiceCapture(cancel) {
+      const capture = voiceCapture;
+      if (!capture) return;
+      if (cancel) {
+        // 按钮/新决策已接管：录到一半的音频不再上传。
+        capture.cancelled = true;
+        voiceCapture = null;
+      }
+      capture.recorder.stop();
+    }
+
+    function startVoiceCapture(payload) {
+      const capture = {
+        decisionId: payload.decision_id,
+        recorder: recordVoiceReply(),
+        cancelled: false,
+        pending: true,
+      };
+      voiceCapture = capture;
+      capture.recorder.promise
+        .then((audioB64) => {
+          if (!audioB64 || capture.cancelled || disposed) return undefined;
+          return uploadDangerVoice(httpBase, {
+            sceneId: payload.scene_id || sceneRef.current,
+            decisionId: payload.decision_id,
+            timestampMs: performance.now(),
+            audioB64,
+          });
+        })
+        .catch(() => {})
+        .finally(() => {
+          capture.pending = false;
+          if (voiceCapture === capture) voiceCapture = null;
+        });
+    }
 
     function stopAlarmLocal() {
       if (vibrateTimer) {
@@ -235,6 +274,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     function markResponded(decisionId) {
       respondedDecisionIds.add(decisionId);
       if (countdown.decisionId === decisionId) clearCountdown();
+      // 按钮已回答：进行中的录音作废，麦克风立即释放。
+      if (voiceCapture?.decisionId === decisionId) stopVoiceCapture(true);
     }
 
     function ingestDecision(payload) {
@@ -261,6 +302,19 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             countdown = { decisionId: null, timer: 0 };
             setDeadline(null);
             if (respondedDecisionIds.has(decisionId)) return;
+            // 老人正在说话（或语音已在上传/识别中）：本地不抢答超时，
+            // 让语音结果收尾；链路失败时 B 侧倒计时兜底网（+2s 宽限）
+            // 仍会升级，"沉默必须升级"的安全不因此松动。
+            const capture = voiceCapture;
+            if (
+              capture &&
+              capture.decisionId === decisionId &&
+              capture.pending &&
+              capture.recorder.speechActive()
+            ) {
+              return;
+            }
+            stopVoiceCapture(true);
             submitFor(payload, "none", "timeout");
           }, timeoutMs),
         };
@@ -278,16 +332,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           }).catch(() => {});
         }
       }
-      if (channels.includes("voice")) {
-        recordWav({ durationMs: 4000, sampleRate: 16000 })
-          .then((audioB64) => uploadDangerVoice(httpBase, {
-            sceneId: payload.scene_id || sceneRef.current,
-            decisionId: payload.decision_id,
-            timestampMs: performance.now(),
-            audioB64,
-          }))
-          .catch(() => {});
-      }
+      // 旧决策的录音一律作废（新决策若带 voice 通道会重新开麦）。
+      stopVoiceCapture(true);
+      if (channels.includes("voice")) startVoiceCapture(payload);
 
       if (payload.alarm) {
         latestAlarmDecision = payload;
@@ -314,7 +361,16 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         return;
       }
       if (frame.schema_version !== RUNTIME_EVENT_SCHEMA) return;
-      if (frame.session_id !== sessionId || frame.event_type !== "care_decision") return;
+      if (frame.session_id !== sessionId) return;
+      if (frame.event_type === "interaction_response") {
+        // B 回执的老人应答（含语音转写）：对话记录的另一半。
+        const reply = frame.payload;
+        if (reply && typeof reply === "object" && reply.decision_id) {
+          setReplies((current) => [reply, ...current].slice(0, 20));
+        }
+        return;
+      }
+      if (frame.event_type !== "care_decision") return;
       if (!frame.payload || typeof frame.payload !== "object") return;
       ingestDecision(frame.payload);
     }
@@ -349,6 +405,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setReason("");
       setDecision(null);
       setHistory([]);
+      setReplies([]);
       setDeadline(null);
       setAlarm(null);
       try {
@@ -386,6 +443,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       abortController.abort();
       if (countdown.timer) window.clearTimeout(countdown.timer);
       countdown = { decisionId: null, timer: 0 };
+      stopVoiceCapture(true);
       stopAlarmLocal();
       try {
         socket?.close();
@@ -414,6 +472,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     reason,
     decision,
     history,
+    replies,
     deadline,
     alarm,
     respondSafe,

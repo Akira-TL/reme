@@ -687,9 +687,13 @@ def test_tick_during_inflight_mimo_reuses_instead_of_stacking(tmp_path: Path) ->
     class _CapturePublisher:
         def __init__(self) -> None:
             self.published: list[str] = []
+            self.responses: list[InteractionResponse] = []
 
         def publish_decision(self, decision: CareDecision) -> None:
             self.published.append(decision.decision_id)
+
+        def publish_response(self, response: InteractionResponse) -> None:
+            self.responses.append(response)
 
     publisher = _CapturePublisher()
     service = DecisionService(

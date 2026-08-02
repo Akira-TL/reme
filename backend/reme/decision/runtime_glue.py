@@ -82,6 +82,31 @@ class RuntimeDecisionPublisher:
             self._latest_event = payload
             self._hub.broadcast_json(payload)
 
+    def publish_response(self, response: InteractionResponse) -> None:
+        """Envelope one accepted reply as an interaction_response event (§4).
+
+        Same ordered step as decisions (shared lock + session sequence) so a
+        reply and its consequent decision keep dialogue order on the wire.
+        Deliberately NOT stored as the replay snapshot: late joiners reconcile
+        on the latest decision; replies are transient dialogue lines.
+        """
+
+        with self._order_lock:
+            session_id = self._registry.active_session_id()
+            if session_id is None:
+                return
+            try:
+                sequence = self._registry.next_sequence(session_id)
+            except SessionRegistryError:
+                return
+            event = RuntimeEvent(
+                session_id=session_id,
+                sequence=sequence,
+                event_type=RuntimeEventType.INTERACTION_RESPONSE,
+                payload=response.to_payload(),
+            )
+            self._hub.broadcast_json(event.to_payload())
+
     def latest_decision_event(self) -> dict[str, Any] | None:
         """The active session's newest care_decision envelope, or None.
 
@@ -147,6 +172,10 @@ class EscalationBackstopPublisher:
             self._inner.publish_decision(decision)
         finally:
             self._arm(decision)
+
+    def publish_response(self, response: InteractionResponse) -> None:
+        # Replies never carry a countdown; nothing to arm.
+        self._inner.publish_response(response)
 
     def _arm(self, decision: CareDecision) -> None:
         if self._service is None:

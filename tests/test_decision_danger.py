@@ -126,9 +126,13 @@ def _fall_scenes(tmp_path: Path) -> dict[str, Any]:
 class _Publisher:
     def __init__(self) -> None:
         self.decisions: list[CareDecision] = []
+        self.responses: list[InteractionResponse] = []
 
     def publish_decision(self, decision: CareDecision) -> None:
         self.decisions.append(decision)
+
+    def publish_response(self, response: InteractionResponse) -> None:
+        self.responses.append(response)
 
 
 class _FakeConfirmClient:
@@ -760,6 +764,34 @@ def test_voice_validation_rejects_ambiguous_payloads(tmp_path: Path) -> None:
             timestamp_ms=14000.0,
             text="   ",
         )
+
+
+def test_voice_audio_has_no_size_cap_and_reply_is_recorded(tmp_path: Path) -> None:
+    # 用户定调 2026-08-02：老人的回话不因时长被掐断——语音路径不设字节
+    # 上限（帧路径的 2MB 防护不变），且被接受的应答必须作为回执发布
+    # （含转写原话），而不是分类完就丢。
+    publisher = _Publisher()
+    service = _service(tmp_path, publisher)
+    check_in = _open_fall_check_in(service)
+    client = _FakeConfirmClient([_voice_reply("safe", "我没事，就是坐下歇一会儿")])
+    controller = _controller(service, client)
+
+    long_clip = b"RIFF" + b"\x00" * 3_000_000  # 远超帧路径的 2MB 上限
+    controller.submit_voice(
+        scene_id="fall_demo_01",
+        decision_id=check_in.decision_id,
+        timestamp_ms=15000.0,
+        audio_b64=_b64(long_clip),
+        audio_format="wav",
+    )
+
+    assert publisher.decisions[-1].state is DecisionState.RESOLVED
+    assert publisher.responses, "接受的语音应答必须发布回执"
+    reply = publisher.responses[-1]
+    assert reply.decision_id == check_in.decision_id
+    assert reply.source is ResponseSource.VOICE
+    assert reply.response is ResponseValue.SAFE
+    assert reply.text == "我没事，就是坐下歇一会儿"
 
 
 def test_voice_channel_not_offered_on_concern(tmp_path: Path) -> None:

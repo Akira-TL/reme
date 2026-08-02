@@ -36,9 +36,19 @@ function CountdownBar({ deadline }) {
   );
 }
 
+const REPLY_SOURCE_LABELS = {
+  voice: "语音回应",
+  user_input: "按键回应",
+  timeout: "无回应",
+};
+
 export function DangerLayer({ decisionRuntime }) {
-  const { decision, deadline, alarm, respondSafe, respondNeedHelp, confirmAlarm } = decisionRuntime;
+  const {
+    decision, deadline, alarm, replies, respondSafe, respondNeedHelp, confirmAlarm,
+  } = decisionRuntime;
   const [resolvedToast, setResolvedToast] = useState(null);
+  // 最近一条老人应答（B 回执，语音带转写原话）。
+  const lastReply = replies?.[0] || null;
 
   useEffect(() => {
     if (decision?.state !== "resolved") return undefined;
@@ -81,6 +91,11 @@ export function DangerLayer({ decisionRuntime }) {
           <h2 className="danger-alarm-message">
             {alarm.decision?.family_notification || "检测到紧急状况，请立即确认长辈状态"}
           </h2>
+          {lastReply?.text && (
+            <p className="danger-reply-quote">
+              {REPLY_SOURCE_LABELS[lastReply.source] || "回应"}：“{lastReply.text}”
+            </p>
+          )}
           <button type="button" className="danger-button danger-button-ack" onClick={confirmAlarm}>
             已收到，马上处理
           </button>
@@ -90,6 +105,11 @@ export function DangerLayer({ decisionRuntime }) {
       {resolvedToast && (
         <div className="danger-resolved-toast" role="status">
           {resolvedToast.elder_message || resolvedToast.family_notification || "状态已确认，本次关注解除"}
+          {lastReply?.text && lastReply.decision_id && (
+            <span className="danger-reply-quote">
+              {REPLY_SOURCE_LABELS[lastReply.source] || "回应"}：“{lastReply.text}”
+            </span>
+          )}
         </div>
       )}
     </>

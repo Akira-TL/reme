@@ -113,6 +113,9 @@ class DangerConfig:
     max_vision_calls: int = 2
     max_voice_calls: int = 3
     max_voice_unclear: int = 1
+    # Frame uploads only — voice is exempt from the size gate (an elder's
+    # reply must not be cut off by a byte budget; C ends recording on
+    # silence, not on a clock).
     max_media_bytes: int = 2_000_000
     # 跌倒问询语境（confirm_channels 只出现在跌倒事件）下，听不清的
     # 发声本身就是险情信号——呻吟、含糊、杂音一律按求救升级，而不是
@@ -206,7 +209,9 @@ class DangerConfirmController:
                 raise DangerRejectedError(REJECT_CONFIRM_UNAVAILABLE)
             if audio_format not in SUPPORTED_AUDIO_FORMATS:
                 raise DangerRejectedError(REJECT_BAD_MEDIA)
-            audio_bytes = self._decode_media(audio_b64)
+            # 语音不设字节上限（用户定调 2026-08-02）：老人的回话不因时长
+            # 被掐断，录音长度由 C 端的静音检测收尾；帧路径的 2MB 防护不变。
+            audio_bytes = self._decode_media(audio_b64, limit=None)
             magic, offset = _AUDIO_MAGIC[audio_format]
             if magic and audio_bytes[offset : offset + len(magic)] != magic:
                 raise DangerRejectedError(REJECT_BAD_MEDIA)
@@ -240,15 +245,22 @@ class DangerConfirmController:
             raise DangerRejectedError(REJECT_CHANNEL_NOT_OFFERED)
         return target_id
 
-    def _decode_media(self, encoded: str) -> bytes:
+    def _decode_media(self, encoded: str, *, limit: int | None = 0) -> bytes:
+        """Decode base64 media; ``limit=None`` lifts the size gate (voice).
+
+        The sentinel default 0 means "use the configured frame cap" so
+        existing callers keep their behaviour without repeating the config.
+        """
+
+        cap = self._config.max_media_bytes if limit == 0 else limit
         # 4/3 expansion plus padding slack: reject before decoding buys DoS room.
-        if len(encoded) > self._config.max_media_bytes * 4 // 3 + 8:
+        if cap is not None and len(encoded) > cap * 4 // 3 + 8:
             raise DangerRejectedError(REJECT_BAD_MEDIA)
         try:
             payload = base64.b64decode(encoded, validate=True)
         except (binascii.Error, ValueError) as exc:
             raise DangerRejectedError(REJECT_BAD_MEDIA) from exc
-        if not payload or len(payload) > self._config.max_media_bytes:
+        if not payload or (cap is not None and len(payload) > cap):
             raise DangerRejectedError(REJECT_BAD_MEDIA)
         return payload
 

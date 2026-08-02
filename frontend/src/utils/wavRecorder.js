@@ -62,38 +62,86 @@ function toBase64(bytes) {
   return btoa(binary);
 }
 
-// 录一段单声道 WAV 并返回 base64。用 ScriptProcessorNode（兼容面最广），不要换成
-// MediaRecorder：其 webm/ogg 输出 B 服务不接收。权限拒绝/环境不支持时抛错，由调用方静默处理。
-export async function recordWav({ durationMs = 4000, sampleRate = 16000 } = {}) {
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
-  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextCtor) throw new Error("当前浏览器不支持 WebAudio 录音");
+// 录单声道 WAV 并返回 base64。用 ScriptProcessorNode（兼容面最广），不要换成
+// MediaRecorder：其 webm/ogg 输出 B 服务不接收。权限拒绝/环境不支持时 promise
+// reject，由调用方静默处理。
+//
+// 录音没有固定时长上限（老人的回话不被时钟掐断）：检测到说话后靠尾部静音
+// （silenceMs）收尾；一直没人说话时由 maxLeadinSilenceMs 或调用方 stop() 兜底，
+// 此时（以及 stop 于开口前）resolve null 表示没有可上传的内容。
+export function recordVoiceReply({
+  sampleRate = 16000,
+  silenceMs = 1400,
+  speechRms = 0.012,
+  maxLeadinSilenceMs = 15000,
+} = {}) {
+  let speechDetected = false;
+  let stopRequested = false;
+  let finish = null;
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const context = new AudioContextCtor();
-  try {
-    await context.resume().catch(() => {});
-    const source = context.createMediaStreamSource(stream);
-    const processor = context.createScriptProcessor(4096, 1, 1);
-    const chunks = [];
-    processor.onaudioprocess = (event) => {
-      chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
-    };
-    source.connect(processor);
-    processor.connect(context.destination);
+  const promise = (async () => {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) throw new Error("当前浏览器不支持 WebAudio 录音");
 
-    await new Promise((resolve) => window.setTimeout(resolve, durationMs));
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const context = new AudioContextCtor();
+    try {
+      await context.resume().catch(() => {});
+      const source = context.createMediaStreamSource(stream);
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      const chunks = [];
+      const chunkMs = (4096 / context.sampleRate) * 1000;
+      let trailingSilenceMs = 0;
+      let leadinMs = 0;
 
-    processor.onaudioprocess = null;
-    source.disconnect();
-    processor.disconnect();
+      await new Promise((resolve) => {
+        finish = resolve;
+        if (stopRequested) resolve();
+        processor.onaudioprocess = (event) => {
+          const data = new Float32Array(event.inputBuffer.getChannelData(0));
+          chunks.push(data);
+          let sum = 0;
+          for (let i = 0; i < data.length; i += 1) sum += data[i] * data[i];
+          const rms = Math.sqrt(sum / data.length);
+          if (rms >= speechRms) {
+            speechDetected = true;
+            trailingSilenceMs = 0;
+          } else if (speechDetected) {
+            trailingSilenceMs += chunkMs;
+            if (trailingSilenceMs >= silenceMs) resolve();
+          } else {
+            leadinMs += chunkMs;
+            if (leadinMs >= maxLeadinSilenceMs) resolve();
+          }
+          if (stopRequested) resolve();
+        };
+        source.connect(processor);
+        processor.connect(context.destination);
+      });
 
-    const recorded = mergeChunks(chunks);
-    if (!recorded.length) throw new Error("未采集到音频数据");
-    const resampled = resampleLinear(recorded, context.sampleRate, sampleRate);
-    return toBase64(encodeWav(resampled, sampleRate));
-  } finally {
-    stream.getTracks().forEach((track) => track.stop());
-    context.close().catch(() => {});
-  }
+      processor.onaudioprocess = null;
+      source.disconnect();
+      processor.disconnect();
+
+      if (!speechDetected) return null;
+      const recorded = mergeChunks(chunks);
+      if (!recorded.length) return null;
+      const resampled = resampleLinear(recorded, context.sampleRate, sampleRate);
+      return toBase64(encodeWav(resampled, sampleRate));
+    } finally {
+      stream.getTracks().forEach((track) => track.stop());
+      context.close().catch(() => {});
+    }
+  })();
+
+  return {
+    promise,
+    stop() {
+      stopRequested = true;
+      if (finish) finish();
+    },
+    // 已听到人声（用于倒计时豁免判断：说话中不触发本地超时上报）。
+    speechActive: () => speechDetected,
+  };
 }
