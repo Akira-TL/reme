@@ -117,6 +117,49 @@ class RuntimeSessionRequest:
             return DecisionMode.LIVE
         return DecisionMode.RECORDED
 
+    @classmethod
+    def from_payload(cls, payload: object) -> RuntimeSessionRequest:
+        """Validate and construct C's JSON runtime request."""
+
+        if not isinstance(payload, dict):
+            raise RuntimeSessionError("runtime session request must be an object")
+        profile_value = payload.get("profile")
+        if not isinstance(profile_value, str):
+            raise RuntimeSessionError("profile must be live_camera or recorded_video")
+        try:
+            profile = ModeProfile(profile_value)
+        except ValueError as exc:
+            raise RuntimeSessionError("profile must be live_camera or recorded_video") from exc
+        manifest_value = payload.get("manifest_path")
+        if manifest_value is not None and not isinstance(manifest_value, str):
+            raise RuntimeSessionError("manifest_path must be a string or null")
+        request = cls(
+            session_id=_payload_string(payload, "session_id"),
+            profile=profile,
+            scene_id=_payload_string(payload, "scene_id"),
+            camera_id=_optional_payload_string(payload, "camera_id"),
+            manifest_path=Path(manifest_value) if manifest_value else None,
+            schema_version=str(
+                payload.get(
+                    "schema_version", "reme-runtime-session-request/v0-experiment"
+                )
+            ),
+        )
+        if request.schema_version != "reme-runtime-session-request/v0-experiment":
+            raise RuntimeSessionError("unsupported runtime session request schema_version")
+        derived = {
+            "input_source": request.input_source.value,
+            "perception_mode": request.perception_mode.value,
+            "decision_mode": request.decision_mode.value,
+        }
+        for field_name, expected in derived.items():
+            actual = payload.get(field_name)
+            if actual is not None and actual != expected:
+                raise RuntimeSessionError(
+                    f"{field_name} must be {expected!r} for profile {profile.value!r}"
+                )
+        return request
+
     def to_payload(self) -> dict[str, Any]:
         """Return the JSON-serializable control payload sent by C."""
 
@@ -238,3 +281,19 @@ def ensure_new_session(
 def _require_identifier(value: str, field_name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise RuntimeSessionError(f"{field_name} must be a non-empty string")
+
+
+def _payload_string(payload: dict[str, Any], field_name: str) -> str:
+    value = payload.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeSessionError(f"{field_name} must be a non-empty string")
+    return value.strip()
+
+
+def _optional_payload_string(payload: dict[str, Any], field_name: str) -> str | None:
+    value = payload.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeSessionError(f"{field_name} must be a non-empty string or null")
+    return value.strip()

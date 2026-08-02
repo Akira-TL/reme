@@ -24,7 +24,8 @@ from reme.pose.runtime import RuntimeEvent
 
 DEFAULT_MOVENET_MODEL = Path("models/movenet/movenet_lightning_f16_v4.tflite")
 DEFAULT_POSTURE_MODEL = Path(
-    "artifacts/pose-classification/models/posture-softmax-v3/model.json"
+    "artifacts/pose-classification/models/posture-sweep-20260801/"
+    "seed-42-lr-0.04/model.json"
 )
 DEFAULT_VENDOR_DIR = Path(
     "artifacts/pose-classification/scenes/video_148703662/vendor"
