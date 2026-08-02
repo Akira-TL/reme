@@ -207,6 +207,51 @@ class TestLandmarkFrameEngine:
         engine = LandmarkFrameEngine(session_id=SESSION, scene_id=SCENE, publish=published.append)
         return engine, published
 
+    def test_fall_after_long_standing_still_fires(self) -> None:
+        """Live-lane pin: a real person stands for many seconds before falling.
+
+        The conservative profile can never emit fall_like once the rolling
+        window exceeds fall_max_duration_ms; the live-lane config bounds the
+        buffer so a fall after 8s of standing still classifies.
+        """
+
+        engine, published = self._session()
+        index, timestamp = 0, 0.0
+        for _ in range(80):
+            engine.handle_text(
+                _landmark_message(_standing(), frame_index=index, timestamp_ms=timestamp)
+            )
+            index += 1
+            timestamp += 100.0
+        standing, lying = _standing(), _lying()
+        for step in range(1, 5):
+            blend = step / 4
+            coords = {
+                name: (
+                    standing[name][0] + (lying[name][0] - standing[name][0]) * blend,
+                    standing[name][1] + (lying[name][1] - standing[name][1]) * blend,
+                )
+                for name in standing
+            }
+            engine.handle_text(
+                _landmark_message(coords, frame_index=index, timestamp_ms=timestamp)
+            )
+            index += 1
+            timestamp += 100.0
+        for _ in range(40):
+            engine.handle_text(
+                _landmark_message(_lying(), frame_index=index, timestamp_ms=timestamp)
+            )
+            index += 1
+            timestamp += 100.0
+        falls = [
+            event.payload
+            for event in published
+            if event.event_type is RuntimeEventType.TRANSITION_EVENT
+            and event.payload["transition"] == "fall_like_transition"
+        ]
+        assert falls, "a fall after prolonged standing must still classify on the live lane"
+
     def test_fall_stream_emits_posture_and_fall_transition(self) -> None:
         engine, published = self._session()
         for message in _fall_stream():

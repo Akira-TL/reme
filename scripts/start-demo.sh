@@ -13,7 +13,8 @@ command -v npm >/dev/null || { echo "缺 npm：先安装 Node.js（brew install 
 
 # ---------- 1. 依赖 ----------
 say_step "第一步：安装/同步依赖"
-uv sync --quiet && echo "后端依赖 OK（uv sync）"
+# --inexact：不剥离 venv 里已有的 dev/pose 附加依赖（uv sync 默认会精确同步并删掉它们）
+uv sync --inexact --quiet && echo "后端依赖 OK（uv sync）"
 if [ ! -d frontend/node_modules ]; then
   (cd frontend && npm install)
 else

@@ -77,6 +77,33 @@ KEYPOINT_NAMES = (
 
 POSTURE_LABELS = ("standing", "sitting", "lying", "bending_or_crouching", "unknown")
 
+# Live-lane transition tuning.  The conservative default profile classifies
+# over the whole 3.2s sample buffer while requiring the evidence window to
+# stay under fall_max_duration_ms=1400 — after a few seconds of continuous
+# standing in front of a live camera every real fall therefore degrades to
+# normal/uncertain (the window can never be short again).  The live lane
+# bounds the buffer itself to the fall-duration budget and eases peak speed
+# for ~10fps browser landmark streams.  Sensitivity-first is the product
+# call for the danger link (误报可接受，漏报不可接受); the recorded-clip
+# paths keep the conservative defaults untouched.
+LIVE_TRANSITION_CONFIG = TransitionDetectorConfig(
+    window_ms=2000.0,
+    fall_max_duration_ms=2000.0,
+    fall_peak_speed=0.5,
+    # Classify only after the smoothed posture has had time to flip to
+    # lying: the emitted verdict clears the sample buffer, so a first shot
+    # wasted on posture-attachment lag can never be retried with the
+    # pre-fall standing context still in the window.  +250ms is noise
+    # against the 8s countdown budget.
+    settle_ms=450.0,
+    cooldown_ms=700.0,
+)
+
+# Companion posture cadence for the live lane: 10Hz output with a 2-frame
+# vote flips to lying within ~200ms of landing, so the post-fall window
+# segment carries lying attachments by the time the detector judges.
+LIVE_POSTURE_CONFIG = PostureRuntimeConfig(output_hz=10.0, smoothing_window=2)
+
 
 class BrowserInputError(ValueError):
     """Raised when a pushed input message violates the wire contract."""
@@ -247,10 +274,10 @@ class LandmarkFrameEngine:
         self._tracker = RealtimePostureTracker(
             session_id=session_id,
             predictor=self._predictor,
-            config=posture_config or PostureRuntimeConfig(),
+            config=posture_config or LIVE_POSTURE_CONFIG,
         )
         self._detector = TransitionDetector(
-            session_id=session_id, config=transition_config or TransitionDetectorConfig()
+            session_id=session_id, config=transition_config or LIVE_TRANSITION_CONFIG
         )
         self._lock = threading.Lock()
         self._sequence = 0
