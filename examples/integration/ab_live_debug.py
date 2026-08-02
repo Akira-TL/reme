@@ -17,6 +17,9 @@
   # 「站立→跌倒→躺地」：规则跌倒问询 → 8s 无回应 → 规则家属升级（危险链路全程不等 MiMo）
   .venv/bin/python examples/integration/ab_live_debug.py
 
+  # 长站立前奏（2s）后跌倒：回归验证运动锚定复评（缓冲常驻时仍产出 fall_like）
+  .venv/bin/python examples/integration/ab_live_debug.py --fall-prelude 2.0
+
   # 「坐姿静止 30s」关切链路，MiMo 三次出场：撰写问询（COMPOSE_CHECK_IN）→
   # 解读老人主诉（need_help+text → INTERPRET_RESPONSE）→ 同意后撰写家属卡（COMPOSE_CARD）
   .venv/bin/python examples/integration/ab_live_debug.py --scenario concern \
@@ -268,17 +271,19 @@ def _blend(
 Pose = dict[str, tuple[float, float]]
 
 
-def _scenario_poses(scenario: str, duration_s: float, fps: float) -> list[Pose]:
+def _scenario_poses(
+    scenario: str, duration_s: float, fps: float, fall_prelude_s: float = 0.6
+) -> list[Pose]:
     if scenario == "still":
         return [_standing()] * max(1, round(duration_s * fps))
     if scenario == "concern":
         # 关切触发条件（guardrails 默认值）：sitting + 静止 ≥30s。
         return [_sitting()] * round(31.0 * fps)
-    # 站立基线必须短：转变检测器的 short_window 信号要求评估窗口 ≤1400ms，
-    # 而滑窗从场景开始（或上一事件清空）起累积，站立前奏过长会把窗口撑破，
-    # 跌倒只能判成 uncertain。0.6s+0.4s 与 tests/test_danger_link_e2e.py 同节奏。
+    # 站立基线时长可调（--fall-prelude）：转变检测器的运动锚定复评会把评估窗口
+    # 锚在 settle 打破处，长前奏（如 2s）后的快速跌倒同样应产出 fall_like——
+    # 用非默认前奏即可回归验证。默认 0.6s+0.4s 与 tests/test_danger_link_e2e.py 同节奏。
     standing, lying = _standing(), _lying()
-    poses = [standing] * round(0.6 * fps)  # 0.6s 站立基线
+    poses = [standing] * max(1, round(fall_prelude_s * fps))  # 站立基线
     fall_steps = max(2, round(0.4 * fps))  # 0.4s 快速倒地
     poses += [_blend(standing, lying, step / fall_steps) for step in range(1, fall_steps + 1)]
     poses += [lying] * round(6.0 * fps)  # 6s 躺地不动
@@ -569,8 +574,9 @@ def _drive_scenario(
     fps: float,
     hold_s: float,
     clock: StreamClock,
+    fall_prelude_s: float = 0.6,
 ) -> None:
-    poses = _scenario_poses(scenario, duration_s, fps)
+    poses = _scenario_poses(scenario, duration_s, fps, fall_prelude_s)
     # 主序列结束后保持末姿态继续推流：B 的评估由 A 事件驱动（状态机无定时器），
     # 断流即无 tick；同时倒计时期间人仍在画面里也更接近真实。
     poses += [poses[-1]] * max(0, round(hold_s * fps))
@@ -605,6 +611,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scenario", choices=("fall", "concern", "still"), default="fall")
     parser.add_argument("--duration", type=float, default=8.0, help="still 场景时长（秒）")
     parser.add_argument("--fps", type=float, default=10.0, help="注入帧率")
+    parser.add_argument(
+        "--fall-prelude",
+        type=float,
+        default=0.6,
+        help="fall 场景跌倒前的站立秒数（默认 0.6 与 e2e 同节奏；2.0 复现长前奏回归）",
+    )
     parser.add_argument(
         "--linger", type=float, default=15.0, help="主序列后保持末姿态继续推流的秒数"
     )
@@ -674,6 +686,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.fps,
                 args.linger,
                 clock,
+                fall_prelude_s=args.fall_prelude,
             )
             time.sleep(3.0)  # 收尾观察，接住最后广播的决策
     except KeyboardInterrupt:
