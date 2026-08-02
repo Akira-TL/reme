@@ -162,16 +162,82 @@ def test_fall_trigger_enters_awaiting_elder_with_mandatory_timeout() -> None:
     assert directive.next_state.escalation is EscalationKind.FALL
 
 
-def test_concern_trigger_requests_mimo_check_in() -> None:
+def _concern_context() -> DecisionContext:
     sitting = _posture(
         posture=Posture.SITTING, posture_duration_ms=40000.0, motion_level=MotionLevel.STILL
     )
-    directive = on_tick(_state(), _context(latest_posture=sitting), config=_CONFIG)
+    return _context(latest_posture=sitting)
+
+
+def test_concern_trigger_requests_mimo_check_in() -> None:
+    directive = on_tick(_state(), _concern_context(), config=_CONFIG)
     assert directive.skeleton is not None
     assert directive.skeleton.template is TemplateId.CONCERN_CHECK_IN
-    assert directive.skeleton.response_timeout_ms is None
     assert directive.mimo_task is MimoTask.COMPOSE_CHECK_IN
     assert directive.next_state.escalation is EscalationKind.CONCERN
+
+
+def test_concern_check_in_carries_the_mandatory_countdown() -> None:
+    directive = on_tick(_state(), _concern_context(), config=_CONFIG)
+    assert directive.skeleton is not None
+    assert directive.skeleton.state is DecisionState.CHECK_IN_REQUIRED
+    assert directive.skeleton.need_dialogue is True
+    # Same countdown source as the fall path: without it C renders no timer and
+    # the timeout escalation below is unreachable.
+    assert directive.skeleton.response_timeout_ms == _CONFIG.check_in_timeout_ms
+    assert directive.next_state.phase is SessionPhase.AWAITING_ELDER
+
+
+def test_concern_check_in_timeout_escalates_by_rule() -> None:
+    check_in = on_tick(_state(), _concern_context(), config=_CONFIG)
+    assert check_in.skeleton is not None
+    assert check_in.skeleton.response_timeout_ms is not None
+    awaiting = replace(check_in.next_state, pending_decision_id="decision-0001")
+
+    directive = on_response(
+        awaiting, _response(ResponseValue.NONE, ResponseSource.TIMEOUT), config=_CONFIG
+    )
+    assert directive.skeleton is not None
+    assert directive.skeleton.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
+    assert directive.skeleton.template is TemplateId.TIMEOUT_FAMILY_ALERT
+    assert directive.skeleton.action is DecisionAction.NOTIFY_FAMILY
+    # Rule-driven and MiMo-free, exactly as on the fall path (ADR-0005).
+    assert directive.mimo_task is None
+    assert directive.next_state.phase is SessionPhase.FAMILY_NOTIFIED
+    assert directive.next_state.risk_floor == 3
+    assert directive.next_state.timeout_count == 1
+
+
+def test_concern_clarification_keeps_the_countdown() -> None:
+    first = on_response(
+        _awaiting_elder(escalation=EscalationKind.CONCERN),
+        _response(ResponseValue.UNCLEAR, ResponseSource.USER_INPUT),
+        config=_CONFIG,
+    )
+    assert first.skeleton is not None
+    assert first.skeleton.template is TemplateId.CLARIFY
+    assert first.skeleton.response_timeout_ms == _CONFIG.check_in_timeout_ms
+
+    clarified = replace(first.next_state, pending_decision_id="decision-0002")
+    second = on_response(
+        clarified,
+        _response(ResponseValue.NONE, ResponseSource.TIMEOUT, decision_id="decision-0002"),
+        config=_CONFIG,
+    )
+    assert second.skeleton is not None
+    assert second.skeleton.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
+    assert second.mimo_task is None
+
+
+def test_concern_need_help_clarification_keeps_the_countdown() -> None:
+    directive = on_response(
+        _awaiting_elder(escalation=EscalationKind.CONCERN),
+        _response(ResponseValue.NEED_HELP, ResponseSource.USER_INPUT),
+        config=_CONFIG,
+    )
+    assert directive.skeleton is not None
+    assert directive.skeleton.template is TemplateId.CLARIFY
+    assert directive.skeleton.response_timeout_ms == _CONFIG.check_in_timeout_ms
 
 
 def test_tick_while_awaiting_elder_reuses_pending_decision() -> None:
@@ -249,6 +315,28 @@ def test_unclear_response_allows_exactly_one_clarification() -> None:
     assert second.skeleton is not None
     assert second.skeleton.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
     assert second.skeleton.template is TemplateId.UNCLEAR_FAMILY_ALERT
+
+
+def test_fall_path_countdown_and_wording_are_unchanged() -> None:
+    """Regression guard: widening the countdown must not touch the fall path."""
+
+    check_in = on_tick(_state(), _fall_context(), config=_CONFIG)
+    assert check_in.skeleton is not None
+    assert check_in.skeleton.template is TemplateId.FALL_CHECK_IN
+    assert check_in.skeleton.dialogue_goal == "confirm_safety"
+    assert check_in.skeleton.response_timeout_ms == _CONFIG.check_in_timeout_ms
+    assert check_in.mimo_task is None
+
+    clarify = on_response(
+        _awaiting_elder(),
+        _response(ResponseValue.UNCLEAR, ResponseSource.USER_INPUT),
+        config=_CONFIG,
+    )
+    assert clarify.skeleton is not None
+    assert clarify.skeleton.template is TemplateId.CLARIFY
+    # The goal still distinguishes the two triggers; only the countdown is shared.
+    assert clarify.skeleton.dialogue_goal == "confirm_safety"
+    assert clarify.skeleton.response_timeout_ms == _CONFIG.check_in_timeout_ms
 
 
 def test_need_help_on_fall_path_notifies_family_immediately() -> None:
