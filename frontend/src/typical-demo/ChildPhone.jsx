@@ -62,7 +62,6 @@ export function ChildPhone({
           canvasRef={canvasRef}
           cameraReady={camera.cameraReady}
           viewMode={viewMode}
-          segmentationReady={camera.segmentationReady}
           skeletonSource={camera.skeletonSource}
           compact
         />

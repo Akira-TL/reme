@@ -70,7 +70,6 @@ export function TypicalDemoApp() {
     cameraReady,
     aspectRatio: cameraAspectRatio,
     modelReady,
-    segmentationReady,
     personDetected,
     backendSkeletonActive,
     skeletonSource,
@@ -80,6 +79,7 @@ export function TypicalDemoApp() {
     deviceViewMode,
     phoneViewMode,
     skeletonColor,
+    privacyMode: sceneId === "bathroom",
     onLandmarks: handleLandmarks,
     backendLandmarkFrame: live.landmarkFrame,
   });
@@ -96,7 +96,6 @@ export function TypicalDemoApp() {
     cameraReady,
     aspectRatio: cameraAspectRatio,
     modelReady,
-    segmentationReady,
     personDetected,
     backendSkeletonActive,
     skeletonSource,
@@ -110,7 +109,6 @@ export function TypicalDemoApp() {
     modelReady,
     personDetected,
     retryCamera,
-    segmentationReady,
     skeletonSource,
   ]);
 

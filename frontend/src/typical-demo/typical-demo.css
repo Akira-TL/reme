@@ -268,6 +268,37 @@ button { font: inherit; }
 .privacy-curtain { display: none; z-index: 4; left: 35%; top: 9%; width: 31%; height: 76%; border-radius: 6px 6px 2px 2px; background: repeating-linear-gradient(90deg, rgba(255,255,255,.9) 0 9%, rgba(226,220,211,.9) 9% 12%); box-shadow: 0 9px 18px rgba(76,65,53,.14); }
 .privacy-curtain span { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); color: rgba(114,100,85,.55); font-size: 12px; font-weight: 700; letter-spacing: .18em; white-space: nowrap; }
 .scene-bathroom .privacy-curtain { display: block; }
+.scene-viewport.is-private-compact {
+  background: linear-gradient(145deg, #f7f7f8, #e6e8eb);
+  background-image: none;
+}
+.scene-viewport.is-private-compact .room-wall,
+.scene-viewport.is-private-compact .room-floor,
+.scene-viewport.is-private-compact .set-window,
+.scene-viewport.is-private-compact .set-console,
+.scene-viewport.is-private-compact .set-sofa,
+.scene-viewport.is-private-compact .set-rug,
+.scene-viewport.is-private-compact .set-lamp,
+.scene-viewport.is-private-compact .set-counter,
+.scene-viewport.is-private-compact .set-cabinets,
+.scene-viewport.is-private-compact .set-island,
+.scene-viewport.is-private-compact .set-shower,
+.scene-viewport.is-private-compact .set-tiles,
+.scene-viewport.is-private-compact .set-bath-shelf { display: none; }
+.scene-viewport.is-private-compact .privacy-curtain {
+  display: block;
+  inset: 13% 17%;
+  width: auto;
+  height: auto;
+  border: 1px solid rgba(94, 99, 108, .12);
+  border-radius: 14px;
+  background: rgba(255,255,255,.58);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.52);
+}
+.scene-viewport.is-private-compact .privacy-curtain span {
+  color: rgba(72, 77, 86, .54);
+  letter-spacing: .1em;
+}
 
 .scene-fall .room-wall { background: linear-gradient(120deg, #251f1b, #10151d); }
 .scene-fall .room-floor { background: linear-gradient(#2f2925, #15191f); }

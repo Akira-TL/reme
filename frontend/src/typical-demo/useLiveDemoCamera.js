@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { createDemoLandmarks, drawSkeleton, mapLandmarks } from "../utils/pose";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createDemoLandmarks, drawSkeleton, mapLandmarks } from "../utils/pose.js";
 
 // 本地资产（predev 拷贝 wasm、模型已入库）：演示现场零 CDN 依赖。
 const MP_WASM_URL = "/mediapipe/wasm";
@@ -72,10 +72,19 @@ function paintTarget(canvas, source) {
   context.drawImage(source, offsetX, offsetY, drawWidth, drawHeight);
 }
 
+export function emitRealInferenceLandmarks(onLandmarks, landmarks, timestamp) {
+  onLandmarks?.(landmarks, timestamp);
+}
+
+export function resolvePrivacySafeViewMode(viewMode, privacyMode) {
+  return privacyMode ? "skeleton" : viewMode;
+}
+
 export function useLiveDemoCamera({
   deviceViewMode,
   phoneViewMode,
   skeletonColor,
+  privacyMode = false,
   onLandmarks = null,
   backendLandmarkFrame = null,
 }) {
@@ -90,12 +99,12 @@ export function useLiveDemoCamera({
   const localLandmarksRef = useRef([]);
   const backendLandmarksRef = useRef([]);
   const backendReceivedAtRef = useRef(0);
-  const maskCanvasRef = useRef(null);
   const deviceRenderCanvasRef = useRef(null);
   const phoneRenderCanvasRef = useRef(null);
   const deviceViewModeRef = useRef(deviceViewMode);
   const phoneViewModeRef = useRef(phoneViewMode);
   const skeletonColorRef = useRef(skeletonColor);
+  const privacyModeRef = useRef(privacyMode);
   const cameraFallbackRef = useRef(false);
   const modelFallbackRef = useRef(false);
   const onLandmarksRef = useRef(onLandmarks);
@@ -107,7 +116,6 @@ export function useLiveDemoCamera({
   const [cameraReady, setCameraReady] = useState(false);
   const [aspectRatio, setAspectRatio] = useState(DEFAULT_RENDER_WIDTH / DEFAULT_RENDER_HEIGHT);
   const [modelReady, setModelReady] = useState(false);
-  const [segmentationReady, setSegmentationReady] = useState(false);
   const [personDetected, setPersonDetected] = useState(false);
   const [backendSkeletonActive, setBackendSkeletonActive] = useState(false);
   const [cameraError, setCameraError] = useState("");
@@ -126,11 +134,12 @@ export function useLiveDemoCamera({
       : performance.now();
   }, [backendLandmarkFrame]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     deviceViewModeRef.current = deviceViewMode;
     phoneViewModeRef.current = phoneViewMode;
     skeletonColorRef.current = skeletonColor;
-  }, [deviceViewMode, phoneViewMode, skeletonColor]);
+    privacyModeRef.current = privacyMode;
+  }, [deviceViewMode, phoneViewMode, privacyMode, skeletonColor]);
 
   useEffect(() => {
     cameraReadyRef.current = cameraReady;
@@ -195,7 +204,7 @@ export function useLiveDemoCamera({
           minPoseDetectionConfidence: 0.5,
           minPosePresenceConfidence: 0.5,
           minTrackingConfidence: 0.5,
-          outputSegmentationMasks: true,
+          outputSegmentationMasks: false,
         };
         try {
           landmarkerRef.current = await withTimeout(
@@ -219,7 +228,7 @@ export function useLiveDemoCamera({
         modelFallbackRef.current = true;
         if (!cancelled) {
           setModelReady(false);
-          setModelError("姿态/抠像模型暂不可用，真人场景将显示摄像头原画");
+          setModelError("姿态模型暂不可用，已进入动态骨架演示");
         }
       }
     }
@@ -238,43 +247,14 @@ export function useLiveDemoCamera({
   useEffect(() => {
     const deviceRenderCanvas = document.createElement("canvas");
     const phoneRenderCanvas = document.createElement("canvas");
-    const maskCanvas = document.createElement("canvas");
     deviceRenderCanvasRef.current = deviceRenderCanvas;
     phoneRenderCanvasRef.current = phoneRenderCanvas;
-    maskCanvasRef.current = maskCanvas;
     deviceRenderCanvas.width = DEFAULT_RENDER_WIDTH;
     deviceRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
     phoneRenderCanvas.width = DEFAULT_RENDER_WIDTH;
     phoneRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
     const deviceContext = deviceRenderCanvas.getContext("2d");
     const phoneContext = phoneRenderCanvas.getContext("2d");
-
-    function updateMask(mask) {
-      try {
-        const values = mask.getAsFloat32Array();
-        const target = maskCanvasRef.current;
-        if (target.width !== mask.width || target.height !== mask.height) {
-          target.width = mask.width;
-          target.height = mask.height;
-        }
-        const maskContext = target.getContext("2d");
-        const image = maskContext.createImageData(mask.width, mask.height);
-        for (let index = 0; index < values.length; index += 1) {
-          const alpha = Math.max(0, Math.min(1, (values[index] - 0.2) / 0.58));
-          const pixel = index * 4;
-          image.data[pixel] = 255;
-          image.data[pixel + 1] = 255;
-          image.data[pixel + 2] = 255;
-          image.data[pixel + 3] = Math.round(alpha * 255);
-        }
-        maskContext.putImageData(image, 0, 0);
-        setSegmentationReady((current) => current || true);
-      } catch {
-        setSegmentationReady(false);
-      } finally {
-        mask.close?.();
-      }
-    }
 
     function detect(now) {
       if (cameraFallbackRef.current || modelFallbackRef.current) {
@@ -290,11 +270,9 @@ export function useLiveDemoCamera({
       try {
         const result = landmarker.detectForVideo(video, now);
         localLandmarksRef.current = result?.landmarks?.[0] ? mapLandmarks(result.landmarks[0]) : [];
-        const mask = result?.segmentationMasks?.[0];
-        if (mask) updateMask(mask);
         // 只发送真实推理结果，绝不发送演示骨架。空结果同样是 A 的
         // 消失式跌倒证据，因此不能在这里按 17 点长度过滤。
-        onLandmarksRef.current?.(localLandmarksRef.current, now);
+        emitRealInferenceLandmarks(onLandmarksRef.current, localLandmarksRef.current, now);
       } catch {
         localLandmarksRef.current = [];
       }
@@ -304,16 +282,12 @@ export function useLiveDemoCamera({
       const width = context.canvas.width;
       const height = context.canvas.height;
       context.clearRect(0, 0, width, height);
-      const showVideo = mode === "video" || mode === "video_skeleton";
+      const safeMode = resolvePrivacySafeViewMode(mode, privacyModeRef.current);
+      const showVideo = safeMode === "video" || safeMode === "video_skeleton";
       if (showVideo && cameraReadyRef.current && video?.readyState >= 2) {
         drawFrame(context, video, width, height);
-        if (mode === "video" && segmentationReady && maskCanvasRef.current?.width) {
-          context.globalCompositeOperation = "destination-in";
-          drawFrame(context, maskCanvasRef.current, width, height);
-          context.globalCompositeOperation = "source-over";
-        }
       }
-      if ((mode === "skeleton" || mode === "video_skeleton") && points.length === 17) {
+      if ((safeMode === "skeleton" || safeMode === "video_skeleton") && points.length === 17) {
         drawSkeleton(
           context,
           points,
@@ -363,7 +337,7 @@ export function useLiveDemoCamera({
 
     renderFrameRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(renderFrameRef.current);
-  }, [segmentationReady]);
+  }, []);
 
   return {
     videoRef,
@@ -372,7 +346,6 @@ export function useLiveDemoCamera({
     cameraReady,
     aspectRatio,
     modelReady,
-    segmentationReady,
     personDetected,
     backendSkeletonActive,
     skeletonSource: backendSkeletonActive ? "a_backend" : "c_local",
