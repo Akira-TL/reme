@@ -213,9 +213,67 @@
 
 ---
 
-## 待补：行为学与神经科学主张
+## R23 · Martino-Saltzman, Blasch, Morris & McNeal (1991)
 
-以下主张尚在核实中，**核实完成前不得作为答辩依据**：徘徊行为分型、静息-活动节律与认知衰退、精神运动性迟滞。核实结果以 R23 起补入；核实不到一手来源的，对应表述将从 ADR-0006 删除或降级为"工程假设"（如 R19 的夜尿前兆句已被删除那样）。
+*Travel behavior of nursing home residents perceived as wanderers and nonwanderers.* The Gerontologist 31(5):666–672. DOI [10.1093/geront/31.5.666](https://doi.org/10.1093/geront/31.5.666) · PMID [1778493](https://pubmed.ncbi.nlm.nih.gov/1778493/) · `[读摘要]`
+
+**报告的事实**：40 名疗养院居民、30 天连续录像、逾 5000 次无协助行走事件，识别出四种行走模式——direct 86.8%、lapping 11.6%、random 0.9%、pacing 0.7%；"直接行走"占比与认知状态显著相关（r = .56）。
+
+**支撑我们的**：行走/移动模式确实可分型且与认知状态相关——这是把轨迹级分析列为**休眠能力**（等上游提供空间序列）的理由。
+
+**不支撑的（口径纠正）**：论文报告的是**行走事件层面**的模式占比，不是把人固定归为某一"徘徊类型"。ADR-0006 的措辞已按此收窄。我们当前的 `restlessness_score` 只是体位/运动带翻动率，**与该四型分类没有对应关系**。
+
+---
+
+## R24 · Tranah, Blackwell, Stone, et al. (2011)
+
+*Circadian activity rhythms and risk of incident dementia and mild cognitive impairment in older women.* Annals of Neurology 70(5):722–732. DOI [10.1002/ana.22468](https://doi.org/10.1002/ana.22468) · PMID [22162057](https://pubmed.ncbi.nlm.nih.gov/22162057/) · `[读摘要]`
+
+**报告的事实**：1282 名社区老年女性（平均 83 岁）腕动计测量，随访 4.9 年——节律振幅低、稳健性低、活动高峰延迟者发生痴呆/MCI 风险显著更高（OR 1.57–1.83）。
+
+## R25 · Haghayegh, Gao, Sugg, et al. (2024)
+
+*Association of rest-activity rhythm and risk of developing dementia or mild cognitive impairment in the middle-aged and older population: prospective cohort study.* JMIR Public Health and Surveillance 10:e55211. DOI [10.2196/55211](https://doi.org/10.2196/55211) · PMID [38713911](https://pubmed.ncbi.nlm.nih.gov/38713911/) · `[读摘要]`
+
+**报告的事实**：UK Biobank 91,517 人腕动计数据、随访最长 7.5 年——静息-活动节律受抑制/碎片化与随后痴呆/MCI 风险独立正相关（HR 1.14–1.32）。
+
+**R24/R25 支撑我们的**：日常节律的稳定性本身是有前瞻价值的健康信号（两项均为前瞻队列，非横断面）。这是 `memory.py` 分时段基线的设计理由。
+
+**不支撑的**：两项都用**腕动计连续测量**并计算 M10/L5/相对振幅等标准节律指标。我们的分时段 EWMA 是极简近似，**不是节律指标，也不做任何痴呆风险判断**。
+
+---
+
+## R26 · Sobin & Sackeim (1997)
+
+*Psychomotor symptoms of depression.* American Journal of Psychiatry 154(1):4–17. DOI [10.1176/ajp.154.1.4](https://doi.org/10.1176/ajp.154.1.4) · PMID [8988952](https://pubmed.ncbi.nlm.nih.gov/8988952/) · `[读摘要]`
+
+## R27 · Buyukdura, McClintock & Croarkin (2011)
+
+*Psychomotor retardation in depression: biological underpinnings, measurement, and treatment.* Progress in Neuro-Psychopharmacology & Biological Psychiatry 35(2):395–409. DOI [10.1016/j.pnpbp.2010.10.019](https://doi.org/10.1016/j.pnpbp.2010.10.019) · PMID [21044654](https://pubmed.ncbi.nlm.nih.gov/21044654/) · `[读摘要]`
+
+**R26/R27 支撑我们的**：精神运动性迟滞（动作减少、启动变慢、活动量下降）是**抑郁**的既有表现，因此"活动量持续低于个人基线"值得一句问候。
+
+**明确不支撑的（已据此删改 ADR）**：这两篇都聚焦**抑郁**语境，**不支持**把精神运动性迟滞作为"认知衰退/痴呆"的表现。ADR-0006 原文写的"抑郁与认知衰退的公认表现"已删去后半句。
+
+---
+
+## R28 · Grant, Ryan, Tigbe & Granat (2006)
+
+*The validation of a novel activity monitor in the measurement of posture and motion during everyday activities.* British Journal of Sports Medicine 40(12):992–997. DOI [10.1136/bjsm.2006.030262](https://doi.org/10.1136/bjsm.2006.030262) · PMID [16980531](https://pubmed.ncbi.nlm.nih.gov/16980531/) · `[读摘要]`
+
+## R29 · Stemland, Ingebrigtsen, Christiansen, et al. (2015)
+
+*Validity of the Acti4 method for detection of physical activity types in free-living settings: comparison with video analysis.* Ergonomics 58(6):953–965. DOI [10.1080/00140139.2014.998724](https://doi.org/10.1080/00140139.2014.998724) · PMID [25588819](https://pubmed.ncbi.nlm.nih.gov/25588819/) · `[读摘要]`
+
+**R28/R29 支撑我们的**：体位识别在**自由生活**环境下的表现显著低于标准化测试（R29 报告敏感度随动作复杂度在 49.9%–99.4% 间波动）——与 R6 同向：实验室数字不可外推，系统必须为误判留出余地。
+
+---
+
+## 核实过程中的两次裁决（如实记录）
+
+**① Lyden 2016 的归属曾被质疑，经查证成立。** 一次独立核实认为 Kate Lyden 名下没有专做坐/躺判别的论文、疑为误记。经 PubMed 直接检索确认该文真实存在（PMID 26516691，标题、作者四人、卷期页与 DOI 全部吻合，摘要明载 ±65° 阈值与 96.7%/92.9%），故 **R8 维持原样**。记录此事是为了留下"结论以工具查证为准、不以任一方断言为准"的痕迹。
+
+**② Acti4/activPAL 的角度阈值数字未能回到原文。** R9 中"45° + 100 mg"来自二手转述；Skotte 2014 全文受付费墙限制未获取，且不同复现研究给出的阈值在 10°–66° 之间互相矛盾，R28 原始验证论文的摘要也未公开阈值（属厂商专有算法）。**结论：任何单一角度数字都不可当权威引用**——所幸我们一个角度都没有搬进代码（我们的输入没有重力方向），此条仅作范式依据。
 
 ---
 
