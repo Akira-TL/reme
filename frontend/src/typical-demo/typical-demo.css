@@ -81,6 +81,27 @@ button { font: inherit; }
   border-color: #9fd8ae;
   background: #ecf8ef;
 }
+.fall-countdown {
+  margin: 10px 0 2px;
+}
+.fall-countdown i {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #ff3b30, #ff8a00);
+  animation: fall-countdown-shrink linear forwards;
+  transform-origin: left center;
+}
+.fall-countdown small {
+  display: block;
+  margin-top: 5px;
+  color: #a05a00;
+  font-size: 12px;
+}
+@keyframes fall-countdown-shrink {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
 
 .scene-tabs {
   display: grid;

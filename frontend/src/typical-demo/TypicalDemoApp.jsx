@@ -166,6 +166,7 @@ export function TypicalDemoApp() {
           fallPhase={effectivePhase}
           fallStateOverride={live.active ? live.fallState : null}
           liveActive={live.active}
+          liveDeadline={live.active ? live.deadline : null}
           kitchenShared={kitchenShared}
           canvasRef={deviceCanvasRef}
           camera={cameraState}
@@ -173,6 +174,7 @@ export function TypicalDemoApp() {
           onShare={() => setKitchenShared(true)}
           onStartFall={startFall}
           onSafe={markSafe}
+          onNeedHelp={live.active ? live.respondNeedHelp : null}
           onResetFall={markSafe}
         />
 

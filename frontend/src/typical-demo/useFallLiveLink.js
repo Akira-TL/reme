@@ -110,6 +110,10 @@ export function useFallLiveLink({ enabled, videoElement }) {
     decision.respondSafe();
   }, [decision]);
 
+  const respondNeedHelp = useCallback(() => {
+    decision.respondNeedHelp();
+  }, [decision]);
+
   const confirmAlarm = useCallback(() => {
     if (current) setConfirmedDecisionId(current.decision_id);
     decision.confirmAlarm();
@@ -134,7 +138,9 @@ export function useFallLiveLink({ enabled, videoElement }) {
     connection: decision.connection,
     perceptionState: perception.runtime.state,
     sendLandmarks: perception.sendLandmarks,
+    deadline: decision.deadline,
     respondSafe,
+    respondNeedHelp,
     confirmAlarm,
     decision,
   };

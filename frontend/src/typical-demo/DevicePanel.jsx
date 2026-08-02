@@ -19,6 +19,7 @@ export function DevicePanel({
   fallPhase,
   fallStateOverride = null,
   liveActive = false,
+  liveDeadline = null,
   kitchenShared,
   canvasRef,
   camera,
@@ -26,6 +27,7 @@ export function DevicePanel({
   onShare,
   onStartFall,
   onSafe,
+  onNeedHelp = null,
   onResetFall,
 }) {
   const fallState = fallStateOverride || FALL_PHASES[fallPhase];
@@ -102,6 +104,15 @@ export function DevicePanel({
                   : "候选检测不等于真实跌倒结论；当前按演示时序推进。"}
             </p>
           </div>
+          {liveActive && fallPhase === "checking" && liveDeadline?.timeoutMs && (
+            <div className="fall-countdown" aria-label="回应倒计时">
+              <i
+                key={liveDeadline.decisionId}
+                style={{ animationDuration: `${liveDeadline.timeoutMs}ms` }}
+              />
+              <small>倒计时内未回应将自动通知家人</small>
+            </div>
+          )}
           <div className="control-actions">
             {!liveActive && fallPhase === "idle" && (
               <Button variant="contained" color="error" onClick={onStartFall}>开始跌倒流程</Button>
@@ -110,6 +121,9 @@ export function DevicePanel({
               <Button variant="outlined" color="success" onClick={onSafe}>
                 {liveActive ? "我没事（回应 B 的询问）" : "我没事，解除候选"}
               </Button>
+            )}
+            {liveActive && fallPhase === "checking" && onNeedHelp && (
+              <Button variant="contained" color="error" onClick={onNeedHelp}>需要帮助</Button>
             )}
             {!liveActive && !["idle", "candidate", "checking"].includes(fallPhase) && (
               <Button variant="outlined" onClick={onResetFall}>重置场景</Button>
