@@ -8,6 +8,12 @@ from pathlib import Path
 import pytest
 from reme.pose.biomech import ImageGeometry, parse_frame_record
 from reme.pose.posture_criteria import PostureVerdict, classify_frame
+from reme.pose.posture_runtime import (
+    POSTURE_SCHEMA_VERSION,
+    BiomechPostureTracker,
+    PostureRuntimeConfig,
+    PostureRuntimeError,
+)
 from reme.pose.posture_temporal import (
     PostureTemporalError,
     PostureTemporalTracker,
@@ -16,6 +22,7 @@ from reme.pose.posture_temporal import (
     smooth_sequence,
     temporal_payload,
 )
+from reme.pose.runtime import RuntimeEvent, RuntimeEventType
 
 
 def verdict(posture: str, confidence: float = 0.8) -> PostureVerdict:
@@ -236,3 +243,110 @@ def test_real_clip_label_jitter_collapses() -> None:
     # rather than trade it away.
     standing = sum(1 for item in released if item.posture == "standing")
     assert standing / len(released) > 0.97
+
+
+class TestRuntimeWiring:
+    """The temporal layer must see every frame, not the emission cadence."""
+
+    @staticmethod
+    def _event(record: dict[str, object], index: int, timestamp_ms: float) -> RuntimeEvent:
+        payload = dict(record)
+        payload["frame_index"] = index
+        payload["timestamp_ms"] = timestamp_ms
+        return RuntimeEvent(
+            session_id="session-1",
+            sequence=index,
+            event_type=RuntimeEventType.FRAME_LANDMARKS,
+            payload=payload,
+        )
+
+    def _stream(self, postures: list[str]) -> list[RuntimeEvent]:
+        from tests.test_pose_biomech import build_record, upright_person
+
+        records = {
+            "standing": build_record(upright_person()),
+            # A collapsed skeleton the criteria cannot resolve, so the frame
+            # verdict is unknown without needing to fake a verdict object.
+            "unknown": build_record({"nose": (640.0, 300.0)}),
+        }
+        return [
+            self._event(records[posture], index, index * 33.3333)
+            for index, posture in enumerate(postures)
+        ]
+
+    def _tracker(self, **kwargs: object) -> BiomechPostureTracker:
+        return BiomechPostureTracker(
+            session_id="session-1", image=_GEOMETRY, **kwargs  # type: ignore[arg-type]
+        )
+
+    def test_emission_stays_inside_the_contract_cadence(self) -> None:
+        events = self._stream(["standing"] * 300)
+        tracker = self._tracker(config=PostureRuntimeConfig(output_hz=7.5))
+        emitted = list(tracker.iter_events(events))
+        span_s = (299 * 33.3333) / 1000.0
+        rate = len(emitted) / span_s
+        assert 5.0 <= rate <= 10.0
+
+    def test_a_single_frame_blip_never_reaches_the_emitted_stream(self) -> None:
+        """The F9 fix: a 33 ms blip is invisible only if every frame is ingested."""
+
+        postures = ["standing"] * 150 + ["unknown"] + ["standing"] * 150
+        tracker = self._tracker()
+        emitted = list(tracker.iter_events(self._stream(postures)))
+        settled = [item.payload["posture"] for item in emitted[10:]]
+        assert set(settled) == {"standing"}
+
+    def test_observation_keeps_the_shared_schema_version(self) -> None:
+        tracker = self._tracker()
+        emitted = list(tracker.iter_events(self._stream(["standing"] * 60)))
+        assert emitted[0].payload["schema_version"] == POSTURE_SCHEMA_VERSION
+
+    def test_observation_carries_evidence_for_the_released_label(self) -> None:
+        tracker = self._tracker()
+        emitted = list(tracker.iter_events(self._stream(["standing"] * 60)))
+        evidence = emitted[-1].payload["posture_evidence"]
+        assert isinstance(evidence, dict)
+        assert evidence["posture"] == emitted[-1].payload["posture"]
+        assert "frame_posture" in evidence
+        assert "frame_evidence" in evidence
+
+    def test_the_decision_layer_still_parses_the_payload(self) -> None:
+        """Adding evidence must not break B, which keys on schema_version."""
+
+        from reme.decision.context import Posture, _parse_posture_observation
+
+        tracker = self._tracker()
+        emitted = list(tracker.iter_events(self._stream(["standing"] * 60)))
+        observation = _parse_posture_observation(emitted[-1].payload, label="test")
+        assert observation.posture is Posture.STANDING
+
+    def test_events_from_another_session_are_rejected(self) -> None:
+        tracker = self._tracker()
+        event = self._stream(["standing"])[0]
+        stray = RuntimeEvent(
+            session_id="session-2",
+            sequence=0,
+            event_type=RuntimeEventType.FRAME_LANDMARKS,
+            payload=event.payload,
+        )
+        with pytest.raises(PostureRuntimeError):
+            tracker.process_frame_event(stray)
+
+    def test_non_landmark_events_are_rejected(self) -> None:
+        tracker = self._tracker()
+        stray = RuntimeEvent(
+            session_id="session-1",
+            sequence=0,
+            event_type=RuntimeEventType.POSTURE_OBSERVATION,
+            payload={},
+        )
+        with pytest.raises(PostureRuntimeError, match="only FrameLandmarks"):
+            tracker.process_frame_event(stray)
+
+    def test_reset_clears_state_for_a_replacement_session(self) -> None:
+        tracker = self._tracker()
+        list(tracker.iter_events(self._stream(["standing"] * 60)))
+        tracker.reset()
+        first = tracker.process_frame_event(self._stream(["standing"])[0])
+        assert first is not None
+        assert first.payload["posture"] == "unknown"

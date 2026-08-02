@@ -148,12 +148,34 @@
 且后两者必须是 [0,1] 比值。将来产出转变事件时必须用这三个名字，
 不要新造 `center_height_change` 之类的键。
 
-### F9 posture_runtime 的节流早于 predict
+### F9 posture_runtime 的节流早于 predict — **已绕过（新增并行 tracker）**
 
-`backend/reme/pose/posture_runtime.py:98-102` 在 `predict_record` **之前**短路返回，
-因此 predictor 只能看到 `output_hz`（默认 7.5）的帧。
-任何需要逐帧（30 Hz）输入的时序特征都无法在现有 tracker 下满足，
-需把节流移到 predict 之后，或加 `ingest_every_frame` 开关。
+`backend/reme/pose/posture_runtime.py` 的 `RealtimePostureTracker` 在 `predict_record`
+**之前**短路返回，因此 predictor 只能看到 `output_hz`（默认 7.5）的帧。
+167 ms 驻留在 7.5 Hz 下只有约 1.25 个样本，根本不构成驻留。
+
+**处置**：不改 `RealtimePostureTracker`（那是 StaticPostureModel 的路径，
+其多数投票窗口按发出样本定义，改了会破坏既有行为与测试），
+改为新增并行的 `BiomechPostureTracker`：
+
+- **逐帧分类，只节流发出**。可行是因为判据层是 17 点闭式几何而非模型推理；
+- **该路径只有一个平滑器**。刻意不复用 `RealtimePostureTracker` 的多数投票——
+  两个独立平滑器叠在同一信号上，得到的结果谁也描述不了；
+- `posture_duration_ms` 取自时序层的 `dwell_ms`（自候选首次出现起算）；
+- 新增 `posture_evidence` 为**附加键**，`schema_version` 保持
+  `reme-posture/v0-experiment` 不变，B 侧照常解析（已加测试断言
+  `_parse_posture_observation` 接受该载荷）。
+
+实测（真实 2370 帧经 RuntimeEvent 通路）：入 2370 帧 → 出 527 条观察，
+发出速率 6.67 Hz（合同要求 5–10 Hz），发出流中标签翻转 5 次，
+standing 518 / unknown 9。
+
+注意：发出速率 6.67 而非 7.5，源于既有节流逻辑与毫秒时间戳的浮点余数
+（偶尔多跳一帧）。落在合同区间内，且属既有共用逻辑，未改动。
+
+**F1 的接线禁令仍然有效**：本次只新增 tracker 类，
+`camera.py` 与 `live_preview.py` 的 CLI 仍构造 `RealtimePostureTracker`
++ `StaticPostureModel`，实时链路未改。
 
 ## 记录：复审对设计稿的一处误报
 

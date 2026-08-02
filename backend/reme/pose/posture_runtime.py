@@ -10,7 +10,16 @@ from typing import Any, Protocol
 
 import numpy as np
 
+from reme.pose.biomech import (
+    DEFAULT_UNCERTAINTY,
+    BiomechError,
+    ImageGeometry,
+    UncertaintyModel,
+    parse_frame_record,
+)
 from reme.pose.posture import PosturePrediction
+from reme.pose.posture_criteria import DEFAULT_RELEASED_CLASSES, classify_frame
+from reme.pose.posture_temporal import PostureTemporalTracker, TemporalConfig
 from reme.pose.runtime import RuntimeEvent, RuntimeEventType, RuntimeSessionError
 
 POSTURE_SCHEMA_VERSION = "reme-posture/v0-experiment"
@@ -243,3 +252,133 @@ def _number(value: object, field_name: str) -> float:
     if not math.isfinite(number) or number < 0:
         raise PostureRuntimeError(f"{field_name} must be finite and non-negative")
     return number
+
+
+class BiomechPostureTracker:
+    """Drive the biomechanical classifier and its temporal layer at full frame rate.
+
+    This is a sibling of :class:`RealtimePostureTracker`, not a replacement.  The
+    two differ in a way that matters: ``RealtimePostureTracker`` throttles
+    *before* calling its predictor, so the predictor only ever sees the output
+    cadence.  That is the right trade for a learned model, whose per-frame cost
+    is the thing being saved, and whose majority-vote window is defined over
+    emitted samples.
+
+    It is the wrong trade here.  The temporal layer's dwell is expressed in
+    milliseconds and needs every frame to resolve: at a 7.5 Hz output cadence a
+    167 ms dwell would be barely more than one sample, which is not a dwell at
+    all.  So this tracker classifies **every** frame -- affordable because the
+    criteria layer is closed-form geometry over 17 points, not inference -- and
+    throttles only the emission.
+
+    There is exactly one smoother in this path.  ``RealtimePostureTracker``'s
+    majority vote is deliberately not reused: two independent smoothers stacked
+    on one signal produce a result neither of them describes, and the temporal
+    layer is the one whose decisions are recorded in the evidence.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        image: ImageGeometry,
+        config: PostureRuntimeConfig | None = None,
+        temporal: TemporalConfig | None = None,
+        uncertainty: UncertaintyModel = DEFAULT_UNCERTAINTY,
+        released_classes: frozenset[str] = DEFAULT_RELEASED_CLASSES,
+    ) -> None:
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise PostureRuntimeError("session_id must be non-empty")
+        self.session_id = session_id
+        self.image = image
+        self.config = config or PostureRuntimeConfig()
+        self.uncertainty = uncertainty
+        self.released_classes = released_classes
+        self._temporal = PostureTemporalTracker(temporal)
+        self._last_emit_ms: float | None = None
+        self._last_emitted_frame: dict[str, Any] | None = None
+
+    def reset(self) -> None:
+        """Clear all state for a replacement session."""
+
+        self._temporal.reset()
+        self._last_emit_ms = None
+        self._last_emitted_frame = None
+
+    def process_frame_event(self, event: RuntimeEvent) -> RuntimeEvent | None:
+        """Ingest one frame; return a PostureObservation when emission is due."""
+
+        try:
+            event.require_session(self.session_id)
+        except RuntimeSessionError as exc:
+            raise PostureRuntimeError(str(exc)) from exc
+        if event.event_type is not RuntimeEventType.FRAME_LANDMARKS:
+            raise PostureRuntimeError("posture tracker accepts only FrameLandmarks events")
+
+        payload = event.payload
+        timestamp_ms = _number(payload.get("timestamp_ms"), "timestamp_ms")
+        frame_index = _integer(payload.get("frame_index"), "frame_index")
+        scene_id = _text(payload.get("scene_id"), "scene_id")
+
+        # Every frame is classified and fed to the temporal layer, before any
+        # cadence check.  Skipping here would starve the dwell.
+        try:
+            frame = parse_frame_record(
+                payload,
+                image=self.image,
+                score_threshold=self.config.score_threshold,
+                uncertainty=self.uncertainty,
+            )
+        except BiomechError as exc:
+            raise PostureRuntimeError(f"frame landmarks are unusable: {exc}") from exc
+        verdict = classify_frame(frame, released_classes=self.released_classes)
+        released = self._temporal.ingest(verdict, timestamp_ms=timestamp_ms)
+
+        interval_ms = 1000.0 / self.config.output_hz
+        if (
+            self._last_emit_ms is not None
+            and timestamp_ms - self._last_emit_ms < interval_ms - 1e-6
+        ):
+            return None
+
+        motion_level = _motion_level(
+            self._last_emitted_frame,
+            payload,
+            score_threshold=self.config.score_threshold,
+            still_speed=self.config.still_speed,
+            low_speed=self.config.low_speed,
+            medium_speed=self.config.medium_speed,
+        )
+        observation = {
+            "schema_version": POSTURE_SCHEMA_VERSION,
+            "scene_id": scene_id,
+            "timestamp_ms": round(timestamp_ms, 3),
+            "frame_index": frame_index,
+            "person_detected": bool(payload.get("person_detected")),
+            "posture": released.posture,
+            "posture_confidence": round(released.confidence, 6),
+            "posture_duration_ms": round(released.dwell_ms, 3),
+            "motion_level": motion_level,
+            "visible_keypoint_ratio": round(frame.usable_ratio, 6),
+            "landmark_quality": _landmark_quality(payload.get("landmark_quality")),
+            # Additive key.  The shared contract's schema_version is unchanged so
+            # that B keeps parsing this payload; B ignores keys it does not read,
+            # and this one carries the evidence for the label actually released.
+            "posture_evidence": released.to_payload(),
+        }
+        self._last_emit_ms = timestamp_ms
+        self._last_emitted_frame = payload
+        return RuntimeEvent(
+            session_id=self.session_id,
+            sequence=event.sequence,
+            event_type=RuntimeEventType.POSTURE_OBSERVATION,
+            payload=observation,
+        )
+
+    def iter_events(self, events: Iterable[RuntimeEvent]) -> Iterator[RuntimeEvent]:
+        """Yield low-frequency posture observations for a frame-event stream."""
+
+        for event in events:
+            observation = self.process_frame_event(event)
+            if observation is not None:
+                yield observation
