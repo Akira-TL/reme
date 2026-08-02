@@ -325,6 +325,10 @@ class _SceneRuntime:
     # round trip takes seconds, so without a latch every tick in that window
     # launches its own identical (paid) call and the CAS discards all but one.
     mimo_inflight: bool = False
+    # Explicit demo conversations take precedence over frame-driven observe
+    # ticks. Perception may keep updating its buffers, but it must not advance
+    # the B scene session while MiMo is composing the question.
+    explicit_conversation_inflight: bool = False
 
 
 class DecisionService:
@@ -406,6 +410,8 @@ class DecisionService:
         )
         with self._lock:
             runtime = self._runtime(scene_id)
+            if runtime.explicit_conversation_inflight and runtime.pending is not None:
+                return runtime.pending
             previous_id = None if runtime.pending is None else runtime.pending.decision_id
             directive = on_tick(runtime.session, context, config=self._effective_trigger(home))
             outcome = self._commit_rule_directive(runtime, directive, timestamp_ms)
@@ -455,6 +461,7 @@ class DecisionService:
             if outcome is None:
                 outcome = self._claim_mimo_or_reuse(runtime)
                 if outcome is None:
+                    runtime.explicit_conversation_inflight = True
                     snapshot = (runtime.epoch, runtime.session)
         if outcome is not None:
             self._publish(outcome, previous_id)
@@ -470,6 +477,7 @@ class DecisionService:
         finally:
             with self._lock:
                 runtime.mimo_inflight = False
+                runtime.explicit_conversation_inflight = False
         self._publish(decision, previous_id)
         return decision
 

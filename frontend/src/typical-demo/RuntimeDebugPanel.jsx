@@ -50,6 +50,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
   const decisionRuntime = live.decision || {};
   const decision = decisionRuntime.decision;
   const mimoRequest = decisionRuntime.mimoRequest || {};
+  const voice = live.voice || {};
 
   const rawSnapshot = {
     c: {
@@ -75,6 +76,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       mimo_model: MIMO_MODEL,
       mimo_configured: MIMO_CONFIGURED,
       mimo_request: mimoRequest,
+      voice,
     },
   };
 
@@ -171,8 +173,16 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="Decision ID" value={decision?.decision_id || "—"} wide />
               <DebugValue label="老人话术" value={decision?.elder_message || "—"} wide />
               <DebugValue label="家属通知" value={decision?.family_notification || "—"} wide />
-              <DebugValue label="语音识别" value={live.voice?.listening ? "listening" : live.voice?.supported ? "ready" : "unsupported"} />
-              <DebugValue label="识别文本" value={live.voice?.transcript || "—"} wide />
+              <DebugValue label="语音能力" value={voice.supported ? "ready" : "unsupported"} />
+              <DebugValue label="语音阶段" value={voice.stage || "idle"} />
+              <DebugValue label="自动聆听" value={voice.listening ? "recording" : "idle"} />
+              <DebugValue label="ASR 模型" value={voice.asrModel || "mimo-v2.5-asr"} />
+              <DebugValue label="ASR 延迟" value={number(voice.asrLatencyMs, " ms")} />
+              <DebugValue label="TTS 模型" value={voice.ttsModel || "mimo-v2.5-tts"} />
+              <DebugValue label="TTS 延迟" value={number(voice.ttsLatencyMs, " ms")} />
+              <DebugValue label="识别文本" value={voice.transcript || "—"} wide />
+              <DebugValue label="回复意图" value={voice.responseValue || "—"} />
+              {voice.error && <DebugValue label="语音错误" value={voice.error} wide />}
               {decisionRuntime.reason && <DebugValue label="B 错误" value={decisionRuntime.reason} wide />}
             </div>
           </div>

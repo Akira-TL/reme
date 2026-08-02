@@ -2,18 +2,29 @@ import CampaignRoundedIcon from "@mui/icons-material/CampaignRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import MedicalServicesRoundedIcon from "@mui/icons-material/MedicalServicesRounded";
-import MicRoundedIcon from "@mui/icons-material/MicRounded";
 import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
 import RestartAltRoundedIcon from "@mui/icons-material/RestartAltRounded";
 import VolumeUpRoundedIcon from "@mui/icons-material/VolumeUpRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { Button } from "@mui/material";
 
+const VOICE_STAGE_LABELS = {
+  idle: "等待对话",
+  tts_request: "MiMo TTS 合成询问中…",
+  playing: "正在播放 MiMo 语音…",
+  playing_fallback: "正在播放降级语音…",
+  waiting_reply: "即将自动聆听…",
+  recording: "正在自动聆听老人回复…",
+  asr_request: "MiMo ASR 识别中…",
+  complete: "本轮语音对话完成",
+  failed: "语音链路失败",
+};
+
 export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
   const decision = live.decision?.decision;
   const mimoRequest = live.decision?.mimoRequest || {};
   const voice = live.voice || {};
-  const waitingResponse = Boolean(decision?.need_dialogue);
+  const waitingResponse = ["check_in_required", "consent_required"].includes(decision?.state);
   const waitingConsent = Boolean(decision?.consent_required);
   const kitchen = scene.id === "kitchen";
   const fall = scene.id === "fall";
@@ -69,7 +80,7 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
         </div>
 
         <div className="acceptance-control-group">
-          <small>老人回复</small>
+          <small>免按钮语音 / 手动回退</small>
           <div>
             <Button
               variant="outlined"
@@ -79,15 +90,6 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
             >
               重播 MiMo 询问
             </Button>
-            <Button
-              variant="contained"
-              startIcon={<MicRoundedIcon />}
-              disabled={!waitingResponse || !voice.supported || voice.listening}
-              onClick={live.startVoiceReply}
-            >
-              {voice.listening ? "正在聆听…" : "语音回复"}
-            </Button>
-
             {waitingConsent ? (
               <>
                 <Button
@@ -137,6 +139,7 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
         <b>{live.active ? `当前场景：${scene.title}` : "ABC 链路未连接"}</b>
         <p>
           {voice.error
+            || (voice.stage && voice.stage !== "idle" ? VOICE_STAGE_LABELS[voice.stage] : "")
             || mimoRequest.error
             || (mimoRequest.status === "waiting_scene" ? "正在同步 B 场景，随后发起 MiMo 请求…" : "")
             || (mimoRequest.status === "requesting" ? "MiMo 请求已发出，等待响应…" : "")

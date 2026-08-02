@@ -141,13 +141,12 @@ class MimoSpeechClient:
                             "type": "input_audio",
                             "input_audio": {
                                 "data": f"data:{_mime_type(audio_format)};base64,{encoded}",
-                                "format": audio_format,
                             },
                         }
                     ],
                 }
             ],
-            "asr_options": {"language": "zh"},
+            "asr_options": {"language": "auto"},
             "stream": False,
         }
         raw, latency_ms, attempts = self._request(body)
