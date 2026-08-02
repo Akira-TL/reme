@@ -6,18 +6,32 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
 import { DEMO_SCENES } from "./scenes";
+import { useFallLiveLink } from "./useFallLiveLink";
 import { useLiveDemoCamera } from "./useLiveDemoCamera";
 
 export function TypicalDemoApp() {
   const [sceneId, setSceneId] = useState("living");
   const [fallPhase, setFallPhase] = useState("idle");
   const [kitchenShared, setKitchenShared] = useState(false);
+  const [videoElement, setVideoElement] = useState(null);
   const timersRef = useRef([]);
+  const sendLandmarksRef = useRef(null);
 
   const scene = useMemo(() => DEMO_SCENES.find((item) => item.id === sceneId), [sceneId]);
-  const emergencyVideo = sceneId === "fall" && ["emergency", "contacting", "resolved"].includes(fallPhase);
+  const handleLandmarks = useCallback(
+    (points, timestampMs) => sendLandmarksRef.current?.(points, timestampMs),
+    [],
+  );
+  const live = useFallLiveLink({ enabled: sceneId === "fall", videoElement });
+  const effectivePhase = live.active ? live.phase : fallPhase;
+  const emergencyVideo = sceneId === "fall"
+    && (live.active
+      ? live.showEmergencyVideo
+      : ["emergency", "contacting", "resolved"].includes(effectivePhase));
   const viewMode = sceneId === "kitchen" || emergencyVideo ? "video" : "skeleton";
-  const skeletonColor = sceneId === "fall" && ["candidate", "checking"].includes(fallPhase) ? "#ff3b30" : "#ff5a00";
+  const skeletonColor = sceneId === "fall" && ["candidate", "checking"].includes(effectivePhase)
+    ? "#ff3b30"
+    : "#ff5a00";
   const {
     videoRef,
     deviceCanvasRef,
@@ -28,7 +42,15 @@ export function TypicalDemoApp() {
     personDetected,
     error: cameraError,
     retry: retryCamera,
-  } = useLiveDemoCamera({ viewMode, skeletonColor });
+  } = useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks: handleLandmarks });
+
+  useEffect(() => {
+    setVideoElement(videoRef.current);
+  }, [videoRef]);
+
+  useEffect(() => {
+    sendLandmarksRef.current = sceneId === "fall" ? live.sendLandmarks : null;
+  }, [live.sendLandmarks, sceneId]);
   const cameraState = useMemo(() => ({
     cameraReady,
     modelReady,
@@ -64,15 +86,23 @@ export function TypicalDemoApp() {
   }, [clearTimers]);
 
   const markSafe = useCallback(() => {
+    if (live.active) {
+      live.respondSafe();
+      return;
+    }
     clearTimers();
     setFallPhase("idle");
-  }, [clearTimers]);
+  }, [clearTimers, live]);
 
   const contactEmergency = useCallback(() => {
+    if (live.active) {
+      live.confirmAlarm();
+      return;
+    }
     clearTimers();
     setFallPhase("contacting");
     timersRef.current = [window.setTimeout(() => setFallPhase("resolved"), 2400)];
-  }, [clearTimers]);
+  }, [clearTimers, live]);
 
   useEffect(() => () => clearTimers(), [clearTimers]);
 
@@ -80,14 +110,15 @@ export function TypicalDemoApp() {
     function onKeyDown(event) {
       if (["INPUT", "TEXTAREA", "BUTTON"].includes(document.activeElement?.tagName)) return;
       if (/^[1-4]$/.test(event.key)) selectScene(DEMO_SCENES[Number(event.key) - 1].id);
-      if (event.code === "Space" && sceneId === "fall" && fallPhase === "idle") {
+      if (event.code === "Space" && sceneId === "fall" && fallPhase === "idle" && !live.active) {
+        // 真实决策流接管时，跌倒只能来自镜头前的动作，空格剧本让位。
         event.preventDefault();
         startFall();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [fallPhase, sceneId, selectScene, startFall]);
+  }, [fallPhase, live.active, sceneId, selectScene, startFall]);
 
   async function enterFullscreen() {
     if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
@@ -105,6 +136,11 @@ export function TypicalDemoApp() {
         </div>
         <div className="topbar-actions">
           <span className={`camera-health ${cameraReady ? "is-online" : ""}`}><VideocamRoundedIcon />{cameraReady ? "摄像头已连接" : "摄像头连接中"}</span>
+          {sceneId === "fall" && (
+            <span className={`camera-health live-link-health ${live.active ? "is-online" : ""}`}>
+              {live.active ? "B 决策流已接入" : "演示脚本模式"}
+            </span>
+          )}
           <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>全屏演示</Button>
         </div>
       </header>
@@ -127,7 +163,9 @@ export function TypicalDemoApp() {
       <div className="demo-workspace">
         <DevicePanel
           scene={scene}
-          fallPhase={fallPhase}
+          fallPhase={effectivePhase}
+          fallStateOverride={live.active ? live.fallState : null}
+          liveActive={live.active}
           kitchenShared={kitchenShared}
           canvasRef={deviceCanvasRef}
           camera={cameraState}
@@ -145,7 +183,9 @@ export function TypicalDemoApp() {
 
         <ChildPhone
           scene={scene}
-          fallPhase={fallPhase}
+          fallPhase={effectivePhase}
+          fallStateOverride={live.active ? live.fallState : null}
+          emergencyNote={live.active ? live.emergencyNote : null}
           kitchenShared={kitchenShared}
           canvasRef={phoneCanvasRef}
           camera={cameraState}

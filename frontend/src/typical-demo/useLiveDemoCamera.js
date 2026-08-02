@@ -43,7 +43,7 @@ function paintTarget(canvas, source) {
   context.drawImage(source, 0, 0, rect.width, rect.height);
 }
 
-export function useLiveDemoCamera({ viewMode, skeletonColor }) {
+export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null }) {
   const videoRef = useRef(null);
   const deviceCanvasRef = useRef(null);
   const phoneCanvasRef = useRef(null);
@@ -57,10 +57,15 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
   const renderCanvasRef = useRef(null);
   const viewModeRef = useRef(viewMode);
   const skeletonColorRef = useRef(skeletonColor);
+  const onLandmarksRef = useRef(onLandmarks);
   const fallbackRef = useRef(false);
   const detectedRef = useRef(false);
   const cameraReadyRef = useRef(false);
   const modelReadyRef = useRef(false);
+
+  useEffect(() => {
+    onLandmarksRef.current = onLandmarks;
+  }, [onLandmarks]);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [modelReady, setModelReady] = useState(false);
@@ -204,6 +209,11 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
         landmarksRef.current = result?.landmarks?.[0] ? mapLandmarks(result.landmarks[0]) : [];
         const mask = result?.segmentationMasks?.[0];
         if (mask) updateMask(mask);
+        // Real inference only: scripted fallback skeletons must never feed
+        // the live perception link.
+        if (landmarksRef.current.length === 17) {
+          onLandmarksRef.current?.(landmarksRef.current, now);
+        }
       } catch {
         landmarksRef.current = [];
       }

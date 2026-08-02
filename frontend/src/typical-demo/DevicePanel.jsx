@@ -17,6 +17,8 @@ function StatusSymbol({ sceneId, fallPhase }) {
 export function DevicePanel({
   scene,
   fallPhase,
+  fallStateOverride = null,
+  liveActive = false,
   kitchenShared,
   canvasRef,
   camera,
@@ -26,7 +28,7 @@ export function DevicePanel({
   onSafe,
   onResetFall,
 }) {
-  const fallState = FALL_PHASES[fallPhase];
+  const fallState = fallStateOverride || FALL_PHASES[fallPhase];
   const activeStatus = scene.id === "fall" ? fallState.status : scene.status;
   const activeSummary = scene.id === "fall" ? fallState.message : scene.summary;
   const danger = scene.id === "fall" && fallPhase !== "idle";
@@ -87,13 +89,34 @@ export function DevicePanel({
       {scene.id === "fall" && (
         <div className="interaction-card fall-controls">
           <div>
-            <b>{fallPhase === "idle" ? "准备深夜跌倒演示" : "演示流程正在双端同步"}</b>
-            <p>{fallPhase === "idle" ? "准备好动作后点击按钮或按空格键。风险判断为可控剧本触发。" : "候选检测不等于真实跌倒结论；当前按演示时序推进。"}</p>
+            <b>
+              {liveActive
+                ? "真实决策流已接管（A 感知 + B 决策）"
+                : fallPhase === "idle" ? "准备深夜跌倒演示" : "演示流程正在双端同步"}
+            </b>
+            <p>
+              {liveActive
+                ? "跌倒由镜头前动作触发：A 判定候选、B 询问确认并升级家属，本面板按钮即老人的真实回应。"
+                : fallPhase === "idle"
+                  ? "准备好动作后点击按钮或按空格键。风险判断为可控剧本触发。"
+                  : "候选检测不等于真实跌倒结论；当前按演示时序推进。"}
+            </p>
           </div>
           <div className="control-actions">
-            {fallPhase === "idle" && <Button variant="contained" color="error" onClick={onStartFall}>开始跌倒流程</Button>}
-            {["candidate", "checking"].includes(fallPhase) && <Button variant="outlined" color="success" onClick={onSafe}>我没事，解除候选</Button>}
-            {!["idle", "candidate", "checking"].includes(fallPhase) && <Button variant="outlined" onClick={onResetFall}>重置场景</Button>}
+            {!liveActive && fallPhase === "idle" && (
+              <Button variant="contained" color="error" onClick={onStartFall}>开始跌倒流程</Button>
+            )}
+            {["candidate", "checking"].includes(fallPhase) && (
+              <Button variant="outlined" color="success" onClick={onSafe}>
+                {liveActive ? "我没事（回应 B 的询问）" : "我没事，解除候选"}
+              </Button>
+            )}
+            {!liveActive && !["idle", "candidate", "checking"].includes(fallPhase) && (
+              <Button variant="outlined" onClick={onResetFall}>重置场景</Button>
+            )}
+            {liveActive && ["emergency", "contacting"].includes(fallPhase) && (
+              <Button variant="outlined" color="success" onClick={onSafe}>我没事（迟到平安）</Button>
+            )}
           </div>
         </div>
       )}
