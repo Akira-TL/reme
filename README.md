@@ -39,6 +39,22 @@ uv run mypy
 
 启动 B（决策服务）前加载 key：`source ~/.config/reme/mimo.env`。key 文件在仓库外、每台机器各自生成，不进 git。
 
+### ABC 单机实时验收
+
+在仓库根目录执行一个前台命令：
+
+```bash
+uv run reme-local-demo
+```
+
+该命令会自动读取 `~/.config/reme/mimo.env`，依次启动：
+
+- A 感知服务：`http://127.0.0.1:8770`
+- B 决策服务：`http://127.0.0.1:8100`
+- C Vite 页面：`http://127.0.0.1:4174/typical-demo.html`
+
+浏览器打开验收页面并允许摄像头权限。页面默认进入跌倒链路验收，并在同一页面显示 C 摄像头输入、A 姿态/转变事件和 B/MiMo 决策状态。按 `Ctrl+C` 会统一停止三个本地进程；不使用 systemd，也不由 B 静态托管前端。
+
 The existing `reme-demo` command and motion-data files came from an early exploratory spike. They are not an accepted architecture and should not be used to constrain the feasibility experiments.
 
 ## Immediate milestone

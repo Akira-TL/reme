@@ -3,14 +3,14 @@ import RestartAltRoundedIcon from "@mui/icons-material/RestartAltRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import { Button } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
+import { RuntimeInspector } from "./RuntimeInspector";
 import { DEMO_SCENES } from "./scenes";
 import { useFallLiveLink } from "./useFallLiveLink";
 import { useLiveDemoCamera } from "./useLiveDemoCamera";
 
 export function TypicalDemoApp() {
-  const [sceneId, setSceneId] = useState("living");
+  const [sceneId, setSceneId] = useState("fall");
   const [fallPhase, setFallPhase] = useState("idle");
   const [kitchenShared, setKitchenShared] = useState(false);
   const [videoElement, setVideoElement] = useState(null);
@@ -35,7 +35,6 @@ export function TypicalDemoApp() {
   const {
     videoRef,
     deviceCanvasRef,
-    phoneCanvasRef,
     cameraReady,
     modelReady,
     segmentationReady,
@@ -94,16 +93,6 @@ export function TypicalDemoApp() {
     setFallPhase("idle");
   }, [clearTimers, live]);
 
-  const contactEmergency = useCallback(() => {
-    if (live.active) {
-      live.confirmAlarm();
-      return;
-    }
-    clearTimers();
-    setFallPhase("contacting");
-    timersRef.current = [window.setTimeout(() => setFallPhase("resolved"), 2400)];
-  }, [clearTimers, live]);
-
   useEffect(() => () => clearTimers(), [clearTimers]);
 
   useEffect(() => {
@@ -132,13 +121,13 @@ export function TypicalDemoApp() {
       <header className="demo-topbar">
         <div className="brand-lockup">
           <span className="reme-word">Reme</span>
-          <div><h1>典型场景双端演示</h1><p>智能设备端与子女设备端实时联动</p></div>
+          <div><h1>ABC 单机实时验收</h1><p>同一台电脑运行感知、决策与前端展示</p></div>
         </div>
         <div className="topbar-actions">
           <span className={`camera-health ${cameraReady ? "is-online" : ""}`}><VideocamRoundedIcon />{cameraReady ? "摄像头已连接" : "摄像头连接中"}</span>
           {sceneId === "fall" && (
             <span className={`camera-health live-link-health ${live.active ? "is-online" : ""}`}>
-              {live.active ? "B 决策流已接入" : "演示脚本模式"}
+              {live.active ? "ABC 链路已接入" : "等待 ABC 链路"}
             </span>
           )}
           <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>全屏演示</Button>
@@ -181,23 +170,17 @@ export function TypicalDemoApp() {
           <b>实时同步</b>
         </div>
 
-        <ChildPhone
+        <RuntimeInspector
           scene={scene}
           fallPhase={effectivePhase}
-          fallStateOverride={live.active ? live.fallState : null}
-          emergencyNote={live.active ? live.emergencyNote : null}
-          kitchenShared={kitchenShared}
-          canvasRef={phoneCanvasRef}
           camera={cameraState}
-          viewMode={viewMode}
-          onContact={contactEmergency}
-          onSafe={markSafe}
+          live={live}
         />
       </div>
 
       <footer className="demo-footer">
         <span><b>现场模式</b> 摄像头帧仅在当前页面内存中处理，不默认录制</span>
-        <span><b>演示控制</b> 数字键 1–4 切换场景，深夜场景按空格启动流程</span>
+        <span><b>验收入口</b> 默认进入真实跌倒链路；数字键 1–4 可查看其他场景</span>
         <button type="button" onClick={() => selectScene(sceneId)}><RestartAltRoundedIcon />重置当前场景</button>
       </footer>
     </main>

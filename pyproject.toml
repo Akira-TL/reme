@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 reme-demo = "reme.demo:entrypoint"
+reme-local-demo = "reme.local_demo:main"
 reme-decision-server = "reme.decision.server:main"
 reme-decision-smoke = "reme.decision.mimo.adapter:main"
 reme-mimo-experiment = "reme.decision.mimo.experiment:main"
