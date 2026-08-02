@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import CameraAltRoundedIcon from "@mui/icons-material/CameraAltRounded";
+import HomeRoundedIcon from "@mui/icons-material/HomeRounded";
 import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
+import PersonalInjuryRoundedIcon from "@mui/icons-material/PersonalInjuryRounded";
+import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
+import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import { createMoveNetBrowserEstimator } from "../model/movenet.js";
 import {
   captureJpegBase64,
@@ -10,6 +14,13 @@ import {
 } from "./activityRecognition.js";
 import { getRelayBase, relayHttpUrl, relayWebSocketUrl } from "./config.js";
 import { createControllerMediaBridge } from "./controllerMedia.js";
+import {
+  clearControllerSession,
+  controllerReconnectDelayMs,
+  readControllerSession,
+  updateControllerSession,
+  writeControllerSession,
+} from "./controllerSession.js";
 import { createFallTransitionDetector } from "./fallDetection.js";
 import {
   advanceControllerEventSequence,
@@ -19,8 +30,10 @@ import {
   createMediaGrantRequest,
   createMediaGrantRevoke,
   createPoseFrame,
+  isControllerReady,
   isDemoEvent,
   isForwardedMediaSignal,
+  isHeartbeatAck,
 } from "./protocol.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import { createMonitorState, reduceMonitorState } from "./state.js";
@@ -29,12 +42,41 @@ const MIN_PUBLISH_INTERVAL_MS = 100;
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const COOKING_SAMPLE_INTERVAL_MS = 4_000;
 const FALL_REPLY_WINDOW_MS = 8_000;
+const CONTROLLER_READY_TIMEOUT_MS = 5_000;
 
 const DEMO_SCENES = Object.freeze([
-  { id: "living", number: "01", label: "日常", detail: "抽象客厅 + 火柴人" },
-  { id: "kitchen", number: "02", label: "做饭", detail: "视觉识别 + 家庭心跳" },
-  { id: "bathroom", number: "03", label: "完全隐私", detail: "仅火柴人" },
-  { id: "fall", number: "04", label: "跌倒", detail: "问询后规则告警" },
+  {
+    id: "living",
+    number: "01",
+    label: "日常",
+    shortLabel: "日常",
+    detail: "抽象客厅 + 火柴人",
+    Icon: HomeRoundedIcon,
+  },
+  {
+    id: "kitchen",
+    number: "02",
+    label: "做饭",
+    shortLabel: "做饭",
+    detail: "视觉识别 + 家庭心跳",
+    Icon: RestaurantRoundedIcon,
+  },
+  {
+    id: "bathroom",
+    number: "03",
+    label: "完全隐私",
+    shortLabel: "隐私",
+    detail: "仅火柴人",
+    Icon: VisibilityOffRoundedIcon,
+  },
+  {
+    id: "fall",
+    number: "04",
+    label: "跌倒",
+    shortLabel: "跌倒",
+    detail: "问询后规则告警",
+    Icon: PersonalInjuryRoundedIcon,
+  },
 ]);
 
 function createActivityState() {
@@ -97,11 +139,25 @@ function waitForVideo(video) {
 }
 
 export function MonitorApp() {
-  const [ui, dispatch] = useReducer(reduceMonitorState, undefined, createMonitorState);
+  const [restoredControllerSession] = useState(() => readControllerSession({
+    now: Date.now(),
+  }));
+  const [ui, dispatch] = useReducer(
+    reduceMonitorState,
+    restoredControllerSession,
+    (restored) => restored
+      ? reduceMonitorState(createMonitorState(), {
+        type: "unlocked",
+        sessionId: restored.sessionId,
+      })
+      : createMonitorState(),
+  );
   const [controlKey, setControlKey] = useState("");
   const [localFrame, setLocalFrame] = useState(null);
   const [stats, setStats] = useState({ inferenceMs: null, published: 0, quality: "—" });
-  const [sceneId, setSceneId] = useState("living");
+  const [sceneId, setSceneId] = useState(
+    () => restoredControllerSession?.sceneId || "living",
+  );
   const [activity, setActivity] = useState(createActivityState);
   const [heartCard, setHeartCard] = useState(null);
   const [moment, setMoment] = useState({ status: "idle", size: 0, mimeType: "" });
@@ -112,6 +168,11 @@ export function MonitorApp() {
   const tokenRef = useRef(null);
   const sessionIdRef = useRef(null);
   const controllerRef = useRef(null);
+  const connectControllerRef = useRef(null);
+  const reconnectTimerRef = useRef(0);
+  const reconnectAttemptRef = useRef(0);
+  const leaseExpiresAtRef = useRef(null);
+  const stopCaptureRef = useRef(null);
   const streamRef = useRef(null);
   const estimatorRef = useRef(null);
   const mediaBridgeRef = useRef(null);
@@ -209,11 +270,17 @@ export function MonitorApp() {
     };
   }, []);
 
+  const clearReconnectTimer = useCallback(() => {
+    window.clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = 0;
+  }, []);
+
   const closeControllerSocket = useCallback(() => {
     const connection = controllerRef.current;
     controllerRef.current = null;
     if (!connection) return;
     window.clearInterval(connection.heartbeat);
+    window.clearTimeout(connection.readyTimeout);
     connection.socket.onopen = null;
     connection.socket.onmessage = null;
     connection.socket.onclose = null;
@@ -222,7 +289,53 @@ export function MonitorApp() {
     mediaBridgeRef.current?.stopGrant(null, "socket_closed");
   }, []);
 
+  const invalidateControllerSession = useCallback((error) => {
+    clearReconnectTimer();
+    intentionalCloseRef.current = true;
+    closeControllerSocket();
+    clearControllerSession();
+    tokenRef.current = null;
+    sessionIdRef.current = null;
+    leaseExpiresAtRef.current = null;
+    sequenceRef.current = 0;
+    eventSequenceRef.current = 0;
+    reconnectAttemptRef.current = 0;
+    void stopCaptureRef.current?.();
+    intentionalCloseRef.current = false;
+    dispatch({
+      type: "session_expired",
+      error: error || "短期控制会话已到期，请重新输入密钥。",
+    });
+  }, [clearReconnectTimer, closeControllerSocket]);
+
+  const scheduleControllerReconnect = useCallback(() => {
+    clearReconnectTimer();
+    const token = tokenRef.current;
+    const expiresAtMs = leaseExpiresAtRef.current;
+    if (!token) return;
+    if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) {
+      invalidateControllerSession("短期控制会话已到期，请重新输入密钥。");
+      return;
+    }
+    const attempt = reconnectAttemptRef.current;
+    const delayMs = controllerReconnectDelayMs(attempt);
+    reconnectAttemptRef.current = attempt + 1;
+    dispatch({
+      type: "degraded",
+      connection: "connecting",
+      captureActive: captureActiveRef.current,
+      error: captureActiveRef.current
+        ? `控制链路中断，摄像头仍在本机运行；${Math.ceil(delayMs / 100) / 10} 秒后自动恢复。`
+        : `控制链路中断，${Math.ceil(delayMs / 100) / 10} 秒后自动恢复。`,
+    });
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = 0;
+      if (tokenRef.current === token) connectControllerRef.current?.(token);
+    }, delayMs);
+  }, [clearReconnectTimer, invalidateControllerSession]);
+
   const connectController = useCallback((token) => {
+    clearReconnectTimer();
     intentionalCloseRef.current = true;
     closeControllerSocket();
     intentionalCloseRef.current = false;
@@ -235,15 +348,11 @@ export function MonitorApp() {
         controllerProtocols(token),
       );
     } catch {
-      dispatch({
-        type: "degraded",
-        connection: "disconnected",
-        error: "无法建立安全控制连接。",
-      });
+      scheduleControllerReconnect();
       return;
     }
 
-    const connection = { socket, heartbeat: 0 };
+    const connection = { socket, heartbeat: 0, readyTimeout: 0, ready: false };
     controllerRef.current = connection;
     socket.onopen = () => {
       if (controllerRef.current !== connection) return;
@@ -251,18 +360,17 @@ export function MonitorApp() {
         socket.close(1002, "unexpected subprotocol");
         return;
       }
+      socket.send(JSON.stringify({ type: "heartbeat" }));
       connection.heartbeat = window.setInterval(() => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "heartbeat" }));
         }
       }, HEARTBEAT_INTERVAL_MS);
-      dispatch({ type: "controller_connected" });
-      publishEvent("scene_state", {
-        scene_id: sceneIdRef.current,
-        visual_mode: sceneIdRef.current === "bathroom"
-          ? "skeleton_only"
-          : "abstract_environment",
-      });
+      connection.readyTimeout = window.setTimeout(() => {
+        if (!connection.ready && socket.readyState === WebSocket.OPEN) {
+          socket.close(4000, "controller_ready_timeout");
+        }
+      }, CONTROLLER_READY_TIMEOUT_MS);
     };
     socket.onmessage = (message) => {
       if (controllerRef.current !== connection || typeof message.data !== "string") return;
@@ -270,6 +378,64 @@ export function MonitorApp() {
       try {
         value = JSON.parse(message.data);
       } catch {
+        return;
+      }
+      if (value?.type === "controller_ready") {
+        if (!tokenRef.current) return;
+        if (!isControllerReady(value) || value.session_id !== sessionIdRef.current) {
+          invalidateControllerSession("控制会话校验失败，请重新输入密钥。");
+          return;
+        }
+        const stored = writeControllerSession({
+          version: 1,
+          token: tokenRef.current,
+          sessionId: value.session_id,
+          leaseExpiresAtMs: value.lease_expires_at_ms,
+          sceneId: sceneIdRef.current,
+        }, {
+          now: Date.now(),
+        });
+        if (!stored) {
+          invalidateControllerSession("短期控制会话已到期，请重新输入密钥。");
+          return;
+        }
+        connection.ready = true;
+        window.clearTimeout(connection.readyTimeout);
+        leaseExpiresAtRef.current = value.lease_expires_at_ms;
+        sequenceRef.current = value.last_frame_sequence + 1;
+        if (value.last_event_sequence >= 0) {
+          eventSequenceRef.current = advanceControllerEventSequence(
+            eventSequenceRef.current,
+            value.last_event_sequence,
+          );
+        }
+        reconnectAttemptRef.current = 0;
+        dispatch({ type: "controller_connected" });
+        publishEvent("scene_state", {
+          scene_id: sceneIdRef.current,
+          visual_mode: sceneIdRef.current === "bathroom"
+            ? "skeleton_only"
+            : "abstract_environment",
+        });
+        return;
+      }
+      if (!connection.ready) return;
+      if (isHeartbeatAck(value)) {
+        if (!tokenRef.current || !sessionIdRef.current) return;
+        const stored = writeControllerSession({
+          version: 1,
+          token: tokenRef.current,
+          sessionId: sessionIdRef.current,
+          leaseExpiresAtMs: value.lease_expires_at_ms,
+          sceneId: sceneIdRef.current,
+        }, {
+          now: Date.now(),
+        });
+        if (!stored) {
+          invalidateControllerSession("短期控制会话已到期，请重新输入密钥。");
+          return;
+        }
+        leaseExpiresAtRef.current = value.lease_expires_at_ms;
         return;
       }
       if (isForwardedMediaSignal(value)) {
@@ -327,20 +493,45 @@ export function MonitorApp() {
     socket.onclose = () => {
       if (controllerRef.current !== connection) return;
       window.clearInterval(connection.heartbeat);
+      window.clearTimeout(connection.readyTimeout);
       controllerRef.current = null;
-      if (!intentionalCloseRef.current) {
-        dispatch({
-          type: "degraded",
-          connection: "disconnected",
-          captureActive: captureActiveRef.current,
-          error: captureActiveRef.current
-            ? "中继连接已断开：摄像头仍在本机运行，但评委端不会收到新骨架。"
-            : "中继连接已断开，请在租约到期前重新连接。",
-        });
-      }
+      mediaBridgeRef.current?.stopGrant(null, "socket_closed");
+      activeGrantRef.current = null;
+      window.clearTimeout(grantExpiryRef.current);
+      grantExpiryRef.current = 0;
+      setMediaStatus({ state: "idle", detail: "" });
+      if (!intentionalCloseRef.current) scheduleControllerReconnect();
     };
     socket.onerror = () => socket.close();
-  }, [closeControllerSocket, publishEvent]);
+  }, [
+    clearReconnectTimer,
+    closeControllerSocket,
+    invalidateControllerSession,
+    publishEvent,
+    scheduleControllerReconnect,
+  ]);
+
+  useEffect(() => {
+    connectControllerRef.current = connectController;
+    return () => {
+      if (connectControllerRef.current === connectController) {
+        connectControllerRef.current = null;
+      }
+    };
+  }, [connectController]);
+
+  useEffect(() => {
+    const restored = restoredControllerSession;
+    if (!restored) return;
+    tokenRef.current = restored.token;
+    sessionIdRef.current = restored.sessionId;
+    leaseExpiresAtRef.current = restored.leaseExpiresAtMs;
+    sceneIdRef.current = restored.sceneId;
+    sequenceRef.current = 0;
+    eventSequenceRef.current = 0;
+    reconnectAttemptRef.current = 0;
+    connectController(restored.token);
+  }, [connectController, restoredControllerSession]);
 
   const requestMediaGrant = useCallback((eventId, scope, expiresInMs) => {
     const socket = controllerRef.current?.socket;
@@ -492,6 +683,9 @@ export function MonitorApp() {
     heartCardRef.current = null;
     sceneIdRef.current = nextSceneId;
     setSceneId(nextSceneId);
+    updateControllerSession({ sceneId: nextSceneId }, {
+      now: Date.now(),
+    });
     setActivity(createActivityState());
     setHeartCard(null);
     setFall(emptyFall);
@@ -527,6 +721,13 @@ export function MonitorApp() {
     setLocalFrame(null);
   }, [clearFallTimer, stopLocalMoment]);
 
+  useEffect(() => {
+    stopCaptureRef.current = stopCapture;
+    return () => {
+      if (stopCaptureRef.current === stopCapture) stopCaptureRef.current = null;
+    };
+  }, [stopCapture]);
+
   const unlock = useCallback(async (event) => {
     event.preventDefault();
     const key = controlKey.trim();
@@ -539,16 +740,45 @@ export function MonitorApp() {
         body: JSON.stringify({ key }),
       });
       const payload = await response.json().catch(() => null);
-      if (!response.ok || !payload?.ok || !payload.token || !payload.session_id) {
+      if (
+        !response.ok
+        || !payload?.ok
+        || !payload.token
+        || !payload.session_id
+        || !Number.isFinite(payload.lease_expires_at_ms)
+      ) {
         dispatch({ type: "degraded", error: unlockError(response, payload) });
+        return;
+      }
+
+      const stored = writeControllerSession({
+        version: 1,
+        token: payload.token,
+        sessionId: payload.session_id,
+        leaseExpiresAtMs: payload.lease_expires_at_ms,
+        sceneId: sceneIdRef.current,
+      }, {
+        now: Date.now(),
+      });
+      setControlKey("");
+      if (!stored) {
+        await fetch(relayHttpUrl("/api/release"), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${payload.token}` },
+        }).catch(() => null);
+        dispatch({
+          type: "degraded",
+          error: "当前浏览器无法保存短期控制会话，请退出隐私模式或允许会话存储后重试。",
+        });
         return;
       }
 
       tokenRef.current = payload.token;
       sessionIdRef.current = payload.session_id;
+      leaseExpiresAtRef.current = payload.lease_expires_at_ms;
       sequenceRef.current = 0;
       eventSequenceRef.current = 0;
-      setControlKey("");
+      reconnectAttemptRef.current = 0;
       dispatch({ type: "unlocked", sessionId: payload.session_id });
       connectController(payload.token);
     } catch {
@@ -702,17 +932,12 @@ export function MonitorApp() {
   const releaseControl = useCallback(async () => {
     const token = tokenRef.current;
     intentionalCloseRef.current = true;
-    const socket = controllerRef.current?.socket;
-    let releasedOverSocket = false;
-    if (socket?.readyState === WebSocket.OPEN) {
-      try {
-        socket.send(JSON.stringify({ type: "release" }));
-        releasedOverSocket = true;
-      } catch {
-        // Fall through to the authenticated HTTP release path.
-      }
-    }
-    const releaseRequest = token && !releasedOverSocket
+    clearReconnectTimer();
+    clearControllerSession();
+    tokenRef.current = null;
+    sessionIdRef.current = null;
+    leaseExpiresAtRef.current = null;
+    const releaseRequest = token
       ? fetch(relayHttpUrl("/api/release"), {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -721,17 +946,19 @@ export function MonitorApp() {
     await stopCapture();
     await releaseRequest;
     closeControllerSocket();
-    tokenRef.current = null;
-    sessionIdRef.current = null;
     sequenceRef.current = 0;
     eventSequenceRef.current = 0;
+    reconnectAttemptRef.current = 0;
     intentionalCloseRef.current = false;
     dispatch({ type: "released" });
-  }, [closeControllerSocket, stopCapture]);
+  }, [clearReconnectTimer, closeControllerSocket, stopCapture]);
 
   const retryConnection = useCallback(() => {
-    if (tokenRef.current) connectController(tokenRef.current);
-  }, [connectController]);
+    const token = tokenRef.current;
+    if (!token) return;
+    clearReconnectTimer();
+    connectController(token);
+  }, [clearReconnectTimer, connectController]);
 
   useEffect(() => {
     if (
@@ -861,26 +1088,35 @@ export function MonitorApp() {
   }, [publishEvent, sceneId, stopLocalMoment, ui.captureActive, ui.connection, updateHeartCard]);
 
   useEffect(() => {
-    const releaseOnPageHide = () => {
-      const socket = controllerRef.current?.socket;
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "release" }));
-      }
+    const suspendController = () => {
       intentionalCloseRef.current = true;
+      clearReconnectTimer();
       closeControllerSocket();
       void stopCapture();
-      tokenRef.current = null;
-      sessionIdRef.current = null;
+      intentionalCloseRef.current = false;
     };
-    window.addEventListener("pagehide", releaseOnPageHide);
+    const resumeController = () => {
+      const token = tokenRef.current;
+      if (!token || controllerRef.current) return;
+      intentionalCloseRef.current = false;
+      clearReconnectTimer();
+      dispatch({ type: "capture_stopped" });
+      connectControllerRef.current?.(token);
+    };
+    window.addEventListener("pagehide", suspendController);
+    window.addEventListener("pageshow", resumeController);
+    window.addEventListener("online", resumeController);
     return () => {
-      window.removeEventListener("pagehide", releaseOnPageHide);
-      releaseOnPageHide();
+      window.removeEventListener("pagehide", suspendController);
+      window.removeEventListener("pageshow", resumeController);
+      window.removeEventListener("online", resumeController);
+      suspendController();
     };
-  }, [closeControllerSocket, stopCapture]);
+  }, [clearReconnectTimer, closeControllerSocket, stopCapture]);
 
   const locked = ui.phase === "locked" || (ui.phase === "degraded" && !ui.sessionId);
   const canStart = ui.connection === "connected" && !ui.captureActive && ui.phase !== "starting";
+  const activeScene = DEMO_SCENES.find((scene) => scene.id === sceneId) || DEMO_SCENES[0];
 
   return (
     <div className="demo-shell monitor-role">
@@ -889,11 +1125,15 @@ export function MonitorApp() {
           <span className="brand-mark">R</span>
           <span><b>Reme</b><small>现场采集控制台</small></span>
         </a>
-        <div className="role-lockup">
+        <div className={`role-lockup ${locked ? "is-locked" : "is-unlocked"}`}>
           <span className="role-pill monitor-pill">唯一监控端</span>
           {!locked && (
             <span className={`connection-pill is-${ui.connection}`}>
-              <i />{ui.connection === "connected" ? "控制租约在线" : "控制链路中断"}
+              <i />{ui.connection === "connected"
+                ? "控制租约在线"
+                : ui.connection === "connecting"
+                  ? "自动恢复中"
+                  : "控制链路中断"}
             </span>
           )}
         </div>
@@ -904,7 +1144,7 @@ export function MonitorApp() {
           <section className="unlock-copy">
             <div className="eyebrow">MONITOR ACCESS</div>
             <h1>监控入口<br />与旁观入口分开。</h1>
-            <p>只有一台设备可以取得控制租约。密钥只用于本次解锁，不会写入网址或浏览器存储。</p>
+            <p>只有一台设备可以取得控制租约。原始密钥不会保存；本标签页只保留可跨刷新的短期控制凭证。</p>
             <div className="boundary-list">
               <span><i>1</i>解锁唯一控制租约</span>
               <span><i>2</i>主动点击开启后置摄像头</span>
@@ -933,35 +1173,43 @@ export function MonitorApp() {
             <button className="primary-action" type="submit" disabled={!controlKey.trim() || ui.phase === "unlocking"}>
               {ui.phase === "unlocking" ? "正在验证…" : "解锁监控端"}
             </button>
-            <small>密钥经 HTTPS 发送给中继验证；页面不会保存它。</small>
+            <small>原始密钥不保存；短期凭证仅存本标签页，释放控制权或关闭标签页后失效。</small>
           </form>
         </main>
       ) : (
         <main className="monitor-layout">
-          <section className="monitor-stage">
-            <video
-              ref={videoRef}
-              muted
-              playsInline
-              className={`camera-preview ${sceneId === "bathroom" ? "is-privacy-hidden" : ""}`}
-            />
-            <div className="stage-grid" />
-            <SkeletonStage frame={localFrame} color="#ff5a00" className="monitor-skeleton" />
-            {!ui.captureActive && (
-              <div className="stage-placeholder compact">
-                <span className="camera-glyph" aria-hidden="true"><CameraAltRoundedIcon /></span>
-                <b>{ui.phase === "starting" ? "正在加载摄像头与模型…" : "摄像头尚未开启"}</b>
-                <p>只有点击下方按钮后，浏览器才会申请后置摄像头权限。</p>
+          <section className="monitor-visual-column">
+            <div className="monitor-stage">
+              <video
+                ref={videoRef}
+                muted
+                playsInline
+                className={`camera-preview ${sceneId === "bathroom" ? "is-privacy-hidden" : ""}`}
+              />
+              <div className="stage-grid" />
+              <SkeletonStage frame={localFrame} color="#ff5a00" className="monitor-skeleton" />
+              {!ui.captureActive && (
+                <div className="stage-placeholder compact">
+                  <span className="camera-glyph" aria-hidden="true"><CameraAltRoundedIcon /></span>
+                  <b>{ui.phase === "starting" ? "正在加载摄像头与模型…" : "摄像头尚未开启"}</b>
+                  <p>只有点击下方按钮后，浏览器才会申请后置摄像头权限。</p>
+                </div>
+              )}
+              <div className="stage-topline">
+                <span><i className={ui.phase === "live" ? "live-dot" : "wait-dot"} />{ui.phase === "live" ? "PUBLISHING" : "LOCAL / PAUSED"}</span>
+                <span>{sceneId === "bathroom" ? "完全隐私 · 画面本机也已遮蔽" : "原始画面默认仅在本机"}</span>
               </div>
-            )}
-            <div className="stage-topline">
-              <span><i className={ui.phase === "live" ? "live-dot" : "wait-dot"} />{ui.phase === "live" ? "PUBLISHING" : "LOCAL / PAUSED"}</span>
-              <span>{sceneId === "bathroom" ? "完全隐私 · 画面本机也已遮蔽" : "原始画面默认仅在本机"}</span>
             </div>
-            <div className={`monitor-scene-badge is-${sceneId}`}>
-              <small>{DEMO_SCENES.find((scene) => scene.id === sceneId)?.number}</small>
-              <b>{DEMO_SCENES.find((scene) => scene.id === sceneId)?.label}</b>
-              <span>{DEMO_SCENES.find((scene) => scene.id === sceneId)?.detail}</span>
+            <div
+              className={`monitor-scene-summary is-${sceneId}`}
+              role="status"
+              aria-live="polite"
+            >
+              <small>{activeScene.number}</small>
+              <span>
+                <b>{activeScene.label}</b>
+                <em>{activeScene.detail}</em>
+              </span>
             </div>
           </section>
 
@@ -973,17 +1221,27 @@ export function MonitorApp() {
             </div>
 
             <nav className="monitor-scene-tabs" aria-label="选择演示场景">
-              {DEMO_SCENES.map((scene) => (
-                <button
-                  type="button"
-                  key={scene.id}
-                  className={sceneId === scene.id ? "is-active" : ""}
-                  onClick={() => selectScene(scene.id)}
-                >
-                  <small>{scene.number}</small>
-                  <span>{scene.label}</span>
-                </button>
-              ))}
+              {DEMO_SCENES.map((scene) => {
+                const SceneIcon = scene.Icon;
+                const className = [
+                  sceneId === scene.id ? "is-active" : "",
+                  scene.id === "fall" && fall.phase === "escalated" ? "has-alert" : "",
+                ].filter(Boolean).join(" ");
+                return (
+                  <button
+                    type="button"
+                    key={scene.id}
+                    className={className}
+                    aria-label={`${scene.label}场景：${scene.detail}`}
+                    aria-pressed={sceneId === scene.id}
+                    onClick={() => selectScene(scene.id)}
+                  >
+                    <SceneIcon className="scene-tab-icon" aria-hidden="true" />
+                    <span>{scene.shortLabel}</span>
+                    <small>{scene.number}</small>
+                  </button>
+                );
+              })}
             </nav>
 
             {ui.error && (
@@ -991,7 +1249,7 @@ export function MonitorApp() {
                 <b>已明确降级</b>
                 <p>{ui.error}</p>
                 {ui.connection !== "connected" && (
-                  <button type="button" className="secondary-action" onClick={retryConnection}>重新连接中继</button>
+                  <button type="button" className="secondary-action" onClick={retryConnection}>立即重试连接</button>
                 )}
                 <a href="/typical-demo.html">改用单机演示备份</a>
               </div>

@@ -216,6 +216,11 @@ export function reduceMonitorState(state, action) {
       };
     case "released":
       return createMonitorState();
+    case "session_expired":
+      return {
+        ...createMonitorState(),
+        error: action.error || "短期控制会话已失效",
+      };
     default:
       return state;
   }

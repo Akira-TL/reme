@@ -105,6 +105,12 @@ interface EventSequenceRow {
   last_event_sequence: number;
 }
 
+interface FrameSequenceRow {
+  [key: string]: SqlStorageValue;
+  session_id: string;
+  last_frame_sequence: number;
+}
+
 interface EventStateRow {
   [key: string]: SqlStorageValue;
   event_type: DemoEventType;
@@ -160,6 +166,11 @@ export class DemoRoom extends DurableObject<Env> {
           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
           session_id TEXT NOT NULL,
           last_event_sequence INTEGER NOT NULL CHECK (last_event_sequence >= -1)
+        );
+        CREATE TABLE IF NOT EXISTS room_frame_sequence (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          session_id TEXT NOT NULL,
+          last_frame_sequence INTEGER NOT NULL CHECK (last_frame_sequence >= -1)
         );
         CREATE TABLE IF NOT EXISTS demo_event_state (
           event_type TEXT PRIMARY KEY,
@@ -337,13 +348,19 @@ export class DemoRoom extends DurableObject<Env> {
       return;
     }
 
-    if (
-      attachment.latestFrame !== null &&
-      validation.frame.sequence <= attachment.latestFrame.sequence
-    ) {
+    const frameSequence = this.frameSequence(attachment.sessionId);
+    if (validation.frame.sequence <= frameSequence.last_frame_sequence) {
       rejectSocket(ws, "non_increasing_sequence", 1008);
       return;
     }
+
+    this.ctx.storage.sql.exec(
+      `UPDATE room_frame_sequence
+          SET last_frame_sequence = ?
+        WHERE singleton = 1 AND session_id = ?`,
+      validation.frame.sequence,
+      attachment.sessionId,
+    );
 
     ws.serializeAttachment({
       ...attachment,
@@ -725,6 +742,22 @@ export class DemoRoom extends DurableObject<Env> {
     return sequence;
   }
 
+  private frameSequence(sessionId: string): FrameSequenceRow {
+    const existing = this.ctx.storage.sql.exec<FrameSequenceRow>(
+      `SELECT session_id, last_frame_sequence
+         FROM room_frame_sequence
+        WHERE singleton = 1`,
+    ).toArray()[0];
+    if (existing !== undefined && existing.session_id === sessionId) return existing;
+    this.ctx.storage.sql.exec("DELETE FROM room_frame_sequence WHERE singleton = 1");
+    this.ctx.storage.sql.exec(
+      `INSERT INTO room_frame_sequence (singleton, session_id, last_frame_sequence)
+       VALUES (1, ?, -1)`,
+      sessionId,
+    );
+    return { session_id: sessionId, last_frame_sequence: -1 };
+  }
+
   private grantById(grantId: string): GrantRow | null {
     return this.ctx.storage.sql.exec<GrantRow>(
       `SELECT grant_id, session_id, event_id, scope, expires_at_ms, status
@@ -884,6 +917,7 @@ export class DemoRoom extends DurableObject<Env> {
     this.ctx.storage.sql.exec("DELETE FROM media_grant");
     this.ctx.storage.sql.exec("DELETE FROM demo_event_state");
     this.ctx.storage.sql.exec("DELETE FROM room_event_sequence WHERE singleton = 1");
+    this.ctx.storage.sql.exec("DELETE FROM room_frame_sequence WHERE singleton = 1");
     this.ctx.storage.sql.exec(
       `INSERT INTO control_lease
          (singleton, token_hash, session_id, expires_at_ms)
@@ -894,6 +928,11 @@ export class DemoRoom extends DurableObject<Env> {
     );
     this.ctx.storage.sql.exec(
       `INSERT INTO room_event_sequence (singleton, session_id, last_event_sequence)
+       VALUES (1, ?, -1)`,
+      sessionId,
+    );
+    this.ctx.storage.sql.exec(
+      `INSERT INTO room_frame_sequence (singleton, session_id, last_frame_sequence)
        VALUES (1, ?, -1)`,
       sessionId,
     );
@@ -999,6 +1038,8 @@ export class DemoRoom extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
+    const eventSequence = this.eventSequence(lease.session_id);
+    const frameSequence = this.frameSequence(lease.session_id);
     const attachment: ControllerAttachment = {
       role: "controller",
       tokenHash,
@@ -1015,6 +1056,8 @@ export class DemoRoom extends DurableObject<Env> {
         type: "controller_ready",
         session_id: lease.session_id,
         lease_expires_at_ms: lease.expires_at_ms,
+        last_event_sequence: eventSequence.last_event_sequence,
+        last_frame_sequence: frameSequence.last_frame_sequence,
       }),
     );
 

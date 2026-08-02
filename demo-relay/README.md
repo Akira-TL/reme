@@ -17,16 +17,35 @@ quality state, plus exactly 17 normalized MoveNet keypoints. `source_width` and
 `source_height` must be safe integers from 1 through 16384. `person_detected=false`
 requires `landmark_quality=unavailable`; a detected person must use `usable` or
 `degraded`. Viewer sockets are read-only, and binary/media payloads are rejected.
-The Durable Object stores the active lease plus bounded structured event and grant
-metadata in SQLite; its latest pose frame lives on the active controller's
-hibernation attachment and disappears with that socket.
+The Durable Object stores the active lease plus bounded structured event, grant,
+and authoritative event/frame sequence metadata in SQLite. Only the latest frame
+sequence number is persisted; the latest pose payload lives on the active
+controller's hibernation attachment and disappears with that socket.
 Late viewers first receive `{ "type": "viewer_ready", "viewer_id": "..." }`, then
 the latest persisted non-media `reme-demo-event/v1` state in event-sequence order,
-and finally a fresh pose snapshot when available. Event sequence state, the latest
+and finally a fresh pose snapshot when available. Event and frame sequence state, the latest
 scene/activity/card/alarm events, grant metadata, and the grant's fixed viewer ID
 audience live in Durable Object SQLite. WebSocket attachments carry the viewer ID
 or controller lease/frame snapshot across hibernation. No SDP, ICE candidate,
 image, audio, video frame, or Blob is written to SQLite or an attachment.
+
+The first controller message is an authoritative resume cursor:
+
+```json
+{
+  "type": "controller_ready",
+  "session_id": "...",
+  "lease_expires_at_ms": 0,
+  "last_event_sequence": -1,
+  "last_frame_sequence": -1
+}
+```
+
+Each accepted event or frame must use a sequence strictly greater than its
+corresponding cursor. A controller socket may reconnect with the same token and
+session until the lease TTL expires; disconnecting the socket does not release
+the lease, but it immediately revokes every active media grant for fail-closed
+privacy.
 
 `media_grant_request` is accepted only for a matching consented kitchen care card
 or matching escalated fall alarm. The generated short-lived grant includes only

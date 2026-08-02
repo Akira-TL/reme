@@ -13,8 +13,10 @@ import {
   createMediaGrantRevoke,
   createMediaSignal,
   createPoseFrame,
+  isControllerReady,
   isDemoEvent,
   isForwardedMediaSignal,
+  isHeartbeatAck,
   isMediaSignal,
   isPoseFrame,
   parseDemoEvent,
@@ -189,6 +191,10 @@ test("monitor reducer makes failures explicit and release forgets the session", 
   assert.equal(state.phase, "degraded");
   assert.equal(state.error, "模型加载失败");
   assert.deepEqual(reduceMonitorState(state, { type: "released" }), createMonitorState());
+  assert.deepEqual(
+    reduceMonitorState(state, { type: "session_expired", error: "租约已到期" }),
+    { ...createMonitorState(), error: "租约已到期" },
+  );
 });
 
 test("controller token is carried only by WebSocket subprotocol", () => {
@@ -386,4 +392,28 @@ test("controller event blocks leave deterministic room for Relay grant events", 
     CONTROLLER_EVENT_SEQUENCE_BLOCK_SIZE * 2,
   );
   assert.throws(() => advanceControllerEventSequence(-1, 0), TypeError);
+});
+
+test("controller resume messages require exact authoritative cursors", () => {
+  const ready = {
+    type: "controller_ready",
+    session_id: "session-a",
+    lease_expires_at_ms: 31_000,
+    last_event_sequence: -1,
+    last_frame_sequence: 42,
+  };
+  assert.equal(isControllerReady(ready), true);
+  assert.equal(isControllerReady({ ...ready, last_frame_sequence: -2 }), false);
+  assert.equal(isControllerReady({ ...ready, token: "forbidden" }), false);
+  assert.equal(isControllerReady({ ...ready, session_id: "bad session" }), false);
+
+  assert.equal(isHeartbeatAck({
+    type: "heartbeat_ack",
+    lease_expires_at_ms: 45_000,
+  }), true);
+  assert.equal(isHeartbeatAck({
+    type: "heartbeat_ack",
+    lease_expires_at_ms: 45_000,
+    session_id: "session-a",
+  }), false);
 });

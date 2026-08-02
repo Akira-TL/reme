@@ -83,6 +83,19 @@ describe("single-room demo relay", () => {
     });
   });
 
+  it("reports empty authoritative cursors for a new controller session", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+
+    await expect(nextJson(controller)).resolves.toEqual({
+      type: "controller_ready",
+      session_id: lease.session_id,
+      lease_expires_at_ms: lease.lease_expires_at_ms,
+      last_event_sequence: -1,
+      last_frame_sequence: -1,
+    });
+  });
+
   it("fans a valid frame out to every viewer", async () => {
     const lease = await unlock();
     const controller = await connectController(lease.token);
@@ -100,6 +113,65 @@ describe("single-room demo relay", () => {
     await expect(nextJson(controller)).resolves.toEqual({
       type: "frame_accepted",
       sequence: 1,
+    });
+  });
+
+  it("resumes the same token with authoritative event and frame cursors", async () => {
+    const lease = await unlock();
+    const firstController = await connectController(lease.token);
+    await nextJson(firstController);
+    const viewer = await connectViewer();
+
+    await publishEvent(
+      firstController,
+      makeSceneEvent(lease.session_id, 3, "kitchen"),
+      [viewer],
+    );
+    const frameAccepted = nextJson(firstController);
+    const frameReceived = nextJson(viewer);
+    firstController.send(JSON.stringify(makeFrame(lease.session_id, 7)));
+    await expect(frameAccepted).resolves.toEqual({
+      type: "frame_accepted",
+      sequence: 7,
+    });
+    await expect(frameReceived).resolves.toEqual(makeFrame(lease.session_id, 7));
+
+    await closeControllerSocket(firstController, 1000, "controller_refresh");
+    const status = await relayFetch("/api/status");
+    await expect(status.json()).resolves.toMatchObject({
+      controller_locked: true,
+      controller_connected: false,
+      session_id: lease.session_id,
+    });
+
+    const resumedController = await connectController(lease.token);
+    await expect(nextJson(resumedController)).resolves.toEqual({
+      type: "controller_ready",
+      session_id: lease.session_id,
+      lease_expires_at_ms: lease.lease_expires_at_ms,
+      last_event_sequence: 3,
+      last_frame_sequence: 7,
+    });
+
+    await publishEvent(
+      resumedController,
+      makeSceneEvent(lease.session_id, 1_024, "fall"),
+      [viewer],
+    );
+    const resumedFrameAccepted = nextJson(resumedController);
+    const resumedFrameReceived = nextJson(viewer);
+    resumedController.send(JSON.stringify(makeFrame(lease.session_id, 8)));
+    await expect(resumedFrameAccepted).resolves.toEqual({
+      type: "frame_accepted",
+      sequence: 8,
+    });
+    await expect(resumedFrameReceived).resolves.toEqual(makeFrame(lease.session_id, 8));
+
+    const rejection = nextJson(resumedController);
+    resumedController.send(JSON.stringify(makeFrame(lease.session_id, 8)));
+    await expect(rejection).resolves.toEqual({
+      type: "error",
+      error: "non_increasing_sequence",
     });
   });
 
@@ -419,6 +491,55 @@ describe("single-room demo relay", () => {
     await expect(revokeForA).resolves.toEqual(revokeAck.grant);
     await expect(revokeForB).resolves.toEqual(revokeAck.grant);
     await expectNoMessage(lateViewer);
+  });
+
+  it("revokes media grants on disconnect while keeping the lease resumable", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), [viewer]);
+    await publishEvent(
+      controller,
+      makeCareCardEvent(lease.session_id, 1, "consented"),
+      [viewer],
+    );
+
+    const grantedForViewer = nextJson(viewer);
+    const grantAckPromise = nextJson(controller);
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "cooking-1",
+      scope: "kitchen_moment",
+      expires_in_ms: 30_000,
+    }));
+    const grantAck = readGrantAck(await grantAckPromise, "media_grant_accepted");
+    await expect(grantedForViewer).resolves.toEqual(grantAck.grant);
+
+    const revokedForViewer = nextJson(viewer);
+    await closeControllerSocket(controller, 4001, "controller_network_lost");
+    await expect(revokedForViewer).resolves.toMatchObject({
+      event_sequence: 3,
+      event_type: "media_grant",
+      payload: {
+        grant_id: mediaGrantId(grantAck.grant),
+        status: "revoked",
+      },
+    });
+
+    const status = await relayFetch("/api/status");
+    await expect(status.json()).resolves.toMatchObject({
+      controller_locked: true,
+      controller_connected: false,
+      session_id: lease.session_id,
+    });
+    const resumedController = await connectController(lease.token);
+    await expect(nextJson(resumedController)).resolves.toMatchObject({
+      type: "controller_ready",
+      session_id: lease.session_id,
+      last_event_sequence: 3,
+      last_frame_sequence: -1,
+    });
   });
 
   it("issues fall media only for a matching escalated alarm", async () => {
@@ -750,6 +871,21 @@ async function connectController(token: string): Promise<WebSocket> {
   socket.accept();
   sockets.push(socket);
   return socket;
+}
+
+async function closeControllerSocket(
+  socket: WebSocket,
+  code: number,
+  reason: string,
+): Promise<void> {
+  socket.close(code, reason);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const status = await relayFetch("/api/status");
+    const payload = await status.json<{ controller_connected: boolean }>();
+    if (!payload.controller_connected) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("timed out waiting for controller disconnection");
 }
 
 function requireSocket(response: Response): WebSocket {

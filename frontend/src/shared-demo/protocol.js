@@ -108,6 +108,14 @@ const FORWARDED_MEDIA_SIGNAL_KEYS = [
   "signal_type",
   "target_id",
 ];
+const CONTROLLER_READY_KEYS = [
+  "last_event_sequence",
+  "last_frame_sequence",
+  "lease_expires_at_ms",
+  "session_id",
+  "type",
+];
+const HEARTBEAT_ACK_KEYS = ["lease_expires_at_ms", "type"];
 const DESCRIPTION_SIGNAL_KEYS = ["sdp"];
 const ICE_SIGNAL_KEYS = ["candidate", "sdp_mid", "sdp_mline_index"];
 const TORSO_SHOULDER_INDICES = Object.freeze([5, 6]);
@@ -140,6 +148,27 @@ function isOpaqueId(value) {
 
 function isNullableDeadline(value) {
   return value === null || (Number.isFinite(value) && value >= 0);
+}
+
+function isSequenceCursor(value) {
+  return Number.isSafeInteger(value) && value >= -1;
+}
+
+export function isControllerReady(value) {
+  return hasExactKeys(value, CONTROLLER_READY_KEYS)
+    && value.type === "controller_ready"
+    && isOpaqueId(value.session_id)
+    && Number.isFinite(value.lease_expires_at_ms)
+    && value.lease_expires_at_ms >= 0
+    && isSequenceCursor(value.last_event_sequence)
+    && isSequenceCursor(value.last_frame_sequence);
+}
+
+export function isHeartbeatAck(value) {
+  return hasExactKeys(value, HEARTBEAT_ACK_KEYS)
+    && value.type === "heartbeat_ack"
+    && Number.isFinite(value.lease_expires_at_ms)
+    && value.lease_expires_at_ms >= 0;
 }
 
 function isSceneStatePayload(value) {
