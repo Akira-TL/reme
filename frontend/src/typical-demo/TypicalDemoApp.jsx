@@ -70,7 +70,6 @@ export function TypicalDemoApp() {
     cameraReady,
     aspectRatio: cameraAspectRatio,
     modelReady,
-    segmentationReady,
     personDetected,
     backendSkeletonActive,
     skeletonSource,
@@ -96,7 +95,6 @@ export function TypicalDemoApp() {
     cameraReady,
     aspectRatio: cameraAspectRatio,
     modelReady,
-    segmentationReady,
     personDetected,
     backendSkeletonActive,
     skeletonSource,
@@ -110,7 +108,6 @@ export function TypicalDemoApp() {
     modelReady,
     personDetected,
     retryCamera,
-    segmentationReady,
     skeletonSource,
   ]);
 

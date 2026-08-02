@@ -90,7 +90,6 @@ export function useLiveDemoCamera({
   const localLandmarksRef = useRef([]);
   const backendLandmarksRef = useRef([]);
   const backendReceivedAtRef = useRef(0);
-  const maskCanvasRef = useRef(null);
   const deviceRenderCanvasRef = useRef(null);
   const phoneRenderCanvasRef = useRef(null);
   const deviceViewModeRef = useRef(deviceViewMode);
@@ -107,7 +106,6 @@ export function useLiveDemoCamera({
   const [cameraReady, setCameraReady] = useState(false);
   const [aspectRatio, setAspectRatio] = useState(DEFAULT_RENDER_WIDTH / DEFAULT_RENDER_HEIGHT);
   const [modelReady, setModelReady] = useState(false);
-  const [segmentationReady, setSegmentationReady] = useState(false);
   const [personDetected, setPersonDetected] = useState(false);
   const [backendSkeletonActive, setBackendSkeletonActive] = useState(false);
   const [cameraError, setCameraError] = useState("");
@@ -195,7 +193,7 @@ export function useLiveDemoCamera({
           minPoseDetectionConfidence: 0.5,
           minPosePresenceConfidence: 0.5,
           minTrackingConfidence: 0.5,
-          outputSegmentationMasks: true,
+          outputSegmentationMasks: false,
         };
         try {
           landmarkerRef.current = await withTimeout(
@@ -219,7 +217,7 @@ export function useLiveDemoCamera({
         modelFallbackRef.current = true;
         if (!cancelled) {
           setModelReady(false);
-          setModelError("姿态/抠像模型暂不可用，真人场景将显示摄像头原画");
+          setModelError("姿态模型暂不可用，已进入动态骨架演示");
         }
       }
     }
@@ -238,43 +236,14 @@ export function useLiveDemoCamera({
   useEffect(() => {
     const deviceRenderCanvas = document.createElement("canvas");
     const phoneRenderCanvas = document.createElement("canvas");
-    const maskCanvas = document.createElement("canvas");
     deviceRenderCanvasRef.current = deviceRenderCanvas;
     phoneRenderCanvasRef.current = phoneRenderCanvas;
-    maskCanvasRef.current = maskCanvas;
     deviceRenderCanvas.width = DEFAULT_RENDER_WIDTH;
     deviceRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
     phoneRenderCanvas.width = DEFAULT_RENDER_WIDTH;
     phoneRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
     const deviceContext = deviceRenderCanvas.getContext("2d");
     const phoneContext = phoneRenderCanvas.getContext("2d");
-
-    function updateMask(mask) {
-      try {
-        const values = mask.getAsFloat32Array();
-        const target = maskCanvasRef.current;
-        if (target.width !== mask.width || target.height !== mask.height) {
-          target.width = mask.width;
-          target.height = mask.height;
-        }
-        const maskContext = target.getContext("2d");
-        const image = maskContext.createImageData(mask.width, mask.height);
-        for (let index = 0; index < values.length; index += 1) {
-          const alpha = Math.max(0, Math.min(1, (values[index] - 0.2) / 0.58));
-          const pixel = index * 4;
-          image.data[pixel] = 255;
-          image.data[pixel + 1] = 255;
-          image.data[pixel + 2] = 255;
-          image.data[pixel + 3] = Math.round(alpha * 255);
-        }
-        maskContext.putImageData(image, 0, 0);
-        setSegmentationReady((current) => current || true);
-      } catch {
-        setSegmentationReady(false);
-      } finally {
-        mask.close?.();
-      }
-    }
 
     function detect(now) {
       if (cameraFallbackRef.current || modelFallbackRef.current) {
@@ -290,8 +259,6 @@ export function useLiveDemoCamera({
       try {
         const result = landmarker.detectForVideo(video, now);
         localLandmarksRef.current = result?.landmarks?.[0] ? mapLandmarks(result.landmarks[0]) : [];
-        const mask = result?.segmentationMasks?.[0];
-        if (mask) updateMask(mask);
         // 本地真实推理只在 A 明确要求 landmarks 输入时上送；演示骨架永不上送。
         if (localLandmarksRef.current.length === 17) {
           onLandmarksRef.current?.(localLandmarksRef.current, now);
@@ -308,11 +275,6 @@ export function useLiveDemoCamera({
       const showVideo = mode === "video" || mode === "video_skeleton";
       if (showVideo && cameraReadyRef.current && video?.readyState >= 2) {
         drawFrame(context, video, width, height);
-        if (mode === "video" && segmentationReady && maskCanvasRef.current?.width) {
-          context.globalCompositeOperation = "destination-in";
-          drawFrame(context, maskCanvasRef.current, width, height);
-          context.globalCompositeOperation = "source-over";
-        }
       }
       if ((mode === "skeleton" || mode === "video_skeleton") && points.length === 17) {
         drawSkeleton(
@@ -364,7 +326,7 @@ export function useLiveDemoCamera({
 
     renderFrameRef.current = requestAnimationFrame(render);
     return () => cancelAnimationFrame(renderFrameRef.current);
-  }, [segmentationReady]);
+  }, []);
 
   return {
     videoRef,
@@ -373,7 +335,6 @@ export function useLiveDemoCamera({
     cameraReady,
     aspectRatio,
     modelReady,
-    segmentationReady,
     personDetected,
     backendSkeletonActive,
     skeletonSource: backendSkeletonActive ? "a_backend" : "c_local",

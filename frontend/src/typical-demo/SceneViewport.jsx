@@ -8,19 +8,20 @@ export function SceneViewport({
   canvasRef,
   cameraReady,
   viewMode,
-  segmentationReady,
   skeletonSource = "c_local",
   compact = false,
   showStatus = true,
 }) {
   const privacy = sceneId === "bathroom";
   const night = sceneId === "fall";
+  const hideEnvironment = privacy && compact;
+  const hasSceneBackground = Boolean(backgroundImage) && !hideEnvironment;
 
   return (
     <div
-      className={`scene-viewport scene-${sceneId} ${backgroundImage ? "has-scene-background" : ""} ${compact ? "is-compact" : ""}`}
+      className={`scene-viewport scene-${sceneId} ${hasSceneBackground ? "has-scene-background" : ""} ${compact ? "is-compact" : ""} ${hideEnvironment ? "is-private-compact" : ""}`}
       style={{
-        "--scene-background": backgroundImage ? `url(${backgroundImage})` : "none",
+        "--scene-background": hasSceneBackground ? `url(${backgroundImage})` : "none",
         aspectRatio: aspectRatio || 16 / 9,
       }}
     >
@@ -60,14 +61,14 @@ export function SceneViewport({
                 : viewMode === "video_skeleton"
                   ? `${skeletonSource === "a_backend" ? "实时姿态" : "本地姿态"} + 现场画面`
                   : viewMode === "video"
-                    ? (segmentationReady ? "人物轮廓画面" : "现场画面")
+                    ? "现场画面"
                     : skeletonSource === "a_backend" ? "实时姿态画面" : "本地姿态画面"}
             </span>
           </div>
         </>
       )}
       {night && <div className="night-time">23:47</div>}
-      {privacy && <div className="privacy-curtain"><span>隐私幕布</span></div>}
+      {privacy && <div className="privacy-curtain"><span>{compact ? "浴室隐私保护" : "隐私幕布"}</span></div>}
     </div>
   );
 }

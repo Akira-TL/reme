@@ -17,7 +17,6 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
         canvasRef={canvasRef}
         cameraReady={camera.cameraReady}
         viewMode={viewMode}
-        segmentationReady={camera.segmentationReady}
         skeletonSource={camera.skeletonSource}
         showStatus={false}
       />
