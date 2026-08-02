@@ -38,6 +38,25 @@ VITE_REME_PERCEPTION_INPUT_WS_URL=ws://127.0.0.1:8770/ws/camera-input
 
 截至 `develop/akira@8ef0df8`，A 尚未提供 `/ws/camera-input`，其现有正式实现仍要求 A 反向连接 C 的 Camera WebSocket。页面会将这种情况显示为“A输入待接入”，并继续使用浏览器本地 MediaPipe 作为明确的后备，不会把本地结果伪装成 A 输出。点击状态标签可在 A 服务部署或恢复后重新创建会话。
 
+## 四场景双端现场演示
+
+独立入口：
+
+```text
+http://127.0.0.1:4174/typical-demo.html
+```
+
+macOS 可双击 `启动Reme典型场景演示.command`，也可以执行 `npm run dev`。
+
+该页面同时显示智能设备端和子女手机端，并复用同一个电脑摄像头：
+
+1. 客厅行走：双端只显示实时17节点骨架。
+2. 厨房包饺子：显示实时人物抠像；长辈确认分享后，子女端立即收到生活片段卡片。
+3. 浴室洗澡：强制骨架模式，显示隐私幕布、关闭真人画面与音频。
+4. 深夜跌倒：点击“开始跌倒流程”或按空格，依次演示候选检测、主动询问、紧急视频和联系人响应。
+
+数字键 `1`–`4` 可快速切换四个场景。跌倒流程使用明确标注的演示编排，不宣称当前模型已经完成真实跌倒确诊；摄像头帧只在页面内存中处理，默认不录制。
+
 ## 目录
 
 ```text
@@ -49,11 +68,13 @@ frontend/
 │   ├── data/               # 场景、看板和设置文案
 │   ├── hooks/              # 摄像头、MediaPipe 与 A 运行时生命周期
 │   ├── services/           # A HTTP/WS 地址与控制请求
+│   ├── typical-demo/       # 四场景双端现场演示
 │   ├── utils/              # 17 节点映射与 Canvas 绘制
 │   ├── App.jsx             # 产品状态与场景编排
 │   ├── index.css           # TailwindCSS + 精确坐标样式
 │   └── main.jsx            # React 入口和 MUI 主题
 ├── index.html
+├── typical-demo.html
 ├── package.json
 └── vite.config.js
 ```
