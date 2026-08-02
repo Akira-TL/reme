@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -176,6 +177,7 @@ def start_process(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        start_new_session=True,
     )
     stream = process.stdout
     if stream is None:
@@ -217,21 +219,53 @@ def wait_for_http(
     raise LocalDemoError(f"{component.label} did not become ready at {url}{detail}")
 
 
+def _signal_process_group(managed: ManagedProcess, sig: signal.Signals) -> bool:
+    """Signal the whole child process group, including npm-spawned Vite children."""
+
+    try:
+        os.killpg(managed.process.pid, sig)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _process_group_alive(managed: ManagedProcess) -> bool:
+    try:
+        os.killpg(managed.process.pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 def stop_processes(processes: Sequence[ManagedProcess]) -> None:
-    """Terminate all children, then kill only those that ignore the grace period."""
+    """Stop every A/B/C process group and report each component's final state."""
+
+    for managed in reversed(processes):
+        if _signal_process_group(managed, signal.SIGTERM):
+            print(f"[{managed.label}] stopping process group", flush=True)
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        for managed in processes:
+            managed.process.poll()
+        if not any(_process_group_alive(managed) for managed in processes):
+            break
+        time.sleep(0.05)
+
+    for managed in reversed(processes):
+        if _process_group_alive(managed):
+            print(f"[{managed.label}] did not stop in time; sending SIGKILL", flush=True)
+            _signal_process_group(managed, signal.SIGKILL)
 
     for managed in reversed(processes):
         if managed.process.poll() is None:
-            managed.process.terminate()
-    deadline = time.monotonic() + 5.0
-    for managed in reversed(processes):
-        remaining = max(0.0, deadline - time.monotonic())
-        try:
-            managed.process.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            managed.process.kill()
-            managed.process.wait(timeout=2.0)
+            try:
+                managed.process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                managed.process.kill()
+                managed.process.wait(timeout=2.0)
         managed.output_thread.join(timeout=1.0)
+        print(f"[{managed.label}] stopped", flush=True)
 
 
 def ensure_frontend_dependencies(config: LocalDemoConfig, env: dict[str, str]) -> None:

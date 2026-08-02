@@ -14,6 +14,8 @@ import {
 } from "../services/decisionClient";
 import { recordWav } from "../utils/wavRecorder";
 
+let pendingSessionStop = Promise.resolve();
+
 function pluckDecision(payload) {
   if (payload?.decision_id) return payload;
   if (payload?.decision?.decision_id) return payload.decision;
@@ -324,6 +326,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setDeadline(null);
       setAlarm(null);
       try {
+        await pendingSessionStop;
+        if (disposed) return;
         await startSession(httpBase, createSessionRequest(sessionId, sceneRef.current), abortController.signal);
         if (disposed) return;
         socket = new WebSocket(wsUrl);
@@ -360,7 +364,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       } catch {
         // 忽略关闭失败
       }
-      stopSession(httpBase, sessionId).catch(() => {});
+      pendingSessionStop = stopSession(httpBase, sessionId).catch(() => {});
     };
   }, [enabled, sessionId]);
 

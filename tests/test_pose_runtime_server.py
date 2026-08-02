@@ -422,7 +422,9 @@ def test_frontend_error_payload_has_stable_shape() -> None:
         thread.join(timeout=2.0)
 
 
-def test_runtime_http_start_status_stop_and_websocket() -> None:
+def test_runtime_http_start_status_stop_and_websocket(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     worker = FakeWorker()
     controller = RuntimePerceptionController(worker=worker)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), build_runtime_handler(controller))
@@ -469,6 +471,8 @@ def test_runtime_http_start_status_stop_and_websocket() -> None:
         )
         assert stopped["state"] == "stopped"
         websocket.close()
+        time.sleep(0.05)
+        assert "BrokenPipeError" not in capsys.readouterr().err
     finally:
         httpd.shutdown()
         httpd.server_close()

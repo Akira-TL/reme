@@ -527,6 +527,12 @@ def build_runtime_handler(
         protocol_version = "HTTP/1.1"
         server_version = "RemePerception/0.1"
 
+        def handle(self) -> None:
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
         def do_OPTIONS(self) -> None:  # noqa: N802
             self.send_response(HTTPStatus.NO_CONTENT)
             self._cors()
@@ -685,6 +691,7 @@ def build_runtime_handler(
             accept = base64.b64encode(
                 hashlib.sha1((key + _WEBSOCKET_GUID).encode("ascii")).digest()
             ).decode("ascii")
+            self.close_connection = True
             subscription = controller.broker.subscribe(session_id)
             self.send_response(HTTPStatus.SWITCHING_PROTOCOLS)
             self.send_header("Upgrade", "websocket")

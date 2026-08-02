@@ -19,6 +19,7 @@ import {
 } from "../services/perceptionClient";
 
 const CAMERA_FPS = 10;
+let pendingRuntimeStop = Promise.resolve();
 
 function makeSessionId() {
   const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -162,6 +163,8 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
 
     async function start() {
       try {
+        await pendingRuntimeStop;
+        if (disposed) return;
         const capabilities = await getCapabilities(urls.httpBase, abortController.signal);
         if (capabilities?.schemas?.runtime_event !== "reme-runtime-event/v0-experiment") {
           throw new Error("A 的 runtime event schema 不兼容");
@@ -243,7 +246,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
       inputSocket?.close();
       eventsSocket?.close();
       inputSocketRef.current = null;
-      stopRuntime(urls.httpBase, sessionId).catch(() => {});
+      pendingRuntimeStop = stopRuntime(urls.httpBase, sessionId).catch(() => {});
     };
   }, [enabled, retryGeneration, videoElement]);
 

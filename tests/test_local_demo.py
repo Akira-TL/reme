@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import socket
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -10,6 +13,8 @@ from reme.local_demo import (
     assert_port_available,
     build_child_commands,
     load_env_file,
+    start_process,
+    stop_processes,
 )
 
 
@@ -59,3 +64,27 @@ def test_assert_port_available_rejects_occupied_listener() -> None:
         port = listener.getsockname()[1]
         with pytest.raises(LocalDemoError, match="already in use"):
             assert_port_available("127.0.0.1", port)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group supervision is POSIX-only")
+def test_stop_processes_kills_spawned_process_group(tmp_path: Path) -> None:
+    managed = start_process(
+        "C",
+        [
+            sys.executable,
+            "-c",
+            (
+                "import subprocess, sys, time; "
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                "time.sleep(60)"
+            ),
+        ],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+    )
+    time.sleep(0.15)
+
+    stop_processes([managed])
+
+    with pytest.raises(ProcessLookupError):
+        os.killpg(managed.process.pid, 0)
