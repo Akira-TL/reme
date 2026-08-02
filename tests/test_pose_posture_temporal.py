@@ -214,7 +214,7 @@ _GEOMETRY = ImageGeometry(width=1280, height=720, size_provenance="measured")
 
 
 def _upright_record() -> dict[str, object]:
-    from tests.test_pose_biomech import build_record, upright_person
+    from test_pose_biomech import build_record, upright_person
 
     return build_record(upright_person())
 
@@ -261,7 +261,7 @@ class TestRuntimeWiring:
         )
 
     def _stream(self, postures: list[str]) -> list[RuntimeEvent]:
-        from tests.test_pose_biomech import build_record, upright_person
+        from test_pose_biomech import build_record, upright_person
 
         records = {
             "standing": build_record(upright_person()),
