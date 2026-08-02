@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import reme.decision.policy as policy_module
 from reme.decision.context import load_scene_streams
 from reme.decision.mimo.adapter import MimoCallResult, MimoTransportError
 from reme.decision.policy import (
@@ -349,6 +350,54 @@ def test_fall_scene_escalates_after_timeout_then_urgent(tmp_path: Path) -> None:
 
     reused = service.get_decision(scene_id=scene, timestamp_ms=30000.0)
     assert reused.decision_id == urgent.decision_id
+
+
+def test_voice_prompt_timeout_waits_for_tts_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = 1000.0
+    monkeypatch.setattr(policy_module.time, "monotonic", lambda: now)
+    service = DecisionService(scenes=_fall_scenes(tmp_path), config=PolicyConfig())
+    scene = "fall_demo_01"
+    check_in = service.get_decision(scene_id=scene, timestamp_ms=13000.0)
+    assert check_in.response_timeout_ms is not None
+
+    service.mark_decision_voice_started(scene_id=scene, decision_id=check_in.decision_id)
+    with pytest.raises(DecisionRejectedError, match="response_too_early"):
+        service.submit_response(
+            _response(
+                scene_id=scene,
+                decision_id=check_in.decision_id,
+                value=ResponseValue.NONE,
+                source=ResponseSource.TIMEOUT,
+                timestamp_ms=21000.0,
+            )
+        )
+
+    now = 1001.0
+    service.mark_decision_voice_ready(scene_id=scene, decision_id=check_in.decision_id)
+    with pytest.raises(DecisionRejectedError, match="response_too_early"):
+        service.submit_response(
+            _response(
+                scene_id=scene,
+                decision_id=check_in.decision_id,
+                value=ResponseValue.NONE,
+                source=ResponseSource.TIMEOUT,
+                timestamp_ms=22000.0,
+            )
+        )
+
+    now = 1001.0 + check_in.response_timeout_ms / 1000
+    alert = service.submit_response(
+        _response(
+            scene_id=scene,
+            decision_id=check_in.decision_id,
+            value=ResponseValue.NONE,
+            source=ResponseSource.TIMEOUT,
+            timestamp_ms=23000.0,
+        )
+    )
+    assert alert.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
 
 
 def test_mimo_failure_emits_degraded_and_keeps_phase(tmp_path: Path) -> None:

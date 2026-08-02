@@ -43,6 +43,10 @@ class VoiceDecisionService(Protocol):
 
     def current_decision(self, scene_id: str) -> CareDecision | None: ...
 
+    def mark_decision_voice_started(self, *, scene_id: str, decision_id: str) -> None: ...
+
+    def mark_decision_voice_ready(self, *, scene_id: str, decision_id: str) -> None: ...
+
     def submit_response(self, response: InteractionResponse) -> CareDecision: ...
 
 
@@ -120,7 +124,11 @@ class VoiceDialogueController:
         decision = self._require_decision(scene_id, decision_id)
         if decision.elder_message is None:
             raise VoiceDialogueError("no_elder_message")
-        result = self._synthesize(decision.elder_message)
+        self._service.mark_decision_voice_started(scene_id=scene_id, decision_id=decision_id)
+        try:
+            result = self._synthesize(decision.elder_message)
+        finally:
+            self._service.mark_decision_voice_ready(scene_id=scene_id, decision_id=decision_id)
         return decision, VoiceAudio.from_result(result)
 
     def submit_audio_reply(

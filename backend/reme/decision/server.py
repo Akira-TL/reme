@@ -62,6 +62,7 @@ _REJECT_STATUS: dict[str, HTTPStatus] = {
     "timeline_rewind": HTTPStatus.CONFLICT,
     "episode_resolved": HTTPStatus.CONFLICT,
     "risk_floor_violation": HTTPStatus.CONFLICT,
+    "response_too_early": HTTPStatus.CONFLICT,
     "no_recorded_decisions": HTTPStatus.CONFLICT,
     "invalid_response": HTTPStatus.UNPROCESSABLE_ENTITY,
     "no_pending_decision": HTTPStatus.UNPROCESSABLE_ENTITY,
