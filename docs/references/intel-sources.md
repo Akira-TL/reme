@@ -79,17 +79,19 @@
 
 ---
 
-## 三、源文档索引（谁在哪个分支）
+## 三、源文档索引
 
-| 文档 | 所在分支 | 内容 | 台账对应 |
-|---|---|---|---|
-| `planning/docs/情报-MiMo-API.md` | `mimo-api-research` | API 能力面全景 | S1–S3 |
-| `planning/docs/情报-Miloco-代码剖析.md` | `mimo-api-research` | 架构对照读码 | S6 |
-| `planning/docs/方案-MiMo接入.md` | `mimo-api-research` | 接入方案与载荷模板 | S1, S4 |
-| `planning/docs/情报-Miloco.md` | `b-decision`（当前） | Miloco 概览 | S5 |
-| `.scratch/handoff/2026-08-01-mimo-api-live-test.md` | `mimo-api-research` | G-01 实测 | S4 |
+`mimo-api-research` 已于 2026-08-02 并入 `b-decision`（合并提交 `cf70172`），下列文档**全部在当前分支**，不再需要跨分支取读：
 
-⚠️ **五份里有四份不在当前工作分支**。答辩或联调时若在 `b-decision` 上找不到它们，不是丢失，是分支差异——需要时 `git show mimo-api-research:<路径>` 取读，或先把 `mimo-api-research` 并入主线。
+| 文档 | 内容 | 台账对应 |
+|---|---|---|
+| `planning/docs/情报-MiMo-API.md` | API 能力面全景 | S1–S3 |
+| `planning/docs/情报-Miloco-代码剖析.md` | 架构对照读码 | S6 |
+| `planning/docs/方案-MiMo接入.md` | 接入方案与载荷模板 | S1, S4 |
+| `planning/docs/情报-Miloco.md` | Miloco 概览 | S5 |
+| `.scratch/handoff/2026-08-01-mimo-api-live-test.md` | G-01 实测 | S4 |
+
+合并时的取舍（备查）：该分支上的**旧版 B 决策实现**（`contracts/engine/mimo_client/mock_scenes` 及其测试）**未合入**——现行 `decision/` 是后来从零重写的版本，两套并存只会造成误引用。旧实现仍可在合并历史与 `mimo-api-research` 分支中查到。
 
 ---
 
