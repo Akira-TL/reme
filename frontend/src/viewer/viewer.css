@@ -2,9 +2,13 @@
   color-scheme: dark;
 }
 
-body {
+/* MUI CssBaseline 会按主题重写 body 背景，深色底落在挂载根上更稳。 */
+html,
+body,
+#viewer-root {
   margin: 0;
-  background: #101014;
+  min-height: 100vh;
+  background: #101014 !important;
   color: #f3f3f0;
   font-family: "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
 }
