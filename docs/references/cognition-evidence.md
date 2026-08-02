@@ -143,9 +143,79 @@
 
 ---
 
-## 待补：行为学与老年医学的其余主张
+## R15 · Wild, Nayak & Isaacs (1981)
 
-以下 ADR-0006 提及的主张尚在核实中，**核实完成前不得作为答辩依据**：徘徊行为分型、静息-活动节律与认知衰退、精神运动性迟滞、夜尿频次与跌倒风险、老年急症非典型表现。核实结果会以 R15 起的编号补入本表；未能核实到一手来源的，对应表述将从 ADR-0006 删除或降级为"工程假设"。
+*How dangerous are falls in old people at home?* British Medical Journal (Clin Res Ed) 282(6260):266–268. DOI [10.1136/bmj.282.6260.266](https://doi.org/10.1136/bmj.282.6260.266) · PMID [6779979](https://pubmed.ncbi.nlm.nih.gov/6779979/) · `[读摘要]`
+
+**报告的事实**：125 名居家跌倒的 65 岁以上老人中，20 人卧地超过 1 小时；**这 20 人中一半在 6 个月内死亡**。该文即"long lie ≥1 小时"这一判定口径的经典出处。
+
+**支撑我们的**：与 R3 共同构成跌倒后持续静止的优先级依据。
+
+**明确不支撑的（重要纠正）**：一手摘要**没有**给出脱水、压疮、横纹肌溶解的定量数据（作者检查了低体温，未发现病例）。这三项并发症的关联属二级综述/教科书口径，**不得挂在本文名下**。ADR-0006 已据此把表述收窄为"与短期死亡率显著升高相关"。
+
+---
+
+## R16 · Bohannon (2006)
+
+*Reference values for the five-repetition sit-to-stand test: a descriptive meta-analysis of data from elders.* Perceptual and Motor Skills 103(1):215–222. DOI [10.2466/pms.103.1.215-222](https://doi.org/10.2466/pms.103.1.215-222) · PMID [17037663](https://pubmed.ncbi.nlm.nih.gov/17037663/) · `[读摘要]`
+
+**报告的事实**：五次坐立试验按年龄分层的"劣于平均"界值——60–69 岁 >11.4 s，70–79 岁 >12.6 s，80–89 岁 >14.8 s。
+
+## R17 · Buatois, Perret-Guillaume, Gueguen, et al. (2010)
+
+*A simple clinical scale to stratify risk of recurrent falls in community-dwelling adults aged 65 years and older.* Physical Therapy 90(4):550–560. DOI [10.2522/ptj.20090158](https://doi.org/10.2522/ptj.20090158) · PMID [20203094](https://pubmed.ncbi.nlm.nih.gov/20203094/) · `[读摘要]`
+
+**报告的事实**：1618 名社区老人前瞻队列，五次坐立 >15 s 使中等风险组的复发跌倒风险翻倍。
+
+**R16/R17 支撑我们的**：坐↔站转换能力与跌倒风险有临床意义，因此把 `sit_to_stand_count` 作为**方向一致的粗代理**记录下来是合理的。
+
+**不支撑的**：这些界值是**计时五次连续坐立**的标准化测试口径。我们既不计时也不指定次数，只数窗口内的转换次数，**因此不得声称实现了 FTSST 或引用其界值**。
+
+---
+
+## R18 · Vaughan, Brown, Goode, et al. (2010)
+
+*The association of nocturia with incident falls in an elderly community-dwelling cohort.* International Journal of Clinical Practice 64(5):577–583. DOI [10.1111/j.1742-1241.2009.02326.x](https://doi.org/10.1111/j.1742-1241.2009.02326.x) · PMID [20456212](https://pubmed.ncbi.nlm.nih.gov/20456212/) · `[读摘要]`
+
+**报告的事实**：692 名前一年无跌倒史的社区老人中，**每晚 ≥3 次**夜尿与 3 年内跌倒风险增加 28% 相关（RR 1.28，95% CI 1.02–1.59）。
+
+## R19 · Pesonen, Vernooij, Cartwright, et al. (2020)
+
+*The impact of nocturia on falls and fractures: a systematic review and meta-analysis.* The Journal of Urology 203(4):674–683（Epub 2019）. DOI [10.1097/JU.0000000000000459](https://doi.org/10.1097/JU.0000000000000459) · PMID [31347956](https://pubmed.ncbi.nlm.nih.gov/31347956/) · `[读摘要]`
+
+**报告的事实**：夜尿与跌倒风险合并 RR 1.20（95% CI 1.05–1.37，证据质量中等）；与**骨折**风险合并 RR 1.32，但 **95% CI 0.99–1.76 未达统计学显著，证据质量为低**。
+
+**R18/R19 支撑我们的**：夜间如厕活动值得纳入记忆与上下文（`home.py` 的夜间/卫生间语义、记忆的分时段基线）。
+
+**不支撑的（两处收窄）**：①常被引用的"≥2 次"不是这两篇的切点，R18 的切点是 **≥3 次**；②"夜尿与骨折风险相关"证据弱于跌倒，引用时必须带上未显著这一事实。
+
+**已删除的主张**：ADR-0006 原写"频次突增可能是感染等急症的行为前兆"——**未核实到任何一手研究**把夜尿频次骤增当作急症预警指标。该句已从 ADR 删除，仅保留 R20–R22 支持的较弱说法。
+
+---
+
+## R20 · Jarrett, Rockwood, Carver, et al. (1995)
+
+*Illness presentation in elderly patients.* Archives of Internal Medicine 155(10):1060–1064. PMID [7748049](https://pubmed.ncbi.nlm.nih.gov/7748049/)（该记录无 DOI）· `[读摘要]`
+
+**报告的事实**：193 名老年住院患者队列——体弱（frail）者非典型疾病表现发生率 **59%**，健康老人 25%（p<.001）；体弱者最常见为谵妄（61%），健康老人最常见为跌倒（37%）与谵妄（32%）；非典型表现独立预测不良住院结局（OR 2.37，95% CI 1.20–4.67）。
+
+## R21 · Dutta, Pasha, Paul, et al. (2022)
+
+*Urinary tract infection induced delirium in elderly patients: a systematic review.* Cureus 14(12):e32321. DOI [10.7759/cureus.32321](https://doi.org/10.7759/cureus.32321) · PMID [36632270](https://pubmed.ncbi.nlm.nih.gov/36632270/) · `[读摘要]`
+
+## R22 · Matthews & Lancaster (2011)
+
+*Urinary tract infections in the elderly population.* The American Journal of Geriatric Pharmacotherapy 9(5):286–309. PMID [21840265](https://pubmed.ncbi.nlm.nih.gov/21840265/) · `[读摘要]`
+
+**R20–R22 支撑我们的**：老年急症常以**行为改变**（跌倒、谵妄、嗜睡、食欲下降）而非典型症状起病。这是**记忆层存在的核心理由**——相对个人基线的偏离比绝对阈值更有信息量。
+
+**不支撑的**：R20 是队列研究，不是共识声明；ADR-0006 原文的"教学共识"措辞已改。我们也不做任何感染或谵妄的判断，只把偏离作为问候理由。
+
+---
+
+## 待补：行为学与神经科学主张
+
+以下主张尚在核实中，**核实完成前不得作为答辩依据**：徘徊行为分型、静息-活动节律与认知衰退、精神运动性迟滞。核实结果以 R23 起补入；核实不到一手来源的，对应表述将从 ADR-0006 删除或降级为"工程假设"（如 R19 的夜尿前兆句已被删除那样）。
 
 ---
 
