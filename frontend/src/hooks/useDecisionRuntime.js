@@ -62,22 +62,6 @@ function playBase64Audio(audioB64, audioFormat = "wav") {
   return playAudioElement(new Audio(`data:${mimeType};base64,${audioB64}`));
 }
 
-function speakElderMessage(text) {
-  if (!text || !("speechSynthesis" in window)) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "zh-CN";
-      utterance.onend = () => resolve();
-      utterance.onerror = () => reject(new Error("浏览器语音播放失败"));
-      window.speechSynthesis.speak(utterance);
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
 function decisionAwaitsReply(payload) {
   return Boolean(
     payload?.need_dialogue
@@ -319,22 +303,27 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         await playBase64Audio(speech.audio_b64, speech.audio_format);
       } catch (error) {
         if (disposed) return;
-        try {
-          if (payload.voice_asset) {
+        if (payload.voice_asset) {
+          try {
             await playAudioElement(new Audio(`${httpBase}${payload.voice_asset}`));
-          } else {
-            await speakElderMessage(payload.elder_message);
+            setVoice((current) => ({
+              ...current,
+              stage: "playing_fallback",
+              error: `MiMo TTS 失败，已播放预置语音：${error.message || "unknown"}`,
+            }));
+          } catch (fallbackError) {
+            setVoice((current) => ({
+              ...current,
+              stage: "failed",
+              error: fallbackError.message || "语音播放失败",
+            }));
+            return false;
           }
-          setVoice((current) => ({
-            ...current,
-            stage: "playing_fallback",
-            error: `MiMo TTS 失败，已降级播放：${error.message || "unknown"}`,
-          }));
-        } catch (fallbackError) {
+        } else {
           setVoice((current) => ({
             ...current,
             stage: "failed",
-            error: fallbackError.message || "语音播放失败",
+            error: error.message || "MiMo TTS 失败",
           }));
           return false;
         }
@@ -393,7 +382,6 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         const audioB64 = await recordWav({
           durationMs: replyWindowMs,
           sampleRate: 16000,
-          requireSpeech: true,
         });
         if (disposed) return;
         clearCountdown();
