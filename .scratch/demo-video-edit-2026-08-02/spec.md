@@ -1,11 +1,11 @@
 # Reme 今晚四场景演示视频剪辑记录
 
 - 日期：2026-08-02
-- 状态：ChatCut 可编辑版本已完成，待人工播放审阅
+- 状态：ChatCut 可编辑版本与四个独立 MP4 导出均已完成
 - ChatCut 项目：`7d907832-9d59-473c-9058-c5103c5e5afb`
 - 编辑器：https://app.chatcut.io/zh/editor/7d907832-9d59-473c-9058-c5103c5e5afb?chatcutLaunchClient=codex_app&chatcutLaunchSurface=ext_browser
 - 画布：四条时间线均为 1280×720、30 fps
-- 交付边界：本轮不导出；ChatCut 时间线是主交付，本地 MP4 仅为安全备份
+- 交付边界：ChatCut 时间线保持可编辑；四条时间线已分别完成云端 MP4 导出
 
 ## 素材与选择
 
@@ -45,6 +45,17 @@ ChatCut 媒体池只导入以下四个原始素材：
 - 第 4 条此前已检查稳定、跌倒、问询、告警与末帧；告警状态保留，幕后点评被排除。
 - 本地安全备份位于 `/Users/maniforld/Movies/Reme_四场景精选_2026-08-02/`，四个文件均完成全解码检查；它们不替代 ChatCut 可编辑时间线。
 
+## ChatCut 导出结果
+
+四个 `renderId` 均经 `track_export` 确认为 `complete`，无失败项。实际视频均为 MP4/H.264、1280×720、30 fps；音频均为 AAC、48 kHz、立体声。MP4 容器时长比视频轨多约 0.08–0.10 秒，是 AAC 音频尾部造成的。
+
+| 文件 | renderId | 视频轨时长 | MP4 时长 | 下载 |
+|---|---|---:|---:|---|
+| `01_客厅日常.mp4` | `cf5187ae-4e27-4ca8-a019-c390332b1d62` | 9.933333 秒 | 10.026667 秒 | https://rendererbucket-48236b1.s3-accelerate.amazonaws.com/renders/1-day-2cv4ph1x0i/out.mp4 |
+| `02_厨房时光_授权分享.mp4` | `4755dbf4-33e5-42e3-88bd-5a69e51261a9` | 18.833322 秒 | 18.922667 秒 | https://rendererbucket-48236b1.s3-accelerate.amazonaws.com/renders/1-day-ie2bayhvok/out.mp4 |
+| `03_浴室全隐私.mp4` | `c81b3fe7-b5da-4783-898a-f42fe08d0cba` | 9.866667 秒 | 9.962667 秒 | https://rendererbucket-48236b1.s3-accelerate.amazonaws.com/renders/1-day-4ey9ad7xzr/out.mp4 |
+| `04_夜间跌倒_问询告警.mp4` | `9f9e00f3-e170-4800-835a-5d6f986272e6` | 30.299989 秒 | 30.378667 秒 | https://rendererbucket-48236b1.s3-accelerate.amazonaws.com/renders/1-day-zx0fgneheg/out.mp4 |
+
 ## 下一步
 
-人工在 ChatCut 中逐条点击播放审阅。如确认节奏，可另行发令导出四个独立 MP4；本轮没有隐含导出。
+尽快下载并本地播放四个 MP4 做人工终审；如需调整，继续修改可编辑 ChatCut 时间线后重新导出。
