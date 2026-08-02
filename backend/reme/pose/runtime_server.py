@@ -828,6 +828,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "socket, local_camera is test-only"
         ),
     )
+    parser.add_argument(
+        "--browser-input-mode",
+        choices=("auto", "jpeg", "landmarks"),
+        default="auto",
+        help=(
+            "Input lane for c_ws_server: auto prefers JPEG inference when its dependencies "
+            "and model artifacts exist; landmarks forces the model-free keypoint lane; jpeg "
+            "requires the full local inference stack"
+        ),
+    )
     parser.add_argument("--c-camera-ws-url")
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--width", type=int, default=1280)
@@ -842,7 +852,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionWorker:
-    """Hosted-input gateway; JPEG inference only when its stack is present."""
+    """Build the hosted browser input gateway in auto or explicitly selected mode."""
 
     from importlib.util import find_spec
 
@@ -855,8 +865,13 @@ def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionW
     posture_config = PostureRuntimeConfig(
         output_hz=args.posture_hz, score_threshold=args.score_threshold
     )
-    if not jpeg_ready:
+    requested_mode = args.browser_input_mode
+    if requested_mode == "landmarks" or (requested_mode == "auto" and not jpeg_ready):
         return BrowserGatewayPerceptionWorker(posture_config=posture_config)
+    if not jpeg_ready:
+        raise RuntimeServerError(
+            "--browser-input-mode jpeg requires cv2, numpy, and readable MoveNet/posture models"
+        )
 
     def jpeg_pipeline(source: object) -> CCameraWebSocketPerceptionWorker:
         return CCameraWebSocketPerceptionWorker(

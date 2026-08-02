@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from typing import Protocol
 
 import pytest
@@ -259,6 +260,35 @@ def test_frontend_capabilities_and_cors_headers() -> None:
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=2.0)
+
+
+def test_browser_gateway_can_force_landmark_lane_when_jpeg_stack_is_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    movenet_model = tmp_path / "movenet.tflite"
+    posture_model = tmp_path / "posture.json"
+    movenet_model.write_bytes(b"model")
+    posture_model.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
+
+    args = runtime_server_module._build_parser().parse_args(
+        [
+            "--input-adapter",
+            "c_ws_server",
+            "--browser-input-mode",
+            "landmarks",
+            "--movenet-model",
+            str(movenet_model),
+            "--posture-model",
+            str(posture_model),
+        ]
+    )
+
+    gateway = runtime_server_module.build_browser_gateway(args)
+
+    assert gateway.mode == "landmarks"
+    assert gateway.capabilities()["accepts"] == ["landmarks_frame", "scene_signal"]
 
 
 def test_c_camera_worker_resets_scene_state_and_keeps_runtime_sequence(

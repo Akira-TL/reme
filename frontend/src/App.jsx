@@ -72,7 +72,7 @@ export function App() {
     if (detail.kind === "status") {
       return {
         title: scene.name,
-        body: `${scene.detail}。当前原始视频不上传，仅同步状态和授权后的摘要。`,
+        body: `${scene.detail}。默认仅同步骨骼和状态；跌倒确认窗口会显式上传一帧画面或短语音给 MiMo，不持续上传视频。`,
         eyebrow: "CURRENT STATUS",
         action: "知道了",
       };
