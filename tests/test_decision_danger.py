@@ -684,12 +684,36 @@ def test_voice_model_unclear_with_danger_transcript_upgrades(tmp_path: Path) -> 
     assert alert.alarm is not None and alert.alarm.trigger is AlarmTrigger.VOICE_INTENT
 
 
-def test_voice_unclear_consumes_clarification(tmp_path: Path) -> None:
+def test_voice_unclear_moan_escalates_directly(tmp_path: Path) -> None:
+    """跌倒语境：呻吟/乱码（unclear）本身是险情信号，直接升级家属告警。"""
+
     publisher = _Publisher()
     service = _service(tmp_path, publisher)
     check_in = _open_fall_check_in(service)
     client = _FakeConfirmClient([_voice_reply("unclear", "呜呜")])
     controller = _controller(service, client)
+
+    controller.submit_voice(
+        scene_id="fall_demo_01",
+        decision_id=check_in.decision_id,
+        timestamp_ms=14000.0,
+        audio_b64=_b64(WAV_BYTES),
+        audio_format="wav",
+    )
+
+    alert = publisher.decisions[-1]
+    assert alert.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
+    assert alert.alarm is not None and alert.alarm.trigger is AlarmTrigger.VOICE_INTENT
+
+
+def test_voice_unclear_clarifies_when_upgrade_disabled(tmp_path: Path) -> None:
+    publisher = _Publisher()
+    service = _service(tmp_path, publisher)
+    check_in = _open_fall_check_in(service)
+    client = _FakeConfirmClient([_voice_reply("unclear", "呜呜")])
+    controller = _controller(
+        service, client, config=DangerConfig(treat_unclear_voice_as_help=False)
+    )
 
     controller.submit_voice(
         scene_id="fall_demo_01",
@@ -799,6 +823,48 @@ def test_voice_channel_not_offered_on_concern(tmp_path: Path) -> None:
             text="没事",
         )
     assert excinfo.value.code == REJECT_NO_CONFIRM_PENDING
+
+
+# -- server-side escalation backstop ------------------------------------------
+
+
+def test_backstop_escalates_when_c_countdown_never_submits(tmp_path: Path) -> None:
+    """浏览器后台标签会节流 C 的定时器；B 的兜底计时必须自己升级。"""
+
+    import time as _time
+
+    from reme.decision.runtime_glue import EscalationBackstopPublisher
+
+    publisher = _Publisher()
+    backstop = EscalationBackstopPublisher(publisher, grace_ms=0.0)
+    service = DecisionService(
+        scenes=_fall_scenes(tmp_path),
+        config=PolicyConfig(
+            trigger=TriggerConfig(check_in_timeout_ms=150, family_ack_timeout_ms=150),
+            demo_mode=DemoMode.LIVE,
+            cognition_enabled=False,
+        ),
+        publisher=backstop,
+    )
+    backstop.bind(service)
+
+    check_in = service.get_decision(scene_id="fall_demo_01", timestamp_ms=13000.0)
+    assert check_in.state is DecisionState.CHECK_IN_REQUIRED
+
+    deadline = _time.time() + 3.0
+    while _time.time() < deadline:
+        states = [d.state for d in publisher.decisions]
+        if DecisionState.URGENT_ATTENTION in states:
+            break
+        _time.sleep(0.05)
+    states = [d.state for d in publisher.decisions]
+    # 无人回应也无 C 参与：check-in → 超时家属告警 → 家属未确认 → 紧急。
+    assert DecisionState.FAMILY_NOTIFICATION_REQUIRED in states
+    assert DecisionState.URGENT_ATTENTION in states
+    alert = next(
+        d for d in publisher.decisions if d.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
+    )
+    assert alert.alarm is not None and alert.alarm.trigger is AlarmTrigger.CHECK_IN_TIMEOUT
 
 
 # -- timeout path keeps its alarm --------------------------------------------

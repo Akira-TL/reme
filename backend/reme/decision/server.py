@@ -39,6 +39,7 @@ from reme.decision.policy import (
 )
 from reme.decision.records import DecisionRecordError, DemoMode, parse_interaction_response
 from reme.decision.runtime_glue import (
+    EscalationBackstopPublisher,
     PerceptionBridge,
     RuntimeDecisionPublisher,
     live_streams_resolver,
@@ -725,14 +726,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     registry = RuntimeSessionRegistry()
     hub = DecisionEventHub()
     ingest = EventIngest()
+    publisher = EscalationBackstopPublisher(
+        RuntimeDecisionPublisher(registry=registry, hub=hub)
+    )
     service = DecisionService(
         scenes=scenes,
         config=build_policy_config(config),
         mimo=build_mimo_client(config),
         audit=audit,
-        publisher=RuntimeDecisionPublisher(registry=registry, hub=hub),
+        publisher=publisher,
         live_streams=live_streams_resolver(registry, ingest),
     )
+    if config.demo_mode is not DemoMode.RECORD:
+        # Record replays are C-paced by definition; live/mock get the
+        # server-side countdown net (ADR-0005: silence must escalate even
+        # when the browser throttles C's timers).
+        publisher.bind(service)
     danger = build_danger_controller(config, service, audit)
     bridge = (
         None

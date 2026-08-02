@@ -114,6 +114,11 @@ class DangerConfig:
     max_voice_calls: int = 3
     max_voice_unclear: int = 1
     max_media_bytes: int = 2_000_000
+    # 跌倒问询语境（confirm_channels 只出现在跌倒事件）下，听不清的
+    # 发声本身就是险情信号——呻吟、含糊、杂音一律按求救升级，而不是
+    # 消耗一次澄清（用户定调 2026-08-02）。"我没事"类清晰安全回应不受
+    # 影响；按钮路径的澄清流程保持原样。
+    treat_unclear_voice_as_help: bool = True
 
 
 @dataclass(slots=True)
@@ -375,6 +380,12 @@ class DangerConfirmController:
         timestamp_ms: float,
         note: str,
     ) -> None:
+        if verdict.intent is ResponseValue.UNCLEAR and self._config.treat_unclear_voice_as_help:
+            # 跌倒语境：发声但听不清 = 险情佐证，直接走求助升级。
+            verdict = VoiceIntent(
+                intent=ResponseValue.NEED_HELP, transcript=verdict.transcript
+            )
+            note = f"{note} unclear_upgraded=1"
         if verdict.intent is ResponseValue.UNCLEAR and not self._consume_unclear(
             scene_id, target_id
         ):

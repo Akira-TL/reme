@@ -73,6 +73,16 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   }, []);
 
   useEffect(() => {
+    // 麦克风权限预请求：授权弹窗放在会话开始时，而不是跌倒问询的
+    // 4 秒录音窗里（那时再弹基本来不及）。拿到即释放轨道，只留权限。
+    if (!enabled) return;
+    navigator.mediaDevices
+      ?.getUserMedia?.({ audio: true })
+      .then((stream) => stream.getTracks().forEach((track) => track.stop()))
+      .catch(() => {});
+  }, [enabled]);
+
+  useEffect(() => {
     sceneRef.current = sceneId;
   }, [sceneId]);
 

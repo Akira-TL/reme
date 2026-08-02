@@ -12,8 +12,14 @@ import threading
 from collections.abc import Callable
 
 from reme.decision.danger import DangerConfirmController, DangerRejectedError
-from reme.decision.policy import DecisionService
-from reme.decision.records import CareDecision, DecisionState
+from reme.decision.policy import DecisionPublisher, DecisionService
+from reme.decision.records import (
+    CareDecision,
+    DecisionState,
+    InteractionResponse,
+    ResponseSource,
+    ResponseValue,
+)
 from reme.decision.session import RuntimeSessionRegistry, SessionRegistryError
 from reme.decision.stream import EventIngest, IngestError, LiveStreams
 from reme.decision.websocket import DecisionEventHub
@@ -58,6 +64,74 @@ class RuntimeDecisionPublisher:
                 payload=decision.to_payload(),
             )
             self._hub.broadcast_json(event.to_payload())
+
+
+# States whose countdown gets the server-side safety net.
+_BACKSTOP_STATES = {
+    DecisionState.CHECK_IN_REQUIRED,
+    DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+}
+# C's own countdown submits first in the healthy case; the backstop fires
+# late and gets rejected as stale. The grace covers网络与渲染延迟.
+_BACKSTOP_GRACE_MS = 2000.0
+
+
+class EscalationBackstopPublisher:
+    """Decorator publisher: server-side countdown net behind C's timers.
+
+    The contract makes C render the countdown and submit
+    ``response=none/source=timeout`` — but browser tabs throttle background
+    timers, and a swallowed timeout leaves the episode waiting forever
+    (observed live 2026-08-02: a hung check-in also blocks every later fall,
+    since an awaiting fall episode is deliberately non-preemptible). ADR-0005
+    means silence MUST escalate, so B arms its own timer per countdown-bearing
+    decision, offset by a grace so C normally wins; the loser is rejected as
+    stale/no-pending and swallowed. Timers are daemon threads; stale firings
+    after resets are rejected by the state machine, never replayed.
+    """
+
+    def __init__(self, inner: DecisionPublisher, *, grace_ms: float = _BACKSTOP_GRACE_MS) -> None:
+        self._inner = inner
+        self._grace_ms = grace_ms
+        self._service: DecisionService | None = None
+
+    def bind(self, service: DecisionService) -> None:
+        """Late binding: the service is constructed with this publisher."""
+
+        self._service = service
+
+    def publish_decision(self, decision: CareDecision) -> None:
+        try:
+            self._inner.publish_decision(decision)
+        finally:
+            self._arm(decision)
+
+    def _arm(self, decision: CareDecision) -> None:
+        if self._service is None:
+            return
+        if decision.response_timeout_ms is None or decision.state not in _BACKSTOP_STATES:
+            return
+        delay_s = (decision.response_timeout_ms + self._grace_ms) / 1000.0
+        timer = threading.Timer(delay_s, self._fire, args=(decision,))
+        timer.daemon = True
+        timer.start()
+
+    def _fire(self, decision: CareDecision) -> None:
+        service = self._service
+        if service is None or decision.response_timeout_ms is None:
+            return
+        response = InteractionResponse(
+            scene_id=decision.scene_id,
+            decision_id=decision.decision_id,
+            timestamp_ms=decision.timestamp_ms + decision.response_timeout_ms,
+            response=ResponseValue.NONE,
+            source=ResponseSource.TIMEOUT,
+            demo_mode=service.demo_mode,
+        )
+        try:
+            service.submit_response(response)
+        except Exception:  # noqa: BLE001 - C answered first / episode moved on
+            return
 
 
 def live_streams_resolver(

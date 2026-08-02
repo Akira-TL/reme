@@ -428,6 +428,51 @@ class TestVanishFall:
             timestamp += 100.0
         assert self._vanish_events(published), "phantom flickers must not reset the loss window"
 
+    def test_repeat_falls_all_fire(self) -> None:
+        """User-reported: after one fall, later falls must still trigger.
+
+        A single genuinely visible frame re-arms the detector; the second
+        fall (past the cooldown) fires again."""
+
+        engine, published = self._engine()
+        index, timestamp = 0, 0.0
+
+        def one_fall() -> None:
+            nonlocal index, timestamp
+            for _ in range(10):
+                engine.handle_text(
+                    _landmark_message(_half_body(), frame_index=index, timestamp_ms=timestamp)
+                )
+                index += 1
+                timestamp += 100.0
+            for step in range(1, 5):
+                engine.handle_text(
+                    _landmark_message(
+                        _half_body(drop=0.09 * step),
+                        frame_index=index,
+                        timestamp_ms=timestamp,
+                    )
+                )
+                index += 1
+                timestamp += 100.0
+            for _ in range(12):
+                engine.handle_text(_empty_message(frame_index=index, timestamp_ms=timestamp))
+                index += 1
+                timestamp += 100.0
+
+        one_fall()
+        # Recover: come back into frame long enough to be a genuine return,
+        # and let the cooldown lapse.
+        for _ in range(45):
+            engine.handle_text(
+                _landmark_message(_half_body(), frame_index=index, timestamp_ms=timestamp)
+            )
+            index += 1
+            timestamp += 100.0
+        one_fall()
+        falls = self._vanish_events(published)
+        assert len(falls) == 2, f"both falls must fire, got {len(falls)}"
+
     def test_sideways_walk_out_does_not_fire(self) -> None:
         engine, published = self._engine()
         index, timestamp = 0, 0.0

@@ -186,12 +186,17 @@ class VanishFallDetector:
 
         if not lost:
             self._visible_streak += 1
+            # One genuinely visible frame re-arms the detector for the next
+            # fall (repeat falls in quick succession must all fire; the
+            # cooldown alone guards against flooding), but the loss window
+            # itself only resets on a sustained return — phantom flickers
+            # must not restart the hold timer.
+            self._fired_this_loss = False
             if (
                 self._lost_since is None
                 or self._visible_streak >= self.VISIBLE_STREAK_TO_RESET
             ):
                 self._lost_since = None
-                self._fired_this_loss = False
             return None
         self._visible_streak = 0
         if self._lost_since is None:
