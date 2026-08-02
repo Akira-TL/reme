@@ -11,8 +11,9 @@ import sys
 import threading
 from collections.abc import Callable
 
+from reme.decision.danger import DangerConfirmController, DangerRejectedError
 from reme.decision.policy import DecisionService
-from reme.decision.records import CareDecision
+from reme.decision.records import CareDecision, DecisionState
 from reme.decision.session import RuntimeSessionRegistry, SessionRegistryError
 from reme.decision.stream import EventIngest, IngestError, LiveStreams
 from reme.decision.websocket import DecisionEventHub
@@ -23,6 +24,11 @@ _EVALUATED_EVENT_TYPES = {
     RuntimeEventType.POSTURE_OBSERVATION,
     RuntimeEventType.TRANSITION_EVENT,
 }
+
+# Dormant superset key (abc-interface: TransitionEvent.evidence is a free
+# dict): A may attach the fall window's raw frame so the visual confirmation
+# starts without waiting for C's upload.  A never has to send it.
+EVIDENCE_FRAME_KEY = "frame_jpeg_b64"
 
 
 class RuntimeDecisionPublisher:
@@ -72,7 +78,11 @@ def live_streams_resolver(
     return resolve
 
 
-def evaluate_after_ingest(service: DecisionService, event: RuntimeEvent) -> None:
+def evaluate_after_ingest(
+    service: DecisionService,
+    event: RuntimeEvent,
+    danger: DangerConfirmController | None = None,
+) -> None:
     """Run one decision tick for a freshly buffered perception event.
 
     Called on a daemon thread from the ingest endpoint so A's event POST never
@@ -89,15 +99,54 @@ def evaluate_after_ingest(service: DecisionService, event: RuntimeEvent) -> None
     if isinstance(timestamp_raw, bool) or not isinstance(timestamp_raw, int | float):
         return
     try:
-        service.get_decision(scene_id=scene_id, timestamp_ms=float(timestamp_raw))
+        decision = service.get_decision(scene_id=scene_id, timestamp_ms=float(timestamp_raw))
     except Exception as exc:  # noqa: BLE001 - background tick must never crash ingest
         print(f"warning: post-ingest evaluation failed for {scene_id}: {exc}")
+        return
+    _feed_evidence_frame(danger, event, decision)
 
 
-def spawn_post_ingest_evaluation(service: DecisionService, event: RuntimeEvent) -> None:
+def _feed_evidence_frame(
+    danger: DangerConfirmController | None, event: RuntimeEvent, decision: CareDecision
+) -> None:
+    """Start the visual confirmation from A's own evidence frame, if any."""
+
+    if danger is None or event.event_type is not RuntimeEventType.TRANSITION_EVENT:
+        return
+    if decision.state is not DecisionState.CHECK_IN_REQUIRED:
+        return
+    channels = decision.confirm_channels
+    if channels is None or "frame" not in channels:
+        return
+    evidence = event.payload.get("evidence")
+    frame_b64 = evidence.get(EVIDENCE_FRAME_KEY) if isinstance(evidence, dict) else None
+    if not isinstance(frame_b64, str) or not frame_b64:
+        return
+    try:
+        danger.submit_frame(
+            scene_id=decision.scene_id,
+            decision_id=decision.decision_id,
+            image_b64=frame_b64,
+            timestamp_ms=decision.timestamp_ms,
+            origin="a_evidence",
+        )
+    except DangerRejectedError as exc:
+        # Evidence frames are best-effort; a refusal only means the episode
+        # moved on or the payload was junk.
+        print(f"warning: evidence frame refused for {decision.scene_id}: {exc.code}")
+
+
+def spawn_post_ingest_evaluation(
+    service: DecisionService,
+    event: RuntimeEvent,
+    *,
+    danger: DangerConfirmController | None = None,
+) -> None:
     """Fire-and-forget wrapper used by the server's /api/events route."""
 
-    thread = threading.Thread(target=evaluate_after_ingest, args=(service, event), daemon=True)
+    thread = threading.Thread(
+        target=evaluate_after_ingest, args=(service, event, danger), daemon=True
+    )
     thread.start()
 
 
@@ -119,12 +168,14 @@ class PerceptionBridge:
         registry: RuntimeSessionRegistry,
         service: DecisionService,
         client_factory: Callable[..., PerceptionEventClient] = PerceptionEventClient,
+        danger: DangerConfirmController | None = None,
     ) -> None:
         self._events_url = events_url
         self._ingest = ingest
         self._registry = registry
         self._service = service
         self._client_factory = client_factory
+        self._danger = danger
         self._lock = threading.Lock()
         self._client: PerceptionEventClient | None = None
 
@@ -191,4 +242,4 @@ class PerceptionBridge:
             # kill the subscription (the client keeps the socket open).
             print(f"warning: dropped event from A: {exc.code}: {exc}", file=sys.stderr)
             return
-        spawn_post_ingest_evaluation(self._service, event)
+        spawn_post_ingest_evaluation(self._service, event, danger=self._danger)

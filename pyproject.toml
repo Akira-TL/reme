@@ -20,6 +20,7 @@ reme-decision-server = "reme.decision.server:main"
 reme-decision-smoke = "reme.decision.mimo.adapter:main"
 reme-mimo-experiment = "reme.decision.mimo.experiment:main"
 reme-visual-precut = "reme.decision.visual:main"
+reme-voice-preset = "reme.decision.voice_preset:main"
 
 [project.optional-dependencies]
 dev = [

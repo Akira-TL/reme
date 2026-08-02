@@ -128,6 +128,9 @@ def _spawn_daemon(work: Callable[[], None]) -> None:
     threading.Thread(target=work, daemon=True).start()
 
 
+_DEFAULT_DANGER_CONFIG = DangerConfig()
+
+
 class DangerConfirmController:
     """Validates uploads, budgets the episode, and runs both confirm paths."""
 
@@ -137,7 +140,7 @@ class DangerConfirmController:
         service: DangerDecisionService,
         client: DangerCognitionClient | None,
         audit: AuditLog | None = None,
-        config: DangerConfig = DangerConfig(),
+        config: DangerConfig = _DEFAULT_DANGER_CONFIG,
         spawn: Callable[[Callable[[], None]], None] = _spawn_daemon,
     ) -> None:
         self._service = service
@@ -173,9 +176,7 @@ class DangerConfirmController:
             raise DangerRejectedError(REJECT_BAD_MEDIA)
         self._consume_budget(scene_id, target_id, "vision")
         note = f"origin={origin} decision={decision_id}"
-        self._spawn(
-            lambda: self._run_vision(scene_id, image_bytes, mime_type, timestamp_ms, note)
-        )
+        self._spawn(lambda: self._run_vision(scene_id, image_bytes, mime_type, timestamp_ms, note))
 
     def submit_voice(
         self,
@@ -296,9 +297,7 @@ class DangerConfirmController:
         ).strip()
         self._audit_event("danger_visual", scene_id, note=summary, latency_ms=result.latency_ms)
         if verdict.fallen and verdict.confidence >= self._config.vision_min_confidence:
-            self._service.confirm_danger(
-                scene_id=scene_id, timestamp_ms=timestamp_ms, note=summary
-            )
+            self._service.confirm_danger(scene_id=scene_id, timestamp_ms=timestamp_ms, note=summary)
 
     def _run_voice_audio(
         self,

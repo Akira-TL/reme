@@ -79,9 +79,9 @@ class VoiceIntent:
     transcript: str | None
 
 
-def build_vision_confirm_content(image_bytes: bytes, *, mime_type: str = "image/jpeg") -> list[
-    dict[str, Any]
-]:
+def build_vision_confirm_content(
+    image_bytes: bytes, *, mime_type: str = "image/jpeg"
+) -> list[dict[str, Any]]:
     """User content for one visual confirmation call."""
 
     return [
@@ -110,6 +110,7 @@ def _load_flat_object(raw_text: str, *, allowed: set[str], label: str) -> dict[s
     if unknown:
         raise MimoSchemaError(f"{label} has unexpected fields: {', '.join(unknown)}")
     return payload
+
 
 def parse_vision_verdict(raw_text: str) -> VisionVerdict:
     """Parse one visual confirmation reply; violations raise MimoSchemaError."""
@@ -142,9 +143,7 @@ _VOICE_INTENTS: dict[str, ResponseValue] = {
 def parse_voice_intent(raw_text: str) -> VoiceIntent:
     """Parse one voice-intent reply; violations raise MimoSchemaError."""
 
-    payload = _load_flat_object(
-        raw_text, allowed={"intent", "transcript"}, label="voice intent"
-    )
+    payload = _load_flat_object(raw_text, allowed={"intent", "transcript"}, label="voice intent")
     intent_raw = payload.get("intent")
     intent = _VOICE_INTENTS.get(intent_raw) if isinstance(intent_raw, str) else None
     if intent is None:

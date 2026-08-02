@@ -233,9 +233,7 @@ def build_decision_handler(
 
         # -- danger link (fall fast-confirm) --------------------------------
 
-        def _danger_common(
-            self, payload: dict[str, Any]
-        ) -> tuple[str, str, float] | None:
+        def _danger_common(self, payload: dict[str, Any]) -> tuple[str, str, float] | None:
             """Shared field checks; None means an error was already sent."""
 
             scene_id = payload.get("scene_id")

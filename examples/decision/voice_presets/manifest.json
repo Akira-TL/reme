@@ -1,0 +1,24 @@
+{
+  "schema_version": "reme-voice-preset/v0-experiment",
+  "voice": "Tingting",
+  "elder_name": "王奶奶",
+  "family_relation": "家人",
+  "entries": {
+    "fall_check_in": {
+      "file": "fall_check_in.m4a",
+      "text": "王奶奶，刚才看您像是摔了一下，您还好吗？能回应我一下吗？"
+    },
+    "clarify": {
+      "file": "clarify.m4a",
+      "text": "王奶奶，刚才没听清，您现在方便再说一遍吗？"
+    },
+    "fall_help_alert": {
+      "file": "fall_help_alert.m4a",
+      "text": "王奶奶，好的，我马上通知家人来帮您。"
+    },
+    "danger_confirmed_alert": {
+      "file": "danger_confirmed_alert.m4a",
+      "text": "王奶奶，我看到您可能摔倒了，已经通知家人，您先别急着起身，帮助马上就来。"
+    }
+  }
+}

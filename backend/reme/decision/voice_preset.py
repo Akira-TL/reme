@@ -136,8 +136,7 @@ def load_voice_assets(
         or manifest.get("family_relation") != persona.family_relation
     ):
         print(
-            "warning: voice presets were recorded for another persona; "
-            "re-run reme-voice-preset",
+            "warning: voice presets were recorded for another persona; re-run reme-voice-preset",
             file=sys.stderr,
         )
         return {}
