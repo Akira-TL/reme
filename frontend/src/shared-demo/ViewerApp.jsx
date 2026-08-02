@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import EmergencyRoundedIcon from "@mui/icons-material/EmergencyRounded";
+import FavoriteRoundedIcon from "@mui/icons-material/FavoriteRounded";
+import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
+import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
+import VerifiedUserRoundedIcon from "@mui/icons-material/VerifiedUserRounded";
+import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
   selectActiveMediaGrant,
@@ -77,22 +83,13 @@ function SceneEnvironment({ sceneId }) {
   if (sceneId === "kitchen") {
     return (
       <div className="scene-environment environment-kitchen" aria-hidden="true">
-        <span className="kitchen-window" />
-        <span className="kitchen-cabinet cabinet-one" />
-        <span className="kitchen-cabinet cabinet-two" />
-        <span className="kitchen-counter" />
-        <span className="kitchen-stove"><i /><i /></span>
-        <span className="kitchen-island" />
+        <img src="/scenes/kitchen.jpg" alt="" />
       </div>
     );
   }
   return (
     <div className={`scene-environment environment-living ${sceneId === "fall" ? "is-night" : ""}`} aria-hidden="true">
-      <span className="living-window" />
-      <span className="living-lamp"><i /></span>
-      <span className="living-sofa"><i /><i /></span>
-      <span className="living-table" />
-      <span className="living-rug" />
+      <img src="/scenes/living-room.jpg" alt="" />
     </div>
   );
 }
@@ -131,7 +128,7 @@ function HeartbeatCard({ card }) {
   if (!card) return null;
   return (
     <article className={`viewer-event-card heartbeat-card is-${card.share_state}`}>
-      <div className="event-card-kicker"><span aria-hidden="true">♥</span>家庭心跳</div>
+      <div className="event-card-kicker"><FavoriteRoundedIcon aria-hidden="true" />家庭心跳</div>
       <h2>{card.title}</h2>
       <p>{card.body}</p>
       <div className="event-card-footer">
@@ -314,13 +311,81 @@ export function ViewerApp() {
     stale: { label: "WAITING", dot: "wait-dot" },
     waiting: { label: "WAITING", dot: "wait-dot" },
   }[presentation.kind];
+  const primaryStatus = (() => {
+    if (relay.alarm?.phase === "escalated") {
+      return {
+        tone: "danger",
+        label: "紧急告警：请立即关注",
+        detail: videoVisible
+          ? "短期授权现场画面已接通；授权到期后会自动回到抽象骨架。"
+          : activeGrant
+            ? "告警已升级，正在建立短期授权点对点视频；连接失败时仍保持骨架。"
+            : "告警已升级；只有短期授权有效且点对点视频接通后才会开放现场画面。",
+        Icon: EmergencyRoundedIcon,
+      };
+    }
+    if (relay.alarm?.phase === "checking") {
+      return {
+        tone: "warning",
+        label: "正在进行安全问询",
+        detail: "问询阶段保持抽象骨架，等待本人回应后再决定是否升级。",
+        Icon: EmergencyRoundedIcon,
+      };
+    }
+    if (scene.scene_id === "bathroom") {
+      return {
+        tone: "privacy",
+        label: "完全隐私模式已开启",
+        detail: "本场景强制隐藏环境与原画，只保留必要的抽象骨架。",
+        Icon: VisibilityOffRoundedIcon,
+      };
+    }
+    if (["waiting", "stale"].includes(presentation.kind)) {
+      return {
+        tone: "pending",
+        label: "正在等待监控端画面",
+        detail: "连接建立后，这里会同步同一组实时骨架和场景事件。",
+        Icon: ShieldRoundedIcon,
+      };
+    }
+    if (["degraded", "unavailable"].includes(presentation.kind)) {
+      return {
+        tone: "warning",
+        label: presentation.kind === "degraded" ? "骨架质量较低" : "当前未检测到人物",
+        detail: "系统正在明确显示降级状态，不会用假画面替代真实检测结果。",
+        Icon: ShieldRoundedIcon,
+      };
+    }
+    if (scene.scene_id === "kitchen") {
+      const activityUnavailable = relay.activity?.phase === "unavailable";
+      return {
+        tone: activityUnavailable
+          ? "warning"
+          : relay.activity?.phase === "confirmed" ? "normal" : "pending",
+        label: activityUnavailable
+          ? "做饭识别暂不可用"
+          : relay.activity?.phase === "confirmed" ? "已识别到做饭活动" : "正在观察做饭活动",
+        detail: activityUnavailable
+          ? relay.activity.reason
+          : "系统只在连续证据确认后形成家庭心跳，分享仍由本人决定。",
+        Icon: RestaurantRoundedIcon,
+      };
+    }
+    return {
+      tone: "normal",
+      label: "当前状态：一切正常",
+      detail: "手机端正在本地处理画面，评委端仅接收抽象骨架。",
+      Icon: VerifiedUserRoundedIcon,
+    };
+  })();
+  const PrimaryStatusIcon = primaryStatus.Icon;
 
   return (
     <div className={`demo-shell viewer-role scene-${scene.scene_id} ${alarmActive ? "has-active-alarm" : ""}`}>
       <header className="demo-header">
         <a className="demo-brand" href="/" aria-label="Reme 评委旁观端首页">
           <span className="brand-mark">R</span>
-          <span><b>Reme</b><small>隐私关怀演示</small></span>
+          <span><b>外婆家</b><small>Reme 隐私关怀演示</small></span>
         </a>
         <div className="role-lockup">
           <span className="role-pill viewer-pill">评委只读端</span>
@@ -359,7 +424,7 @@ export function ViewerApp() {
           ) : null}
           {!showsSkeleton && !videoVisible ? (
             <div className="stage-placeholder" role="status">
-              <span className="placeholder-person" aria-hidden="true" />
+              <VerifiedUserRoundedIcon className="placeholder-status-icon" aria-hidden="true" />
               <b>
                 {presentation.kind === "unavailable"
                   ? "未检测到人物"
@@ -388,7 +453,7 @@ export function ViewerApp() {
             alarmActive={alarmActive}
           />
           <div className="privacy-ribbon">
-            <span aria-hidden="true">◈</span>
+            <ShieldRoundedIcon aria-hidden="true" />
             {videoVisible
               ? "事件授权画面经 WebRTC 点对点接收，不由骨架中继存储"
               : scene.scene_id === "bathroom"
@@ -409,6 +474,23 @@ export function ViewerApp() {
             <span key={line}>{line}{index === 0 ? <br /> : null}</span>
           ))}</h1>
           <p className="intro-copy">{sceneCopy.description}</p>
+
+          <article
+            className={`viewer-primary-status is-${primaryStatus.tone}`}
+            role={primaryStatus.tone === "danger" ? undefined : "status"}
+          >
+            <span className="primary-status-icon"><PrimaryStatusIcon /></span>
+            <span>
+              <small>当前状态</small>
+              <strong>{primaryStatus.label}</strong>
+              <em>{primaryStatus.detail}</em>
+            </span>
+          </article>
+
+          <div className="viewer-section-heading">
+            <h2>时间线</h2>
+            <span>只读实时同步</span>
+          </div>
 
           <div className="viewer-event-stack">
             {scene.scene_id === "kitchen" ? <ActivityCard activity={relay.activity} /> : null}

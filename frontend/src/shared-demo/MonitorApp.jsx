@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import CameraAltRoundedIcon from "@mui/icons-material/CameraAltRounded";
+import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
 import { createMoveNetBrowserEstimator } from "../model/movenet.js";
 import {
   captureJpegBase64,
@@ -911,7 +913,7 @@ export function MonitorApp() {
             </div>
           </section>
           <form className="unlock-card" onSubmit={unlock} autoComplete="off">
-            <span className="key-icon" aria-hidden="true">⌁</span>
+            <span className="key-icon" aria-hidden="true"><KeyRoundedIcon /></span>
             <h2>输入控制密钥</h2>
             <p>评委访问首页无需密钥，也无法进入此控制台。</p>
             <label htmlFor="control-key">本次演示密钥</label>
@@ -944,10 +946,10 @@ export function MonitorApp() {
               className={`camera-preview ${sceneId === "bathroom" ? "is-privacy-hidden" : ""}`}
             />
             <div className="stage-grid" />
-            <SkeletonStage frame={localFrame} color="#ffb454" className="monitor-skeleton" />
+            <SkeletonStage frame={localFrame} color="#ff5a00" className="monitor-skeleton" />
             {!ui.captureActive && (
               <div className="stage-placeholder compact">
-                <span className="camera-glyph" aria-hidden="true">◉</span>
+                <span className="camera-glyph" aria-hidden="true"><CameraAltRoundedIcon /></span>
                 <b>{ui.phase === "starting" ? "正在加载摄像头与模型…" : "摄像头尚未开启"}</b>
                 <p>只有点击下方按钮后，浏览器才会申请后置摄像头权限。</p>
               </div>

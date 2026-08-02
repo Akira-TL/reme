@@ -60,7 +60,7 @@ function draw(canvas, frame, color) {
   context.restore();
 }
 
-export function SkeletonStage({ frame, color = "#54e0c7", className = "" }) {
+export function SkeletonStage({ frame, color = "#ff5a00", className = "" }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
