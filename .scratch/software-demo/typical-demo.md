@@ -29,7 +29,7 @@ uv run reme-local-demo
 http://127.0.0.1:4174/typical-demo.html
 ```
 
-按 `Ctrl+C` 统一停止三个进程。该流程不使用 systemd，前端由 Vite 提供，不由 B 静态托管。
+按 `Ctrl+C` 统一停止三个进程组，终端会明确输出 `[C] stopped`、`[B] stopped`、`[A] stopped`。该流程不使用 systemd，前端由 Vite 提供，不由 B 静态托管。
 
 ## 默认验收场景
 
@@ -40,17 +40,19 @@ http://127.0.0.1:4174/typical-demo.html
 3. B 主动订阅 A 的事件流，生成 `care_decision` 并通过 B WebSocket 推回 C。
 4. C 在右侧验收面板显示真实连接、姿态、转变、决策来源和降级原因。
 5. B 进入询问状态后，可在页面回应“我没事”；告警升级后可确认家属收到。
+6. 页面左下角 `Debug` 可展开原始运行时状态；`?debug=1` 可默认打开，显示 A session、姿态分类/置信度/持续时间、转变事件和 B 决策 JSON。
 
 ## 已验证链路
 
 本地验收已确认：
 
-- 一键命令能同时启动 A、B、Vite。
+- 一键命令能同时启动 A、B、Vite，并在前台 `Ctrl+C` 后终止包括 Vite 子进程在内的全部进程组。
 - 浏览器打开页面后，A 创建 `live_camera` 会话。
 - B 健康状态从 `attached=false, connected=false` 变为 `attached=true, connected=true`。
 - 浏览器与 4174、8770、8100 均建立实际连接。
 - 合成跌倒序列产生 160 个关键点帧、54 个姿态事件和 1 个 `fall_like_transition`。
 - B 先发出安全询问，8 秒无回应后确定性升级为家属通知。
+- A 事件 WebSocket 断开后不再将 WebSocket 帧误解析为下一条 HTTP 请求，因此不会输出 `BrokenPipeError` 堆栈。
 
 ## 边界说明
 

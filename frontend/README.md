@@ -16,7 +16,7 @@ uv run reme-local-demo
 http://127.0.0.1:4174/typical-demo.html
 ```
 
-该命令以前台子进程方式同时启动 A、B 和 Vite，按 `Ctrl+C` 统一退出；不使用 systemd，也不由 B 静态托管前端。
+该命令以前台进程组方式同时启动 A、B 和 Vite，按 `Ctrl+C` 会依次输出 `[C] stopped`、`[B] stopped`、`[A] stopped` 并统一退出；不使用 systemd，也不由 B 静态托管前端。
 
 仅调试前端时可执行：
 
@@ -44,7 +44,7 @@ VITE_REME_PERCEPTION_INPUT_WS_URL=ws://127.0.0.1:8770/ws/camera-input
 
 前端使用 A 已公布的 HTTP 控制接口启动/停止会话，通过 `/ws/events` 接收 `frame_landmarks`、`posture_observation` 和 `transition_event`。摄像头输入采用浏览器直连 A 的设计：先发送 `scene_signal`，再以 `frame_meta + binary JPEG` 发送 10 FPS、最长边 640px 的帧。
 
-截至 `develop/akira@8ef0df8`，A 尚未提供 `/ws/camera-input`，其现有正式实现仍要求 A 反向连接 C 的 Camera WebSocket。页面会将这种情况显示为“A输入待接入”，并继续使用浏览器本地 MediaPipe 作为明确的后备，不会把本地结果伪装成 A 输出。点击状态标签可在 A 服务部署或恢复后重新创建会话。
+当前 A 正式提供 `/ws/camera-input`。`auto` 模式优先接收浏览器 JPEG 并在 A 内运行 MoveNet；本地推理栈不可用时，C 才会按能力声明切换为 17 点关键点直传。两种模式都会如实显示数据源和降级状态，不会把演示骨架伪装成 A 输出。
 
 ## 四场景单机现场验收
 
@@ -63,7 +63,9 @@ macOS 可双击 `启动Reme典型场景演示.command`，也可以执行 `npm ru
 3. 浴室洗澡：强制骨架模式，显示隐私幕布、关闭真人画面与音频。
 4. 深夜跌倒：默认进入真实 ABC 链路，右侧同步展示 C 摄像头、A 姿态/转变以及 B/MiMo 决策状态。
 
-数字键 `1`–`4` 可快速切换四个场景。跌倒流程使用明确标注的演示编排，不宣称当前模型已经完成真实跌倒确诊；摄像头帧只在页面内存中处理，默认不录制。
+数字键 `1`–`4` 可快速切换四个场景。页面左下角的 `Debug` 按钮可展开原始运行时状态，直接查看 A 的 session、姿态分类/置信度/持续时间、动作转变，以及 B 的决策状态、来源、风险等级和完整 JSON。使用 `?debug=1` 可在打开页面时自动展开调试面板。
+
+跌倒流程使用明确标注的演示编排，不宣称当前模型已经完成真实跌倒确诊；摄像头帧只在页面内存中处理，默认不录制。
 
 ## 目录
 
@@ -76,7 +78,7 @@ frontend/
 │   ├── data/               # 场景、看板和设置文案
 │   ├── hooks/              # 摄像头、MediaPipe 与 A 运行时生命周期
 │   ├── services/           # A HTTP/WS 地址与控制请求
-│   ├── typical-demo/       # 四场景双端现场演示
+│   ├── typical-demo/       # 四场景 ABC 单机现场验收
 │   ├── utils/              # 17 节点映射与 Canvas 绘制
 │   ├── App.jsx             # 产品状态与场景编排
 │   ├── index.css           # TailwindCSS + 精确坐标样式

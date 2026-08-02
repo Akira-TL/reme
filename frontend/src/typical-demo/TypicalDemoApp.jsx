@@ -4,6 +4,7 @@ import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import { Button } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DevicePanel } from "./DevicePanel";
+import { RuntimeDebugPanel } from "./RuntimeDebugPanel";
 import { RuntimeInspector } from "./RuntimeInspector";
 import { DEMO_SCENES } from "./scenes";
 import { useFallLiveLink } from "./useFallLiveLink";
@@ -177,6 +178,8 @@ export function TypicalDemoApp() {
           live={live}
         />
       </div>
+
+      <RuntimeDebugPanel camera={cameraState} live={live} scene={scene} />
 
       <footer className="demo-footer">
         <span><b>现场模式</b> 摄像头帧仅在当前页面内存中处理，不默认录制</span>
