@@ -102,7 +102,7 @@ uv run reme-local-demo
 | B · Decision | `http://127.0.0.1:8100` | 规则/MiMo 决策与事件流 |
 | C · Experience | `http://127.0.0.1:4174` | React 双端验收页面 |
 
-MiMo key 不是启动硬依赖：没有 key 时，确定性问询、倒计时与家属提醒仍可运行，模型路径会显示降级。默认 `auto` 模式可以使用浏览器 MediaPipe 关键点路径。后端 MoveNet/JPEG 路径还需要 `uv sync --extra dev --extra pose`、Git 忽略目录中的已验证模型/分类器资产，并应在 `/api/runtime/capabilities` 中确认实际选中了 JPEG lane；详见[姿态与转变实验说明](backend/reme/pose/README.md)。
+MiMo key 不是启动硬依赖：没有 key 时，确定性问询、倒计时与家属提醒仍可运行，模型路径会显示降级。默认 `auto` 模式可以使用浏览器 MediaPipe 关键点路径。仓库已随附团队提供的 MoveNet Lightning FP16 兼容权重；MoveNet/JPEG 路径还需要 `uv sync --extra dev --extra pose`，并应在 `/api/runtime/capabilities` 中确认实际选中了 JPEG lane。当前主线仍缺少默认姿态分类器，因而该权重不会单独让 JPEG lane 成为完整姿态识别链路；详见[模型来源与校验](models/movenet/README.md)和[姿态与转变实验说明](backend/reme/pose/README.md)。
 
 完整操作与排障说明见 [快速启动指南](docs/%E5%BF%AB%E9%80%9F%E5%90%AF%E5%8A%A8.md)。
 
@@ -136,6 +136,7 @@ npm --prefix frontend run build
 .
 ├── backend/reme/          # A 感知、B 决策与本地编排
 ├── frontend/              # C 端 React 演示与本地模型资产
+├── models/movenet/        # 随仓库交付的 MoveNet 兼容权重与来源校验信息
 ├── tests/                 # 确定性领域逻辑与链路测试
 ├── examples/              # 可复现事件、决策与联调样例
 ├── docs/

@@ -37,7 +37,7 @@ reme.pose
 └── transitions.py       # 静止与动作转变（后续 Ticket）
 ```
 
-跨角色字段必须遵循 `.scratch/abc-interface/spec.md`。实验产物放入被 Git 忽略的 `artifacts/pose-classification/`，不得将大型视频、模型或逐帧结果提交到 Git。
+跨角色字段必须遵循 `.scratch/abc-interface/spec.md`。实验产物放入被 Git 忽略的 `artifacts/pose-classification/`，不得将大型视频、逐帧结果或未经明确批准的模型提交到 Git。可选后端 JPEG lane 使用的团队提供 MoveNet 兼容权重是唯一已批准的后端模型例外，并随来源口径与哈希记录一起放在 `models/movenet/`。
 
 兼容入口 `reme.scene_bundle` 暂时保留；新代码和新测试应直接使用 `reme.pose.*`。
 
@@ -66,11 +66,13 @@ opencv-python-headless 5.0.0.93
 numpy 2.4.6
 ```
 
-将已验证模型放到 Git 忽略目录，例如：
+比赛仓库已包含通过 LiteRT 合同校验的团队提供模型：
 
 ```text
 models/movenet/movenet_lightning_f16_v4.tflite
 ```
+
+其来源口径、文件大小和 SHA-256 见 [`models/movenet/README.md`](../../../models/movenet/README.md)。它提供 17 点关键点，不包含当前主线所需的默认姿态分类器；分类器和其他实验权重仍保留在 Git 忽略目录。
 
 持续运行并向标准输出写 RuntimeEvent JSONL：
 
