@@ -25,11 +25,13 @@ from reme.decision.audit import AuditLog
 from reme.decision.config import (
     ServerConfig,
     ServerConfigError,
+    build_danger_controller,
     build_mimo_client,
     build_policy_config,
     server_config_from_args,
 )
 from reme.decision.context import SceneStreamError, discover_scenes
+from reme.decision.danger import DangerConfirmController, DangerRejectedError
 from reme.decision.policy import (
     DecisionRejectedError,
     DecisionService,
@@ -74,6 +76,14 @@ _INGEST_STATUS: dict[str, HTTPStatus] = {
     "push_ingest_disabled": HTTPStatus.CONFLICT,
 }
 
+_DANGER_STATUS: dict[str, HTTPStatus] = {
+    "no_confirm_pending": HTTPStatus.CONFLICT,
+    "channel_not_offered": HTTPStatus.UNPROCESSABLE_ENTITY,
+    "bad_media": HTTPStatus.UNPROCESSABLE_ENTITY,
+    "confirm_budget_exhausted": HTTPStatus.TOO_MANY_REQUESTS,
+    "confirm_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+}
+
 
 def build_decision_handler(
     *,
@@ -83,15 +93,20 @@ def build_decision_handler(
     hub: DecisionEventHub | None = None,
     ingest: EventIngest | None = None,
     bridge: PerceptionBridge | None = None,
+    danger: DangerConfirmController | None = None,
+    voice_dir: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Create the request handler bound to one DecisionService.
 
     The three realtime collaborators are optional: a server built without
     them still serves the recorded-bundle routes, and every runtime route
-    answers 503 ``runtime_disabled`` instead of pretending to work.
+    answers 503 ``runtime_disabled`` instead of pretending to work. The same
+    holds for the danger link: without a controller its upload routes answer
+    503 ``danger_disabled``, and without a voice dir ``/voice/`` is 404.
     """
 
     static_root = None if static_dir is None else static_dir.resolve()
+    voice_root = None if voice_dir is None else voice_dir.resolve()
 
     class DecisionHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -168,6 +183,10 @@ def build_decision_handler(
                     self._handle_session_stop(payload)
                 elif path == "/api/events":
                     self._handle_events(payload)
+                elif path == "/api/danger/frame":
+                    self._handle_danger_frame(payload)
+                elif path == "/api/danger/voice":
+                    self._handle_danger_voice(payload)
                 else:
                     self._send_error_json(HTTPStatus.NOT_FOUND, "not_found", path)
             except UnknownSceneError as exc:
@@ -176,6 +195,9 @@ def build_decision_handler(
                 )
             except DecisionRejectedError as exc:
                 status = _REJECT_STATUS.get(exc.code, HTTPStatus.UNPROCESSABLE_ENTITY)
+                self._send_error_json(status, exc.code, exc.code)
+            except DangerRejectedError as exc:
+                status = _DANGER_STATUS.get(exc.code, HTTPStatus.UNPROCESSABLE_ENTITY)
                 self._send_error_json(status, exc.code, exc.code)
             except DecisionRecordError as exc:
                 self._send_error_json(
@@ -208,6 +230,114 @@ def build_decision_handler(
             response = parse_interaction_response(payload)
             decision = service.submit_response(response)
             self._send_json(HTTPStatus.OK, decision.to_payload())
+
+        # -- danger link (fall fast-confirm) --------------------------------
+
+        def _danger_common(
+            self, payload: dict[str, Any]
+        ) -> tuple[str, str, float] | None:
+            """Shared field checks; None means an error was already sent."""
+
+            scene_id = payload.get("scene_id")
+            decision_id = payload.get("decision_id")
+            timestamp_ms = payload.get("timestamp_ms")
+            if not isinstance(scene_id, str) or not scene_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "scene_id must be a non-empty string"
+                )
+                return None
+            if not isinstance(decision_id, str) or not decision_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "bad_request",
+                    "decision_id must be a non-empty string",
+                )
+                return None
+            if (
+                isinstance(timestamp_ms, bool)
+                or not isinstance(timestamp_ms, int | float)
+                or timestamp_ms < 0
+            ):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "timestamp_ms must be a number >= 0"
+                )
+                return None
+            return scene_id, decision_id, float(timestamp_ms)
+
+        def _handle_danger_frame(self, payload: dict[str, Any]) -> None:
+            if danger is None:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "danger_disabled",
+                    "this server runs without the danger confirmation link",
+                )
+                return
+            common = self._danger_common(payload)
+            if common is None:
+                return
+            scene_id, decision_id, timestamp_ms = common
+            image_b64 = payload.get("image_b64")
+            if not isinstance(image_b64, str) or not image_b64:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "image_b64 must be a non-empty string"
+                )
+                return
+            mime_type = payload.get("mime_type", "image/jpeg")
+            if not isinstance(mime_type, str):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "mime_type must be a string"
+                )
+                return
+            danger.submit_frame(
+                scene_id=scene_id,
+                decision_id=decision_id,
+                image_b64=image_b64,
+                timestamp_ms=timestamp_ms,
+                mime_type=mime_type,
+            )
+            # The verdict arrives over /ws as a new decision; this response
+            # only acknowledges that the confirmation is running.
+            self._send_json(HTTPStatus.OK, {"accepted": "visual_confirm"})
+
+        def _handle_danger_voice(self, payload: dict[str, Any]) -> None:
+            if danger is None:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "danger_disabled",
+                    "this server runs without the danger confirmation link",
+                )
+                return
+            common = self._danger_common(payload)
+            if common is None:
+                return
+            scene_id, decision_id, timestamp_ms = common
+            text = payload.get("text")
+            audio_b64 = payload.get("audio_b64")
+            audio_format = payload.get("audio_format")
+            if text is not None and not isinstance(text, str):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "text must be a string"
+                )
+                return
+            if audio_b64 is not None and not isinstance(audio_b64, str):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "audio_b64 must be a string"
+                )
+                return
+            if audio_format is not None and not isinstance(audio_format, str):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "audio_format must be a string"
+                )
+                return
+            danger.submit_voice(
+                scene_id=scene_id,
+                decision_id=decision_id,
+                timestamp_ms=timestamp_ms,
+                text=text,
+                audio_b64=audio_b64,
+                audio_format=audio_format,
+            )
+            self._send_json(HTTPStatus.OK, {"accepted": "voice_intent"})
 
         def _handle_reset(self, payload: dict[str, Any]) -> None:
             scene_id = payload.get("scene_id")
@@ -339,7 +469,7 @@ def build_decision_handler(
             event = ingest.submit(payload, active_session_id=registry.active_session_id())
             # Evaluate off-thread so A's event POST never waits on a MiMo
             # round trip; the resulting decision reaches C over /ws.
-            spawn_post_ingest_evaluation(service, event)
+            spawn_post_ingest_evaluation(service, event, danger=danger)
             self._send_json(HTTPStatus.OK, {"accepted": event.event_type.value})
 
         def _handle_websocket(self) -> None:
@@ -388,7 +518,26 @@ def build_decision_handler(
             if path.startswith("/scenes/"):
                 self._handle_scene_asset(path)
                 return
+            if path.startswith("/voice/"):
+                self._handle_voice_asset(path)
+                return
             self._handle_static(path)
+
+        def _handle_voice_asset(self, path: str) -> None:
+            # Preset check-in clips (danger link): tiny immutable m4a files.
+            if voice_root is None:
+                self._send_error_json(
+                    HTTPStatus.NOT_FOUND, "no_voice_dir", "server started without voice presets"
+                )
+                return
+            relative = path.removeprefix("/voice/")
+            target = (voice_root / relative).resolve()
+            try:
+                target.relative_to(voice_root)
+            except ValueError:
+                self._send_error_json(HTTPStatus.NOT_FOUND, "not_found", path)
+                return
+            self._send_file(target, allow_range=False)
 
         def do_HEAD(self) -> None:  # noqa: N802
             # HEAD mirrors GET without bodies; only static assets need it.
@@ -586,6 +735,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         publisher=RuntimeDecisionPublisher(registry=registry, hub=hub),
         live_streams=live_streams_resolver(registry, ingest),
     )
+    danger = build_danger_controller(config, service, audit)
     bridge = (
         None
         if config.a_events_url is None
@@ -594,6 +744,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ingest=ingest,
             registry=registry,
             service=service,
+            danger=danger,
         )
     )
     handler = build_decision_handler(
@@ -603,6 +754,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         hub=hub,
         ingest=ingest,
         bridge=bridge,
+        danger=danger,
+        voice_dir=config.voice_dir if config.voice_dir.is_dir() else None,
     )
     server = build_server(config, handler)
     scheme = "https" if config.certfile is not None else "http"

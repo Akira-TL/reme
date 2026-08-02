@@ -45,7 +45,9 @@ from reme.decision.mimo.adapter import MimoCallResult, MimoClient, MimoTransport
 from reme.decision.mimo.prompts import PersonaConfig, build_system_prompt, build_user_prompt
 from reme.decision.mimo.schema import MimoProposal, MimoSchemaError, parse_mimo_proposal
 from reme.decision.records import (
+    ALARM_CHANNELS,
     ActionCard,
+    AlarmSignal,
     CardStatus,
     CareDecision,
     DecisionAction,
@@ -66,6 +68,7 @@ from reme.decision.state_machine import (
     MimoTask,
     SessionState,
     TemplateId,
+    on_danger_confirmed,
     on_response,
     on_tick,
 )
@@ -117,6 +120,11 @@ class PolicyConfig:
     behavior_window_ms: float = DEFAULT_WINDOW_MS
     home_provider: HomeContextProvider | None = None
     memory_store: BehaviorMemoryStore | None = None
+    # Danger link: family-device alarm channels attached to fall alerts, and
+    # pre-generated voice assets (template -> served URL path) so the elder
+    # device can speak a check-in with zero synthesis latency.
+    alarm_channels: tuple[str, ...] = ALARM_CHANNELS
+    voice_assets: Mapping[TemplateId, str] = field(default_factory=dict)
 
 
 # Fold one behavior window into the memory baseline at most this often
@@ -135,7 +143,13 @@ _MEMORY_STATE_KINDS: dict[DecisionState, MemoryEventKind] = {
     DecisionState.RESOLVED: MemoryEventKind.RESOLVED,
 }
 
-_FALL_TEMPLATES = frozenset({TemplateId.FALL_CHECK_IN, TemplateId.FALL_HELP_ALERT})
+_FALL_TEMPLATES = frozenset(
+    {
+        TemplateId.FALL_CHECK_IN,
+        TemplateId.FALL_HELP_ALERT,
+        TemplateId.DANGER_CONFIRMED_ALERT,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +193,12 @@ _TEMPLATES: dict[TemplateId, _Template] = {
         Uncertainty.LOW,
         elder_message="{name}，好的，我马上通知{relation}来帮您。",
         family_notification="疑似跌倒后老人请求帮助，请立即联系或前往查看。",
+    ),
+    TemplateId.DANGER_CONFIRMED_ALERT: _Template(
+        "画面确认老人倒地且尚未确认安全，规则升级通知家属",
+        Uncertainty.MEDIUM,
+        elder_message="{name}，我看到您可能摔倒了，已经通知{relation}，您先别急着起身，帮助马上就来。",
+        family_notification="画面确认老人疑似跌倒、暂未收到回应，请立即联系或前往查看。",
     ),
     TemplateId.UNCLEAR_FAMILY_ALERT: _Template(
         "澄清后仍无法理解回应，转家属确认",
@@ -401,6 +421,73 @@ class DecisionService:
             snapshot,
             elder_text=response.text,
         )
+        self._publish(decision, previous_id)
+        return decision
+
+    def pending_confirm_target(self, scene_id: str) -> tuple[str, tuple[str, ...]] | None:
+        """The (decision_id, confirm_channels) uploads may currently target.
+
+        Returns None outside an upload-accepting episode. A cheap pre-check
+        for the danger controller; the commit-time transition re-validates
+        under the lock, so a stale answer here can never mis-escalate.
+        """
+
+        self._streams(scene_id)
+        with self._lock:
+            runtime = self._runtimes.get(scene_id)
+            if runtime is None or runtime.pending is None:
+                return None
+            channels = runtime.pending.confirm_channels
+            if channels is None:
+                return None
+            return runtime.pending.decision_id, channels
+
+    def confirm_danger(
+        self,
+        *,
+        scene_id: str,
+        timestamp_ms: float,
+        note: str | None = None,
+    ) -> CareDecision | None:
+        """Commit one independent danger confirmation (danger link).
+
+        Returns the emitted family-alert decision, or None when the episode
+        has already moved on (elder answered, rules escalated, session reset)
+        — late confirmations are dropped, never replayed. Pure rule: no MiMo
+        call happens inside, so this path stays fast and non-cancellable.
+        """
+
+        self._streams(scene_id)
+        if self._config.demo_mode is DemoMode.RECORD:
+            return None
+        with self._lock:
+            runtime = self._runtime(scene_id)
+            previous_id = None if runtime.pending is None else runtime.pending.decision_id
+            directive = on_danger_confirmed(
+                runtime.session, timestamp_ms=timestamp_ms, config=self._config.trigger
+            )
+            if directive.reject_code is not None:
+                self._audit_event(
+                    kind="danger_discarded",
+                    scene_id=scene_id,
+                    decision_id=previous_id,
+                    note=note,
+                )
+                return None
+            decision = self._build_decision(
+                runtime,
+                directive,
+                timestamp_ms,
+                proposal=None,
+                source=DecisionSource.RULE,
+            )
+            self._commit_emission(runtime, directive, decision)
+            self._audit_event(
+                kind="danger_confirmed",
+                scene_id=scene_id,
+                decision_id=decision.decision_id,
+                note=note,
+            )
         self._publish(decision, previous_id)
         return decision
 
@@ -769,6 +856,7 @@ class DecisionService:
         persona = self._config.persona
         template = _TEMPLATES[skeleton.template]
         elder_message = _fill(template.elder_message, persona)
+        template_elder_message = elder_message
         family_notification = _fill(template.family_notification, persona)
         reason_summary = template.reason_summary
         uncertainty = template.uncertainty
@@ -788,6 +876,17 @@ class DecisionService:
         card = self._resolve_card(runtime, skeleton, proposal)
         if not skeleton.need_dialogue:
             elder_message = None
+        alarm = None
+        if skeleton.alarm_trigger is not None:
+            alarm = AlarmSignal(
+                channels=self._config.alarm_channels, trigger=skeleton.alarm_trigger
+            )
+        # A preset voice clip is advertised only when the spoken text is
+        # exactly the recorded template wording — MiMo-composed wording must
+        # never play under a mismatched recording.
+        voice_asset = None
+        if elder_message is not None and elder_message == template_elder_message:
+            voice_asset = self._config.voice_assets.get(skeleton.template)
         # Invariant, not policy: the machine owns state/risk and already encodes
         # legal exits from the escalated band in its next-state floor.
         if violates_risk_floor(
@@ -815,6 +914,9 @@ class DecisionService:
             response_timeout_ms=skeleton.response_timeout_ms,
             action_card=card,
             visual_context=None if visual is None else visual.record,
+            alarm=alarm,
+            voice_asset=voice_asset,
+            confirm_channels=skeleton.confirm_channels,
         )
 
     def _resolve_card(

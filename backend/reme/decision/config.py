@@ -6,9 +6,11 @@ import argparse
 import os
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
+from reme.decision.audit import AuditLog
+from reme.decision.danger import DangerConfig, DangerConfirmController
 from reme.decision.guardrails import TriggerConfig
 from reme.decision.home import (
     NIGHT_HOURS,
@@ -23,17 +25,27 @@ from reme.decision.memory import BehaviorMemoryStore
 from reme.decision.mimo.adapter import MimoClient, config_from_environment
 from reme.decision.mimo.prompts import PersonaConfig
 from reme.decision.policy import (
+    DecisionService,
     LiveMimoDecisionClient,
     MimoDecisionClient,
     MockMimoClient,
     PolicyConfig,
 )
 from reme.decision.records import DemoMode
+from reme.decision.state_machine import TemplateId
+from reme.decision.voice_preset import load_voice_assets
 from reme.decision.ws_client import WebSocketClientError, _split_ws_url
 
 DEFAULT_PORT = 8100
 DEFAULT_MOCK_SCRIPT_DIR = Path("examples/decision/mimo_mock")
 DEFAULT_AUDIT_PATH = Path("artifacts/decision-audit.jsonl")
+DEFAULT_VOICE_DIR = Path("examples/decision/voice_presets")
+
+# The danger link's confirmation calls answer or die fast: one attempt on a
+# short leash, because the deterministic countdown escalation is always
+# waiting right behind them (ADR-0005).
+DANGER_CONFIRM_TIMEOUT_SECONDS = 6.0
+DANGER_CONFIRM_MAX_ATTEMPTS = 1
 
 
 class ServerConfigError(ValueError):
@@ -67,6 +79,9 @@ class ServerConfig:
     # Set = pull mode: B subscribes to A's event stream itself.  Unset = push
     # mode: something else POSTs to /api/events (replays, fixtures).
     a_events_url: str | None = None
+    # Danger link: preset voice assets directory and the confirmation paths.
+    voice_dir: Path = DEFAULT_VOICE_DIR
+    danger_enabled: bool = True
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -141,6 +156,17 @@ def build_parser() -> argparse.ArgumentParser:
             "omit it to keep the push entry open for replays and fixtures."
         ),
     )
+    parser.add_argument(
+        "--voice-dir",
+        type=Path,
+        default=DEFAULT_VOICE_DIR,
+        help="preset voice assets dir (reme-voice-preset output), served under /voice/",
+    )
+    parser.add_argument(
+        "--no-danger",
+        action="store_true",
+        help="disable the danger link's frame/voice confirmation endpoints",
+    )
     return parser
 
 
@@ -189,6 +215,8 @@ def server_config_from_args(argv: Sequence[str] | None = None) -> ServerConfig:
         local_hour=args.local_hour,
         memory_file=args.memory_file,
         a_events_url=args.a_events_url,
+        voice_dir=args.voice_dir,
+        danger_enabled=not args.no_danger,
     )
 
 
@@ -214,8 +242,17 @@ def build_home_provider(config: ServerConfig) -> HomeContextProvider | None:
     )
 
 
+def build_voice_assets(config: ServerConfig, persona: PersonaConfig) -> dict[TemplateId, str]:
+    """Advertised preset clips; empty when the dir or persona does not match."""
+
+    if not config.danger_enabled or not config.voice_dir.is_dir():
+        return {}
+    return dict(load_voice_assets(config.voice_dir, persona=persona))
+
+
 def build_policy_config(config: ServerConfig) -> PolicyConfig:
     persona = PersonaConfig(elder_name=config.elder_name, family_relation=config.family_relation)
+    voice_assets = build_voice_assets(config, persona)
     if not config.cognition_enabled:
         # The one-switch v1 fallback must boot even when a cognition file is
         # corrupt or unavailable, so those files are not touched at all.
@@ -226,6 +263,7 @@ def build_policy_config(config: ServerConfig) -> PolicyConfig:
             record_capture=config.record_capture,
             visual_enabled=config.visual_enabled,
             cognition_enabled=False,
+            voice_assets=voice_assets,
         )
     memory_store = None
     if config.memory_file is not None:
@@ -240,6 +278,7 @@ def build_policy_config(config: ServerConfig) -> PolicyConfig:
         cognition_enabled=True,
         home_provider=build_home_provider(config),
         memory_store=memory_store,
+        voice_assets=voice_assets,
     )
 
 
@@ -254,3 +293,31 @@ def build_mimo_client(config: ServerConfig) -> MimoDecisionClient | None:
         # degrade visibly instead of crashing the demo host.
         pass
     return LiveMimoDecisionClient(MimoClient(client_config))
+
+
+def build_danger_controller(
+    config: ServerConfig, service: DecisionService, audit: AuditLog | None
+) -> DangerConfirmController | None:
+    """The danger link's orchestrator; None when the mode cannot use it.
+
+    Record replays take no uploads. Mock mode gets a controller without a
+    cognition client: the text-rule voice path still works for scripted
+    demos, while frame/audio uploads answer ``confirm_unavailable``.
+    """
+
+    if not config.danger_enabled or config.demo_mode is DemoMode.RECORD:
+        return None
+    client = None
+    if config.demo_mode is DemoMode.LIVE:
+        confirm_config = replace(
+            config_from_environment(),
+            timeout_seconds=DANGER_CONFIRM_TIMEOUT_SECONDS,
+            max_attempts=DANGER_CONFIRM_MAX_ATTEMPTS,
+        )
+        client = MimoClient(confirm_config)
+    return DangerConfirmController(
+        service=service,
+        client=client,
+        audit=audit,
+        config=DangerConfig(),
+    )

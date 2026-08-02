@@ -110,11 +110,38 @@ class ResponseSource(StrEnum):
     FAMILY_INPUT = "family_input"
     SCRIPT = "script"
     TIMEOUT = "timeout"
+    # Superset value (danger link): B's own voice-intent loop submits the
+    # elder's spoken reply on their behalf; `text` carries the transcript.
+    VOICE = "voice"
 
 
-_TEXT_BEARING_RESPONSE_SOURCES = {ResponseSource.USER_INPUT, ResponseSource.SCRIPT}
+class AlarmTrigger(StrEnum):
+    """Which deterministic path fired a family alarm (danger link)."""
+
+    ELDER_REPORT = "elder_report"
+    VOICE_INTENT = "voice_intent"
+    VISUAL_CONFIRM = "visual_confirm"
+    CHECK_IN_TIMEOUT = "check_in_timeout"
+    UNCLEAR_RESPONSE = "unclear_response"
+    FAMILY_UNRESPONSIVE = "family_unresponsive"
+
+
+# Channel vocabularies for the danger link's superset fields.  Both are closed
+# lists so C can hard-code renderers against them.
+ALARM_CHANNELS = ("vibrate", "ring", "flash")
+CONFIRM_CHANNELS = ("frame", "voice")
+
+_TEXT_BEARING_RESPONSE_SOURCES = {
+    ResponseSource.USER_INPUT,
+    ResponseSource.SCRIPT,
+    ResponseSource.VOICE,
+}
 _NONE_RESPONSE_SOURCES = {ResponseSource.TIMEOUT, ResponseSource.SCRIPT}
-_ELDER_RESPONSE_SOURCES = {ResponseSource.USER_INPUT, ResponseSource.SCRIPT}
+_ELDER_RESPONSE_SOURCES = {
+    ResponseSource.USER_INPUT,
+    ResponseSource.SCRIPT,
+    ResponseSource.VOICE,
+}
 
 
 def _require_non_empty(value: str, label: str) -> None:
@@ -206,6 +233,36 @@ class VisualContext:
 
 
 @dataclass(frozen=True, slots=True)
+class AlarmSignal:
+    """Family-device alarm instruction attached to a danger-link alert.
+
+    ``channels`` tells the family view how to demand attention (vibrate loop,
+    ringtone, flashlight/screen strobe); ``trigger`` records which deterministic
+    path fired the alarm.  The field is decoration on an already-escalated
+    decision — it never appears below family-alert severity.
+    """
+
+    channels: tuple[str, ...]
+    trigger: AlarmTrigger
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.channels, tuple) or not self.channels:
+            raise DecisionRecordError("alarm.channels must be a non-empty tuple")
+        unknown = [channel for channel in self.channels if channel not in ALARM_CHANNELS]
+        if unknown:
+            raise DecisionRecordError(
+                f"alarm.channels must be within {list(ALARM_CHANNELS)}, got {unknown}"
+            )
+        if len(set(self.channels)) != len(self.channels):
+            raise DecisionRecordError("alarm.channels must not repeat")
+        if not isinstance(self.trigger, AlarmTrigger):
+            raise DecisionRecordError("alarm.trigger must be an AlarmTrigger")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {"channels": list(self.channels), "trigger": self.trigger.value}
+
+
+@dataclass(frozen=True, slots=True)
 class CareDecision:
     """One outbound decision for C (contract section 10)."""
 
@@ -229,6 +286,9 @@ class CareDecision:
     response_timeout_ms: int | None = None
     action_card: ActionCard | None = None
     visual_context: VisualContext | None = None
+    alarm: AlarmSignal | None = None
+    voice_asset: str | None = None
+    confirm_channels: tuple[str, ...] | None = None
     schema_version: str = DECISION_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -268,6 +328,28 @@ class CareDecision:
             or self.response_timeout_ms <= 0
         ):
             raise DecisionRecordError("response_timeout_ms must be a positive integer")
+        if self.alarm is not None and self.state not in (
+            DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+            DecisionState.URGENT_ATTENTION,
+        ):
+            raise DecisionRecordError("alarm is only valid on family-alert or urgent decisions")
+        _require_optional_text(self.voice_asset, "voice_asset")
+        if self.voice_asset is not None and self.elder_message is None:
+            raise DecisionRecordError("voice_asset requires a spoken elder_message")
+        if self.confirm_channels is not None:
+            if not isinstance(self.confirm_channels, tuple) or not self.confirm_channels:
+                raise DecisionRecordError("confirm_channels must be a non-empty tuple")
+            unknown = [
+                channel for channel in self.confirm_channels if channel not in CONFIRM_CHANNELS
+            ]
+            if unknown:
+                raise DecisionRecordError(
+                    f"confirm_channels must be within {list(CONFIRM_CHANNELS)}, got {unknown}"
+                )
+            if len(set(self.confirm_channels)) != len(self.confirm_channels):
+                raise DecisionRecordError("confirm_channels must not repeat")
+            if self.action is not DecisionAction.ASK_ELDER:
+                raise DecisionRecordError("confirm_channels is only valid on ask_elder decisions")
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -293,6 +375,11 @@ class CareDecision:
             "action_card": None if self.action_card is None else self.action_card.to_payload(),
             "visual_context": (
                 None if self.visual_context is None else self.visual_context.to_payload()
+            ),
+            "alarm": None if self.alarm is None else self.alarm.to_payload(),
+            "voice_asset": self.voice_asset,
+            "confirm_channels": (
+                None if self.confirm_channels is None else list(self.confirm_channels)
             ),
         }
 
@@ -410,6 +497,9 @@ _DECISION_FIELDS = {
     "response_timeout_ms",
     "action_card",
     "visual_context",
+    "alarm",
+    "voice_asset",
+    "confirm_channels",
 }
 
 _RESPONSE_FIELDS = {
@@ -447,6 +537,24 @@ def parse_action_card(data: object) -> ActionCard:
     )
 
 
+def _parse_alarm(data: object) -> AlarmSignal:
+    payload = _require_payload_mapping(data, "alarm")
+    _reject_unknown_fields(payload, {"channels", "trigger"}, "alarm")
+    channels = payload.get("channels")
+    if not isinstance(channels, list) or not all(isinstance(item, str) for item in channels):
+        raise DecisionRecordError("alarm.channels must be a list of strings")
+    return AlarmSignal(
+        channels=tuple(channels),
+        trigger=_enum_value(payload, "trigger", AlarmTrigger),
+    )
+
+
+def _parse_confirm_channels(data: object) -> tuple[str, ...]:
+    if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+        raise DecisionRecordError("confirm_channels must be a list of strings")
+    return tuple(data)
+
+
 def _parse_visual_context(data: object) -> VisualContext:
     payload = _require_payload_mapping(data, "visual_context")
     allowed = {"sent_to_mimo", "type", "start_ms", "end_ms", "sample_count"}
@@ -467,6 +575,8 @@ def parse_care_decision(data: object) -> CareDecision:
     _reject_unknown_fields(payload, _DECISION_FIELDS, "care decision")
     card = payload.get("action_card")
     visual = payload.get("visual_context")
+    alarm = payload.get("alarm")
+    confirm_channels = payload.get("confirm_channels")
     risk_level = payload.get("risk_level")
     if isinstance(risk_level, bool) or not isinstance(risk_level, int):
         raise DecisionRecordError("risk_level must be an integer")
@@ -492,6 +602,11 @@ def parse_care_decision(data: object) -> CareDecision:
         response_timeout_ms=payload.get("response_timeout_ms"),
         action_card=None if card is None else parse_action_card(card),
         visual_context=None if visual is None else _parse_visual_context(visual),
+        alarm=None if alarm is None else _parse_alarm(alarm),
+        voice_asset=payload.get("voice_asset"),
+        confirm_channels=(
+            None if confirm_channels is None else _parse_confirm_channels(confirm_channels)
+        ),
     )
 
 

@@ -20,10 +20,12 @@ from reme.decision.guardrails import (
 )
 from reme.decision.records import (
     ActionCard,
+    AlarmTrigger,
     CardStatus,
     DecisionAction,
     DecisionState,
     InteractionResponse,
+    ResponseSource,
     ResponseValue,
 )
 
@@ -65,6 +67,7 @@ class TemplateId(StrEnum):
     SAFE_RESOLVED = "safe_resolved"
     LATE_SAFE_RESOLVED = "late_safe_resolved"
     FALL_HELP_ALERT = "fall_help_alert"
+    DANGER_CONFIRMED_ALERT = "danger_confirmed_alert"
     UNCLEAR_FAMILY_ALERT = "unclear_family_alert"
     TIMEOUT_FAMILY_ALERT = "timeout_family_alert"
     CONSENT_REQUEST = "consent_request"
@@ -80,6 +83,10 @@ REJECT_NO_PENDING = "no_pending_decision"
 REJECT_INVALID_RESPONSE = "invalid_response"
 REJECT_TIMELINE_REWIND = "timeline_rewind"
 REJECT_EPISODE_RESOLVED = "episode_resolved"
+REJECT_DANGER_NOT_APPLICABLE = "danger_not_applicable"
+
+# Danger link: which uploads B accepts against a fall episode's check-in.
+FALL_CONFIRM_CHANNELS = ("frame", "voice")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +121,8 @@ class DecisionSkeleton:
     response_timeout_ms: int | None
     template: TemplateId
     include_card: CardStatus | None = None
+    alarm_trigger: AlarmTrigger | None = None
+    confirm_channels: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +178,7 @@ def _family_alert(
     timeout_count: int | None = None,
     include_card: CardStatus | None = None,
     mimo_task: MimoTask | None = None,
+    alarm_trigger: AlarmTrigger | None = None,
 ) -> Directive:
     skeleton = DecisionSkeleton(
         state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
@@ -180,6 +190,7 @@ def _family_alert(
         response_timeout_ms=response_timeout_ms,
         template=template,
         include_card=include_card,
+        alarm_trigger=alarm_trigger,
     )
     next_state = replace(
         _mark_emitted(state, skeleton),
@@ -213,6 +224,7 @@ def _fall_check_in(
         # (as must every other awaiting-elder decision, see on_tick).
         response_timeout_ms=config.check_in_timeout_ms,
         template=TemplateId.FALL_CHECK_IN,
+        confirm_channels=FALL_CONFIRM_CHANNELS,
     )
     next_state = replace(
         _mark_emitted(state, skeleton),
@@ -321,6 +333,11 @@ def _on_elder_response(
                 TemplateId.FALL_HELP_ALERT,
                 response_timeout_ms=None,
                 need_dialogue=True,
+                alarm_trigger=(
+                    AlarmTrigger.VOICE_INTENT
+                    if response.source is ResponseSource.VOICE
+                    else AlarmTrigger.ELDER_REPORT
+                ),
             )
         complaint = response.text or state.complaint_text
         if complaint is None:
@@ -366,8 +383,8 @@ def _on_elder_response(
         mimo_task = MimoTask.INTERPRET_RESPONSE if response.text is not None else None
         return Directive(next_state=next_state, skeleton=skeleton, mimo_task=mimo_task)
     if value is ResponseValue.UNCLEAR:
+        is_fall = state.escalation is EscalationKind.FALL
         if not state.clarification_used:
-            is_fall = state.escalation is EscalationKind.FALL
             skeleton = DecisionSkeleton(
                 state=DecisionState.CHECK_IN_REQUIRED,
                 risk_level=2,
@@ -379,6 +396,9 @@ def _on_elder_response(
                 # concern clarification left unanswered escalates like a fall's.
                 response_timeout_ms=config.check_in_timeout_ms,
                 template=TemplateId.CLARIFY,
+                # A fall clarification keeps the danger confirm window open:
+                # late frames and a re-spoken reply stay acceptable.
+                confirm_channels=FALL_CONFIRM_CHANNELS if is_fall else None,
             )
             next_state = replace(_mark_emitted(state, skeleton), clarification_used=True)
             return Directive(next_state=next_state, skeleton=skeleton)
@@ -387,17 +407,22 @@ def _on_elder_response(
             TemplateId.UNCLEAR_FAMILY_ALERT,
             response_timeout_ms=config.family_ack_timeout_ms,
             need_dialogue=False,
+            alarm_trigger=AlarmTrigger.UNCLEAR_RESPONSE if is_fall else None,
         )
     if value is ResponseValue.NONE:
         # Contract: after a timeout the rules escalate immediately, never MiMo.
-        # Deliberately blind to `state.escalation`: a silent concern check-in
-        # escalates on exactly the same rule as a silent fall check-in.
+        # Deliberately blind to `state.escalation` for severity: a silent
+        # concern check-in escalates on exactly the same rule as a silent fall
+        # check-in; only the fall episode additionally shakes the family phone.
         return _family_alert(
             state,
             TemplateId.TIMEOUT_FAMILY_ALERT,
             response_timeout_ms=config.family_ack_timeout_ms,
             need_dialogue=False,
             timeout_count=state.timeout_count + 1,
+            alarm_trigger=(
+                AlarmTrigger.CHECK_IN_TIMEOUT if state.escalation is EscalationKind.FALL else None
+            ),
         )
     return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
 
@@ -452,6 +477,11 @@ def _on_family_notified_response(state: SessionState, response: InteractionRespo
             consent_required=False,
             response_timeout_ms=None,
             template=TemplateId.URGENT_ALERT,
+            alarm_trigger=(
+                AlarmTrigger.FAMILY_UNRESPONSIVE
+                if state.escalation is EscalationKind.FALL
+                else None
+            ),
         )
         next_state = replace(
             _mark_emitted(state, skeleton),
@@ -504,3 +534,32 @@ def on_response(
     if advanced.phase is SessionPhase.FAMILY_NOTIFIED:
         return _on_family_notified_response(advanced, response)
     return _on_urgent_response(advanced, response)
+
+
+def on_danger_confirmed(
+    state: SessionState, *, timestamp_ms: float, config: TriggerConfig
+) -> Directive:
+    """Apply one independent danger confirmation (danger link's visual path).
+
+    Valid only while a fall episode is still waiting on the elder: the raw
+    frame is corroborating evidence for exactly that open question.  Once the
+    elder has answered — safe resolves, help already alerted — or the episode
+    escalated some other way, the confirmation is late news and is dropped
+    (the elder's explicit answer stays authoritative, per ADR-0005).  The
+    resulting alert is pure rule: MiMo latency gates nothing after this call.
+    """
+
+    advanced = _advance_clock(state, timestamp_ms)
+    if (
+        advanced.phase is not SessionPhase.AWAITING_ELDER
+        or advanced.escalation is not EscalationKind.FALL
+        or advanced.pending_decision_id is None
+    ):
+        return Directive(next_state=advanced, reject_code=REJECT_DANGER_NOT_APPLICABLE)
+    return _family_alert(
+        advanced,
+        TemplateId.DANGER_CONFIRMED_ALERT,
+        response_timeout_ms=config.family_ack_timeout_ms,
+        need_dialogue=True,
+        alarm_trigger=AlarmTrigger.VISUAL_CONFIRM,
+    )

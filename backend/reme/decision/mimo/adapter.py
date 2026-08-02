@@ -86,6 +86,28 @@ def build_image_part(image_bytes: bytes, *, mime_type: str = "image/jpeg") -> di
     return {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}"}}
 
 
+# Container formats the omni endpoint accepts for ``input_audio`` — measured
+# 2026-08-01 against api.xiaomimimo.com (the 400 body enumerates exactly this
+# list; notably webm/opus is rejected, so Chrome recordings must be WAV).
+SUPPORTED_AUDIO_FORMATS = frozenset({"wav", "mp3", "m4a", "ogg", "flac"})
+
+
+def build_audio_part(audio_bytes: bytes, *, audio_format: str) -> dict[str, Any]:
+    """Encode one short recording as the MiMo ``input_audio`` content part.
+
+    The omni channel transcribes and reasons over the clip in a single chat
+    call (measured ~2s for a 4s clip), which is why the danger link needs no
+    separate ASR endpoint.
+    """
+
+    if audio_format not in SUPPORTED_AUDIO_FORMATS:
+        raise ValueError(
+            f"audio_format must be one of {sorted(SUPPORTED_AUDIO_FORMATS)}, got {audio_format!r}"
+        )
+    encoded = base64.b64encode(audio_bytes).decode("ascii")
+    return {"type": "input_audio", "input_audio": {"data": encoded, "format": audio_format}}
+
+
 class MimoClient:
     """Thin, retrying JSON-mode client for one configured endpoint."""
 
