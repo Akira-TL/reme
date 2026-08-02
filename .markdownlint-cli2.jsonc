@@ -1,0 +1,12 @@
+{
+  "config": {
+    // Centered hero art and badges intentionally use GitLab-compatible HTML.
+    "MD033": false,
+    // The hero image is deliberately rendered before the first Markdown heading.
+    "MD041": false,
+    // Chinese prose and badge URLs are clearer without hard line wrapping.
+    "MD013": false,
+    // Keep compact source tables; GitLab renders all table variants equivalently.
+    "MD060": false
+  }
+}
