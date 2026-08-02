@@ -99,7 +99,27 @@ Vercel 继续负责两个入口、LiteRT WASM 和版本化模型静态资产；�
 | 模型 | 通过（桌面 Chrome/WASM） | LiteRT.js 2.5.3 实际加载版本化权重；`uint8 [1,192,192,3] → float32 [1,1,17,3]`；固定画布输出 17 个有限关键点。 |
 | 对齐 | 通过（固定 192×192 输入） | 同一确定性 RGB 输入相对 Python `ai-edge-litert` 的 `max_abs_error=5.960464477539063e-8`、`mean_abs_error=7.85e-9`。该结果刻意绕开浏览器与 OpenCV 缩放差异，不外推非方形预处理像素级一致。 |
 | 手机 | 待真人执行 | 尚未在目标 iPhone Safari 或 Android Chrome 连续运行 60 秒；桌面 Chrome 推理时间不能作为手机指标。 |
-| 共享 | 通过（Worker staging） | 真实公网 staging 中一个控制浏览器向三个既有 Viewer 广播同一 `session_id/#41`；第四个晚加入 Viewer 立即收到同一快照。 |
-| 权限 | 通过 | Relay 7/7 集成测试覆盖错误密钥、第二控制者、Viewer 写入、媒体/二进制拒绝；真实浏览器中的第二监控页显示占用拒绝，释放后租约归零。 |
+| 共享 | 通过（Worker production） | 真实公网生产中继中一个控制端向三个既有 Viewer 广播同一 `session_id/#41`；第四个晚加入 Viewer 立即收到同一 `movenet-17/v1-demo` 快照。 |
+| 权限 | 通过 | Relay 11/11 集成测试覆盖错误密钥、第二控制者、Viewer 写入、媒体/二进制拒绝；生产中继第二次正确解锁返回 423，测试结束后主动释放租约。 |
 | 隐私 | 通过（合同与网络检查） | Viewer 构建分包和浏览器资源记录均不含 `/weights/` 或 `/litert/wasm/`，摄像头权限保持 `prompt`；中继只接受严格 17 点 JSON。 |
-| 发布 | 进行中 | Worker staging 与 `https://relay.reme.maniforld.com` 已部署，正式域名 HTTPS 健康、外域 Origin 返回 403；Vercel Preview/正式页仍待本分支提交后验证。 |
+| 发布 | 部分通过（控制域名 DNS 待授权） | Vercel Preview 已验证并将同一构建提升为 production；`/`、`/monitor`、模型、WASM 与安全头均为 200。Worker staging/production 已部署，三个允许 Origin 为 200、外域为 403。`monitor.reme.maniforld.com` 已附加到项目，但 Cloudflare Domain Connect 的最终授权仍待人工确认。 |
+
+已部署版本：
+
+- Vercel production：`dpl_4UKJsbkgBWXBEZqqaozZ9F4nfS6j`，构建 URL `https://reme-113fyouny-lx050s-projects.vercel.app`；
+- Vercel 已附加别名：`reme.maniforld.com`、`reme-sage.vercel.app`、`monitor.reme.maniforld.com`；
+- Worker staging：`442b07b0-9a0e-46ec-b982-64c564a7e063`；
+- Worker production：`a07a5a55-4a13-47af-b425-50a66422b3c6`；
+- 远端模型：`4,758,512` 字节，分段下载复核 SHA-256 为 `0fac2226112d0371903ca86e3853cec24ef603a0b2f96f589b180f0ebdd135ab`；
+- Cloudflare 待授权记录：DNS-only `CNAME monitor.reme → 459ace11b47bcf46.vercel-dns-017.com`，以及 Vercel Domain Connect 生成的校验 TXT。
+
+发布到公网不等于手机 Gate 已获准。目标 iPhone/Android 的 60 秒后置摄像头测试未完成前，正式路演仍必须保留 `/typical-demo.html` 回退，并显示能力未验证状态。
+
+## 10. upstream 同步与合并回归
+
+- 仅以 `upstream/feature/abc-single-device-integration@92ca64c` 为云端基线，不处理 fork/origin；
+- 合并提交：`7b6bdb7 merge(upstream): sync ABC single-device integration`；
+- 后端：590 passed、1 skipped。跳过项只涉及仓库和 upstream 历史均未包含的可选 `artifacts/pose-classification/fall-50/mil-v3/model.json`；缺失时运行时明确降级到 deterministic-only；
+- 前端：32/32 tests、ESLint、Vite production build 通过；
+- Relay：11/11 tests、TypeScript check、production/staging dry-run 通过；
+- `mypy` 回到合并前基线的 28 个既有错误（11 个文件），`ruff` 保持合并前 64 个既有错误；本轮没有扩大这两项存量债务。

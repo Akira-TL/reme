@@ -1,9 +1,9 @@
 # 构建单采集端、多评委实时旁观 Demo
 
 - Type: task
-- Status: claimed
+- Status: ready-for-human
 - Owner: Codex
-- Blocked by: none
+- Blocked by: Cloudflare Domain Connect 最终授权；目标手机 60 秒实机 Gate
 
 ## Scope
 
@@ -17,4 +17,9 @@
 
 ## Answer
 
-进行中。
+代码、upstream 合并、自动化验证、Worker production 与 Vercel production 均已完成。`reme.maniforld.com/` 和兼容控制入口 `/monitor` 已上线；独立控制主机名已附加到 Vercel，Cloudflare 授权页已精确列出待新增的 DNS-only CNAME 与校验 TXT。
+
+剩余两项只可由人完成：
+
+1. 在已登录 Cloudflare Domain Connect 页面确认一次 DNS 变更，使 `monitor.reme.maniforld.com` 生效；
+2. 用现场目标 iPhone Safari 或 Android Chrome 连续运行后置摄像头 60 秒并记录性能与降级状态。
