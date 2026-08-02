@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "node --test src/adapters/perception.test.js"
+    "test": "node --test src/adapters/perception.test.js",
+    "predev": "node scripts/copy-mediapipe.mjs",
+    "prebuild": "node scripts/copy-mediapipe.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
