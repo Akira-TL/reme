@@ -15,6 +15,10 @@ Frozen decisions:
   do not modify context.py).
 - Per-scene buffers are bounded (default 2000 posture events) and
   timestamps must be non-decreasing within a session.
+- The anti-replay sequence watermark is kept per ``(session_id, event_type)``,
+  not per session: A derives several event types from one frame and reuses
+  that frame's sequence for all of them, so a session-wide watermark would
+  drop every event after the first one of each frame.
 """
 
 from __future__ import annotations
@@ -111,16 +115,19 @@ class EventIngest:
         self._lock = threading.Lock()
         self._postures: dict[str, deque[PostureObservation]] = {}
         self._transitions: dict[str, deque[TransitionEvent]] = {}
-        self._session_sequences: dict[str, int] = {}
+        self._sequence_watermarks: dict[tuple[str, RuntimeEventType], int] = {}
 
     def submit(self, payload: object, *, active_session_id: str | None) -> RuntimeEvent:
         """Validate and buffer one inbound RuntimeEvent envelope.
 
         Rejects stale/mismatched sessions (``stale_session``), malformed
         envelopes or payloads (``bad_event``), and events while no session is
-        active (``no_active_session``). Only ``posture_observation`` and
-        ``transition_event`` event types are buffered; other valid types are
-        accepted and ignored. Returns the parsed envelope.
+        active (``no_active_session``). Replays and reordering are rejected per
+        ``(session, event_type)`` stream (``bad_event``), so events A derived
+        from the same frame may share that frame's sequence. Only
+        ``posture_observation`` and ``transition_event`` event types are
+        buffered; other valid types are accepted and ignored. Returns the
+        parsed envelope.
         """
 
         if active_session_id is None:
@@ -134,12 +141,24 @@ class EventIngest:
             # Contract section 4: sequences are strictly increasing per sender
             # and session; duplicates and reordering are rejected, and the
             # watermark only advances once an event is fully accepted.
-            last_sequence = self._session_sequences.get(event.session_id)
+            #
+            # The sender here is the derivation stream, not the session: A tags
+            # every event derived from one frame with that frame's sequence
+            # (pose/camera.py emits FrameLandmarks with ``sequence=processed_frames``,
+            # and both pose/posture_runtime.py and pose/transitions.py re-emit
+            # with ``sequence=event.sequence``). A session-wide watermark would
+            # therefore drop the TransitionEvent that shares a frame with a
+            # PostureObservation -- i.e. drop the fall signal. Keying the
+            # watermark on (session, event_type) accepts one event per type per
+            # sequence while still rejecting replays (same type, same sequence)
+            # and true reordering within a type's own stream.
+            watermark_key = (event.session_id, event.event_type)
+            last_sequence = self._sequence_watermarks.get(watermark_key)
             if last_sequence is not None and event.sequence <= last_sequence:
                 raise IngestError(
                     "bad_event",
-                    f"sequence must be strictly increasing per session "
-                    f"({event.sequence} <= {last_sequence})",
+                    f"sequence must be strictly increasing per session and event type "
+                    f"({event.sequence} <= {last_sequence} for {event.event_type.value})",
                 )
             if event.event_type in _BUFFERED_EVENT_TYPES:
                 label = f"runtime event {event.sequence}"
@@ -147,7 +166,7 @@ class EventIngest:
                     self._buffer_posture(event.payload, label=label)
                 else:
                     self._buffer_transition(event.payload, label=label)
-            self._session_sequences[event.session_id] = event.sequence
+            self._sequence_watermarks[watermark_key] = event.sequence
             return event
 
     def snapshot(self, scene_id: str) -> LiveStreams:
@@ -171,7 +190,7 @@ class EventIngest:
         with self._lock:
             self._postures.clear()
             self._transitions.clear()
-            self._session_sequences.clear()
+            self._sequence_watermarks.clear()
 
     def _buffer_posture(self, payload: dict[str, Any], *, label: str) -> None:
         """Append one posture observation; caller holds the lock."""

@@ -214,9 +214,7 @@ def test_posture_timestamp_regression_is_rejected() -> None:
     ingest.submit(_posture_event(sequence=1, timestamp_ms=2000.0), active_session_id=SESSION_ID)
 
     with pytest.raises(IngestError) as excinfo:
-        ingest.submit(
-            _posture_event(sequence=2, timestamp_ms=1999.0), active_session_id=SESSION_ID
-        )
+        ingest.submit(_posture_event(sequence=2, timestamp_ms=1999.0), active_session_id=SESSION_ID)
 
     assert excinfo.value.code == "bad_event"
     assert "reset" in str(excinfo.value)
@@ -273,9 +271,7 @@ def test_scenes_are_buffered_independently() -> None:
 
 def test_reset_scene_clears_the_snapshot_and_allows_replay() -> None:
     ingest = EventIngest()
-    ingest.submit(
-        _posture_event(sequence=1, timestamp_ms=8000.0), active_session_id=SESSION_ID
-    )
+    ingest.submit(_posture_event(sequence=1, timestamp_ms=8000.0), active_session_id=SESSION_ID)
     ingest.submit(_transition_event(sequence=2), active_session_id=SESSION_ID)
 
     ingest.reset_scene(SCENE_ID)
@@ -283,9 +279,7 @@ def test_reset_scene_clears_the_snapshot_and_allows_replay() -> None:
     streams = ingest.snapshot(SCENE_ID)
     assert streams.postures == ()
     assert streams.transitions == ()
-    ingest.submit(
-        _posture_event(sequence=3, timestamp_ms=10.0), active_session_id=SESSION_ID
-    )
+    ingest.submit(_posture_event(sequence=3, timestamp_ms=10.0), active_session_id=SESSION_ID)
     assert len(ingest.snapshot(SCENE_ID).postures) == 1
 
 
@@ -326,13 +320,151 @@ def test_duplicate_or_reordered_sequence_is_rejected() -> None:
     ingest = EventIngest()
     ingest.submit(_posture_event(sequence=5, timestamp_ms=1000.0), active_session_id=SESSION_ID)
     with pytest.raises(IngestError, match="strictly increasing") as duplicate:
-        ingest.submit(
-            _posture_event(sequence=5, timestamp_ms=2000.0), active_session_id=SESSION_ID
-        )
+        ingest.submit(_posture_event(sequence=5, timestamp_ms=2000.0), active_session_id=SESSION_ID)
     assert duplicate.value.code == "bad_event"
     with pytest.raises(IngestError, match="strictly increasing"):
-        ingest.submit(
-            _posture_event(sequence=4, timestamp_ms=3000.0), active_session_id=SESSION_ID
-        )
+        ingest.submit(_posture_event(sequence=4, timestamp_ms=3000.0), active_session_id=SESSION_ID)
     ingest.reset_all()
     ingest.submit(_posture_event(sequence=1, timestamp_ms=4000.0), active_session_id=SESSION_ID)
+
+
+def test_same_sequence_posture_and_transition_are_both_accepted() -> None:
+    # A derives PostureObservation and TransitionEvent from one frame and reuses
+    # that frame's sequence for both; a session-wide watermark dropped the
+    # transition -- i.e. dropped the fall signal.
+    ingest = EventIngest()
+
+    ingest.submit(_posture_event(sequence=42, timestamp_ms=7000.0), active_session_id=SESSION_ID)
+    ingest.submit(
+        _transition_event(sequence=42, start_ms=6800.0, end_ms=7000.0),
+        active_session_id=SESSION_ID,
+    )
+
+    streams = ingest.snapshot(SCENE_ID)
+    assert len(streams.postures) == 1
+    assert len(streams.transitions) == 1
+    assert streams.transitions[0].transition.value == "fall_like_transition"
+
+
+def test_same_sequence_frame_landmarks_do_not_block_derived_events() -> None:
+    # The unbuffered FrameLandmarks event carries the same sequence as the two
+    # events derived from it; it must not consume the sequence for them.
+    ingest = EventIngest()
+
+    ingest.submit(
+        _envelope(
+            event_type=RuntimeEventType.FRAME_LANDMARKS.value,
+            payload={"scene_id": SCENE_ID, "frame_index": 9},
+            sequence=9,
+        ),
+        active_session_id=SESSION_ID,
+    )
+    ingest.submit(_posture_event(sequence=9, timestamp_ms=3000.0), active_session_id=SESSION_ID)
+    ingest.submit(
+        _transition_event(sequence=9, start_ms=2900.0, end_ms=3000.0),
+        active_session_id=SESSION_ID,
+    )
+
+    streams = ingest.snapshot(SCENE_ID)
+    assert len(streams.postures) == 1
+    assert len(streams.transitions) == 1
+
+
+def test_duplicate_transition_at_the_same_sequence_is_rejected() -> None:
+    ingest = EventIngest()
+    ingest.submit(_posture_event(sequence=11, timestamp_ms=5000.0), active_session_id=SESSION_ID)
+    ingest.submit(
+        _transition_event(sequence=11, event_id="transition-1", start_ms=4900.0, end_ms=5000.0),
+        active_session_id=SESSION_ID,
+    )
+
+    with pytest.raises(IngestError, match="strictly increasing") as excinfo:
+        ingest.submit(
+            _transition_event(sequence=11, event_id="transition-2", start_ms=5000.0, end_ms=5100.0),
+            active_session_id=SESSION_ID,
+        )
+
+    assert excinfo.value.code == "bad_event"
+    assert len(ingest.snapshot(SCENE_ID).transitions) == 1
+
+
+def test_duplicate_posture_at_the_same_sequence_is_rejected() -> None:
+    # A replayed posture would pollute the behavior window and memory baseline.
+    ingest = EventIngest()
+    ingest.submit(_posture_event(sequence=11, timestamp_ms=5000.0), active_session_id=SESSION_ID)
+    ingest.submit(
+        _transition_event(sequence=11, start_ms=4900.0, end_ms=5000.0),
+        active_session_id=SESSION_ID,
+    )
+
+    with pytest.raises(IngestError, match="strictly increasing") as excinfo:
+        ingest.submit(
+            _posture_event(sequence=11, timestamp_ms=5000.0), active_session_id=SESSION_ID
+        )
+
+    assert excinfo.value.code == "bad_event"
+    assert len(ingest.snapshot(SCENE_ID).postures) == 1
+
+
+def test_reordering_within_one_event_type_is_still_rejected() -> None:
+    ingest = EventIngest()
+    ingest.submit(
+        _transition_event(sequence=8, event_id="transition-1", start_ms=1000.0, end_ms=1200.0),
+        active_session_id=SESSION_ID,
+    )
+    ingest.submit(_posture_event(sequence=9, timestamp_ms=2000.0), active_session_id=SESSION_ID)
+
+    with pytest.raises(IngestError, match="strictly increasing") as excinfo:
+        ingest.submit(
+            _transition_event(sequence=7, event_id="transition-0", start_ms=1300.0, end_ms=1400.0),
+            active_session_id=SESSION_ID,
+        )
+
+    assert excinfo.value.code == "bad_event"
+    assert len(ingest.snapshot(SCENE_ID).transitions) == 1
+
+
+def test_stale_session_is_rejected_regardless_of_event_type() -> None:
+    ingest = EventIngest()
+    ingest.submit(_posture_event(sequence=3, timestamp_ms=1000.0), active_session_id=SESSION_ID)
+
+    with pytest.raises(IngestError) as excinfo:
+        ingest.submit(
+            _transition_event(sequence=3, session_id="session-0"),
+            active_session_id=SESSION_ID,
+        )
+
+    assert excinfo.value.code == "stale_session"
+    assert ingest.snapshot(SCENE_ID).transitions == ()
+
+
+def test_reset_all_clears_every_per_event_type_watermark() -> None:
+    ingest = EventIngest()
+    ingest.submit(_posture_event(sequence=50, timestamp_ms=9000.0), active_session_id=SESSION_ID)
+    ingest.submit(
+        _transition_event(sequence=50, start_ms=8900.0, end_ms=9000.0),
+        active_session_id=SESSION_ID,
+    )
+
+    ingest.reset_all()
+
+    ingest.submit(_posture_event(sequence=1, timestamp_ms=10.0), active_session_id=SESSION_ID)
+    ingest.submit(
+        _transition_event(sequence=1, start_ms=10.0, end_ms=20.0), active_session_id=SESSION_ID
+    )
+    streams = ingest.snapshot(SCENE_ID)
+    assert len(streams.postures) == 1
+    assert len(streams.transitions) == 1
+
+
+def test_watermarks_are_tracked_per_session() -> None:
+    ingest = EventIngest()
+    ingest.submit(_posture_event(sequence=9, timestamp_ms=1000.0), active_session_id=SESSION_ID)
+
+    # A fresh session keeps its own watermark, so it may restart from zero.
+    ingest.submit(
+        _posture_event(sequence=0, session_id="session-2", scene_id="scene-b"),
+        active_session_id="session-2",
+    )
+
+    assert len(ingest.snapshot("scene-b").postures) == 1
