@@ -96,8 +96,10 @@ REJECT_TIMELINE_REWIND = "timeline_rewind"
 REJECT_EPISODE_RESOLVED = "episode_resolved"
 REJECT_DANGER_NOT_APPLICABLE = "danger_not_applicable"
 
-# Danger link: which uploads B accepts against a fall episode's check-in.
-FALL_CONFIRM_CHANNELS = ("frame", "voice")
+# Danger link: keep the elder check-in first.  Visual confirmation is not
+# accepted during the first question, otherwise C's automatic frame upload
+# turns "lying -> ask" into an immediate family alert.
+FALL_CONFIRM_CHANNELS = ("voice",)
 
 
 @dataclass(frozen=True, slots=True)

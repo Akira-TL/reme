@@ -270,9 +270,40 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setDeadline(null);
     }
 
+    function armResponseTimeout(payload, timeoutMs = payload?.response_timeout_ms) {
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !payload?.decision_id) return;
+      const decisionId = payload.decision_id;
+      clearCountdown();
+      setDeadline({ decisionId, timeoutMs, expiresAt: Date.now() + timeoutMs });
+      countdown = {
+        decisionId,
+        timer: window.setTimeout(() => {
+          countdown = { decisionId: null, timer: 0 };
+          setDeadline(null);
+          if (respondedDecisionIds.has(decisionId)) return;
+          submitFor(payload, "none", "timeout");
+        }, timeoutMs),
+      };
+    }
+
+    function showReplyWindow(payload, timeoutMs) {
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !payload?.decision_id) return;
+      const decisionId = payload.decision_id;
+      clearCountdown();
+      setDeadline({ decisionId, timeoutMs, expiresAt: Date.now() + timeoutMs });
+      countdown = {
+        decisionId,
+        timer: window.setTimeout(() => {
+          if (countdown.decisionId !== decisionId) return;
+          countdown = { decisionId: null, timer: 0 };
+          setDeadline(null);
+        }, timeoutMs),
+      };
+    }
+
     async function playDecisionVoice(payload, { force = false, autoReply = true } = {}) {
-      if (!payload?.elder_message) return;
-      if (!force && spokenDecisionIds.has(payload.decision_id)) return;
+      if (!payload?.elder_message) return false;
+      if (!force && spokenDecisionIds.has(payload.decision_id)) return false;
       spokenDecisionIds.add(payload.decision_id);
       setVoice((current) => ({
         ...current,
@@ -313,10 +344,10 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             stage: "failed",
             error: fallbackError.message || "语音播放失败",
           }));
-          return;
+          return false;
         }
       }
-      if (disposed) return;
+      if (disposed) return false;
       setVoice((current) => ({
         ...current,
         stage: decisionAwaitsReply(payload) ? "waiting_reply" : "complete",
@@ -327,7 +358,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         && !respondedDecisionIds.has(payload.decision_id)
       ) {
         window.setTimeout(() => runVoiceReply(payload), 250);
+        return true;
       }
+      return false;
     }
 
     async function runVoiceReply(target = latestDecision) {
@@ -345,9 +378,15 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           stage: "failed",
           error: "当前浏览器无法采集麦克风 WAV",
         }));
+        armResponseTimeout(target);
         return;
       }
       voiceTurnDecisionId = target.decision_id;
+      const replyWindowMs = Number.isFinite(target.response_timeout_ms)
+        && target.response_timeout_ms > 0
+        ? target.response_timeout_ms
+        : 2500;
+      showReplyWindow(target, replyWindowMs);
       setVoice((current) => ({
         ...current,
         supported: true,
@@ -358,12 +397,15 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         asrLatencyMs: null,
         error: "",
       }));
-      let marked = false;
       try {
-        const audioB64 = await recordWav({ durationMs: 4000, sampleRate: 16000 });
+        const audioB64 = await recordWav({
+          durationMs: replyWindowMs,
+          sampleRate: 16000,
+          requireSpeech: true,
+        });
         if (disposed) return;
+        clearCountdown();
         markResponded(target.decision_id);
-        marked = true;
         setVoice((current) => ({
           ...current,
           listening: false,
@@ -377,11 +419,17 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         });
         if (disposed) return;
         const next = pluckDecision(result);
-        if (next) ingestDecision(next, { suppressVoice: true });
+        const playReplyAudio = Boolean(result.audio_b64 && next?.state !== "resolved");
+        if (next) {
+          ingestDecision(next, {
+            suppressVoice: true,
+            suppressTimeout: playReplyAudio || decisionAwaitsReply(next),
+          });
+        }
         setVoice((current) => ({
           ...current,
           listening: false,
-          stage: result.audio_b64 ? "playing" : "complete",
+          stage: playReplyAudio ? "playing" : "complete",
           transcript: result.transcript || "",
           responseValue: result.response_value || "",
           asrModel: result.asr_model || current.asrModel,
@@ -390,7 +438,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           ttsLatencyMs: result.tts_latency_ms ?? null,
           error: "",
         }));
-        if (result.audio_b64) {
+        if (playReplyAudio) {
           await playBase64Audio(result.audio_b64, result.audio_format);
         }
         if (disposed) return;
@@ -404,13 +452,16 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         }
       } catch (error) {
         voiceTurnDecisionId = null;
+        clearCountdown();
         setVoice((current) => ({
           ...current,
           listening: false,
           stage: "failed",
           error: error.message || "MiMo 语音对话失败",
         }));
-        if (marked && !disposed) submitFor(target, "none", "timeout");
+        if (!disposed && !respondedDecisionIds.has(target.decision_id)) {
+          submitFor(target, "none", "timeout");
+        }
       }
     }
 
@@ -440,7 +491,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       if (countdown.decisionId === decisionId) clearCountdown();
     }
 
-    function ingestDecision(payload, { suppressVoice = false } = {}) {
+    function ingestDecision(payload, { suppressVoice = false, suppressTimeout = false } = {}) {
       if (disposed || !payload?.decision_id) return;
       if (seenDecisionIds.has(payload.decision_id)) return;
       seenDecisionIds.add(payload.decision_id);
@@ -459,21 +510,19 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       // 任何新 decision 到达都清掉旧倒计时
       clearCountdown();
 
-      if (!suppressVoice && voiceTurnDecisionId === null) playDecisionVoice(payload);
-
-      if (Number.isFinite(payload.response_timeout_ms) && payload.response_timeout_ms > 0) {
-        const decisionId = payload.decision_id;
-        const timeoutMs = payload.response_timeout_ms;
-        setDeadline({ decisionId, timeoutMs, expiresAt: Date.now() + timeoutMs });
-        countdown = {
-          decisionId,
-          timer: window.setTimeout(() => {
-            countdown = { decisionId: null, timer: 0 };
-            setDeadline(null);
-            if (respondedDecisionIds.has(decisionId)) return;
-            submitFor(payload, "none", "timeout");
-          }, timeoutMs),
-        };
+      if (!suppressVoice && voiceTurnDecisionId === null) {
+        playDecisionVoice(payload).then((voiceHandled) => {
+          if (
+            !voiceHandled
+            && !suppressTimeout
+            && !disposed
+            && latestDecision?.decision_id === payload.decision_id
+          ) {
+            armResponseTimeout(payload);
+          }
+        });
+      } else if (!suppressTimeout) {
+        armResponseTimeout(payload);
       }
 
       const channels = Array.isArray(payload.confirm_channels) ? payload.confirm_channels : [];

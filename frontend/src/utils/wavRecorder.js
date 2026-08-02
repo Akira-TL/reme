@@ -62,9 +62,26 @@ function toBase64(bytes) {
   return btoa(binary);
 }
 
+function hasSpeech(samples, { peakThreshold = 0.018, rmsThreshold = 0.006 } = {}) {
+  if (!samples.length) return false;
+  let peak = 0;
+  let sumSquares = 0;
+  for (const sample of samples) {
+    const absolute = Math.abs(sample);
+    if (absolute > peak) peak = absolute;
+    sumSquares += sample * sample;
+  }
+  const rms = Math.sqrt(sumSquares / samples.length);
+  return peak >= peakThreshold || rms >= rmsThreshold;
+}
+
 // 录一段单声道 WAV 并返回 base64。用 ScriptProcessorNode（兼容面最广），不要换成
 // MediaRecorder：其 webm/ogg 输出 B 服务不接收。权限拒绝/环境不支持时抛错，由调用方静默处理。
-export async function recordWav({ durationMs = 4000, sampleRate = 16000 } = {}) {
+export async function recordWav({
+  durationMs = 4000,
+  sampleRate = 16000,
+  requireSpeech = false,
+} = {}) {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
   const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextCtor) throw new Error("当前浏览器不支持 WebAudio 录音");
@@ -90,6 +107,7 @@ export async function recordWav({ durationMs = 4000, sampleRate = 16000 } = {}) 
 
     const recorded = mergeChunks(chunks);
     if (!recorded.length) throw new Error("未采集到音频数据");
+    if (requireSpeech && !hasSpeech(recorded)) throw new Error("未检测到语音");
     const resampled = resampleLinear(recorded, context.sampleRate, sampleRate);
     return toBase64(encodeWav(resampled, sampleRate));
   } finally {

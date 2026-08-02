@@ -23,6 +23,7 @@ from reme.decision.mimo.speech import (
 from reme.decision.records import (
     CareDecision,
     DemoMode,
+    DecisionState,
     InteractionResponse,
     ResponseSource,
     ResponseValue,
@@ -151,7 +152,10 @@ class VoiceDialogueController:
         )
         next_decision = self._service.submit_response(response)
         audio = None
-        if next_decision.elder_message is not None:
+        if (
+            next_decision.elder_message is not None
+            and next_decision.state is not DecisionState.RESOLVED
+        ):
             audio = VoiceAudio.from_result(self._synthesize(next_decision.elder_message))
         return VoiceDialogueResult(
             transcript=recognition.transcript,
