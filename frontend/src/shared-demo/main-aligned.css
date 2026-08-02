@@ -514,6 +514,103 @@ body {
   color: #d94c00;
 }
 
+.voice-status-card {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  padding: 13px 14px;
+  border: 1px solid #e4e0dc;
+  border-radius: 15px;
+  color: #555;
+  background: #faf9f8;
+}
+
+.voice-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.voice-status-head b {
+  color: #333;
+  font-size: 13px;
+}
+
+.voice-status-head span {
+  color: #8a817a;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.voice-status-card p,
+.voice-status-card q,
+.voice-status-card small {
+  margin: 0;
+}
+
+.voice-status-card p {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.voice-status-card q {
+  padding-left: 9px;
+  border-left: 2px solid currentColor;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.voice-status-card small {
+  color: #888;
+  font-size: 10px;
+}
+
+.voice-status-card.is-listening {
+  border-color: #ffc89f;
+  color: #a84a0d;
+  background: #fff5ed;
+  box-shadow: 0 0 0 4px rgba(255, 90, 0, 0.06);
+}
+
+.voice-status-card.is-listening .voice-status-head b,
+.voice-status-card.is-listening .voice-status-head span {
+  color: #d94c00;
+}
+
+.voice-status-card.is-transcribing {
+  border-color: #cbd9ef;
+  color: #35567d;
+  background: #f4f8ff;
+}
+
+.voice-status-card.is-result.is-safe {
+  border-color: #cfe9ca;
+  color: #287a32;
+  background: #f5fcec;
+}
+
+.voice-status-card.is-result.is-need_help,
+.voice-status-card.is-fallback {
+  border-color: #ffc7c3;
+  color: #a43b35;
+  background: #fff5f4;
+}
+
+.voice-status-card.is-result.is-safe .voice-status-head b,
+.voice-status-card.is-result.is-safe .voice-status-head span {
+  color: #239a34;
+}
+
+.voice-status-card.is-result.is-need_help .voice-status-head b,
+.voice-status-card.is-result.is-need_help .voice-status-head span,
+.voice-status-card.is-fallback .voice-status-head b,
+.voice-status-card.is-fallback .voice-status-head span {
+  color: #d94239;
+}
+
 .scenario-card-head span {
   border-color: #ffd3b8;
   color: #d94c00;

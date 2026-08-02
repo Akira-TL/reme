@@ -2,9 +2,15 @@ import { DurableObject } from "cloudflare:workers";
 
 import { handleActivityRecognition } from "./activity";
 import {
+  handleDangerVoice,
+  type DangerVoiceAttemptFinish,
+  type DangerVoiceAttemptStart,
+} from "./voice";
+import {
   createForwardedMediaSignal,
   DEMO_EVENT_SCHEMA_VERSION,
   isExactObject,
+  isOpaqueId,
   MEDIA_SIGNAL_SCHEMA_VERSION,
   type DemoEvent,
   type DemoEventType,
@@ -133,6 +139,16 @@ interface GrantViewerRow {
   viewer_id: string;
 }
 
+interface DangerVoiceAttemptRow {
+  [key: string]: SqlStorageValue;
+  session_id: string;
+  event_id: string;
+  alarm_event_sequence: number;
+  attempts: number;
+  inflight_request_id: string | null;
+  inflight_started_at_ms: number | null;
+}
+
 const FORBIDDEN_MEDIA_KEYS = new Set([
   "audio",
   "base64",
@@ -194,7 +210,16 @@ export class DemoRoom extends DurableObject<Env> {
         CREATE INDEX IF NOT EXISTS media_grant_active_idx
           ON media_grant (session_id, status, expires_at_ms);
         CREATE INDEX IF NOT EXISTS media_grant_audience_viewer_idx
-          ON media_grant_audience (viewer_id, grant_id)
+          ON media_grant_audience (viewer_id, grant_id);
+        CREATE TABLE IF NOT EXISTS danger_voice_attempt (
+          session_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          alarm_event_sequence INTEGER NOT NULL CHECK (alarm_event_sequence >= 0),
+          attempts INTEGER NOT NULL CHECK (attempts >= 1),
+          inflight_request_id TEXT,
+          inflight_started_at_ms INTEGER,
+          PRIMARY KEY (session_id, event_id)
+        )
       `);
     });
   }
@@ -225,6 +250,135 @@ export class DemoRoom extends DurableObject<Env> {
     if (!/^[a-f0-9]{64}$/.test(tokenHash)) return false;
     const lease = this.currentLease(Date.now());
     return lease !== null && constantTimeHexEqual(lease.token_hash, tokenHash);
+  }
+
+  async beginDangerVoiceAttempt(
+    tokenHash: string,
+    eventId: string,
+    requestId: string,
+  ): Promise<DangerVoiceAttemptStart> {
+    if (
+      !/^[a-f0-9]{64}$/.test(tokenHash)
+      || !isOpaqueId(eventId)
+      || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(
+        requestId,
+      )
+    ) {
+      return { ok: false, error: "invalid_control_token" };
+    }
+    const now = Date.now();
+    const lease = this.currentLease(now);
+    if (lease === null || !constantTimeHexEqual(lease.token_hash, tokenHash)) {
+      return { ok: false, error: "invalid_control_token" };
+    }
+    const scene = this.structuredEvent(lease.session_id, "scene_state");
+    const alarm = this.structuredEvent(lease.session_id, "alarm_state");
+    if (
+      scene?.event_type !== "scene_state"
+      || scene.payload.scene_id !== "fall"
+      || alarm?.event_type !== "alarm_state"
+      || alarm.payload.phase !== "checking"
+      || alarm.payload.event_id !== eventId
+      || alarm.payload.response_deadline_ms === null
+      || alarm.payload.response_deadline_ms <= now
+    ) {
+      return { ok: false, error: "no_active_danger_event" };
+    }
+
+    const existing = this.ctx.storage.sql.exec<DangerVoiceAttemptRow>(
+      `SELECT session_id, event_id, alarm_event_sequence, attempts,
+              inflight_request_id, inflight_started_at_ms
+         FROM danger_voice_attempt
+        WHERE session_id = ? AND event_id = ?`,
+      lease.session_id,
+      eventId,
+    ).toArray()[0];
+    // A row is the lifetime paid-call budget for this event ID. A later
+    // alarm_state sequence must not reset it, and upstream failures never refund it.
+    if (existing !== undefined) {
+      if (
+        existing.alarm_event_sequence === alarm.event_sequence
+        && existing.inflight_request_id !== null
+      ) {
+        return { ok: false, error: "voice_request_in_progress" };
+      }
+      return { ok: false, error: "voice_attempt_limit" };
+    }
+
+    this.ctx.storage.sql.exec(
+      `INSERT INTO danger_voice_attempt
+         (session_id, event_id, alarm_event_sequence, attempts,
+          inflight_request_id, inflight_started_at_ms)
+       VALUES (?, ?, ?, 1, ?, ?)`,
+      lease.session_id,
+      eventId,
+      alarm.event_sequence,
+      requestId,
+      now,
+    );
+    return {
+      ok: true,
+      session_id: lease.session_id,
+      alarm_event_sequence: alarm.event_sequence,
+      attempt: 1,
+    };
+  }
+
+  async finishDangerVoiceAttempt(
+    tokenHash: string,
+    sessionId: string,
+    eventId: string,
+    alarmEventSequence: number,
+    requestId: string,
+  ): Promise<DangerVoiceAttemptFinish> {
+    const attempt = this.ctx.storage.sql.exec<DangerVoiceAttemptRow>(
+      `SELECT session_id, event_id, alarm_event_sequence, attempts,
+              inflight_request_id, inflight_started_at_ms
+         FROM danger_voice_attempt
+        WHERE session_id = ? AND event_id = ?`,
+      sessionId,
+      eventId,
+    ).toArray()[0];
+    if (
+      attempt === undefined
+      || attempt.alarm_event_sequence !== alarmEventSequence
+      || attempt.inflight_request_id !== requestId
+    ) {
+      return { ok: false, error: "invalid_voice_attempt" };
+    }
+    this.ctx.storage.sql.exec(
+      `UPDATE danger_voice_attempt
+          SET inflight_request_id = NULL, inflight_started_at_ms = NULL
+        WHERE session_id = ? AND event_id = ? AND inflight_request_id = ?`,
+      sessionId,
+      eventId,
+      requestId,
+    );
+
+    const now = Date.now();
+    const lease = this.currentLease(now);
+    if (
+      lease === null
+      || lease.session_id !== sessionId
+      || !constantTimeHexEqual(lease.token_hash, tokenHash)
+    ) {
+      return { ok: false, error: "invalid_control_token" };
+    }
+    const scene = this.structuredEvent(sessionId, "scene_state");
+    const alarm = this.structuredEvent(sessionId, "alarm_state");
+    if (
+      scene?.event_type !== "scene_state"
+      || scene.payload.scene_id !== "fall"
+      || alarm?.event_type !== "alarm_state"
+      || alarm.event_sequence !== alarmEventSequence
+      || alarm.payload.event_id !== eventId
+      || alarm.payload.phase !== "checking"
+      || alarm.payload.response_deadline_ms === null
+      || alarm.payload.response_deadline_ms <= now
+    ) {
+      return { ok: false, error: "stale_danger_event" };
+    }
+    return { ok: true };
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -915,6 +1069,7 @@ export class DemoRoom extends DurableObject<Env> {
     }
     this.ctx.storage.sql.exec("DELETE FROM media_grant_audience");
     this.ctx.storage.sql.exec("DELETE FROM media_grant");
+    this.ctx.storage.sql.exec("DELETE FROM danger_voice_attempt");
     this.ctx.storage.sql.exec("DELETE FROM demo_event_state");
     this.ctx.storage.sql.exec("DELETE FROM room_event_sequence WHERE singleton = 1");
     this.ctx.storage.sql.exec("DELETE FROM room_frame_sequence WHERE singleton = 1");
@@ -1170,6 +1325,7 @@ const worker = {
       url.pathname === "/api/unlock" ||
       url.pathname === "/api/release" ||
       url.pathname === "/api/activity/recognize" ||
+      url.pathname === "/api/danger/voice" ||
       url.pathname === "/ws/viewer" ||
       url.pathname === "/ws/controller";
     if (!knownPath) {
@@ -1196,6 +1352,25 @@ const worker = {
           env,
           (tokenHash) => stub.authorizeControlTokenHash(tokenHash),
         );
+        return withCors(response, origin);
+      }
+      if (url.pathname === "/api/danger/voice") {
+        if (request.method !== "POST") {
+          return withCors(json({ ok: false, error: "method_not_allowed" }, 405), origin);
+        }
+        const response = await handleDangerVoice(request, env, {
+          authorizeTokenHash: (tokenHash) => stub.authorizeControlTokenHash(tokenHash),
+          beginAttempt: (tokenHash, eventId, requestId) =>
+            stub.beginDangerVoiceAttempt(tokenHash, eventId, requestId),
+          finishAttempt: (tokenHash, sessionId, eventId, alarmEventSequence, requestId) =>
+            stub.finishDangerVoiceAttempt(
+              tokenHash,
+              sessionId,
+              eventId,
+              alarmEventSequence,
+              requestId,
+            ),
+        });
         return withCors(response, origin);
       }
       const response = await stub.fetch(request);

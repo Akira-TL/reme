@@ -43,6 +43,7 @@ export interface AlarmStatePayload {
   trigger:
     | "fall_transition"
     | "elder_need_help"
+    | "voice_intent"
     | "check_in_timeout"
     | "visual_confirm"
     | "manual_debug";
@@ -283,6 +284,7 @@ function validateAlarmState(value: unknown): value is AlarmStatePayload {
   if (
     value.trigger !== "fall_transition"
     && value.trigger !== "elder_need_help"
+    && value.trigger !== "voice_intent"
     && value.trigger !== "check_in_timeout"
     && value.trigger !== "visual_confirm"
     && value.trigger !== "manual_debug"

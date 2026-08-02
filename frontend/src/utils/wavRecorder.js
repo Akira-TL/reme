@@ -62,45 +62,161 @@ function toBase64(bytes) {
   return btoa(binary);
 }
 
-// 录单声道 WAV 并返回 base64。用 ScriptProcessorNode（兼容面最广），不要换成
-// MediaRecorder：其 webm/ogg 输出 B 服务不接收。权限拒绝/环境不支持时 promise
-// reject，由调用方静默处理。
+export class VoiceCaptureError extends Error {
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "VoiceCaptureError";
+    this.code = code;
+  }
+}
+
+function normalizeCaptureError(error) {
+  if (error instanceof VoiceCaptureError) return error;
+  if (error?.name === "NotAllowedError" || error?.name === "SecurityError") {
+    return new VoiceCaptureError("microphone_denied", "麦克风权限未开启", { cause: error });
+  }
+  if (error?.name === "NotFoundError" || error?.name === "OverconstrainedError") {
+    return new VoiceCaptureError("microphone_unavailable", "没有可用的麦克风", { cause: error });
+  }
+  if (error?.name === "NotReadableError" || error?.name === "AbortError") {
+    return new VoiceCaptureError("microphone_busy", "麦克风暂时无法使用", { cause: error });
+  }
+  return new VoiceCaptureError(
+    "microphone_capture_failed",
+    error instanceof Error ? error.message : "麦克风采集失败",
+    { cause: error },
+  );
+}
+
+function hasLiveAudioTrack(stream) {
+  return Boolean(stream?.getAudioTracks?.().some((track) => track.readyState !== "ended"));
+}
+
+export async function ensureAudioContextRunning(context, { timeoutMs = 1_200 } = {}) {
+  if (!context || typeof context.resume !== "function") {
+    throw new VoiceCaptureError("audio_context_unavailable", "浏览器语音处理不可用");
+  }
+  if (context.state === "running") return;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new TypeError("timeoutMs must be a positive finite number");
+  }
+  let timeout = 0;
+  try {
+    await Promise.race([
+      Promise.resolve(context.resume()),
+      new Promise((_, reject) => {
+        timeout = globalThis.setTimeout(() => reject(new VoiceCaptureError(
+          "audio_context_suspended",
+          "浏览器尚未允许启动语音处理，请点按页面后重试",
+        )), timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (error instanceof VoiceCaptureError) throw error;
+    throw new VoiceCaptureError(
+      "audio_context_suspended",
+      "浏览器尚未允许启动语音处理，请点按页面后重试",
+      { cause: error },
+    );
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
+  if (typeof context.state === "string" && context.state !== "running") {
+    throw new VoiceCaptureError(
+      "audio_context_suspended",
+      "浏览器尚未允许启动语音处理，请点按页面后重试",
+    );
+  }
+}
+
+// 录单声道 WAV 并返回 base64。用 ScriptProcessorNode（兼容现有演示端），不要换成
+// MediaRecorder：其 webm/ogg 输出 MiMo 不接收。调用方可以传入已经取得权限的
+// MediaStream；否则按需申请麦克风。外部 stream 的轨道永远不会由本函数停止。
 //
-// 录音没有固定时长上限（老人的回话不被时钟掐断）：检测到说话后靠尾部静音
-// （silenceMs）收尾；一直没人说话时由 maxLeadinSilenceMs 或调用方 stop() 兜底，
-// 此时（以及 stop 于开口前）resolve null 表示没有可上传的内容。
+// 默认仍允许由尾部静音自然收尾；公网危险链路会显式传 maxDurationMs，形成
+// 独立于 audioprocess 回调的硬 watchdog。一直没人说话，或 cancel/stop 于开口前，
+// resolve null 表示没有可上传的内容。
 export function recordVoiceReply({
   sampleRate = 16000,
   silenceMs = 1400,
   speechRms = 0.012,
   maxLeadinSilenceMs = 15000,
+  maxDurationMs = null,
+  stream: externalStream = null,
+  requestOnDemand = true,
+  mediaDevices = globalThis.navigator?.mediaDevices,
+  AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext,
+  audioContext: externalAudioContext = null,
+  audioContextResumeTimeoutMs = 1_200,
 } = {}) {
   let speechDetected = false;
   let stopRequested = false;
+  let cancelled = false;
   let finish = null;
 
   const promise = (async () => {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
-    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextCtor) throw new Error("当前浏览器不支持 WebAudio 录音");
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const context = new AudioContextCtor();
+    if (!externalAudioContext && !AudioContextClass) {
+      throw new VoiceCaptureError("microphone_unsupported", "当前浏览器不支持 WebAudio 录音");
+    }
+    let stream = externalStream;
+    let ownsStream = false;
+    let context = externalAudioContext;
+    let ownsContext = false;
+    let source = null;
+    let processor = null;
+    let watchdog = 0;
     try {
-      await context.resume().catch(() => {});
-      const source = context.createMediaStreamSource(stream);
-      const processor = context.createScriptProcessor(4096, 1, 1);
+      if (!context) {
+        context = new AudioContextClass();
+        ownsContext = true;
+      }
+      await ensureAudioContextRunning(context, { timeoutMs: audioContextResumeTimeoutMs });
+      if (cancelled) return null;
+      if (!hasLiveAudioTrack(stream)) {
+        if (!requestOnDemand) {
+          throw new VoiceCaptureError("microphone_unavailable", "没有已授权的麦克风轨道");
+        }
+        if (!mediaDevices?.getUserMedia) {
+          throw new VoiceCaptureError("microphone_unsupported", "当前浏览器不支持麦克风采集");
+        }
+        stream = await mediaDevices.getUserMedia({
+          audio: {
+            channelCount: { ideal: 1 },
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+          video: false,
+        });
+        ownsStream = true;
+      }
+      if (cancelled) return null;
+      source = context.createMediaStreamSource(stream);
+      processor = context.createScriptProcessor(4096, 1, 1);
       const chunks = [];
       const chunkMs = (4096 / context.sampleRate) * 1000;
       let trailingSilenceMs = 0;
       let leadinMs = 0;
+      let recordedMs = 0;
 
       await new Promise((resolve) => {
-        finish = resolve;
-        if (stopRequested) resolve();
+        let finished = false;
+        finish = () => {
+          if (finished) return;
+          finished = true;
+          resolve();
+        };
+        if (stopRequested || cancelled) finish();
+        if (Number.isFinite(maxDurationMs) && maxDurationMs > 0) {
+          watchdog = globalThis.setTimeout(finish, maxDurationMs);
+        }
         processor.onaudioprocess = (event) => {
+          if (stopRequested || cancelled) {
+            finish();
+            return;
+          }
           const data = new Float32Array(event.inputBuffer.getChannelData(0));
           chunks.push(data);
+          recordedMs += chunkMs;
           let sum = 0;
           for (let i = 0; i < data.length; i += 1) sum += data[i] * data[i];
           const rms = Math.sqrt(sum / data.length);
@@ -109,12 +225,12 @@ export function recordVoiceReply({
             trailingSilenceMs = 0;
           } else if (speechDetected) {
             trailingSilenceMs += chunkMs;
-            if (trailingSilenceMs >= silenceMs) resolve();
+            if (trailingSilenceMs >= silenceMs) finish();
           } else {
             leadinMs += chunkMs;
-            if (leadinMs >= maxLeadinSilenceMs) resolve();
+            if (leadinMs >= maxLeadinSilenceMs) finish();
           }
-          if (stopRequested) resolve();
+          if (Number.isFinite(maxDurationMs) && recordedMs >= maxDurationMs) finish();
         };
         source.connect(processor);
         processor.connect(context.destination);
@@ -124,20 +240,41 @@ export function recordVoiceReply({
       source.disconnect();
       processor.disconnect();
 
-      if (!speechDetected) return null;
+      if (cancelled || !speechDetected) return null;
       const recorded = mergeChunks(chunks);
       if (!recorded.length) return null;
       const resampled = resampleLinear(recorded, context.sampleRate, sampleRate);
       return toBase64(encodeWav(resampled, sampleRate));
     } finally {
-      stream.getTracks().forEach((track) => track.stop());
-      context.close().catch(() => {});
+      finish = null;
+      globalThis.clearTimeout(watchdog);
+      if (processor) processor.onaudioprocess = null;
+      try {
+        source?.disconnect();
+      } catch {
+        // 录音节点可能已在正常收尾时断开。
+      }
+      try {
+        processor?.disconnect();
+      } catch {
+        // 同上。
+      }
+      if (ownsStream) stream?.getTracks?.().forEach((track) => track.stop());
+      if (ownsContext) await context?.close?.().catch(() => {});
     }
-  })();
+  })().catch((error) => {
+    if (cancelled) return null;
+    throw normalizeCaptureError(error);
+  });
 
   return {
     promise,
     stop() {
+      stopRequested = true;
+      if (finish) finish();
+    },
+    cancel() {
+      cancelled = true;
       stopRequested = true;
       if (finish) finish();
     },

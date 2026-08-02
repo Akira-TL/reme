@@ -6,6 +6,7 @@ import PersonalInjuryRoundedIcon from "@mui/icons-material/PersonalInjuryRounded
 import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
 import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import { createMoveNetBrowserEstimator } from "../model/movenet.js";
+import { ensureAudioContextRunning, recordVoiceReply } from "../utils/wavRecorder.js";
 import {
   captureJpegBase64,
   createCookingConfirmationTracker,
@@ -37,12 +38,32 @@ import {
 } from "./protocol.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import { createMonitorState, reduceMonitorState } from "./state.js";
+import {
+  estimatePromptLeadMs,
+  recognizeDangerVoice,
+  selectFailClosedFallEvent,
+  selectFallReconnectAction,
+  selectVoiceIntentAction,
+} from "./voiceIntent.js";
 
 const MIN_PUBLISH_INTERVAL_MS = 100;
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const COOKING_SAMPLE_INTERVAL_MS = 4_000;
 const FALL_REPLY_WINDOW_MS = 8_000;
 const CONTROLLER_READY_TIMEOUT_MS = 5_000;
+const FALL_PROMPT_FALLBACK_MS = 7_000;
+const FALL_PROMPT_WATCHDOG_MS = 9_000;
+
+const VOICE_PHASE_COPY = Object.freeze({
+  idle: ["语音回应", "进入跌倒场景后，系统会先申请麦克风权限。"],
+  preparing: ["准备语音回应", "正在申请麦克风权限；授权后会立即释放，事件前不持续收音。"],
+  ready: ["语音回应已就绪", "检测到跌倒并播完问询后，系统会自动短时收音。"],
+  prompt: ["正在语音问询", "问询播放结束后才会开启麦克风，避免把系统声音当作回应。"],
+  listening: ["正在聆听回应", "请直接说“我没事”或“需要帮助”；规则倒计时仍在运行。"],
+  transcribing: ["MiMo 正在理解", "语音已停止采集并发送；安全倒计时不会等待模型。"],
+  result: ["已识别语音回应", "语音结果已进入本次安全事件。"],
+  fallback: ["语音已降级", "可继续使用按钮；没有语音结果时仍会按规则超时告警。"],
+});
 
 const DEMO_SCENES = Object.freeze([
   {
@@ -98,6 +119,18 @@ function createFallState() {
     deadlineMs: null,
     trigger: null,
     message: "等待真实姿态流中的快速下移与横向转变。",
+  };
+}
+
+function createVoiceState(overrides = {}) {
+  return {
+    phase: "idle",
+    intent: null,
+    transcript: "",
+    latencyMs: null,
+    model: "",
+    detail: VOICE_PHASE_COPY.idle[1],
+    ...overrides,
   };
 }
 
@@ -162,6 +195,7 @@ export function MonitorApp() {
   const [heartCard, setHeartCard] = useState(null);
   const [moment, setMoment] = useState({ status: "idle", size: 0, mimeType: "" });
   const [fall, setFall] = useState(createFallState);
+  const [voice, setVoice] = useState(createVoiceState);
   const [mediaStatus, setMediaStatus] = useState({ state: "idle", detail: "" });
 
   const videoRef = useRef(null);
@@ -172,6 +206,8 @@ export function MonitorApp() {
   const reconnectTimerRef = useRef(0);
   const reconnectAttemptRef = useRef(0);
   const leaseExpiresAtRef = useRef(null);
+  const failClosedFallRef = useRef(null);
+  const fallSyncRef = useRef(null);
   const stopCaptureRef = useRef(null);
   const streamRef = useRef(null);
   const estimatorRef = useRef(null);
@@ -194,6 +230,14 @@ export function MonitorApp() {
   const activeGrantRef = useRef(null);
   const grantExpiryRef = useRef(0);
   const checkInAudioRef = useRef(null);
+  const voiceAudioContextRef = useRef(null);
+  const voiceCapabilityRef = useRef("unknown");
+  const voiceGenerationRef = useRef(0);
+  const voicePermissionGenerationRef = useRef(0);
+  const voicePermissionPromiseRef = useRef(null);
+  const voicePromptRef = useRef(null);
+  const voiceRecorderRef = useRef(null);
+  const voiceRequestAbortRef = useRef(null);
   const intentionalCloseRef = useRef(false);
 
   const publishEvent = useCallback((eventType, payload) => {
@@ -246,6 +290,116 @@ export function MonitorApp() {
     fallTimerRef.current = 0;
   }, []);
 
+  const cancelVoiceInteraction = useCallback((nextState = null) => {
+    voiceGenerationRef.current += 1;
+    voicePromptRef.current?.cancel?.();
+    voicePromptRef.current = null;
+    voiceRecorderRef.current?.cancel?.();
+    voiceRecorderRef.current = null;
+    voiceRequestAbortRef.current?.abort?.();
+    voiceRequestAbortRef.current = null;
+    if (nextState) setVoice(nextState);
+  }, []);
+
+  const releaseVoiceResources = useCallback((nextState = createVoiceState()) => {
+    voicePermissionGenerationRef.current += 1;
+    voicePermissionPromiseRef.current = null;
+    if (voiceCapabilityRef.current !== "denied") voiceCapabilityRef.current = "unknown";
+    cancelVoiceInteraction(nextState);
+    const context = voiceAudioContextRef.current;
+    voiceAudioContextRef.current = null;
+    void context?.close?.().catch(() => {});
+  }, [cancelVoiceInteraction]);
+
+  const preauthorizeMicrophone = useCallback(() => {
+    if (voiceCapabilityRef.current === "denied") {
+      setVoice(createVoiceState({
+        phase: "fallback",
+        detail: "麦克风权限未开启，可继续使用“我没事 / 需要帮助”按钮。",
+      }));
+      return Promise.resolve(false);
+    }
+    if (
+      voiceCapabilityRef.current === "ready"
+      && voiceAudioContextRef.current?.state === "running"
+    ) return Promise.resolve(true);
+    if (voicePermissionPromiseRef.current) return voicePermissionPromiseRef.current;
+
+    const mediaDevices = navigator.mediaDevices;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const generation = voicePermissionGenerationRef.current + 1;
+    voicePermissionGenerationRef.current = generation;
+    if (!mediaDevices?.getUserMedia || !AudioContextClass) {
+      voiceCapabilityRef.current = "unavailable";
+      setVoice(createVoiceState({
+        phase: "fallback",
+        detail: "当前浏览器不支持网页麦克风录音，可继续使用按钮回应。",
+      }));
+      return Promise.resolve(false);
+    }
+
+    setVoice(createVoiceState({
+      phase: "preparing",
+      detail: VOICE_PHASE_COPY.preparing[1],
+    }));
+    const attempt = (async () => {
+      let context = voiceAudioContextRef.current;
+      let stream = null;
+      try {
+        if (!context || context.state === "closed") {
+          context = new AudioContextClass();
+          voiceAudioContextRef.current = context;
+        }
+        await ensureAudioContextRunning(context);
+        stream = await mediaDevices.getUserMedia({
+          audio: {
+            channelCount: { ideal: 1 },
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+          video: false,
+        });
+        if (
+          voicePermissionGenerationRef.current !== generation
+          || sceneIdRef.current !== "fall"
+        ) return false;
+        voiceCapabilityRef.current = "ready";
+        setVoice(createVoiceState({
+          phase: "ready",
+          detail: VOICE_PHASE_COPY.ready[1],
+        }));
+        return true;
+      } catch (error) {
+        if (voicePermissionGenerationRef.current !== generation) return false;
+        const denied = error?.name === "NotAllowedError" || error?.name === "SecurityError";
+        const suspended = error?.code === "audio_context_suspended";
+        voiceCapabilityRef.current = denied ? "denied" : "unavailable";
+        setVoice(createVoiceState({
+          phase: "fallback",
+          detail: denied
+            ? "麦克风权限未开启，可继续使用“我没事 / 需要帮助”按钮。"
+            : suspended
+              ? "浏览器没有解锁语音处理，可点按页面后继续使用按钮回应。"
+              : "麦克风暂时不可用，规则倒计时与按钮回应仍然有效。",
+        }));
+        if (voiceAudioContextRef.current === context) {
+          voiceAudioContextRef.current = null;
+          await context?.close?.().catch(() => {});
+        }
+        return false;
+      } finally {
+        stream?.getTracks?.().forEach((track) => track.stop());
+      }
+    })();
+    voicePermissionPromiseRef.current = attempt;
+    void attempt.finally(() => {
+      if (voicePermissionPromiseRef.current === attempt) {
+        voicePermissionPromiseRef.current = null;
+      }
+    });
+    return attempt;
+  }, []);
+
   useEffect(() => {
     const bridge = createControllerMediaBridge({
       getSocket: () => controllerRef.current?.socket ?? null,
@@ -292,6 +446,7 @@ export function MonitorApp() {
   const invalidateControllerSession = useCallback((error) => {
     clearReconnectTimer();
     intentionalCloseRef.current = true;
+    failClosedFallRef.current?.();
     closeControllerSocket();
     clearControllerSession();
     tokenRef.current = null;
@@ -417,6 +572,7 @@ export function MonitorApp() {
             ? "skeleton_only"
             : "abstract_environment",
         });
+        fallSyncRef.current?.();
         return;
       }
       if (!connection.ready) return;
@@ -541,18 +697,64 @@ export function MonitorApp() {
     return true;
   }, []);
 
+  const resolveFallSafe = useCallback((requestedEventId = null, {
+    trigger = null,
+    preserveVoice = false,
+  } = {}) => {
+    const current = fallRef.current;
+    const eventId = typeof requestedEventId === "string" ? requestedEventId : current.eventId;
+    if (!eventId || current.eventId !== eventId || current.phase === "resolved") return;
+    clearFallTimer();
+    cancelVoiceInteraction(preserveVoice ? null : createVoiceState({
+      phase: "result",
+      intent: "safe",
+      detail: "本人已通过按钮确认安全。",
+    }));
+    const resolvedTrigger = trigger || current.trigger || "fall_transition";
+    const next = {
+      phase: "resolved",
+      eventId,
+      deadlineMs: null,
+      trigger: resolvedTrigger,
+      message: "本人已确认安全，本次事件已关闭。",
+    };
+    fallRef.current = next;
+    setFall(next);
+    publishEvent("alarm_state", {
+      event_id: eventId,
+      phase: "resolved",
+      trigger: resolvedTrigger,
+      message: next.message,
+      response_deadline_ms: null,
+      media_scope: "none",
+    });
+    revokeActiveGrant("resolved");
+    fallDetectorRef.current.reset();
+  }, [cancelVoiceInteraction, clearFallTimer, publishEvent, revokeActiveGrant]);
+
   const escalateFall = useCallback((eventId, trigger = "check_in_timeout") => {
     if (!eventId || fallRef.current.eventId !== eventId) return;
     if (["escalated", "resolved"].includes(fallRef.current.phase)) return;
     clearFallTimer();
+    const voiceTriggered = trigger === "voice_intent";
+    const manuallyTriggered = trigger === "elder_need_help";
+    cancelVoiceInteraction(voiceTriggered ? null : createVoiceState({
+      phase: manuallyTriggered ? "result" : "fallback",
+      intent: manuallyTriggered ? "need_help" : null,
+      detail: manuallyTriggered
+        ? "本人已通过按钮表示需要帮助。"
+        : "没有在时限内取得可用语音结果，已按确定性规则告警。",
+    }));
     const next = {
       phase: "escalated",
       eventId,
       deadlineMs: null,
       trigger,
-      message: trigger === "elder_need_help"
-        ? "本人已表示需要帮助，已立即通知评委查看。"
-        : "完整问询窗口没有收到回应，规则已通知评委查看。",
+      message: voiceTriggered
+        ? "语音回应表示需要帮助，已立即通知评委查看。"
+        : manuallyTriggered
+          ? "本人已表示需要帮助，已立即通知评委查看。"
+          : "完整问询窗口没有收到回应，规则已通知评委查看。",
     };
     fallRef.current = next;
     setFall(next);
@@ -571,15 +773,226 @@ export function MonitorApp() {
     } catch {
       // 振动不可用不影响规则告警。
     }
-  }, [clearFallTimer, publishEvent, requestMediaGrant]);
+  }, [cancelVoiceInteraction, clearFallTimer, publishEvent, requestMediaGrant]);
+
+  const failClosedFallCheckIn = useCallback(() => {
+    const eventId = selectFailClosedFallEvent(fallRef.current);
+    if (!eventId) {
+      clearFallTimer();
+      return false;
+    }
+    escalateFall(eventId, "check_in_timeout");
+    return true;
+  }, [clearFallTimer, escalateFall]);
+
+  useEffect(() => {
+    failClosedFallRef.current = failClosedFallCheckIn;
+    return () => {
+      if (failClosedFallRef.current === failClosedFallCheckIn) {
+        failClosedFallRef.current = null;
+      }
+    };
+  }, [failClosedFallCheckIn]);
+
+  const synchronizeFallAfterReconnect = useCallback(() => {
+    const current = fallRef.current;
+    const action = selectFallReconnectAction(current, Date.now());
+    if (action === "none") return false;
+    if (action === "escalate") {
+      escalateFall(current.eventId, "check_in_timeout");
+      return true;
+    }
+
+    const published = publishEvent("alarm_state", {
+      event_id: current.eventId,
+      phase: current.phase,
+      trigger: current.trigger || "fall_transition",
+      message: current.message || (current.phase === "checking"
+        ? "刚才的动作有些突然，您还好吗？"
+        : "本次安全事件状态已恢复。"),
+      response_deadline_ms: current.phase === "checking" ? current.deadlineMs : null,
+      media_scope: current.phase === "escalated" ? "fall_emergency" : "none",
+    });
+
+    if (action === "republish_checking") {
+      clearFallTimer();
+      fallTimerRef.current = window.setTimeout(
+        () => escalateFall(current.eventId, "check_in_timeout"),
+        Math.max(0, current.deadlineMs - Date.now()),
+      );
+    } else if (action === "republish_escalated" && published) {
+      setMediaStatus({ state: "authorizing", detail: "告警状态已恢复，正在重新签发 30 秒事件视频授权…" });
+      requestMediaGrant(current.eventId, "fall_emergency", 30_000);
+    }
+    return Boolean(published);
+  }, [clearFallTimer, escalateFall, publishEvent, requestMediaGrant]);
+
+  useEffect(() => {
+    fallSyncRef.current = synchronizeFallAfterReconnect;
+    return () => {
+      if (fallSyncRef.current === synchronizeFallAfterReconnect) {
+        fallSyncRef.current = null;
+      }
+    };
+  }, [synchronizeFallAfterReconnect]);
+
+  const runFallVoiceReply = useCallback(async (eventId, generation, maxDurationMs) => {
+    if (
+      voiceGenerationRef.current !== generation
+      || fallRef.current.eventId !== eventId
+      || fallRef.current.phase !== "checking"
+    ) return;
+    if (
+      voiceCapabilityRef.current !== "ready"
+      || voiceAudioContextRef.current?.state !== "running"
+    ) {
+      setVoice(createVoiceState({
+        phase: "fallback",
+        detail: "麦克风未在用户手势中完成授权，本次继续使用按钮与规则倒计时。",
+      }));
+      return;
+    }
+    setVoice(createVoiceState({
+      phase: "listening",
+      detail: VOICE_PHASE_COPY.listening[1],
+    }));
+    const recorder = recordVoiceReply({
+      audioContext: voiceAudioContextRef.current,
+      maxLeadinSilenceMs: maxDurationMs,
+      maxDurationMs,
+    });
+    voiceRecorderRef.current = recorder;
+    let requestAbort = null;
+    try {
+      const audioB64 = await recorder.promise;
+      if (voiceRecorderRef.current === recorder) voiceRecorderRef.current = null;
+      if (
+        voiceGenerationRef.current !== generation
+        || fallRef.current.eventId !== eventId
+        || fallRef.current.phase !== "checking"
+      ) return;
+      if (fallRef.current.deadlineMs <= Date.now()) {
+        escalateFall(eventId, "check_in_timeout");
+        return;
+      }
+      if (!audioB64) {
+        setVoice(createVoiceState({
+          phase: "fallback",
+          detail: "没有听到清晰人声，规则倒计时继续；也可以直接点击按钮回应。",
+        }));
+        return;
+      }
+
+      setVoice(createVoiceState({
+        phase: "transcribing",
+        detail: VOICE_PHASE_COPY.transcribing[1],
+      }));
+      requestAbort = new AbortController();
+      voiceRequestAbortRef.current = requestAbort;
+      const verdict = await recognizeDangerVoice(getRelayBase(), tokenRef.current, {
+        eventId,
+        audioB64,
+        signal: requestAbort.signal,
+      });
+      if (voiceRequestAbortRef.current === requestAbort) voiceRequestAbortRef.current = null;
+      if (voiceGenerationRef.current !== generation) return;
+      const action = selectVoiceIntentAction({
+        eventId,
+        fall: fallRef.current,
+        intent: verdict.intent,
+        nowMs: Date.now(),
+      });
+      if (action === "ignore") return;
+      if (action === "expire") {
+        escalateFall(eventId, "check_in_timeout");
+        return;
+      }
+      const transcript = verdict.transcript || "未返回可显示的转写";
+      const terminalIntent = verdict.intent === "safe" || verdict.intent === "need_help";
+      setVoice(createVoiceState({
+        phase: "result",
+        intent: verdict.intent,
+        transcript: terminalIntent ? "" : verdict.transcript || "",
+        latencyMs: verdict.latencyMs,
+        model: verdict.model,
+        detail: verdict.intent === "safe"
+          ? "MiMo 已判定为明确安全回应，本次事件已关闭。"
+          : verdict.intent === "need_help"
+            ? "MiMo 已判定为明确求助回应，已立即升级家庭告警。"
+            : `听到“${transcript}”，含义仍不明确，规则倒计时继续。`,
+      }));
+      if (action === "resolve") {
+        resolveFallSafe(eventId, { trigger: "voice_intent", preserveVoice: true });
+      } else if (action === "escalate") {
+        escalateFall(eventId, "voice_intent");
+      }
+    } catch (error) {
+      if (voiceRecorderRef.current === recorder) voiceRecorderRef.current = null;
+      if (voiceRequestAbortRef.current === requestAbort) voiceRequestAbortRef.current = null;
+      if (
+        error?.name === "AbortError"
+        || voiceGenerationRef.current !== generation
+        || fallRef.current.eventId !== eventId
+        || fallRef.current.phase !== "checking"
+      ) return;
+      if (fallRef.current.deadlineMs <= Date.now()) {
+        escalateFall(eventId, "check_in_timeout");
+        return;
+      }
+      setVoice(createVoiceState({
+        phase: "fallback",
+        detail: error?.code === "microphone_denied"
+          ? "麦克风权限未开启，可继续使用按钮；未回应时仍按规则告警。"
+          : "语音识别暂时不可用，规则倒计时与按钮回应仍然有效。",
+      }));
+    }
+  }, [escalateFall, resolveFallSafe]);
+
+  const armFallResponseWindow = useCallback((eventId, generation) => {
+    const current = fallRef.current;
+    if (
+      voiceGenerationRef.current !== generation
+      || current.eventId !== eventId
+      || current.phase !== "checking"
+    ) return;
+    const now = Date.now();
+    const deadlineMs = Math.min(current.deadlineMs, now + FALL_REPLY_WINDOW_MS);
+    if (deadlineMs !== current.deadlineMs) {
+      const next = { ...current, deadlineMs };
+      fallRef.current = next;
+      setFall(next);
+      publishEvent("alarm_state", {
+        event_id: eventId,
+        phase: "checking",
+        trigger: "fall_transition",
+        message: "刚才的动作有些突然，您还好吗？",
+        response_deadline_ms: deadlineMs,
+        media_scope: "none",
+      });
+      clearFallTimer();
+      fallTimerRef.current = window.setTimeout(
+        () => escalateFall(eventId, "check_in_timeout"),
+        Math.max(0, deadlineMs - Date.now()),
+      );
+    }
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      escalateFall(eventId, "check_in_timeout");
+      return;
+    }
+    void runFallVoiceReply(eventId, generation, Math.min(FALL_REPLY_WINDOW_MS, remainingMs));
+  }, [clearFallTimer, escalateFall, publishEvent, runFallVoiceReply]);
 
   const startFallCheckIn = useCallback((transition) => {
     if (sceneIdRef.current !== "fall" || fallRef.current.phase !== "idle") return;
+    cancelVoiceInteraction(createVoiceState({
+      phase: "prompt",
+      detail: VOICE_PHASE_COPY.prompt[1],
+    }));
+    const generation = voiceGenerationRef.current;
     const eventId = randomId("fall");
     const audio = checkInAudioRef.current;
-    const promptLeadMs = Number.isFinite(audio?.duration) && audio.duration > 0
-      ? Math.ceil(audio.duration * 1_000)
-      : 2_500;
+    const promptLeadMs = estimatePromptLeadMs(audio?.duration, FALL_PROMPT_FALLBACK_MS);
     const deadlineMs = Date.now() + promptLeadMs + FALL_REPLY_WINDOW_MS;
     const next = {
       phase: "checking",
@@ -599,50 +1012,68 @@ export function MonitorApp() {
       response_deadline_ms: deadlineMs,
       media_scope: "none",
     });
-    if (audio) {
-      try {
-        audio.currentTime = 0;
-        void audio.play().catch(() => {});
-      } catch {
-        // 页面仍显示问询和倒计时；音频失败不能跳过安全窗口。
-      }
-    }
-    try {
-      navigator.vibrate?.([140, 90, 140]);
-    } catch {
-      // 振动仅为可选反馈。
-    }
     clearFallTimer();
     fallTimerRef.current = window.setTimeout(
       () => escalateFall(eventId, "check_in_timeout"),
       Math.max(0, deadlineMs - Date.now()),
     );
-  }, [clearFallTimer, escalateFall, publishEvent]);
+    try {
+      navigator.vibrate?.([140, 90, 140]);
+    } catch {
+      // 振动仅为可选反馈。
+    }
 
-  const resolveFallSafe = useCallback(() => {
-    const eventId = fallRef.current.eventId;
-    if (!eventId || fallRef.current.phase === "resolved") return;
-    clearFallTimer();
-    const next = {
-      phase: "resolved",
-      eventId,
-      deadlineMs: null,
-      trigger: fallRef.current.trigger,
-      message: "本人已确认安全，本次事件已关闭。",
+    if (!audio) {
+      armFallResponseWindow(eventId, generation);
+      return;
+    }
+    let settled = false;
+    let watchdog = 0;
+    const cleanup = () => {
+      window.clearTimeout(watchdog);
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onError);
     };
-    fallRef.current = next;
-    setFall(next);
-    publishEvent("alarm_state", {
-      event_id: eventId,
-      phase: "resolved",
-      trigger: fallRef.current.trigger || "fall_transition",
-      message: next.message,
-      response_deadline_ms: null,
-      media_scope: "none",
-    });
-    revokeActiveGrant("resolved");
-    fallDetectorRef.current.reset();
-  }, [clearFallTimer, publishEvent, revokeActiveGrant]);
+    const finish = (stopAudio = false) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (stopAudio) {
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch {
+          // 音频元素失败时直接进入回应窗。
+        }
+      }
+      voicePromptRef.current = null;
+      armFallResponseWindow(eventId, generation);
+    };
+    const onEnded = () => finish(false);
+    const onError = () => finish(true);
+    voicePromptRef.current = {
+      cancel() {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch {
+          // 释放流程继续。
+        }
+      },
+    };
+    audio.addEventListener("ended", onEnded, { once: true });
+    audio.addEventListener("error", onError, { once: true });
+    watchdog = window.setTimeout(() => finish(true), FALL_PROMPT_WATCHDOG_MS);
+    try {
+      audio.currentTime = 0;
+      void audio.play().catch(() => finish(true));
+    } catch {
+      finish(true);
+    }
+  }, [armFallResponseWindow, cancelVoiceInteraction, clearFallTimer, escalateFall, publishEvent]);
 
   const updateHeartCard = useCallback((shareState) => {
     const current = heartCardRef.current;
@@ -669,12 +1100,21 @@ export function MonitorApp() {
 
   const selectScene = useCallback((nextSceneId) => {
     if (!DEMO_SCENES.some((scene) => scene.id === nextSceneId)) return;
+    if (selectFailClosedFallEvent(fallRef.current)) {
+      failClosedFallCheckIn();
+      return;
+    }
     if (heartCardRef.current && !["denied", "expired"].includes(heartCardRef.current.share_state)) {
       updateHeartCard("expired");
     }
     revokeActiveGrant("scene_changed");
     stopLocalMoment();
     clearFallTimer();
+    releaseVoiceResources(createVoiceState({
+      detail: nextSceneId === "fall"
+        ? "正在准备事件触发式语音回应。"
+        : VOICE_PHASE_COPY.idle[1],
+    }));
     cookingTrackerRef.current.reset();
     recognitionUnavailableRef.current = false;
     fallDetectorRef.current.reset();
@@ -693,14 +1133,25 @@ export function MonitorApp() {
       scene_id: nextSceneId,
       visual_mode: nextSceneId === "bathroom" ? "skeleton_only" : "abstract_environment",
     });
-  }, [clearFallTimer, publishEvent, revokeActiveGrant, stopLocalMoment, updateHeartCard]);
+    if (nextSceneId === "fall") void preauthorizeMicrophone();
+  }, [
+    clearFallTimer,
+    failClosedFallCheckIn,
+    preauthorizeMicrophone,
+    publishEvent,
+    releaseVoiceResources,
+    revokeActiveGrant,
+    stopLocalMoment,
+    updateHeartCard,
+  ]);
 
   const stopCapture = useCallback(async () => {
     captureGenerationRef.current += 1;
     captureActiveRef.current = false;
     window.cancelAnimationFrame(animationRef.current);
     animationRef.current = 0;
-    clearFallTimer();
+    failClosedFallCheckIn();
+    releaseVoiceResources();
     mediaBridgeRef.current?.stopGrant(null, "capture_stopped");
     stopLocalMoment();
 
@@ -719,7 +1170,7 @@ export function MonitorApp() {
       }
     }
     setLocalFrame(null);
-  }, [clearFallTimer, stopLocalMoment]);
+  }, [failClosedFallCheckIn, releaseVoiceResources, stopLocalMoment]);
 
   useEffect(() => {
     stopCaptureRef.current = stopCapture;
@@ -794,6 +1245,7 @@ export function MonitorApp() {
     }
 
     dispatch({ type: "starting" });
+    if (sceneIdRef.current === "fall") void preauthorizeMicrophone();
     const checkInAudio = new Audio("/voice/fall_check_in.m4a");
     checkInAudio.preload = "auto";
     checkInAudioRef.current = checkInAudio;
@@ -921,7 +1373,7 @@ export function MonitorApp() {
         error: `无法开始采集：${error instanceof Error ? error.message : "摄像头或模型不可用"}`,
       });
     }
-  }, [startFallCheckIn, stopCapture, ui.connection, ui.sessionId]);
+  }, [preauthorizeMicrophone, startFallCheckIn, stopCapture, ui.connection, ui.sessionId]);
 
   const stopOnly = useCallback(async () => {
     revokeActiveGrant("capture_stopped");
@@ -1091,6 +1543,7 @@ export function MonitorApp() {
     const suspendController = () => {
       intentionalCloseRef.current = true;
       clearReconnectTimer();
+      failClosedFallCheckIn();
       closeControllerSocket();
       void stopCapture();
       intentionalCloseRef.current = false;
@@ -1103,16 +1556,42 @@ export function MonitorApp() {
       dispatch({ type: "capture_stopped" });
       connectControllerRef.current?.(token);
     };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        const checkingEventId = selectFailClosedFallEvent(fallRef.current);
+        releaseVoiceResources(checkingEventId
+          ? createVoiceState({
+            phase: "fallback",
+            detail: "页面已隐藏，麦克风已停止；规则倒计时仍会继续。",
+          })
+          : createVoiceState());
+        return;
+      }
+      const current = fallRef.current;
+      if (
+        selectFailClosedFallEvent(current)
+        && Number.isFinite(current.deadlineMs)
+        && current.deadlineMs <= Date.now()
+      ) failClosedFallCheckIn();
+    };
     window.addEventListener("pagehide", suspendController);
     window.addEventListener("pageshow", resumeController);
     window.addEventListener("online", resumeController);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       window.removeEventListener("pagehide", suspendController);
       window.removeEventListener("pageshow", resumeController);
       window.removeEventListener("online", resumeController);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       suspendController();
     };
-  }, [clearReconnectTimer, closeControllerSocket, stopCapture]);
+  }, [
+    clearReconnectTimer,
+    closeControllerSocket,
+    failClosedFallCheckIn,
+    releaseVoiceResources,
+    stopCapture,
+  ]);
 
   const locked = ui.phase === "locked" || (ui.phase === "degraded" && !ui.sessionId);
   const canStart = ui.connection === "connected" && !ui.captureActive && ui.phase !== "starting";
@@ -1147,7 +1626,7 @@ export function MonitorApp() {
             <p>只有一台设备可以取得控制租约。原始密钥不会保存；本标签页只保留可跨刷新的短期控制凭证。</p>
             <div className="boundary-list">
               <span><i>1</i>解锁唯一控制租约</span>
-              <span><i>2</i>主动点击开启后置摄像头</span>
+              <span><i>2</i>主动授权摄像头；跌倒场景预授权麦克风后立即释放</span>
               <span><i>3</i>默认只发布骨架与结构化事件</span>
               <span><i>4</i>厨房同意或跌倒告警后才短期开原画</span>
             </div>
@@ -1192,7 +1671,7 @@ export function MonitorApp() {
                 <div className="stage-placeholder compact">
                   <span className="camera-glyph" aria-hidden="true"><CameraAltRoundedIcon /></span>
                   <b>{ui.phase === "starting" ? "正在加载摄像头与模型…" : "摄像头尚未开启"}</b>
-                  <p>只有点击下方按钮后，浏览器才会申请后置摄像头权限。</p>
+                  <p>只有点击下方按钮后才申请摄像头；跌倒场景会同时准备麦克风权限，但事件前不监听。</p>
                 </div>
               )}
               <div className="stage-topline">
@@ -1217,7 +1696,7 @@ export function MonitorApp() {
             <div>
               <div className="eyebrow">CONTROLLER</div>
               <h1>四场景监控端</h1>
-              <p className="intro-copy">后置摄像头在本机运行自训练 MoveNet。骨架、事件和授权视频是三条独立通道。</p>
+              <p className="intro-copy">后置摄像头在本机运行自训练 MoveNet。骨架、事件、授权视频与事件语音保持独立通道。</p>
             </div>
 
             <nav className="monitor-scene-tabs" aria-label="选择演示场景">
@@ -1324,9 +1803,30 @@ export function MonitorApp() {
                         : "已关闭"}</span>
                 </div>
                 <p>{fall.message}</p>
+                <div
+                  className={`voice-status-card is-${voice.phase} is-${voice.intent || "none"}`}
+                  role={voice.phase === "fallback" ? "alert" : "status"}
+                  aria-live="polite"
+                >
+                  <div className="voice-status-head">
+                    <b>{VOICE_PHASE_COPY[voice.phase]?.[0] || "语音回应"}</b>
+                    <span>{voice.phase === "listening" ? "MIC ON"
+                      : voice.phase === "transcribing" ? "MIMO"
+                        : "EVENT ONLY"}</span>
+                  </div>
+                  <p>{voice.detail}</p>
+                  {voice.transcript && fall.phase === "checking" && (
+                    <q>{voice.transcript}</q>
+                  )}
+                  {(voice.model || Number.isFinite(voice.latencyMs)) && (
+                    <small>{voice.model || "MiMo"}{Number.isFinite(voice.latencyMs)
+                      ? ` · ${Math.round(voice.latencyMs)} ms`
+                      : ""}</small>
+                  )}
+                </div>
                 {fall.phase === "checking" && (
                   <>
-                    <small>问询播放完成后保留完整 8 秒回应窗；此阶段评委仍只看骨架。</small>
+                    <small>问询播放完成后，在冻结的回应截止时间内短时收音；此阶段评委仍只看骨架。</small>
                     <div className="consent-actions">
                       <button type="button" className="secondary-action" onClick={resolveFallSafe}>我没事</button>
                       <button type="button" className="primary-action danger-action" onClick={() => escalateFall(fall.eventId, "elder_need_help")}>需要帮助</button>
@@ -1349,14 +1849,15 @@ export function MonitorApp() {
             <div className="control-actions">
               {!ui.captureActive ? (
                 <button type="button" className="primary-action" onClick={startCapture} disabled={!canStart}>
-                  {ui.phase === "starting" ? "正在启动…" : "开启后置摄像头"}
+                  {ui.phase === "starting" ? "正在启动…"
+                    : sceneId === "fall" ? "开启摄像头并准备语音" : "开启后置摄像头"}
                 </button>
               ) : (
                 <button type="button" className="secondary-action" onClick={stopOnly}>停止采集</button>
               )}
               <button type="button" className="release-action" onClick={releaseControl}>释放控制权</button>
             </div>
-            <small className="control-footnote">释放后会停止摄像头、撤销事件视频，并允许下一台设备取得控制权。</small>
+            <small className="control-footnote">释放后会停止摄像头与麦克风、撤销事件视频，并允许下一台设备取得控制权。语音只在跌倒问询后短时上传。</small>
           </aside>
         </main>
       )}

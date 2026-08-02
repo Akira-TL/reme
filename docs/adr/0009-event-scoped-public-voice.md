@@ -22,9 +22,11 @@ LBX 公网 Demo 接受**事件触发式语音唤起**：真实跌倒候选进入
 - Relay 先验证短期控制令牌、活跃租约、当前 `alarm_state(checking)` 的 `event_id` 和单事件预算，再读取有硬上限的请求并调用 MiMo。
 - Durable Object 只原子判断结构状态与预算，不接触或保存音频、Base64、transcript。
 - 音频与 transcript 不持久化、不广播、不写日志。Worker 仅写脱敏结构日志：请求/事件标识、provider/model、状态、上游 HTTP 状态、延迟、字节数与最终 intent。
+- Cloudflare 自动 invocation logs 必须关闭，避免把浏览器 WebSocket 子协议里的短期控制凭证持久化为请求元数据；实时 tail 仅可作为受信任发布者的短时调试通道，完成验证后必须关闭。
 - `safe` 仅可关闭仍处于 checking 的同一事件；`need_help` 可提前升级；`unclear`、空音频、拒权、网络/MiMo 失败或迟到均不得延长、取消或降低 ADR-0005 的确定性倒计时告警。
 - 每事件只有一次公网 MiMo 语音预算；本轮不以第二次云端调用做澄清。
 - UI 必须显示监听、转写、结果与降级状态；事件结束、切场景、停止采集、释放控制或页面隐藏时立即取消并释放麦克风。
+- 上述中断不得静默清除仍在 `checking` 的规则告警：停止、释放、切场景与 `pagehide` 先 fail-closed 升级；普通后台隐藏仅停止麦克风并保留绝对 deadline。控制链路恢复后按该 deadline 重发 checking、升级过期事件，或重发本地 terminal alarm 状态。
 
 ## 不接受的替代
 

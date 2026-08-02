@@ -13,8 +13,8 @@ import {
   createMediaGrantRevoke,
   createMediaSignal,
   createPoseFrame,
-  isControllerReady,
   isDemoEvent,
+  isControllerReady,
   isForwardedMediaSignal,
   isHeartbeatAck,
   isMediaSignal,
@@ -323,6 +323,25 @@ test("demo event privacy cross-fields fail closed", () => {
       status: "active",
     },
   }), null);
+});
+
+test("alarm state accepts the event-scoped voice intent trigger", () => {
+  const event = createDemoEvent({
+    sessionId: "session-a",
+    eventSequence: 6,
+    timestampMs: 1_000,
+    eventType: "alarm_state",
+    payload: {
+      event_id: "fall-voice-1",
+      phase: "resolved",
+      trigger: "voice_intent",
+      message: "语音回应确认安全。",
+      response_deadline_ms: null,
+      media_scope: "none",
+    },
+  });
+  assert.notEqual(event, null);
+  assert.equal(isDemoEvent(event), true);
 });
 
 test("media signalling accepts only bounded exact SDP and ICE messages", () => {

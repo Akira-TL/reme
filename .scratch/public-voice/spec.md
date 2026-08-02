@@ -34,6 +34,7 @@
 5. 监控端调用独立鉴权 HTTP 端点；音频不进入 WebRTC 视频 offer，也不进入共享 WebSocket。
 6. Relay 验证控制租约、当前活跃 danger event、请求与 WAV，再进行一次 `mimo-v2.5` `input_audio` 调用。
 7. `safe` 在事件仍为 `checking` 时关闭事件；`need_help` 立即升级家属告警；`unclear`、空录音、拒权、无网络、MiMo 失败或迟到均保持确定性倒计时兜底。
+8. `checking` 期间停止采集、释放控制、切场景或 `pagehide` 必须先按超时 fail-closed 升级；仅切到后台但页面仍存活时只释放麦克风、不清倒计时。控制 WebSocket 重连后必须按绝对 deadline 对账并重发当前 alarm 状态，避免本地与 Relay/旁观端分叉。
 8. UI 显式显示 `waiting / listening / transcribing / safe / help / unclear / unavailable`，但 transcript 只在当前监控端内存里短暂显示，事件结束即清理。
 
 ## HTTP 合同
@@ -78,6 +79,7 @@ Content-Type: application/json
 - MiMo API key 只来自 Worker secret；浏览器不得直连 MiMo。
 - DO 只可原子校验租约、当前结构事件和预算；不得接收、保存或返回音频、Base64、transcript。
 - 结构日志只含 request/event 标识、provider/model、状态、上游 HTTP 状态、耗时、字节数与 intent；严禁 transcript、音频、Base64、Bearer token、API key。
+- Cloudflare 持久化 invocation logs 必须关闭，仅保留上述自定义结构日志；显式实时 tail 会看到瞬时请求元数据，只能由受信任发布者短时开启并在 smoke 后关闭。
 - WebRTC bridge 继续只取 `getVideoTracks()`；麦克风权限不能扩大 viewer 的能力。
 - `Permissions-Policy` 可允许同源麦克风，但 viewer 代码不得请求麦克风；生产响应头与浏览器权限面板必须实测。
 

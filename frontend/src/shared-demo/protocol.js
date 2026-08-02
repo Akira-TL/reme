@@ -214,6 +214,7 @@ function isAlarmStatePayload(value) {
   if (![
     "fall_transition",
     "elder_need_help",
+    "voice_intent",
     "check_in_timeout",
     "visual_confirm",
     "manual_debug",

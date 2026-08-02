@@ -31,6 +31,7 @@ interface UnlockSuccess {
 
 afterEach(async () => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   for (const token of issuedTokens.splice(0)) {
     await relayFetch("/api/release", {
       method: "POST",
@@ -719,6 +720,409 @@ describe("single-room demo relay", () => {
     });
   });
 
+  it("recognizes one event-scoped WAV through the MiMo input_audio path without sensitive logs", async () => {
+    const lease = await unlock();
+    await prepareDangerChecking(lease);
+    const audioB64 = makePcmWavBase64();
+    const outbound = vi.fn(
+      async (..._args: Parameters<typeof fetch>): Promise<Response> =>
+        mimoVoiceResponse("safe", "我没事"),
+    );
+    vi.stubGlobal("fetch", outbound);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const response = await recognizeDangerVoice(lease.token, "fall-1", audioB64);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      intent: "safe",
+      transcript: "我没事",
+      model: "mimo-v2.5",
+      latency_ms: expect.any(Number),
+    });
+    expect(outbound).toHaveBeenCalledTimes(1);
+    const call = outbound.mock.calls[0];
+    expect(String(call?.[0])).toBe("https://api.xiaomimimo.com/v1/chat/completions");
+    const init = call?.[1];
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-mimo-api-key");
+    const payload = JSON.parse(String(init?.body)) as {
+      model: string;
+      messages: Array<{ content: unknown }>;
+      thinking: unknown;
+      response_format: unknown;
+    };
+    expect(payload.model).toBe("mimo-v2.5");
+    expect(payload.messages[1]?.content).toEqual([
+      { type: "text", text: "这是老人对“您还好吗、是否需要帮助”的短语音回应。" },
+      {
+        type: "input_audio",
+        input_audio: { data: `data:audio/wav;base64,${audioB64}` },
+      },
+    ]);
+    expect(payload.thinking).toEqual({ type: "disabled" });
+    expect(payload.response_format).toEqual({ type: "json_object" });
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const logRecord = JSON.parse(String(log.mock.calls[0]?.[0])) as Record<string, unknown>;
+    expect(logRecord).toEqual({
+      event: "danger_voice_mimo",
+      event_id: "fall-1",
+      request_id: expect.any(String),
+      provider: "xiaomi_mimo",
+      model: "mimo-v2.5",
+      status: 200,
+      latency_ms: expect.any(Number),
+      outcome: "safe",
+      bytes: 8_044,
+    });
+    const serializedLogs = JSON.stringify(log.mock.calls);
+    expect(serializedLogs).not.toContain(audioB64);
+    expect(serializedLogs).not.toContain(lease.token);
+    expect(serializedLogs).not.toContain("我没事");
+  });
+
+  it("keeps danger voice method, token, event, and body failures closed before MiMo", async () => {
+    const outbound = vi.fn(async (): Promise<Response> => mimoVoiceResponse("safe", "我没事"));
+    vi.stubGlobal("fetch", outbound);
+
+    const wrongMethod = await relayFetch("/api/danger/voice");
+    expect(wrongMethod.status).toBe(405);
+    await expect(wrongMethod.json()).resolves.toEqual({ ok: false, error: "method_not_allowed" });
+
+    const missingToken = await relayFetch("/api/danger/voice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dangerVoiceBody()),
+    });
+    expect(missingToken.status).toBe(401);
+    await expect(missingToken.json()).resolves.toEqual({
+      ok: false,
+      error: "missing_control_token",
+    });
+
+    const lease = await unlock();
+    const noEvent = await recognizeDangerVoice(lease.token);
+    expect(noEvent.status).toBe(409);
+    await expect(noEvent.json()).resolves.toEqual({
+      ok: false,
+      error: "no_active_danger_event",
+    });
+
+    await prepareDangerChecking(lease);
+    const variants: Array<{ body: unknown; status: number; error: string }> = [
+      {
+        body: { ...dangerVoiceBody(), unexpected: true },
+        status: 400,
+        error: "invalid_request",
+      },
+      {
+        body: dangerVoiceBody("fall-1", "not-base64"),
+        status: 415,
+        error: "invalid_wav",
+      },
+      {
+        body: dangerVoiceBody("fall-1", bytesToBase64(new Uint8Array([1, 2, 3, 4]))),
+        status: 415,
+        error: "invalid_wav",
+      },
+      {
+        body: dangerVoiceBody("fall-1", makePcmWavBase64(10_001)),
+        status: 415,
+        error: "invalid_wav",
+      },
+    ];
+    for (const variant of variants) {
+      const rejected = await relayFetch("/api/danger/voice", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${lease.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(variant.body),
+      });
+      expect(rejected.status).toBe(variant.status);
+      await expect(rejected.json()).resolves.toEqual({ ok: false, error: variant.error });
+    }
+
+    const tooLarge = await relayFetch("/api/danger/voice", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${lease.token}`,
+        "Content-Length": String(450 * 1_024 + 1),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(dangerVoiceBody()),
+    });
+    expect(tooLarge.status).toBe(413);
+    await expect(tooLarge.json()).resolves.toEqual({
+      ok: false,
+      error: "request_too_large",
+    });
+    expect(outbound).not.toHaveBeenCalled();
+  });
+
+  it("applies conservative deterministic guardrails to MiMo voice intent", async () => {
+    const lease = await unlock();
+    const baseTime = Date.now();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "fall", baseTime), []);
+    const outbound = vi
+      .fn<(...args: Parameters<typeof fetch>) => Promise<Response>>()
+      .mockImplementationOnce(
+        async () => mimoVoiceResponse("safe", "我摔倒了，腿很疼，需要帮助"),
+      )
+      .mockImplementationOnce(
+        async () => mimoVoiceResponse("safe", "我不需要帮助，也不疼，没摔倒"),
+      )
+      .mockImplementationOnce(async () => mimoVoiceResponse("unclear", "腿疼"))
+      .mockImplementationOnce(async () => mimoVoiceResponse("safe", null));
+    vi.stubGlobal("fetch", outbound);
+
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 1, "checking", baseTime, "fall-help"),
+      [],
+    );
+    const explicitHelp = await recognizeDangerVoice(lease.token, "fall-help");
+    await expect(explicitHelp.json()).resolves.toMatchObject({ ok: true, intent: "need_help" });
+
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 2, "checking", baseTime + 1, "fall-safe"),
+      [],
+    );
+    const negated = await recognizeDangerVoice(lease.token, "fall-safe");
+    await expect(negated.json()).resolves.toMatchObject({ ok: true, intent: "safe" });
+
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 3, "checking", baseTime + 2, "fall-soft"),
+      [],
+    );
+    const softConcern = await recognizeDangerVoice(lease.token, "fall-soft");
+    await expect(softConcern.json()).resolves.toMatchObject({ ok: true, intent: "need_help" });
+
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 4, "checking", baseTime + 3, "fall-silent"),
+      [],
+    );
+    const silentSafe = await recognizeDangerVoice(lease.token, "fall-silent");
+    await expect(silentSafe.json()).resolves.toMatchObject({ ok: true, intent: "unclear" });
+    expect(outbound).toHaveBeenCalledTimes(4);
+  });
+
+  it("allows only one paid voice attempt per event, including after failure and republish", async () => {
+    const lease = await unlock();
+    const baseTime = Date.now();
+    const controller = await prepareDangerChecking(lease, baseTime);
+    const outbound = vi.fn(async (): Promise<Response> => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", outbound);
+
+    const first = await recognizeDangerVoice(lease.token);
+    expect(first.status).toBe(502);
+    await expect(first.json()).resolves.toEqual({ ok: false, error: "mimo_unavailable" });
+
+    const retry = await recognizeDangerVoice(lease.token);
+    expect(retry.status).toBe(429);
+    await expect(retry.json()).resolves.toEqual({ ok: false, error: "voice_attempt_limit" });
+
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 2, "checking", baseTime + 1, "fall-1"),
+      [],
+    );
+    const republished = await recognizeDangerVoice(lease.token);
+    expect(republished.status).toBe(429);
+    await expect(republished.json()).resolves.toEqual({
+      ok: false,
+      error: "voice_attempt_limit",
+    });
+    expect(outbound).toHaveBeenCalledTimes(1);
+  });
+
+  it("single-flights concurrent voice requests without a second MiMo call", async () => {
+    const lease = await unlock();
+    await prepareDangerChecking(lease);
+    const outbound = vi.fn(
+      async (..._args: Parameters<typeof fetch>): Promise<Response> => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return mimoVoiceResponse("safe", "我没事");
+      },
+    );
+    vi.stubGlobal("fetch", outbound);
+
+    const firstPromise = recognizeDangerVoice(lease.token);
+    await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
+    const concurrent = await recognizeDangerVoice(lease.token);
+    expect(concurrent.status).toBe(409);
+    await expect(concurrent.json()).resolves.toEqual({
+      ok: false,
+      error: "voice_request_in_progress",
+    });
+    expect(outbound).toHaveBeenCalledTimes(1);
+
+    const first = await firstPromise;
+    expect(first.status).toBe(200);
+  });
+
+  it("rejects an already-expired checking window before calling MiMo", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      await prepareDangerChecking(lease, baseTime);
+      const outbound = vi.fn(async (): Promise<Response> => mimoVoiceResponse("safe", "我没事"));
+      vi.stubGlobal("fetch", outbound);
+
+      now.mockReturnValue(baseTime + 8_001);
+      const expired = await recognizeDangerVoice(lease.token);
+      expect(expired.status).toBe(409);
+      await expect(expired.json()).resolves.toEqual({
+        ok: false,
+        error: "no_active_danger_event",
+      });
+      expect(outbound).not.toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("drops a safe verdict that arrives after the frozen checking deadline", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      await prepareDangerChecking(lease, baseTime);
+      const outbound = vi.fn(
+        async (..._args: Parameters<typeof fetch>): Promise<Response> => {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return mimoVoiceResponse("safe", "我没事");
+        },
+      );
+      vi.stubGlobal("fetch", outbound);
+
+      const request = recognizeDangerVoice(lease.token);
+      await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
+      now.mockReturnValue(baseTime + 8_001);
+
+      const stale = await request;
+      expect(stale.status).toBe(409);
+      await expect(stale.json()).resolves.toEqual({
+        ok: false,
+        error: "stale_danger_event",
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("drops a late safe verdict after the alarm has already escalated", async () => {
+    const lease = await unlock();
+    const baseTime = Date.now();
+    const controller = await prepareDangerChecking(lease, baseTime);
+    const outbound = vi.fn(
+      async (..._args: Parameters<typeof fetch>): Promise<Response> => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return mimoVoiceResponse("safe", "我没事");
+      },
+    );
+    vi.stubGlobal("fetch", outbound);
+
+    const request = recognizeDangerVoice(lease.token);
+    await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 2, "escalated", baseTime + 1),
+      [],
+    );
+
+    const stale = await request;
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toEqual({
+      ok: false,
+      error: "stale_danger_event",
+    });
+  });
+
+  it("makes strict MiMo response, rate-limit, network, and timeout failures explicit", async () => {
+    const lease = await unlock();
+    const baseTime = Date.now();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "fall", baseTime), []);
+    const outbound = vi
+      .fn<(...args: Parameters<typeof fetch>) => Promise<Response>>()
+      .mockImplementationOnce(
+        async () => mimoVoiceResponse("safe", "我没事", { unexpected: true }),
+      )
+      .mockImplementationOnce(async () => new Response(null, { status: 429 }))
+      .mockRejectedValueOnce(new Error("network unavailable"));
+    vi.stubGlobal("fetch", outbound);
+
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 1, "checking", baseTime, "fall-invalid"),
+      [],
+    );
+    const invalid = await recognizeDangerVoice(lease.token, "fall-invalid");
+    expect(invalid.status).toBe(502);
+    await expect(invalid.json()).resolves.toEqual({
+      ok: false,
+      error: "invalid_mimo_response",
+    });
+
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 2, "checking", baseTime + 1, "fall-rate"),
+      [],
+    );
+    const rateLimited = await recognizeDangerVoice(lease.token, "fall-rate");
+    expect(rateLimited.status).toBe(502);
+    await expect(rateLimited.json()).resolves.toEqual({
+      ok: false,
+      error: "mimo_rate_limited",
+    });
+
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 3, "checking", baseTime + 2, "fall-network"),
+      [],
+    );
+    const network = await recognizeDangerVoice(lease.token, "fall-network");
+    expect(network.status).toBe(502);
+    await expect(network.json()).resolves.toEqual({ ok: false, error: "mimo_unavailable" });
+
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 4, "checking", baseTime + 3, "fall-timeout"),
+      [],
+    );
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => AbortSignal.abort());
+    outbound.mockImplementationOnce(async () => {
+      throw new DOMException("timed out", "AbortError");
+    });
+    try {
+      const timedOut = await recognizeDangerVoice(lease.token, "fall-timeout");
+      expect(timedOut.status).toBe(504);
+      await expect(timedOut.json()).resolves.toEqual({ ok: false, error: "mimo_timeout" });
+    } finally {
+      timeout.mockRestore();
+    }
+    expect(outbound).toHaveBeenCalledTimes(4);
+  });
+
+  it("accepts voice_intent as an alarm trigger", () => {
+    const event = makeAlarmEvent("session-voice", 1, "resolved");
+    if (event.event_type !== "alarm_state") throw new Error("expected alarm_state");
+    event.payload.trigger = "voice_intent";
+
+    expect(validateDemoEvent(event, event.session_id)).toBe(true);
+  });
+
   it("rate limits repeated unlock attempts from one client address", async () => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const response = await relayFetch("/api/unlock", {
@@ -1051,6 +1455,7 @@ function makeAlarmEvent(
   eventSequence: number,
   phase: "checking" | "escalated" | "resolved",
   timestampMs = eventSequence * 1_000,
+  eventId = "fall-1",
 ): DemoEvent {
   return {
     schema_version: EVENT_SCHEMA_VERSION,
@@ -1059,7 +1464,7 @@ function makeAlarmEvent(
     timestamp_ms: timestampMs,
     event_type: "alarm_state",
     payload: {
-      event_id: "fall-1",
+      event_id: eventId,
       phase,
       trigger: phase === "checking" ? "fall_transition" : "check_in_timeout",
       message: phase === "checking" ? "刚才的动作有些突然，您还好吗？" : "未收到回应，已通知家人。",
@@ -1129,5 +1534,97 @@ async function recognize(token: string, imageB64: string): Promise<Response> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ image_b64: imageB64 }),
+  });
+}
+
+async function prepareDangerChecking(
+  lease: UnlockSuccess,
+  timestampMs = Date.now(),
+  eventId = "fall-1",
+): Promise<WebSocket> {
+  const controller = await connectController(lease.token);
+  await nextJson(controller);
+  await publishEvent(
+    controller,
+    makeSceneEvent(lease.session_id, 0, "fall", timestampMs),
+    [],
+  );
+  await publishEvent(
+    controller,
+    makeAlarmEvent(lease.session_id, 1, "checking", timestampMs, eventId),
+    [],
+  );
+  return controller;
+}
+
+function dangerVoiceBody(
+  eventId = "fall-1",
+  audioB64 = makePcmWavBase64(),
+): { event_id: string; audio_b64: string; audio_format: "wav" } {
+  return { event_id: eventId, audio_b64: audioB64, audio_format: "wav" };
+}
+
+async function recognizeDangerVoice(
+  token: string,
+  eventId = "fall-1",
+  audioB64 = makePcmWavBase64(),
+): Promise<Response> {
+  return relayFetch("/api/danger/voice", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(dangerVoiceBody(eventId, audioB64)),
+  });
+}
+
+function makePcmWavBase64(durationMs = 250): string {
+  const sampleCount = Math.max(1, Math.floor(16_000 * durationMs / 1_000));
+  const dataBytes = sampleCount * 2;
+  const bytes = new Uint8Array(44 + dataBytes);
+  const view = new DataView(bytes.buffer);
+  writeAscii(bytes, 0, "RIFF");
+  view.setUint32(4, bytes.byteLength - 8, true);
+  writeAscii(bytes, 8, "WAVE");
+  writeAscii(bytes, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 16_000, true);
+  view.setUint32(28, 32_000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(bytes, 36, "data");
+  view.setUint32(40, dataBytes, true);
+  return bytesToBase64(bytes);
+}
+
+function writeAscii(target: Uint8Array, offset: number, value: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    target[offset + index] = value.charCodeAt(index);
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkBytes = 32_768;
+  for (let offset = 0; offset < bytes.byteLength; offset += chunkBytes) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkBytes));
+  }
+  return btoa(binary);
+}
+
+function mimoVoiceResponse(
+  intent: string,
+  transcript: string | null,
+  extra: Record<string, unknown> = {},
+): Response {
+  return Response.json({
+    choices: [{
+      message: {
+        content: JSON.stringify({ intent, transcript, ...extra }),
+      },
+    }],
   });
 }

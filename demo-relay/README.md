@@ -7,6 +7,8 @@ This isolated Cloudflare Worker provides the single-room data plane for the demo
 - `POST /api/release` with `Authorization: Bearer <token>`
 - `POST /api/activity/recognize` with the active Bearer token and exact
   `{ "image_b64": "<plain JPEG base64>" }`
+- `POST /api/danger/voice` with the active Bearer token and exact
+  `{ "event_id": "<active fall id>", "audio_b64": "<plain WAV base64>", "audio_format": "wav" }`
 - `WS /ws/viewer` with subprotocol `reme-viewer-v1`
 - `WS /ws/controller` with subprotocols `reme-controller-v1` and
   `reme-token-<token>`
@@ -23,11 +25,12 @@ sequence number is persisted; the latest pose payload lives on the active
 controller's hibernation attachment and disappears with that socket.
 Late viewers first receive `{ "type": "viewer_ready", "viewer_id": "..." }`, then
 the latest persisted non-media `reme-demo-event/v1` state in event-sequence order,
-and finally a fresh pose snapshot when available. Event and frame sequence state, the latest
-scene/activity/card/alarm events, grant metadata, and the grant's fixed viewer ID
-audience live in Durable Object SQLite. WebSocket attachments carry the viewer ID
-or controller lease/frame snapshot across hibernation. No SDP, ICE candidate,
-image, audio, video frame, or Blob is written to SQLite or an attachment.
+and finally a fresh pose snapshot when available. Event and frame sequence state,
+the latest scene/activity/card/alarm events, grant metadata, and the grant's fixed
+viewer ID audience live in Durable Object SQLite. WebSocket attachments carry the
+viewer ID or controller lease/frame snapshot across hibernation. No SDP, ICE
+candidate, image, audio, video frame, or Blob is written to SQLite or an
+attachment.
 
 The first controller message is an authoritative resume cursor:
 
@@ -63,6 +66,31 @@ the Durable Object or logs. Unlock attempts are limited per Cloudflare
 client address in a one-minute in-memory window; the control key must still be
 high entropy because Origin checking is not authentication for non-browser clients.
 
+Danger voice recognition is a second, isolated HTTP path for event-triggered
+check-in only; it is not a continuously listening hotword service. The relay accepts
+one canonical 16 kHz, mono, PCM16 RIFF/WAVE of at most 10 seconds for the current
+unexpired `alarm_state(checking)` event. It atomically consumes that event's single
+MiMo budget before making one `mimo-v2.5` chat-completions request with
+an official `data:audio/wav;base64,...` `input_audio`, JSON mode, and thinking
+disabled. A failed upstream request does not
+refund the budget, and a verdict arriving after the frozen alarm deadline or after
+an alarm/scene change is rejected.
+
+Successful voice responses strictly return `ok=true`, an intent from `safe`,
+`need_help`, or `unclear`, a nullable transcript of at most 240 characters, the
+model, and integer latency. Request JSON is capped at 450 KiB; the response body
+and MiMo call are bounded independently. The audio and transcript never enter
+WebSockets, Durable Object storage, event broadcasts, or logs. The Durable Object
+stores only the event-scoped attempt marker, and Worker logs contain redacted
+request/event IDs, `provider=xiaomi_mimo`, model, upstream status, latency,
+outcome, and byte count.
+
+Cloudflare automatic invocation logs are disabled in both environments so the
+controller credential carried by the browser WebSocket subprotocol is not
+persisted as request metadata. Custom structured logs remain enabled. An operator
+running an explicit real-time tail can still inspect transient request metadata;
+that privileged debugging path must not be left running during a live demo.
+
 ## Local verification
 
 ```sh
@@ -75,7 +103,8 @@ CONTROL_KEY_SHA256=<64-character-test-digest> npm run dry-run
 
 For local `wrangler dev`, place `CONTROL_KEY_SHA256` in an ignored `.dev.vars` file.
 The value is the lowercase SHA-256 hex digest of the human-entered control key.
-Place `MIMO_API_KEY` there as well when exercising activity recognition.
+Place `MIMO_API_KEY` there as well when exercising activity or danger voice
+recognition.
 
 ## Deployment inputs
 
