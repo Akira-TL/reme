@@ -15,6 +15,7 @@ import {
 
 const POLL_MS = 2000;
 const RETRY_MS = 1500;
+const FAIL_STREAK_LIMIT = 3;
 // running：正常旁观；degraded：A 流断但会话仍在（决策仍可能由回应触发），保持订阅。
 const WATCHABLE_STATES = ["starting", "running", "degraded"];
 
@@ -106,26 +107,59 @@ export function useViewerLink() {
   }, []);
 
   // 会话发现：轮询 A/B 状态；活跃会话变化时重置全部旁观状态。
+  // 容错原则：只有 B 明确说"没有会话"（404/stopped）才撤下 target；
+  // 网络类失败保留现场（告警绝不因一次探测抖动被静音），连续多次才放弃。
   useEffect(() => {
     let disposed = false;
+    let inFlight = false; // 串行化：慢响应乱序回写会把 target 翻回旧会话
+    let failStreak = 0;
     const { httpBase: aBase } = getPerceptionUrls();
     const { httpBase: bBase } = getDecisionUrls();
 
-    async function tick() {
-      const [aResult, bResult] = await Promise.allSettled([
-        getStatus(aBase),
-        getSessionStatus(bBase),
-      ]);
-      if (disposed) return;
-      setAStatus(aResult.status === "fulfilled" ? aResult.value : null);
-      const bPayload = bResult.status === "fulfilled" ? bResult.value : null;
-      setBStatus(bPayload);
-      const activeId =
-        bPayload && WATCHABLE_STATES.includes(bPayload.state) ? bPayload.session_id : null;
+    function applyTarget(activeId) {
       setTarget((current) => {
         if ((current?.sessionId ?? null) === (activeId ?? null)) return current;
         return activeId ? { sessionId: activeId } : null;
       });
+    }
+
+    async function tick() {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      const abort = new AbortController();
+      const abortTimer = window.setTimeout(() => abort.abort(), POLL_MS * 2);
+      try {
+        const [aResult, bResult] = await Promise.allSettled([
+          getStatus(aBase, abort.signal),
+          getSessionStatus(bBase, abort.signal),
+        ]);
+        if (disposed) return;
+        setAStatus(aResult.status === "fulfilled" ? aResult.value : null);
+        if (bResult.status === "fulfilled") {
+          failStreak = 0;
+          const bPayload = bResult.value;
+          setBStatus(bPayload);
+          applyTarget(
+            bPayload && WATCHABLE_STATES.includes(bPayload.state) ? bPayload.session_id : null,
+          );
+          return;
+        }
+        if (bResult.reason?.status === 404) {
+          // B 明确回答"当前没有会话"，与网络失败不同，立即撤下。
+          failStreak = 0;
+          setBStatus(null);
+          applyTarget(null);
+          return;
+        }
+        failStreak += 1;
+        if (failStreak >= FAIL_STREAK_LIMIT) {
+          setBStatus(null);
+          applyTarget(null);
+        }
+      } finally {
+        window.clearTimeout(abortTimer);
+        inFlight = false;
+      }
     }
 
     tick();
@@ -136,22 +170,22 @@ export function useViewerLink() {
     };
   }, []);
 
-  // 会话切换：清空上一会话的画面与决策残留（setTimeout(0) 遵循仓库
-  // 对 react-hooks/set-state-in-effect 的既定处理习惯）。
+  // 会话切换：清空上一会话的画面与决策残留。必须与 ref 清理/停铃同步完成：
+  // 后台标签页的 setTimeout 会被节流 ≥1s，而 WS onmessage 不节流，延迟清态
+  // 会把新会话首个告警的浮层清掉而响铃继续（复审确认的竞态）。
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     skeletonRef.current = null;
     alarmDecisionRef.current = null;
     stopAlarmEffects();
-    const timer = window.setTimeout(() => {
-      setPosture(null);
-      setTransition(null);
-      setDecision(null);
-      setHistory([]);
-      setAlarm(null);
-      setConfirmState("idle");
-    }, 0);
-    return () => window.clearTimeout(timer);
+    setPosture(null);
+    setTransition(null);
+    setDecision(null);
+    setHistory([]);
+    setAlarm(null);
+    setConfirmState("idle");
   }, [target?.sessionId, stopAlarmEffects]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // A 感知流：骨架/姿态/转变，只读订阅，断开退避重连。
   useEffect(() => {

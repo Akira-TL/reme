@@ -5,21 +5,29 @@ import { RUNTIME_EVENT_SCHEMA } from "../adapters/perception.js";
 
 export function createFeedState() {
   // A 的 RuntimeEvent.sequence 在整个 session 内单调递增（abc-interface §4），
-  // 重连后继续增长，因此跨连接持有同一水位即可丢弃迟到帧。
-  return { lastSequence: -1 };
+  // 但派生事件（posture_observation/transition_event）复用其源帧的 sequence
+  // 且帧先发布——水位必须按事件类型放行同 seq，否则派生事件被全部拦下
+  // （B 侧 ingest 与驱动页 adapter 均按此语义实现）。
+  return { lastSequence: -1, typesAtSequence: new Set() };
 }
 
 export function reduceAEvent(feed, envelope, sessionId) {
   if (!envelope || envelope.schema_version !== RUNTIME_EVENT_SCHEMA) return null;
   if (envelope.session_id !== sessionId) return null;
   const sequence = envelope.sequence;
-  if (!Number.isFinite(sequence) || sequence <= feed.lastSequence) return null;
+  if (!Number.isFinite(sequence) || sequence < feed.lastSequence) return null;
   const payload = envelope.payload;
   if (!payload || typeof payload !== "object") return null;
   if (!["frame_landmarks", "posture_observation", "transition_event"].includes(envelope.event_type)) {
     return null;
   }
-  feed.lastSequence = sequence;
+  if (sequence === feed.lastSequence) {
+    if (feed.typesAtSequence.has(envelope.event_type)) return null;
+  } else {
+    feed.lastSequence = sequence;
+    feed.typesAtSequence.clear();
+  }
+  feed.typesAtSequence.add(envelope.event_type);
   return { kind: envelope.event_type, payload };
 }
 

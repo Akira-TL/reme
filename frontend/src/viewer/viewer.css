@@ -94,6 +94,15 @@ body,
   gap: 14px;
 }
 
+.viewer-degraded {
+  border: 1px solid #ffcc00;
+  background: rgba(255, 204, 0, 0.12);
+  color: #ffd94d;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
 .viewer-stage {
   position: relative;
   border-radius: 16px;

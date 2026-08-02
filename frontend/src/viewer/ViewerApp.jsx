@@ -58,11 +58,15 @@ function connectionDot(connection) {
   return "is-off";
 }
 
+// 使用侧以 key={decision.decision_id} 渲染：决策更替即重建实例，
+// 惰性初始值保证首帧就是本决策的完整时长，不闪现上一决策的陈旧文案。
 function CountdownHint({ decision }) {
   const applicable = Boolean(
     decision?.need_dialogue && Number.isFinite(decision.response_timeout_ms),
   );
-  const [remainingMs, setRemainingMs] = useState(null);
+  const [remainingMs, setRemainingMs] = useState(() =>
+    applicable ? decision.response_timeout_ms : null,
+  );
   useEffect(() => {
     if (!applicable) return undefined;
     const expiresAt = performance.now() + decision.response_timeout_ms;
@@ -145,6 +149,14 @@ export function ViewerApp() {
         </main>
       ) : (
         <main className="viewer-main">
+          {(link.bStatus?.state === "degraded" || link.aStatus?.state === "degraded") && (
+            <div className="viewer-degraded" role="status">
+              守护服务降级：
+              {link.bStatus?.state === "degraded"
+                ? link.bStatus?.reason || "决策链路部分不可用"
+                : link.aStatus?.reason || "感知链路部分不可用"}
+            </div>
+          )}
           <section className={`viewer-stage ${emergency ? "is-alert" : ""}`}>
             <canvas ref={canvasRef} className="viewer-canvas" />
             {!personVisible && <div className="stage-empty">等待画面：骨架流未就绪或无人</div>}
@@ -167,7 +179,11 @@ export function ViewerApp() {
 
           <section className={`viewer-card ${emergency ? "is-alert" : ""}`}>
             {!decision ? (
-              <p className="card-empty">暂无决策：老人状态平稳时 B 不会打扰。</p>
+              <p className="card-empty">
+                {link.connectionB === "open"
+                  ? "已接入决策流，尚未同步到决策。中途加入时早前的决策不会重放，仅新决策实时送达。"
+                  : "决策流连接中…（断线窗口内的决策不会补发）"}
+              </p>
             ) : (
               <>
                 <div className="card-head">
@@ -186,7 +202,7 @@ export function ViewerApp() {
                 {decision.reason_summary && (
                   <p className="card-reason">{decision.reason_summary}</p>
                 )}
-                <CountdownHint decision={decision} />
+                <CountdownHint key={decision.decision_id} decision={decision} />
               </>
             )}
           </section>
