@@ -33,5 +33,8 @@ node_modules/
 # Claude Code local state (agent worktrees, session settings)
 .claude/
 
+# MediaPipe wasm 由 predev/prebuild 从 node_modules 拷贝（模型 .task 入库）
+frontend/public/mediapipe/wasm/
+
 # Derived keypoint copies used for local analysis (regenerate with git show)
 .scratch/posture-classifier-theory/data/

@@ -1,8 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createDemoLandmarks, drawSkeleton, mapLandmarks } from "../utils/pose";
 
-const MP_WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
-const POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+// 本地资产（predev 拷贝 wasm、模型已入库）：演示现场零 CDN 依赖。
+const MP_WASM_URL = "/mediapipe/wasm";
+const POSE_MODEL_URL = "/mediapipe/pose_landmarker_lite.task";
+const MODEL_LOAD_TIMEOUT_MS = 15000;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => reject(new Error(label)), ms);
+    }),
+  ]);
+}
 const RENDER_WIDTH = 960;
 const RENDER_HEIGHT = 540;
 
@@ -127,7 +138,11 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
       modelFallbackRef.current = false;
       try {
         const { FilesetResolver, PoseLandmarker } = await import("@mediapipe/tasks-vision");
-        const vision = await FilesetResolver.forVisionTasks(MP_WASM_URL);
+        const vision = await withTimeout(
+          FilesetResolver.forVisionTasks(MP_WASM_URL),
+          MODEL_LOAD_TIMEOUT_MS,
+          "wasm 加载超时",
+        );
         const options = {
           baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
           runningMode: "VIDEO",
@@ -138,16 +153,25 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
           outputSegmentationMasks: true,
         };
         try {
-          landmarkerRef.current = await PoseLandmarker.createFromOptions(vision, options);
+          landmarkerRef.current = await withTimeout(
+            PoseLandmarker.createFromOptions(vision, options),
+            MODEL_LOAD_TIMEOUT_MS,
+            "姿态模型加载超时",
+          );
         } catch {
           options.baseOptions = { modelAssetPath: POSE_MODEL_URL };
-          landmarkerRef.current = await PoseLandmarker.createFromOptions(vision, options);
+          landmarkerRef.current = await withTimeout(
+            PoseLandmarker.createFromOptions(vision, options),
+            MODEL_LOAD_TIMEOUT_MS,
+            "姿态模型加载超时",
+          );
         }
         if (!cancelled) {
           setModelReady(true);
           setModelError("");
         }
       } catch {
+        // 悬挂与失败同等处理：明确降级，不再无限“连接中”。
         modelFallbackRef.current = true;
         if (!cancelled) {
           setModelReady(false);
