@@ -1380,12 +1380,15 @@ export function MonitorApp() {
     if (!restoredControllerSession || current.phase !== "checking" || !current.eventId) {
       return undefined;
     }
-    if (document.visibilityState === "hidden") {
-      escalateFall(current.eventId, "check_in_timeout");
-      return undefined;
-    }
-    const remainingMs = current.deadlineMs - Date.now();
-    if (remainingMs <= 0) {
+    const nowMs = Date.now();
+    const remainingMs = current.deadlineMs - nowMs;
+    const interruptionAction = selectFallInterruptionAction({
+      kind: "visibility",
+      fall: current,
+      nowMs,
+      visibilityState: document.visibilityState,
+    });
+    if (interruptionAction === "escalate") {
       escalateFall(current.eventId, "check_in_timeout");
       return undefined;
     }

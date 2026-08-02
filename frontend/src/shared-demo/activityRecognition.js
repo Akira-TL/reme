@@ -139,13 +139,15 @@ export function classifyCookingConfirmationAck(pending, ack, current) {
     && ack.event_type === "activity_state"
     && Number.isSafeInteger(ack.event_sequence)
     && ack.event_sequence === pending.eventSequence;
-  const accepted = ack.type === "event_accepted"
+  const acknowledged = ack.type === "event_accepted"
     && ack.event_type === "activity_state"
     && Number.isSafeInteger(ack.event_sequence)
     && ack.event_sequence === pending.eventSequence;
-  if (!accepted && !rejected) return "ignore";
+  if (!acknowledged && !rejected) return "ignore";
   if (!isCookingRecognitionContextCurrent(pending.context, current)) return "stale";
-  return accepted ? "verified" : "rejected";
+  // Older Relay versions emit the same generic ACK without proving that the
+  // one-time receipt was consumed, so absence of this marker must fail closed.
+  return acknowledged && ack.activity_verified === true ? "verified" : "rejected";
 }
 
 function supportedMomentMimeType(MediaRecorderImpl) {

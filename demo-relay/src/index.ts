@@ -1199,10 +1199,15 @@ export class DemoRoom extends DurableObject<Env> {
     }
 
     this.broadcastToAllViewers(event);
+    // The additive marker lets a new frontend distinguish this verified fact
+    // from the generic ACK emitted by an older Relay during a rolling release.
     safeSend(ws, JSON.stringify({
       type: "event_accepted",
       event_sequence: event.event_sequence,
       event_type: event.event_type,
+      ...(event.event_type === "activity_state" && event.payload.phase === "confirmed"
+        ? { activity_verified: true }
+        : {}),
     }));
     this.revokeInvalidatedGrants(event, ws);
   }

@@ -227,7 +227,19 @@ test("cooking results and Relay acknowledgements bind to one active capture gene
     type: "event_accepted",
     event_type: "activity_state",
     event_sequence: 12,
+    activity_verified: true,
   }, current), "verified");
+  assert.equal(classifyCookingConfirmationAck(pending, {
+    type: "event_accepted",
+    event_type: "activity_state",
+    event_sequence: 12,
+  }, current), "rejected");
+  assert.equal(classifyCookingConfirmationAck(pending, {
+    type: "event_accepted",
+    event_type: "activity_state",
+    event_sequence: 12,
+    activity_verified: false,
+  }, current), "rejected");
   assert.equal(classifyCookingConfirmationAck(pending, {
     type: "error",
     error: "activity_evidence_not_verified",
@@ -254,6 +266,7 @@ test("cooking results and Relay acknowledgements bind to one active capture gene
       type: "event_accepted",
       event_type: "activity_state",
       event_sequence: 12,
+      activity_verified: true,
     }, { ...current, ...stale }), "stale");
   }
   assert.equal(classifyCookingConfirmationAck(pending, {

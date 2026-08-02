@@ -3733,6 +3733,9 @@ async function publishEvent(
     type: "event_accepted",
     event_sequence: event.event_sequence,
     event_type: event.event_type,
+    ...(event.event_type === "activity_state" && event.payload.phase === "confirmed"
+      ? { activity_verified: true }
+      : {}),
   });
   for (const message of viewerMessages) {
     await expect(message).resolves.toEqual(event);
