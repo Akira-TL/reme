@@ -10,6 +10,15 @@ from reme.decision.records import DecisionState, PrivacyMode
 LOW_MOTION_LEVELS = frozenset({MotionLevel.STILL, MotionLevel.LOW})
 DOWN_POSTURES = frozenset({Posture.LYING, Posture.UNKNOWN})
 
+# Derivation of A's fall_like confidence range (reme/pose/transitions.py::_classify):
+# conf = clamp(0.55 + 0.12*min(drop/0.20 - 1, 1) + 0.12*min(speed/0.65 - 1, 1) + 0.08*r, 0, 0.95),
+# emitted only when all(fall_signals) holds, which already forces drop >= 0.20 and speed >= 0.65,
+# so both min() terms live in [0, 1]; r is the window's smallest visible-keypoint ratio, and A
+# drops every frame under TransitionDetectorConfig.min_visible_keypoint_ratio = 0.5, so r in
+# [0.5, 1.0].  Hence conf in [0.55 + 0.08*0.5, 0.55 + 0.12 + 0.12 + 0.08] = [0.59, 0.87]; the 0.95
+# clamp is unreachable.  Verified by sweeping the admissible region through A's own _classify.
+FALL_LIKE_CONFIDENCE_FLOOR = 0.59
+
 _STATE_SEVERITY: dict[DecisionState, int] = {
     DecisionState.NORMAL: 0,
     DecisionState.RESOLVED: 0,
@@ -35,16 +44,25 @@ class TriggerConfig:
       geriatric finding that what matters after a fall is time spent immobile:
       R3 Fleming & Brayne 2008 (BMJ 337:a2227), R4 Schwickert et al. 2017.
     - The *numbers* below are ours.  ``long_still_min_ms`` is a demo-scale
-      value, not R4's 24.5 s marker; ``fall_confidence_min`` and both timeouts
-      are tuned for a live demo's pacing.  No paper states them, and none may
-      be cited as their source.
+      value, not R4's 24.5 s marker, and both timeouts are tuned for a live
+      demo's pacing.  No paper states them, and none may be cited as their
+      source.
+    - ``fall_confidence_min`` is the one number here that was actually
+      measured: it is 按 A 的产出分布实测标定的工程值, pinned to the analytic
+      floor of A's fall_like confidence (derivation above
+      ``FALL_LIKE_CONFIDENCE_FLOOR``).  The previous 0.7 sat *inside* A's own
+      output range [0.59, 0.87] and silently dropped every real fall scoring
+      below it — an availability defect, not a threshold choice.  0.59 has no
+      literature behind it either; it is A's arithmetic, and it moves the
+      moment A retunes ``fall_center_drop`` / ``fall_peak_speed`` /
+      ``min_visible_keypoint_ratio``.
     - Detection rates from the literature must never become Reme's promises:
       published fall-detection algorithms drop to 57.0% +/- 27.3% sensitivity
       on real-world falls (R6 Bagalà et al. 2012), which is exactly why the
       product asks a question first instead of asserting a fall.
     """
 
-    fall_confidence_min: float = 0.7
+    fall_confidence_min: float = FALL_LIKE_CONFIDENCE_FLOOR
     long_still_min_ms: float = 30000.0
     concern_postures: frozenset[Posture] = field(
         default_factory=lambda: frozenset({Posture.SITTING})

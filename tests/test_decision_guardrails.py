@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from reme.decision.context import (
@@ -14,6 +15,7 @@ from reme.decision.context import (
     TransitionEvent,
 )
 from reme.decision.guardrails import (
+    FALL_LIKE_CONFIDENCE_FLOOR,
     TriggerConfig,
     detect_concern_trigger,
     detect_fall_trigger,
@@ -21,6 +23,7 @@ from reme.decision.guardrails import (
     violates_risk_floor,
 )
 from reme.decision.records import DecisionState
+from reme.pose.transitions import TransitionDetectorConfig
 
 
 def _posture(**overrides: Any) -> PostureObservation:
@@ -92,6 +95,109 @@ def test_fall_trigger_ignores_posture_from_before_the_transition() -> None:
 def test_fall_trigger_accepts_person_lost_after_transition() -> None:
     posture = _posture(person_detected=False, posture=Posture.UNKNOWN)
     assert detect_fall_trigger(_context(latest_posture=posture), config=TriggerConfig())
+
+
+def _a_side_fall_confidence(
+    *,
+    drop_multiple: float,
+    speed_multiple: float,
+    visible_keypoint_ratio: float,
+) -> float:
+    """Reproduce A's fall_like confidence for one point inside its fall gate.
+
+    Mirrors ``TransitionDetector._classify`` in backend/reme/pose/transitions.py::
+
+        conf = clamp(0.55
+                     + 0.12 * min(center_height_change / fall_center_drop - 1, 1)
+                     + 0.12 * min(peak_keypoint_speed / fall_peak_speed - 1, 1)
+                     + 0.08 * visible_keypoint_ratio, 0.0, 0.95)
+
+    The ``*_multiple`` arguments are ``center_height_change / fall_center_drop`` and
+    ``peak_keypoint_speed / fall_peak_speed``; A only reaches this branch when
+    ``all(fall_signals)`` holds, which forces both of them to be at least 1.0.
+    """
+
+    return min(
+        max(
+            0.55
+            + 0.12 * min(drop_multiple - 1.0, 1.0)
+            + 0.12 * min(speed_multiple - 1.0, 1.0)
+            + 0.08 * visible_keypoint_ratio,
+            0.0,
+        ),
+        0.95,
+    )
+
+
+def test_fall_confidence_floor_tracks_a_side_formula() -> None:
+    """0.59 is A's arithmetic, not a round number, and must move when A's config moves."""
+
+    pose = TransitionDetectorConfig()
+    # Floor: both fall gates met exactly, so both min() bonus terms are 0, and the window
+    # sits on A's own frame-admission floor min_visible_keypoint_ratio (0.5).
+    floor = _a_side_fall_confidence(
+        drop_multiple=1.0,
+        speed_multiple=1.0,
+        visible_keypoint_ratio=pose.min_visible_keypoint_ratio,
+    )
+    # Ceiling: both bonus terms saturated at their min(..., 1.0) cap, every keypoint visible.
+    ceiling = _a_side_fall_confidence(
+        drop_multiple=2.0, speed_multiple=2.0, visible_keypoint_ratio=1.0
+    )
+    assert round(floor, 6) == FALL_LIKE_CONFIDENCE_FLOOR == 0.59
+    assert round(ceiling, 6) == 0.87  # A's 0.95 clamp is unreachable
+    assert TriggerConfig().fall_confidence_min == FALL_LIKE_CONFIDENCE_FLOOR
+
+
+def test_fall_trigger_fires_at_a_side_confidence_floor() -> None:
+    """A's weakest possible fall_like event must still escalate, not be silently dropped."""
+
+    transition = _transition(transition_confidence=FALL_LIKE_CONFIDENCE_FLOOR)
+    assert detect_fall_trigger(_context(active_transition=transition), config=TriggerConfig())
+
+
+def test_fall_trigger_covers_the_whole_a_side_confidence_band() -> None:
+    """[0.59, 0.87] is A's entire fall_like range; the former 0.7 discarded its lower band."""
+
+    config = TriggerConfig()
+    # 0.592353 = 0.55 + 0.08 * 9/17, the weakest MoveNet-17 frame that still clears A's
+    # min_visible_keypoint_ratio; 0.712 is a measured hard fall; 0.818511 is the
+    # rapid high-to-low trajectory in tests/test_pose_transitions.py.
+    for confidence in (0.59, 0.592353, 0.65, 0.699999, 0.712, 0.818511, 0.87):
+        context = _context(active_transition=_transition(transition_confidence=confidence))
+        assert detect_fall_trigger(context, config=config), confidence
+
+
+def test_fall_trigger_rejects_confidence_below_a_side_floor() -> None:
+    """Below 0.59 nothing A labels fall_like can exist, so the floor stays a real gate."""
+
+    config = TriggerConfig()
+    for confidence in (0.0, 0.35, 0.55, 0.58):
+        context = _context(active_transition=_transition(transition_confidence=confidence))
+        assert not detect_fall_trigger(context, config=config), confidence
+
+
+def test_fall_confidence_boundary_is_inclusive() -> None:
+    """The edge is unambiguous: exactly at the floor fires, one float step below does not."""
+
+    config = TriggerConfig()
+    below_floor = math.nextafter(FALL_LIKE_CONFIDENCE_FLOOR, 0.0)
+    at_floor = _transition(transition_confidence=FALL_LIKE_CONFIDENCE_FLOOR)
+    just_below = _transition(transition_confidence=below_floor)
+    assert detect_fall_trigger(_context(active_transition=at_floor), config=config)
+    assert not detect_fall_trigger(_context(active_transition=just_below), config=config)
+
+
+def test_fall_floor_survives_a_side_payload_rounding() -> None:
+    """A ships round(confidence, 6) on the wire; the rounded floor must not fall under."""
+
+    raw = _a_side_fall_confidence(
+        drop_multiple=1.0,
+        speed_multiple=1.0,
+        visible_keypoint_ratio=TransitionDetectorConfig().min_visible_keypoint_ratio,
+    )
+    transition = _transition(transition_confidence=round(raw, 6))
+    assert detect_fall_trigger(_context(active_transition=transition), config=TriggerConfig())
 
 
 def test_concern_trigger_requires_long_still_duration() -> None:
