@@ -106,7 +106,7 @@ Vercel 继续负责两个入口、LiteRT WASM 和版本化模型静态资产；�
 
 已部署版本：
 
-- Vercel production：`dpl_4UKJsbkgBWXBEZqqaozZ9F4nfS6j`，构建 URL `https://reme-113fyouny-lx050s-projects.vercel.app`；
+- Vercel production：`dpl_8cZxp2xPgR32AEgoysQ3SgSMRtQH`，构建 URL `https://reme-hml30n8gz-lx050s-projects.vercel.app`；
 - Vercel 已附加别名：`reme.maniforld.com`、`reme-sage.vercel.app`、`monitor.reme.maniforld.com`；
 - Worker staging：`442b07b0-9a0e-46ec-b982-64c564a7e063`；
 - Worker production：`a07a5a55-4a13-47af-b425-50a66422b3c6`；
@@ -117,9 +117,9 @@ Vercel 继续负责两个入口、LiteRT WASM 和版本化模型静态资产；�
 
 ## 10. upstream 同步与合并回归
 
-- 仅以 `upstream/feature/abc-single-device-integration@92ca64c` 为云端基线，不处理 fork/origin；
-- 合并提交：`7b6bdb7 merge(upstream): sync ABC single-device integration`；
+- 仅以 `upstream/feature/abc-single-device-integration@a4e8625` 为云端基线，不处理 fork/origin；
+- 合并提交：`7b6bdb7 merge(upstream): sync ABC single-device integration` 与 `775efa2 merge(upstream): sync v0.1.0 frontend`；
 - 后端：590 passed、1 skipped。跳过项只涉及仓库和 upstream 历史均未包含的可选 `artifacts/pose-classification/fall-50/mil-v3/model.json`；缺失时运行时明确降级到 deterministic-only；
-- 前端：32/32 tests、ESLint、Vite production build 通过；
+- 前端：35/35 tests、ESLint、Vite production build 通过；其中明确覆盖空 landmarks 上送和浴室画布层强制 skeleton；
 - Relay：11/11 tests、TypeScript check、production/staging dry-run 通过；
 - `mypy` 回到合并前基线的 28 个既有错误（11 个文件），`ruff` 保持合并前 64 个既有错误；本轮没有扩大这两项存量债务。
