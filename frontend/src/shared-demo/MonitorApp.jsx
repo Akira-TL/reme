@@ -41,6 +41,7 @@ import {
   advanceControllerEventSequence,
   CONTROLLER_PROTOCOL,
   controllerProtocols,
+  createActivityConfirmation,
   createDemoEvent,
   createMediaGrantRequest,
   createMediaGrantRevoke,
@@ -50,6 +51,7 @@ import {
   isForwardedMediaSignal,
   isHeartbeatAck,
   isMediaGrantError,
+  isRelayCapabilities,
 } from "./protocol.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import { createMonitorState, reduceMonitorState } from "./state.js";
@@ -75,6 +77,7 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 const COOKING_SAMPLE_INTERVAL_MS = 4_000;
 const FALL_REPLY_WINDOW_MS = 8_000;
 const CONTROLLER_READY_TIMEOUT_MS = 5_000;
+const ACTIVITY_CAPABILITY_TIMEOUT_MS = 1_500;
 const FALL_PROMPT_FALLBACK_MS = 7_000;
 const FALL_PROMPT_WATCHDOG_MS = 9_000;
 const RELEASE_TIMEOUT_MS = 6_000;
@@ -293,6 +296,7 @@ export function MonitorApp() {
   );
   const [fallDetectionArmed, setFallDetectionArmed] = useState(false);
   const [activity, setActivity] = useState(createActivityState);
+  const [activityConfirmationCapability, setActivityConfirmationCapability] = useState("pending");
   const [heartCard, setHeartCard] = useState(null);
   const [kitchenLiveEventId, setKitchenLiveEventId] = useState(null);
   const [moment, setMoment] = useState({ status: "idle", size: 0, mimeType: "" });
@@ -355,7 +359,9 @@ export function MonitorApp() {
   const automaticSceneAbortRef = useRef(null);
   const fallDetectionArmedRef = useRef(false);
 
-  const publishEvent = useCallback((eventType, payload) => {
+  const publishEvent = useCallback((eventType, payload, {
+    verifiedActivity = false,
+  } = {}) => {
     const socket = controllerRef.current?.socket;
     const sessionId = sessionIdRef.current;
     if (socket?.readyState !== WebSocket.OPEN || !sessionId) return null;
@@ -366,9 +372,10 @@ export function MonitorApp() {
       eventType,
       payload,
     });
-    if (!event) return null;
+    const outbound = verifiedActivity ? createActivityConfirmation(event) : event;
+    if (!event || !outbound) return null;
     try {
-      socket.send(JSON.stringify(event));
+      socket.send(JSON.stringify(outbound));
     } catch {
       return null;
     }
@@ -705,6 +712,7 @@ export function MonitorApp() {
     if (!connection) return;
     window.clearInterval(connection.heartbeat);
     window.clearTimeout(connection.readyTimeout);
+    window.clearTimeout(connection.activityCapabilityTimeout);
     connection.socket.onopen = null;
     connection.socket.onmessage = null;
     connection.socket.onclose = null;
@@ -855,8 +863,20 @@ export function MonitorApp() {
       return;
     }
 
-    const connection = { socket, heartbeat: 0, readyTimeout: 0, ready: false };
+    const connection = {
+      socket,
+      heartbeat: 0,
+      readyTimeout: 0,
+      activityCapabilityTimeout: 0,
+      activityConfirmationSupported: false,
+      ready: false,
+    };
     controllerRef.current = connection;
+    queueMicrotask(() => {
+      if (controllerRef.current === connection) {
+        setActivityConfirmationCapability("pending");
+      }
+    });
     const completeKitchenConfirmation = (value) => {
       const pending = pendingKitchenGrantRef.current;
       const action = classifyCookingConfirmationAck(pending, value, {
@@ -991,6 +1011,13 @@ export function MonitorApp() {
         }));
         connection.ready = true;
         window.clearTimeout(connection.readyTimeout);
+        connection.activityCapabilityTimeout = window.setTimeout(() => {
+          if (
+            controllerRef.current === connection
+            && connection.ready
+            && !connection.activityConfirmationSupported
+          ) setActivityConfirmationCapability("unsupported");
+        }, ACTIVITY_CAPABILITY_TIMEOUT_MS);
         leaseExpiresAtRef.current = value.lease_expires_at_ms;
         const readyFrameSequence = Number.isSafeInteger(value.last_frame_sequence)
           ? value.last_frame_sequence
@@ -1028,6 +1055,12 @@ export function MonitorApp() {
         return;
       }
       if (!connection.ready) return;
+      if (isRelayCapabilities(value)) {
+        connection.activityConfirmationSupported = true;
+        window.clearTimeout(connection.activityCapabilityTimeout);
+        setActivityConfirmationCapability("supported");
+        return;
+      }
       if (
         value?.type === "error"
         && value.error === "activity_evidence_not_verified"
@@ -1203,6 +1236,8 @@ export function MonitorApp() {
       if (controllerRef.current !== connection) return;
       window.clearInterval(connection.heartbeat);
       window.clearTimeout(connection.readyTimeout);
+      window.clearTimeout(connection.activityCapabilityTimeout);
+      setActivityConfirmationCapability("pending");
       controllerRef.current = null;
       const automaticRequest = automaticSceneAbortRef.current;
       if (automaticRequest) {
@@ -2386,6 +2421,28 @@ export function MonitorApp() {
       || ui.connection !== "connected"
       || !tokenRef.current
     ) return undefined;
+    if (activityConfirmationCapability !== "supported") {
+      if (
+        activityConfirmationCapability === "unsupported"
+        && !recognitionUnavailableRef.current
+      ) {
+        recognitionUnavailableRef.current = true;
+        const reason = "当前 Relay 尚未声明可验证的活动确认合同；不会发送 confirmed、创建心跳、短片或实景授权。";
+        setActivity({
+          ...createActivityState(),
+          phase: "unavailable",
+          reason,
+        });
+        publishEvent("activity_state", {
+          activity: "cooking",
+          phase: "unavailable",
+          source: "mimo_visual",
+          confidence: null,
+          reason,
+        });
+      }
+      return undefined;
+    }
     let cancelled = false;
     let inFlight = false;
     let interval = 0;
@@ -2485,6 +2542,8 @@ export function MonitorApp() {
           source: "mimo_visual",
           confidence: verdict.confidence,
           reason,
+        }, {
+          verifiedActivity: serverVerified,
         });
         if (serverVerified && !kitchenLiveEventIdRef.current) {
           if (!activityEvent) {
@@ -2552,6 +2611,7 @@ export function MonitorApp() {
       window.clearInterval(interval);
     };
   }, [
+    activityConfirmationCapability,
     automaticScene.phase,
     publishEvent,
     sceneId,

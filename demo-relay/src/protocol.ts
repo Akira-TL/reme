@@ -1,5 +1,6 @@
 export const DEMO_EVENT_SCHEMA_VERSION = "reme-demo-event/v1";
 export const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
+export const ACTIVITY_CONFIRMATION_PROTOCOL = "verified-activity-event/v1";
 
 export const DEMO_EVENT_TYPES = [
   "scene_state",
@@ -111,6 +112,12 @@ export interface MediaGrantRevoke {
   grant_id: string;
 }
 
+export interface ActivityConfirmation {
+  type: "activity_confirmation";
+  protocol: typeof ACTIVITY_CONFIRMATION_PROTOCOL;
+  event: Extract<DemoEvent, { event_type: "activity_state" }>;
+}
+
 const EVENT_KEYS = [
   "event_sequence",
   "event_type",
@@ -198,6 +205,21 @@ export function validateMediaGrantRevoke(value: unknown): value is MediaGrantRev
   return isExactObject(value, ["type", "grant_id"])
     && value.type === "media_grant_revoke"
     && isOpaqueId(value.grant_id);
+}
+
+export function validateActivityConfirmation(
+  value: unknown,
+  sessionId: string,
+): value is ActivityConfirmation {
+  if (
+    !isExactObject(value, ["event", "protocol", "type"])
+    || value.type !== "activity_confirmation"
+    || value.protocol !== ACTIVITY_CONFIRMATION_PROTOCOL
+    || !validateDemoEvent(value.event, sessionId)
+  ) return false;
+  return value.event.event_type === "activity_state"
+    && value.event.payload.phase === "confirmed"
+    && value.event.payload.source === "mimo_visual";
 }
 
 export function createForwardedMediaSignal(

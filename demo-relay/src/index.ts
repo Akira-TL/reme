@@ -17,6 +17,7 @@ import {
   type SceneRecognitionAttemptStart,
 } from "./scene";
 import {
+  ACTIVITY_CONFIRMATION_PROTOCOL,
   createForwardedMediaSignal,
   DEMO_EVENT_SCHEMA_VERSION,
   isExactObject,
@@ -28,6 +29,7 @@ import {
   type MediaGrantScope,
   type MediaSignal,
   validateDemoEvent,
+  validateActivityConfirmation,
   validateMediaGrantRequest,
   validateMediaGrantRevoke,
   validateMediaSignal,
@@ -849,6 +851,21 @@ export class DemoRoom extends DurableObject<Env> {
     if (isExactObject(decoded, ["type", "grant_id"])
       && decoded.type === "media_grant_revoke") {
       rejectSocket(ws, "invalid_media_grant_revoke", 1008);
+      return;
+    }
+
+    if (validateActivityConfirmation(decoded, attachment.sessionId)) {
+      await this.acceptDemoEvent(ws, attachment, decoded.event);
+      return;
+    }
+    if (
+      decoded !== null
+      && typeof decoded === "object"
+      && !Array.isArray(decoded)
+      && "type" in decoded
+      && decoded.type === "activity_confirmation"
+    ) {
+      rejectSocket(ws, "invalid_activity_confirmation", 1008);
       return;
     }
 
@@ -2575,6 +2592,10 @@ export class DemoRoom extends DurableObject<Env> {
         current_alarm: currentAlarm?.event_type === "alarm_state" ? currentAlarm : null,
       }),
     );
+    safeSend(server, JSON.stringify({
+      type: "relay_capabilities",
+      activity_confirmation: ACTIVITY_CONFIRMATION_PROTOCOL,
+    }));
 
     return new Response(null, {
       status: 101,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ACTIVITY_CONFIRMATION_PROTOCOL,
   CONTROLLER_EVENT_SEQUENCE_BLOCK_SIZE,
   DEMO_EVENT_SCHEMA_VERSION,
   FRAME_SCHEMA_VERSION,
@@ -8,6 +9,7 @@ import {
   MEDIA_SIGNAL_SCHEMA_VERSION,
   advanceControllerEventSequence,
   controllerProtocols,
+  createActivityConfirmation,
   createDemoEvent,
   createMediaGrantRequest,
   createMediaGrantRevoke,
@@ -20,6 +22,7 @@ import {
   isMediaGrantError,
   isMediaSignal,
   isPoseFrame,
+  isRelayCapabilities,
   parseDemoEvent,
   parsePoseFrame,
   parseForwardedMediaSignal,
@@ -394,6 +397,46 @@ test("media grant commands are scope-bound and short-lived", () => {
     grant_id: "grant-1",
   });
   assert.equal(createMediaGrantRevoke("bad grant"), null);
+});
+
+test("verified activity confirmation is a capability-gated wrapper, never a public event", () => {
+  const event = createDemoEvent({
+    sessionId: "session-a",
+    eventSequence: 12,
+    timestampMs: 1_000,
+    eventType: "activity_state",
+    payload: {
+      activity: "cooking",
+      phase: "confirmed",
+      source: "mimo_visual",
+      confidence: 0.87,
+      reason: "连续样本显示人物正在备菜",
+    },
+  });
+  const command = createActivityConfirmation(event);
+  assert.deepEqual(command, {
+    type: "activity_confirmation",
+    protocol: ACTIVITY_CONFIRMATION_PROTOCOL,
+    event,
+  });
+  assert.equal(isDemoEvent(command), false);
+  assert.equal(createActivityConfirmation({
+    ...event,
+    payload: { ...event.payload, phase: "candidate" },
+  }), null);
+  assert.equal(isRelayCapabilities({
+    type: "relay_capabilities",
+    activity_confirmation: ACTIVITY_CONFIRMATION_PROTOCOL,
+  }), true);
+  assert.equal(isRelayCapabilities({
+    type: "relay_capabilities",
+    activity_confirmation: "legacy-generic-ack",
+  }), false);
+  assert.equal(isRelayCapabilities({
+    type: "relay_capabilities",
+    activity_confirmation: ACTIVITY_CONFIRMATION_PROTOCOL,
+    extra: true,
+  }), false);
 });
 
 test("controller event blocks leave deterministic room for Relay grant events", () => {

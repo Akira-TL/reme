@@ -14,7 +14,7 @@ import {
   type MediaSignal,
 } from "../src/index";
 import { handleActivityRecognition } from "../src/activity";
-import { validateDemoEvent } from "../src/protocol";
+import { ACTIVITY_CONFIRMATION_PROTOCOL, validateDemoEvent } from "../src/protocol";
 import { handleSceneRecognition } from "../src/scene";
 
 const ORIGIN = "https://reme.maniforld.com";
@@ -404,13 +404,40 @@ describe("single-room demo relay", () => {
     });
   });
 
+  it("rejects malformed modern activity confirmations before viewer broadcast", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    await publishEvent(
+      controller,
+      makeSceneEvent(lease.session_id, 0, "kitchen"),
+      [viewer],
+    );
+
+    controller.send(JSON.stringify({
+      type: "activity_confirmation",
+      protocol: ACTIVITY_CONFIRMATION_PROTOCOL,
+      event: makeActivityEvent(lease.session_id, 1, "candidate"),
+    }));
+    await expect(nextJson(controller)).resolves.toEqual({
+      type: "error",
+      error: "invalid_activity_confirmation",
+    });
+    await expectNoMessage(viewer);
+  });
+
   it("issues kitchen live grants only after confirmed activity and adds late viewers", async () => {
     const lease = await unlock();
     const controller = await connectController(lease.token);
     await nextJson(controller);
 
     await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), []);
-    controller.send(JSON.stringify(makeActivityEvent(lease.session_id, 1)));
+    controller.send(JSON.stringify({
+      type: "activity_confirmation",
+      protocol: ACTIVITY_CONFIRMATION_PROTOCOL,
+      event: makeActivityEvent(lease.session_id, 1),
+    }));
     await expect(nextJson(controller)).resolves.toEqual({
       type: "error",
       error: "activity_evidence_not_verified",
@@ -447,7 +474,11 @@ describe("single-room demo relay", () => {
     }>();
     expect(secondVerdict.consecutive).toBe(2);
     expect(secondVerdict.receipt_id).toMatch(/^activity-receipt-[a-f0-9]{32}$/);
-    await publishEvent(controller, makeActivityEvent(lease.session_id, 3), []);
+    await publishActivityConfirmation(
+      controller,
+      makeActivityEvent(lease.session_id, 3),
+      [],
+    );
 
     // The public event id remains stable and carries no secret receipt. Relay
     // binds it to the just-consumed server receipt before signing media.
@@ -3502,6 +3533,14 @@ async function connectController(token: string): Promise<WebSocket> {
   const socket = requireSocket(response);
   socket.accept();
   sockets.push(socket);
+  const ready = await nextJson(socket);
+  await expect(nextJson(socket)).resolves.toEqual({
+    type: "relay_capabilities",
+    activity_confirmation: ACTIVITY_CONFIRMATION_PROTOCOL,
+  });
+  // Keep existing tests and legacy controller expectations focused on the
+  // authoritative ready message while asserting the additive capability once.
+  ensureSocketInbox(socket).messages.unshift({ value: ready });
   return socket;
 }
 
@@ -3736,6 +3775,32 @@ async function publishEvent(
     ...(event.event_type === "activity_state" && event.payload.phase === "confirmed"
       ? { activity_verified: true }
       : {}),
+  });
+  for (const message of viewerMessages) {
+    await expect(message).resolves.toEqual(event);
+  }
+}
+
+async function publishActivityConfirmation(
+  controller: WebSocket,
+  event: DemoEvent,
+  viewers: readonly WebSocket[],
+): Promise<void> {
+  if (event.event_type !== "activity_state" || event.payload.phase !== "confirmed") {
+    throw new TypeError("a confirmed activity event is required");
+  }
+  const viewerMessages = viewers.map((viewer) => nextJson(viewer));
+  const ack = nextJson(controller);
+  controller.send(JSON.stringify({
+    type: "activity_confirmation",
+    protocol: ACTIVITY_CONFIRMATION_PROTOCOL,
+    event,
+  }));
+  await expect(ack).resolves.toEqual({
+    type: "event_accepted",
+    event_sequence: event.event_sequence,
+    event_type: event.event_type,
+    activity_verified: true,
   });
   for (const message of viewerMessages) {
     await expect(message).resolves.toEqual(event);

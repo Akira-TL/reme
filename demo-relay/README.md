@@ -46,6 +46,26 @@ The first controller message is an authoritative resume cursor:
 }
 ```
 
+The Relay then sends a separate exact capability message without changing the
+strict 3/5/6-field `controller_ready` rolling contract:
+
+```json
+{
+  "type": "relay_capabilities",
+  "activity_confirmation": "verified-activity-event/v1"
+}
+```
+
+A current controller waits for this capability before starting continuous
+kitchen activity sampling. Its public `activity_state(confirmed)` is carried
+inside an `activity_confirmation` command, so an older Relay that cannot verify
+the one-time receipt rejects the unknown wrapper without persisting or
+broadcasting a false confirmed fact. The current Relay unwraps it only through
+the same pre-persistence receipt check used for a legacy bare event. A previous
+frontend may continue to send a bare confirmed activity during the bounded
+rolling window; the new Relay validates it and returns the additive
+`activity_verified=true` acknowledgement marker.
+
 Each accepted event or frame must use a sequence strictly greater than its
 corresponding cursor. A controller socket may reconnect with the same token and
 session until the lease TTL expires; disconnecting the socket does not release
