@@ -16,4 +16,4 @@
 - [x] 只在 `lbx` 创建描述性提交，只推送 `upstream/lbx`（`22778f27`）。
 - [x] 不使用已有 `dist*`；部署前从 lockfile 重建。
 - [x] Cloudflare staging/production Relay 与 Vercel production 已部署并完成基础 smoke。
-- [ ] 为 `monitor.reme.maniforld.com` 补齐 Cloudflare DNS，确认公网解析、TLS 和手机端入口。
+- [x] `monitor.reme.maniforld.com` 已完成 Cloudflare DNS、Vercel ownership、TLS 与独立监控端根路径验收。

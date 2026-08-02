@@ -33,7 +33,8 @@
 - Cloudflare staging Relay：`https://reme-demo-relay-staging.lx-0506.workers.dev`，version `d0cccf95-bb42-485f-8d61-177f4958680a`。
 - Cloudflare production Relay：`https://relay.reme.maniforld.com`，version `873dc201-c44c-4a99-b704-1abd4fbc630c`；授权状态接口 smoke 为 200，越权请求为 403。
 - Vercel production：deployment `dpl_84587MoJd7mU1nmxA1Gq65WSjy6k`，`https://reme-rlxtrqhbl-lx050s-projects.vercel.app`；`https://reme.maniforld.com/` 与兼容监控入口 `https://reme.maniforld.com/monitor` 均为 200，公网模型 SHA-256 与用户权重一致。
-- 阻塞：截至 2026-08-02，`monitor.reme.maniforld.com` 在公共解析器仍为 `NXDOMAIN`；Vercel alias 已配置，但 Cloudflare DNS/TLS 尚未闭环。
+- 独立监控域名：`monitor.reme.maniforld.com` 的 Cloudflare 权威 DNS、1.1.1.1 和 8.8.8.8 均返回项目专属 DNS-only CNAME `459ace11b47bcf46.vercel-dns-017.com`；Vercel verify 为 `configured_correctly`、`verified=true`、`issues=[]`。
+- Vercel 证书签发后，`https://monitor.reme.maniforld.com/` 从公网返回 200；浏览器实测标题为“Reme · 手机监控端”，根路径显示唯一控制租约与密钥解锁界面，未误入评委旁观端。
 
 ## 尚未关闭的人工 Gate
 
