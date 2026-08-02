@@ -2,19 +2,25 @@ import { exports as workerExports } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  type DemoEvent,
   type FrameLandmarks,
+  type MediaSignal,
 } from "../src/index";
+import { validateDemoEvent } from "../src/protocol";
 
 const ORIGIN = "https://reme.maniforld.com";
 const MONITOR_ORIGIN = "https://monitor.reme.maniforld.com";
 const VERCEL_ORIGIN = "https://reme-sage.vercel.app";
 const CONTROL_KEY = "correct horse battery staple";
 const FRAME_SCHEMA_VERSION = "movenet-17/v1-demo";
+const EVENT_SCHEMA_VERSION = "reme-demo-event/v1";
+const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
 const VIEWER_PROTOCOL = "reme-viewer-v1";
 const CONTROLLER_PROTOCOL = "reme-controller-v1";
 
 const sockets: WebSocket[] = [];
 const issuedTokens: string[] = [];
+const viewerIds = new WeakMap<WebSocket, string>();
 
 interface UnlockSuccess {
   ok: true;
@@ -24,6 +30,7 @@ interface UnlockSuccess {
 }
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   for (const token of issuedTokens.splice(0)) {
     await relayFetch("/api/release", {
       method: "POST",
@@ -237,6 +244,360 @@ describe("single-room demo relay", () => {
     await expect(received).resolves.toEqual(frame);
   });
 
+  it("accepts exact monotonic demo events and replays latest structured state in order", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+
+    const living = makeSceneEvent(lease.session_id, 0, "living");
+    await publishEvent(controller, living, [viewer]);
+    const activity = makeActivityEvent(lease.session_id, 1);
+    await publishEvent(controller, activity, [viewer]);
+    const card = makeCareCardEvent(lease.session_id, 2, "consent_pending");
+    await publishEvent(controller, card, [viewer]);
+    const kitchen = makeSceneEvent(lease.session_id, 3, "kitchen");
+    await publishEvent(controller, kitchen, [viewer]);
+
+    const lateViewer = await connectViewer();
+    await expect(nextJson(lateViewer)).resolves.toEqual(activity);
+    await expect(nextJson(lateViewer)).resolves.toEqual(card);
+    await expect(nextJson(lateViewer)).resolves.toEqual(kitchen);
+    await expectNoMessage(lateViewer);
+  });
+
+  it("rejects unknown event fields and non-increasing event sequences", async () => {
+    const firstLease = await unlock();
+    const firstController = await connectController(firstLease.token);
+    await nextJson(firstController);
+    const event = makeSceneEvent(firstLease.session_id, 0, "living");
+    firstController.send(JSON.stringify({ ...event, unexpected: true }));
+    await expect(nextJson(firstController)).resolves.toEqual({
+      type: "error",
+      error: "invalid_event",
+    });
+
+    await release(firstLease.token);
+    const secondLease = await unlock();
+    const secondController = await connectController(secondLease.token);
+    await nextJson(secondController);
+    await publishEvent(
+      secondController,
+      makeSceneEvent(secondLease.session_id, 4, "living"),
+      [],
+    );
+    secondController.send(JSON.stringify(makeSceneEvent(secondLease.session_id, 4, "kitchen")));
+    await expect(nextJson(secondController)).resolves.toEqual({
+      type: "error",
+      error: "non_increasing_event_sequence",
+    });
+  });
+
+  it("issues kitchen grants only after matching consent and excludes late viewers", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewerA = await connectViewer();
+    const viewerB = await connectViewer();
+
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), [viewerA, viewerB]);
+    await publishEvent(
+      controller,
+      makeCareCardEvent(lease.session_id, 1, "consent_pending"),
+      [viewerA, viewerB],
+    );
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "cooking-1",
+      scope: "kitchen_moment",
+      expires_in_ms: 30_000,
+    }));
+    await expect(nextJson(controller)).resolves.toEqual({
+      type: "error",
+      error: "media_grant_not_eligible",
+    });
+
+    await publishEvent(
+      controller,
+      makeCareCardEvent(lease.session_id, 2, "consented"),
+      [viewerA, viewerB],
+    );
+    const grantForA = nextJson(viewerA);
+    const grantForB = nextJson(viewerB);
+    const grantAckPromise = nextJson(controller);
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "cooking-1",
+      scope: "kitchen_moment",
+      expires_in_ms: 30_000,
+    }));
+    const grantAck = readGrantAck(await grantAckPromise, "media_grant_accepted");
+    expect(grantAck.viewer_ids).toEqual([viewerId(viewerA), viewerId(viewerB)].sort());
+    await expect(grantForA).resolves.toEqual(grantAck.grant);
+    await expect(grantForB).resolves.toEqual(grantAck.grant);
+    expect(grantAck.grant.event_sequence).toBe(3);
+    expect(grantAck.grant.payload).toMatchObject({
+      event_id: "cooking-1",
+      scope: "kitchen_moment",
+      status: "active",
+    });
+
+    const lateViewer = await connectViewer();
+    await expect(nextJson(lateViewer)).resolves.toEqual(makeSceneEvent(lease.session_id, 0, "kitchen"));
+    await expect(nextJson(lateViewer)).resolves.toEqual(
+      makeCareCardEvent(lease.session_id, 2, "consented"),
+    );
+    await expectNoMessage(lateViewer);
+
+    const grantId = mediaGrantId(grantAck.grant);
+    const offer: MediaSignal = {
+      schema_version: MEDIA_SIGNAL_SCHEMA_VERSION,
+      grant_id: grantId,
+      target_id: viewerId(viewerA),
+      signal_type: "offer",
+      signal: { sdp: "v=0\r\n" },
+    };
+    const forwardedOffer = nextJson(viewerA);
+    controller.send(JSON.stringify(offer));
+    await expect(forwardedOffer).resolves.toEqual({ ...offer, from_id: "controller" });
+
+    const answer: MediaSignal = {
+      schema_version: MEDIA_SIGNAL_SCHEMA_VERSION,
+      grant_id: grantId,
+      target_id: "controller",
+      signal_type: "answer",
+      signal: { sdp: "v=0\r\na=answer" },
+    };
+    const forwardedAnswer = nextJson(controller);
+    viewerA.send(JSON.stringify(answer));
+    await expect(forwardedAnswer).resolves.toEqual({
+      ...answer,
+      from_id: viewerId(viewerA),
+    });
+
+    const controllerIce: MediaSignal = {
+      schema_version: MEDIA_SIGNAL_SCHEMA_VERSION,
+      grant_id: grantId,
+      target_id: viewerId(viewerB),
+      signal_type: "ice_candidate",
+      signal: { candidate: "candidate:controller", sdp_mid: "0", sdp_mline_index: 0 },
+    };
+    const forwardedControllerIce = nextJson(viewerB);
+    controller.send(JSON.stringify(controllerIce));
+    await expect(forwardedControllerIce).resolves.toEqual({
+      ...controllerIce,
+      from_id: "controller",
+    });
+
+    const viewerIce: MediaSignal = {
+      schema_version: MEDIA_SIGNAL_SCHEMA_VERSION,
+      grant_id: grantId,
+      target_id: "controller",
+      signal_type: "ice_candidate",
+      signal: { candidate: "candidate:viewer", sdp_mid: null, sdp_mline_index: null },
+    };
+    const forwardedViewerIce = nextJson(controller);
+    viewerB.send(JSON.stringify(viewerIce));
+    await expect(forwardedViewerIce).resolves.toEqual({
+      ...viewerIce,
+      from_id: viewerId(viewerB),
+    });
+
+    lateViewer.send(JSON.stringify(answer));
+    await expect(nextJson(lateViewer)).resolves.toEqual({
+      type: "error",
+      error: "media_signal_not_authorized",
+    });
+
+    const revokeForA = nextJson(viewerA);
+    const revokeForB = nextJson(viewerB);
+    const revokeAckPromise = nextJson(controller);
+    controller.send(JSON.stringify({ type: "media_grant_revoke", grant_id: grantId }));
+    const revokeAck = readGrantAck(await revokeAckPromise, "media_grant_revoked");
+    expect(revokeAck.grant.event_sequence).toBe(4);
+    expect(revokeAck.grant.payload).toMatchObject({ grant_id: grantId, status: "revoked" });
+    await expect(revokeForA).resolves.toEqual(revokeAck.grant);
+    await expect(revokeForB).resolves.toEqual(revokeAck.grant);
+    await expectNoMessage(lateViewer);
+  });
+
+  it("issues fall media only for a matching escalated alarm", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "fall"), [viewer]);
+    await publishEvent(controller, makeAlarmEvent(lease.session_id, 1, "checking"), [viewer]);
+
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "fall-1",
+      scope: "fall_emergency",
+      expires_in_ms: 10_000,
+    }));
+    await expect(nextJson(controller)).resolves.toEqual({
+      type: "error",
+      error: "media_grant_not_eligible",
+    });
+
+    await publishEvent(controller, makeAlarmEvent(lease.session_id, 2, "escalated"), [viewer]);
+    const viewerGrant = nextJson(viewer);
+    const ackPromise = nextJson(controller);
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "fall-1",
+      scope: "fall_emergency",
+      expires_in_ms: 10_000,
+    }));
+    const ack = readGrantAck(await ackPromise, "media_grant_accepted");
+    expect(ack.grant.event_sequence).toBe(3);
+    await expect(viewerGrant).resolves.toEqual(ack.grant);
+
+    const resolved = makeAlarmEvent(lease.session_id, 4, "resolved");
+    const viewerMessages = nextJsonBatch(viewer, 2);
+    const controllerMessages = nextJsonBatch(controller, 2);
+    controller.send(JSON.stringify(resolved));
+    const [resolvedForViewer, revokedForViewer] = await viewerMessages;
+    expect(resolvedForViewer).toEqual(resolved);
+    const [eventAck, revokeAckValue] = await controllerMessages;
+    expect(eventAck).toEqual({
+      type: "event_accepted",
+      event_sequence: 4,
+      event_type: "alarm_state",
+    });
+    const revokeAck = readGrantAck(revokeAckValue, "media_grant_revoked");
+    expect(revokeAck.grant.event_sequence).toBe(5);
+    expect(revokeAck.grant.payload).toMatchObject({ status: "revoked" });
+    expect(revokedForViewer).toEqual(revokeAck.grant);
+  });
+
+  it("rejects signal media fields, binary data, wrong directions, and expired grants", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const viewer = await connectViewer();
+      await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "fall", baseTime), [viewer]);
+      await publishEvent(
+        controller,
+        makeAlarmEvent(lease.session_id, 1, "escalated", baseTime),
+        [viewer],
+      );
+      const viewerGrant = nextJson(viewer);
+      const ackPromise = nextJson(controller);
+      controller.send(JSON.stringify({
+        type: "media_grant_request",
+        event_id: "fall-1",
+        scope: "fall_emergency",
+        expires_in_ms: 5_000,
+      }));
+      const ack = readGrantAck(await ackPromise, "media_grant_accepted");
+      await viewerGrant;
+      const grantId = mediaGrantId(ack.grant);
+
+      const wrongDirection: MediaSignal = {
+        schema_version: MEDIA_SIGNAL_SCHEMA_VERSION,
+        grant_id: grantId,
+        target_id: viewerId(viewer),
+        signal_type: "answer",
+        signal: { sdp: "v=0" },
+      };
+      controller.send(JSON.stringify(wrongDirection));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "media_signal_direction_forbidden",
+      });
+
+      now.mockReturnValue(baseTime + 5_001);
+      controller.send(JSON.stringify({
+        ...wrongDirection,
+        signal_type: "offer",
+      }));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "media_signal_not_authorized",
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("recognizes one bounded JPEG only with the active control token", async () => {
+    const lease = await unlock();
+    const outbound = vi.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => Response.json({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            classification: "cooking",
+            confidence: 0.87,
+            reason: "画面中人物正在案板前切配食材",
+          }),
+        },
+      }],
+    }));
+    vi.stubGlobal("fetch", outbound);
+
+    const response = await relayFetch("/api/activity/recognize", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${lease.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ image_b64: "/9j/2Q==" }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      classification: "cooking",
+      confidence: 0.87,
+      reason: "画面中人物正在案板前切配食材",
+      model: "mimo-v2.5",
+    });
+    expect(outbound).toHaveBeenCalledTimes(1);
+    const call = outbound.mock.calls[0];
+    expect(String(call?.[0])).toBe("https://api.xiaomimimo.com/v1/chat/completions");
+  });
+
+  it("makes activity authorization, size, JPEG, and MiMo parse failures explicit", async () => {
+    const missing = await relayFetch("/api/activity/recognize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_b64: "/9j/2Q==" }),
+    });
+    expect(missing.status).toBe(401);
+    await expect(missing.json()).resolves.toEqual({ ok: false, error: "missing_control_token" });
+
+    const lease = await unlock();
+    const invalidJpeg = await recognize(lease.token, "bm90LWEtanBlZw==");
+    expect(invalidJpeg.status).toBe(415);
+    await expect(invalidJpeg.json()).resolves.toEqual({ ok: false, error: "invalid_jpeg" });
+
+    const tooLarge = await relayFetch("/api/activity/recognize", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${lease.token}`,
+        "Content-Length": String(900 * 1_024 + 1),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ image_b64: "/9j/2Q==" }),
+    });
+    expect(tooLarge.status).toBe(413);
+    await expect(tooLarge.json()).resolves.toEqual({ ok: false, error: "request_too_large" });
+
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      choices: [{ message: { content: "{\"classification\":\"maybe\"}" } }],
+    })));
+    const malformed = await recognize(lease.token, "/9j/2Q==");
+    expect(malformed.status).toBe(502);
+    await expect(malformed.json()).resolves.toEqual({
+      ok: false,
+      error: "invalid_mimo_response",
+    });
+  });
+
   it("rate limits repeated unlock attempts from one client address", async () => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const response = await relayFetch("/api/unlock", {
@@ -356,7 +717,24 @@ async function connectViewer(): Promise<WebSocket> {
   const socket = requireSocket(response);
   socket.accept();
   sockets.push(socket);
+  const ready = await nextJson(socket);
+  expect(ready).toMatchObject({ type: "viewer_ready" });
+  if (
+    ready === null
+    || typeof ready !== "object"
+    || !("viewer_id" in ready)
+    || typeof ready.viewer_id !== "string"
+  ) {
+    throw new Error("viewer_ready must include viewer_id");
+  }
+  viewerIds.set(socket, ready.viewer_id);
   return socket;
+}
+
+function viewerId(socket: WebSocket): string {
+  const value = viewerIds.get(socket);
+  if (value === undefined) throw new Error("viewer id is unavailable");
+  return value;
 }
 
 async function connectController(token: string): Promise<WebSocket> {
@@ -396,6 +774,31 @@ function nextJson(socket: WebSocket): Promise<unknown> {
       },
       { once: true },
     );
+  });
+}
+
+function nextJsonBatch(socket: WebSocket, count: number): Promise<unknown[]> {
+  return new Promise((resolve, reject) => {
+    const messages: unknown[] = [];
+    const timeout = setTimeout(() => {
+      socket.removeEventListener("message", onMessage);
+      reject(new Error(`timed out waiting for ${count} WebSocket messages`));
+    }, 2_000);
+    const onMessage = (event: MessageEvent) => {
+      if (typeof event.data !== "string") {
+        clearTimeout(timeout);
+        socket.removeEventListener("message", onMessage);
+        reject(new Error("expected a text WebSocket message"));
+        return;
+      }
+      messages.push(JSON.parse(event.data) as unknown);
+      if (messages.length === count) {
+        clearTimeout(timeout);
+        socket.removeEventListener("message", onMessage);
+        resolve(messages);
+      }
+    };
+    socket.addEventListener("message", onMessage);
   });
 }
 
@@ -446,4 +849,149 @@ function makeFrame(sessionId: string, sequence: number): FrameLandmarks {
       score: 0.9,
     })),
   };
+}
+
+function makeSceneEvent(
+  sessionId: string,
+  eventSequence: number,
+  sceneId: "living" | "kitchen" | "bathroom" | "fall",
+  timestampMs = eventSequence * 1_000,
+): DemoEvent {
+  return {
+    schema_version: EVENT_SCHEMA_VERSION,
+    session_id: sessionId,
+    event_sequence: eventSequence,
+    timestamp_ms: timestampMs,
+    event_type: "scene_state",
+    payload: {
+      scene_id: sceneId,
+      visual_mode: sceneId === "bathroom" ? "skeleton_only" : "abstract_environment",
+    },
+  };
+}
+
+function makeActivityEvent(sessionId: string, eventSequence: number): DemoEvent {
+  return {
+    schema_version: EVENT_SCHEMA_VERSION,
+    session_id: sessionId,
+    event_sequence: eventSequence,
+    timestamp_ms: eventSequence * 1_000,
+    event_type: "activity_state",
+    payload: {
+      activity: "cooking",
+      phase: "confirmed",
+      source: "mimo_visual",
+      confidence: 0.87,
+      reason: "连续样本显示人物正在备菜",
+    },
+  };
+}
+
+function makeCareCardEvent(
+  sessionId: string,
+  eventSequence: number,
+  shareState: "local_only" | "consent_pending" | "consented" | "denied" | "expired",
+): DemoEvent {
+  return {
+    schema_version: EVENT_SCHEMA_VERSION,
+    session_id: sessionId,
+    event_sequence: eventSequence,
+    timestamp_ms: eventSequence * 1_000,
+    event_type: "care_card",
+    payload: {
+      card_id: "card-1",
+      event_id: "cooking-1",
+      kind: "family_heartbeat",
+      title: "厨房里的家庭心跳",
+      body: "检测到一段做饭时光，等待本人决定是否分享。",
+      occurred_at_ms: 1_000,
+      share_state: shareState,
+    },
+  };
+}
+
+function makeAlarmEvent(
+  sessionId: string,
+  eventSequence: number,
+  phase: "checking" | "escalated" | "resolved",
+  timestampMs = eventSequence * 1_000,
+): DemoEvent {
+  return {
+    schema_version: EVENT_SCHEMA_VERSION,
+    session_id: sessionId,
+    event_sequence: eventSequence,
+    timestamp_ms: timestampMs,
+    event_type: "alarm_state",
+    payload: {
+      event_id: "fall-1",
+      phase,
+      trigger: phase === "checking" ? "fall_transition" : "check_in_timeout",
+      message: phase === "checking" ? "刚才的动作有些突然，您还好吗？" : "未收到回应，已通知家人。",
+      response_deadline_ms: phase === "checking" ? timestampMs + 8_000 : null,
+      media_scope: phase === "escalated" ? "fall_emergency" : "none",
+    },
+  };
+}
+
+async function publishEvent(
+  controller: WebSocket,
+  event: DemoEvent,
+  viewers: readonly WebSocket[],
+): Promise<void> {
+  const viewerMessages = viewers.map((viewer) => nextJson(viewer));
+  const ack = nextJson(controller);
+  controller.send(JSON.stringify(event));
+  await expect(ack).resolves.toEqual({
+    type: "event_accepted",
+    event_sequence: event.event_sequence,
+    event_type: event.event_type,
+  });
+  for (const message of viewerMessages) {
+    await expect(message).resolves.toEqual(event);
+  }
+}
+
+function readGrantAck(
+  value: unknown,
+  expectedType: "media_grant_accepted" | "media_grant_revoked",
+): { grant: DemoEvent; viewer_ids: string[] } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("grant ack must be an object");
+  }
+  if (!("type" in value) || value.type !== expectedType || !("grant" in value)) {
+    throw new Error(`expected ${expectedType}`);
+  }
+  const grant = value.grant;
+  if (
+    grant === null
+    || typeof grant !== "object"
+    || Array.isArray(grant)
+    || !("session_id" in grant)
+    || typeof grant.session_id !== "string"
+    || !validateDemoEvent(grant, grant.session_id)
+    || grant.event_type !== "media_grant"
+  ) {
+    throw new Error("grant ack contains an invalid media_grant event");
+  }
+  const ids = "viewer_ids" in value ? value.viewer_ids : [];
+  if (!Array.isArray(ids) || !ids.every((item) => typeof item === "string")) {
+    throw new Error("grant ack viewer_ids must be strings");
+  }
+  return { grant, viewer_ids: ids };
+}
+
+function mediaGrantId(event: DemoEvent): string {
+  if (event.event_type !== "media_grant") throw new Error("expected media grant event");
+  return event.payload.grant_id;
+}
+
+async function recognize(token: string, imageB64: string): Promise<Response> {
+  return relayFetch("/api/activity/recognize", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ image_b64: imageB64 }),
+  });
 }

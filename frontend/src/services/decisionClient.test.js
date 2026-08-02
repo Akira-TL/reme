@@ -1,9 +1,30 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import {
+  after,
+  afterEach,
+  before,
+  test,
+} from "node:test";
+import { createServer } from "vite";
 import { startSessionWithTakeover } from "./decisionClient.js";
 
 // 用脚本化 fetch 模拟 B：按调用顺序回放响应，记录请求轨迹。
 const originalFetch = globalThis.fetch;
+let runtimeHelpers;
+let viteServer;
+
+before(async () => {
+  viteServer = await createServer({
+    appType: "custom",
+    logLevel: "silent",
+    server: { middlewareMode: true },
+  });
+  runtimeHelpers = await viteServer.ssrLoadModule("/src/hooks/useDecisionRuntime.js");
+});
+
+after(async () => {
+  await viteServer?.close();
+});
 
 function scriptFetch(steps) {
   const calls = [];
@@ -73,4 +94,53 @@ test("状态查询失败时放弃接管，保留原始 409", async () => {
     { path: "/api/session/status", status: 500, payload: null },
   ]);
   await assert.rejects(startSessionWithTakeover(BASE, REQUEST), (error) => error.status === 409);
+});
+
+test("跌倒语音应答选择 danger fast lane，普通对话不误走该端点", () => {
+  assert.equal(runtimeHelpers.voiceReplyTransport({ confirm_channels: ["voice"] }), "danger");
+  assert.equal(runtimeHelpers.voiceReplyTransport({ confirm_channels: [] }), "dialogue");
+});
+
+test("空录音会恢复 listening 状态并释放 decision lock", () => {
+  const lock = runtimeHelpers.createVoiceCaptureLock();
+  assert.equal(lock.claim("decision-empty"), true);
+  const capture = lock.attach("decision-empty", {
+    stop() {},
+  });
+
+  const recovered = runtimeHelpers.recoverVoiceStateAfterEmptyCapture({
+    listening: true,
+    stage: "recording",
+  }, false);
+  lock.release("decision-empty", capture);
+
+  assert.equal(recovered.listening, false);
+  assert.equal(recovered.stage, "waiting_reply");
+  assert.equal(capture.pending, false);
+  assert.equal(lock.isIdle(), true);
+  assert.equal(lock.claim("decision-retry"), true, "空录音后必须允许重新录音");
+});
+
+test("取消录音无论 recorder 是否已创建都会释放 decision lock", () => {
+  const lock = runtimeHelpers.createVoiceCaptureLock();
+
+  assert.equal(lock.claim("decision-before-recorder"), true);
+  lock.cancel();
+  assert.equal(lock.isIdle(), true, "recorder 创建前取消也不能残留锁");
+
+  let stops = 0;
+  assert.equal(lock.claim("decision-recording"), true);
+  const capture = lock.attach("decision-recording", {
+    stop() {
+      stops += 1;
+    },
+  });
+  lock.cancel();
+
+  assert.equal(stops, 1);
+  assert.equal(capture.cancelled, true);
+  assert.equal(capture.pending, false);
+  assert.equal(lock.current(), null);
+  assert.equal(lock.isIdle(), true);
+  assert.equal(lock.claim("decision-after-cancel"), true, "取消后必须允许新 decision 录音");
 });

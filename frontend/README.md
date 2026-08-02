@@ -40,7 +40,9 @@ https://monitor.reme.maniforld.com/  # 唯一手机监控端
 
 两个网址是不同的浏览器 Origin；它们不依赖 localStorage、IndexedDB 或所谓“同域存储”共享数据，而是连接同一个临时 relay 房间。`https://reme.maniforld.com/monitor` 仅保留为兼容入口。
 
-监控端在浏览器本地运行版本化 MoveNet 权重，只把不高于 10Hz 的 17 点骨架发送到 `relay.reme.maniforld.com`。评委端不下载模型、不请求摄像头，也不接收原始视频。Cloudflare Durable Object 只保存短期控制租约；最新骨架只附着在活跃控制 WebSocket 上，不建立业务数据库或录像存储。
+监控端在浏览器本地运行版本化 MoveNet 权重，日常只把不高于 10Hz 的 17 点骨架和版本化结构事件发送到 `relay.reme.maniforld.com`。评委端不下载模型、也不请求摄像头；只有做饭活动被实验识别且本人同意，或跌倒问询按规则升级为告警后，签发时已经在线的评委才会在短时 `media_grant` 下通过 WebRTC 接收现场画面。Cloudflare Durable Object 保存短期控制租约、最新结构状态和授权元数据，只转发 SDP/ICE 而不接收视频帧；JPEG、SDP/ICE、视频帧和录像 Blob 均不写入其 SQLite。最新骨架仍只附着在活跃控制 WebSocket 上。
+
+跨设备页包含四条现场路径：日常为固定家具抽象与实时骨架；厨房低频发送一张降采样 JPEG 给 MiMo，连续两次高置信度 `cooking` 才形成家庭心跳卡；完全隐私场景强制纯骨架；跌倒由真实姿态转变进入问询，完整响应窗未得到安全确认后才升级告警并短期开原画。固定家具不是对真实家庭的识别或重建，跌倒规则也不作医疗准确率承诺。不同网络仅配置 STUN，P2P 协商失败时页面会保留结构化告警并明确回落骨架。
 
 控制密钥原文不在仓库或 Vite 环境变量中。本机部署者可将它直接复制到剪贴板：
 

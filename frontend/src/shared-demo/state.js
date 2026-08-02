@@ -1,13 +1,84 @@
 export function createViewerState() {
   return {
     connection: "connecting",
+    viewerId: null,
+    sessionId: null,
     frame: null,
     receivedAtMs: null,
+    eventSequence: null,
+    eventReceivedAtMs: null,
+    scene: null,
+    activity: null,
+    careCard: null,
+    alarm: null,
+    mediaGrant: null,
     rejectedFrames: 0,
   };
 }
 
 export const VIEWER_STALE_AFTER_MS = 2500;
+export const DEFAULT_VIEWER_SCENE = Object.freeze({
+  scene_id: "living",
+  visual_mode: "abstract_environment",
+});
+
+function resetViewerSession(state, sessionId) {
+  return {
+    ...state,
+    sessionId,
+    frame: null,
+    receivedAtMs: null,
+    eventSequence: null,
+    eventReceivedAtMs: null,
+    scene: null,
+    activity: null,
+    careCard: null,
+    alarm: null,
+    mediaGrant: null,
+  };
+}
+
+export function selectViewerScene(state) {
+  return state.scene || DEFAULT_VIEWER_SCENE;
+}
+
+export function selectActiveMediaGrant(state, nowMs) {
+  const grant = state.mediaGrant;
+  if (
+    state.connection !== "connected"
+    || !state.viewerId
+    || !grant
+    || grant.status !== "active"
+    || grant.expires_at_ms <= nowMs
+  ) {
+    return null;
+  }
+
+  const scene = selectViewerScene(state);
+  if (scene.scene_id === "bathroom" || scene.visual_mode === "skeleton_only") return null;
+
+  if (grant.scope === "fall_emergency") {
+    const alarm = state.alarm;
+    return alarm
+      && alarm.event_id === grant.event_id
+      && alarm.phase === "escalated"
+      && alarm.media_scope === "fall_emergency"
+      ? grant
+      : null;
+  }
+
+  if (grant.scope === "kitchen_moment") {
+    const card = state.careCard;
+    return scene.scene_id === "kitchen"
+      && card
+      && card.event_id === grant.event_id
+      && card.share_state === "consented"
+      ? grant
+      : null;
+  }
+
+  return null;
+}
 
 export function selectViewerPresentation(
   state,
@@ -35,11 +106,16 @@ export function reduceViewerState(state, action) {
     case "connected":
       return { ...state, connection: "connected" };
     case "disconnected":
-      return { ...state, connection: "disconnected" };
+      return { ...state, connection: "disconnected", mediaGrant: null };
+    case "viewer_ready":
+      return { ...state, viewerId: action.viewerId };
     case "invalid_frame":
       return { ...state, rejectedFrames: state.rejectedFrames + 1 };
     case "frame": {
-      const previous = state.frame;
+      const base = state.sessionId && state.sessionId !== action.frame.session_id
+        ? resetViewerSession(state, action.frame.session_id)
+        : { ...state, sessionId: action.frame.session_id };
+      const previous = base.frame;
       if (
         previous
         && previous.session_id === action.frame.session_id
@@ -48,11 +124,40 @@ export function reduceViewerState(state, action) {
         return state;
       }
       return {
-        ...state,
+        ...base,
         connection: "connected",
         frame: action.frame,
         receivedAtMs: action.receivedAtMs,
       };
+    }
+    case "demo_event": {
+      const event = action.event;
+      const base = state.sessionId && state.sessionId !== event.session_id
+        ? resetViewerSession(state, event.session_id)
+        : { ...state, sessionId: event.session_id };
+      if (base.eventSequence !== null && event.event_sequence <= base.eventSequence) {
+        return state;
+      }
+
+      const next = {
+        ...base,
+        connection: "connected",
+        eventSequence: event.event_sequence,
+        eventReceivedAtMs: action.receivedAtMs,
+      };
+      if (event.event_type === "scene_state") next.scene = event.payload;
+      if (event.event_type === "activity_state") next.activity = event.payload;
+      if (event.event_type === "care_card") next.careCard = event.payload;
+      if (event.event_type === "alarm_state") next.alarm = event.payload;
+      if (event.event_type === "media_grant") {
+        if (
+          event.payload.status === "active"
+          || next.mediaGrant?.grant_id === event.payload.grant_id
+        ) {
+          next.mediaGrant = event.payload;
+        }
+      }
+      return next;
     }
     default:
       return state;

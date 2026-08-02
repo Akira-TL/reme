@@ -7,8 +7,8 @@ One test walks the six hops with real servers on loopback ports:
 2. A's browser gateway classifies posture and emits a fall transition
    (hop 2) on its ``/ws/events`` stream;
 3. B's PerceptionBridge pulls those events and evaluates them (hop 3);
-4. B opens the fall check-in (preset voice + confirm channels), receives the
-   raw-frame upload, and the fake vision verdict confirms the fall (hop 4);
+4. B opens the fall check-in (preset voice + voice-only confirmation), receives
+   the elder's explicit help reply, and the danger fast lane classifies it (hop 4);
 5. the resulting family alert with ``alarm`` reaches C over B's ``/ws``
    (hop 5) — rendering it on a device is C's browser code (hop 6), covered
    by the frontend build, not this test.
@@ -366,26 +366,22 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
         assert check_in is not None, "fall check-in never reached B's decision stream"
         check_in_latency = time.time() - started
         assert check_in["dialogue_goal"] == "confirm_safety"
-        assert check_in["confirm_channels"] == ["frame", "voice"]
+        assert check_in["confirm_channels"] == ["voice"]
         assert check_in["voice_asset"] == "/voice/fall_check_in.m4a"
         assert check_in["response_timeout_ms"] == TriggerConfig().check_in_timeout_ms
 
-        # Hop 4b: C uploads the raw frame; the fake vision verdict confirms.
-        jpeg_b64 = "/9j/reme-e2e"  # b64 of 0xFF 0xD8 0xFF prefix + filler
-        import base64 as _b64
-
-        jpeg_b64 = _b64.b64encode(b"\xff\xd8\xff\xe0reme-e2e-frame").decode()
+        # Hop 4b: C submits the spoken intent through ADR-0007's danger lane.
         status, body = _post(
             b_port,
-            "/api/danger/frame",
+            "/api/danger/voice",
             {
                 "scene_id": SCENE_ID,
                 "decision_id": check_in["decision_id"],
                 "timestamp_ms": 12000.0,
-                "image_b64": jpeg_b64,
+                "text": "快来人啊，我摔倒了",
             },
         )
-        assert status == 200 and body == {"accepted": "visual_confirm"}
+        assert status == 200 and body == {"accepted": "voice_intent"}
 
         # Hop 5: the family alert with the alarm block reaches C.
         alert = None
@@ -402,13 +398,12 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
         total_latency = time.time() - started
         assert alert["alarm"] == {
             "channels": ["vibrate", "ring", "flash"],
-            "trigger": "visual_confirm",
+            "trigger": "voice_intent",
         }
         assert alert["family_notification"]
         assert alert["risk_level"] == 3
-        # The elder-side reassurance is spoken from the preset registry only
-        # when configured; text always rides elder_message.
-        assert alert["elder_message"]
+        # Alarm-bearing decisions ring/vibrate only; no duplicate elder TTS.
+        assert alert["elder_message"] is None
 
         # Sanity: the whole chain (sans MiMo) stays far inside the countdown.
         assert check_in_latency < 10, f"check-in took {check_in_latency:.1f}s"

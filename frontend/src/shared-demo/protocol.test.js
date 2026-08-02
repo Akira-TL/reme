@@ -1,12 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  CONTROLLER_EVENT_SEQUENCE_BLOCK_SIZE,
+  DEMO_EVENT_SCHEMA_VERSION,
   FRAME_SCHEMA_VERSION,
   KEYPOINT_NAMES,
+  MEDIA_SIGNAL_SCHEMA_VERSION,
+  advanceControllerEventSequence,
   controllerProtocols,
+  createDemoEvent,
+  createMediaGrantRequest,
+  createMediaGrantRevoke,
+  createMediaSignal,
   createPoseFrame,
+  isDemoEvent,
+  isForwardedMediaSignal,
+  isMediaSignal,
   isPoseFrame,
+  parseDemoEvent,
   parsePoseFrame,
+  parseForwardedMediaSignal,
 } from "./protocol.js";
 import { containedContentRect, mapPointIntoContainedContent } from "./geometry.js";
 import {
@@ -181,4 +194,196 @@ test("monitor reducer makes failures explicit and release forgets the session", 
 test("controller token is carried only by WebSocket subprotocol", () => {
   assert.deepEqual(controllerProtocols("a1b2"), ["reme-controller-v1", "reme-token-a1b2"]);
   assert.throws(() => controllerProtocols("not a token"), /hexadecimal/);
+});
+
+test("demo events use exact scene, activity, care-card, alarm, and grant payloads", () => {
+  const base = {
+    sessionId: "session-a",
+    eventSequence: 1,
+    timestampMs: 1_000,
+  };
+  const events = [
+    createDemoEvent({
+      ...base,
+      eventType: "scene_state",
+      payload: { scene_id: "living", visual_mode: "abstract_environment" },
+    }),
+    createDemoEvent({
+      ...base,
+      eventSequence: 2,
+      eventType: "activity_state",
+      payload: {
+        activity: "cooking",
+        phase: "confirmed",
+        source: "mimo_visual",
+        confidence: 0.82,
+        reason: "持续观察到备菜和锅具操作",
+      },
+    }),
+    createDemoEvent({
+      ...base,
+      eventSequence: 3,
+      eventType: "care_card",
+      payload: {
+        card_id: "card-1",
+        event_id: "activity-1",
+        kind: "family_heartbeat",
+        title: "厨房里的家庭心跳",
+        body: "检测到一段做饭时光，等待本人决定是否分享。",
+        occurred_at_ms: 1_000,
+        share_state: "consent_pending",
+      },
+    }),
+    createDemoEvent({
+      ...base,
+      eventSequence: 4,
+      eventType: "alarm_state",
+      payload: {
+        event_id: "fall-1",
+        phase: "checking",
+        trigger: "fall_transition",
+        message: "刚才的动作有些突然，您还好吗？",
+        response_deadline_ms: 9_000,
+        media_scope: "none",
+      },
+    }),
+    createDemoEvent({
+      ...base,
+      eventSequence: 5,
+      eventType: "media_grant",
+      payload: {
+        grant_id: "grant-1",
+        event_id: "fall-1",
+        scope: "fall_emergency",
+        expires_at_ms: 31_000,
+        status: "active",
+      },
+    }),
+  ];
+
+  for (const event of events) {
+    assert.notEqual(event, null);
+    assert.equal(isDemoEvent(event), true);
+    assert.deepEqual(parseDemoEvent(JSON.stringify(event)), event);
+  }
+  assert.equal(events[0].schema_version, DEMO_EVENT_SCHEMA_VERSION);
+});
+
+test("demo event privacy cross-fields fail closed", () => {
+  const event = createDemoEvent({
+    sessionId: "session-a",
+    eventSequence: 1,
+    timestampMs: 1_000,
+    eventType: "scene_state",
+    payload: { scene_id: "bathroom", visual_mode: "skeleton_only" },
+  });
+  assert.equal(isDemoEvent({
+    ...event,
+    payload: { scene_id: "bathroom", visual_mode: "abstract_environment" },
+  }), false);
+  assert.equal(isDemoEvent({
+    ...event,
+    payload: { ...event.payload, video: "forbidden" },
+  }), false);
+
+  const checking = createDemoEvent({
+    sessionId: "session-a",
+    eventSequence: 2,
+    timestampMs: 1_000,
+    eventType: "alarm_state",
+    payload: {
+      event_id: "fall-1",
+      phase: "checking",
+      trigger: "fall_transition",
+      message: "正在确认安全",
+      response_deadline_ms: 9_000,
+      media_scope: "none",
+    },
+  });
+  assert.equal(isDemoEvent({
+    ...checking,
+    payload: { ...checking.payload, media_scope: "fall_emergency" },
+  }), false);
+  assert.equal(createDemoEvent({
+    sessionId: "session-a",
+    eventSequence: 3,
+    timestampMs: 1_000,
+    eventType: "media_grant",
+    payload: {
+      grant_id: "grant-1",
+      event_id: "fall-1",
+      scope: "fall_emergency",
+      expires_at_ms: 1_000,
+      status: "active",
+    },
+  }), null);
+});
+
+test("media signalling accepts only bounded exact SDP and ICE messages", () => {
+  const offer = createMediaSignal({
+    grantId: "grant-1",
+    targetId: "viewer-1",
+    signalType: "offer",
+    signal: { sdp: "v=0" },
+  });
+  assert.equal(offer.schema_version, MEDIA_SIGNAL_SCHEMA_VERSION);
+  assert.equal(isMediaSignal(offer), true);
+  assert.equal(isMediaSignal({ ...offer, video: "no" }), false);
+
+  const forwarded = { ...offer, from_id: "controller" };
+  assert.equal(isForwardedMediaSignal(forwarded), true);
+  assert.deepEqual(parseForwardedMediaSignal(JSON.stringify(forwarded)), forwarded);
+
+  const ice = createMediaSignal({
+    grantId: "grant-1",
+    targetId: "controller",
+    signalType: "ice_candidate",
+    signal: { candidate: "candidate:1", sdp_mid: "0", sdp_mline_index: 0 },
+  });
+  assert.equal(isMediaSignal(ice), true);
+  assert.equal(createMediaSignal({
+    grantId: "grant-1",
+    targetId: "controller",
+    signalType: "ice_candidate",
+    signal: { candidate: "candidate:1", sdp_mid: "0" },
+  }), null);
+});
+
+test("media grant commands are scope-bound and short-lived", () => {
+  assert.deepEqual(
+    createMediaGrantRequest({ eventId: "fall-1", scope: "fall_emergency", expiresInMs: 30_000 }),
+    {
+      type: "media_grant_request",
+      event_id: "fall-1",
+      scope: "fall_emergency",
+      expires_in_ms: 30_000,
+    },
+  );
+  assert.equal(
+    createMediaGrantRequest({ eventId: "fall-1", scope: "fall_emergency", expiresInMs: 120_000 }),
+    null,
+  );
+  assert.deepEqual(createMediaGrantRevoke("grant-1"), {
+    type: "media_grant_revoke",
+    grant_id: "grant-1",
+  });
+  assert.equal(createMediaGrantRevoke("bad grant"), null);
+});
+
+test("controller event blocks leave deterministic room for Relay grant events", () => {
+  const afterFirstControllerEvent = advanceControllerEventSequence(0, 0);
+  assert.equal(afterFirstControllerEvent, CONTROLLER_EVENT_SEQUENCE_BLOCK_SIZE);
+
+  assert.equal(
+    advanceControllerEventSequence(afterFirstControllerEvent, 1),
+    CONTROLLER_EVENT_SEQUENCE_BLOCK_SIZE,
+  );
+  assert.equal(
+    advanceControllerEventSequence(
+      afterFirstControllerEvent,
+      CONTROLLER_EVENT_SEQUENCE_BLOCK_SIZE,
+    ),
+    CONTROLLER_EVENT_SEQUENCE_BLOCK_SIZE * 2,
+  );
+  assert.throws(() => advanceControllerEventSequence(-1, 0), TypeError);
 });

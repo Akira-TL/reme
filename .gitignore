@@ -40,6 +40,8 @@ node_modules/
 frontend/public/mediapipe/wasm/
 # LiteRT.js wasm 同样由 predev/prebuild 从 node_modules 生成
 frontend/public/litert/wasm/
+# 跌倒问询预置语音由 predev/prebuild 从已审计的 examples 资产生成
+frontend/public/voice/
 # Vercel CLI 本地项目绑定与拉取的环境配置
 frontend/.vercel/
 

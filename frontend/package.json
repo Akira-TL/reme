@@ -8,9 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "node --test src/adapters/perception.test.js src/model/movenet.test.js src/services/decisionClient.test.js src/shared-demo/protocol.test.js src/shared-demo/route-role.test.js src/typical-demo/useLiveDemoCamera.test.js src/viewer/viewerFeed.test.js",
-    "predev": "node scripts/copy-mediapipe.mjs && node scripts/copy-litert.mjs",
-    "prebuild": "node scripts/copy-mediapipe.mjs && node scripts/copy-litert.mjs"
+    "test": "node --test src/adapters/perception.test.js src/model/movenet.test.js src/services/decisionClient.test.js src/shared-demo/activityRecognition.test.js src/shared-demo/controllerMedia.test.js src/shared-demo/fallDetection.test.js src/shared-demo/protocol.test.js src/shared-demo/route-role.test.js src/shared-demo/viewerMedia.test.js src/shared-demo/viewerState.test.js src/typical-demo/useLiveDemoCamera.test.js src/viewer/viewerFeed.test.js",
+    "predev": "node scripts/copy-mediapipe.mjs && node scripts/copy-litert.mjs && node scripts/copy-demo-assets.mjs",
+    "prebuild": "node scripts/copy-mediapipe.mjs && node scripts/copy-litert.mjs && node scripts/copy-demo-assets.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

@@ -96,8 +96,10 @@ REJECT_TIMELINE_REWIND = "timeline_rewind"
 REJECT_EPISODE_RESOLVED = "episode_resolved"
 REJECT_DANGER_NOT_APPLICABLE = "danger_not_applicable"
 
-# Danger link: which uploads B accepts against a fall episode's check-in.
-FALL_CONFIRM_CHANNELS = ("frame", "voice")
+# Keep the elder check-in first: C may listen for an explicit spoken reply, but
+# must not auto-upload a frame and turn the initial question into an immediate
+# visual-confirm alarm.
+FALL_CONFIRM_CHANNELS = ("voice",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +166,8 @@ def _resolved_skeleton(
         state=DecisionState.RESOLVED,
         risk_level=0,
         action=DecisionAction.MARK_RESOLVED,
-        need_dialogue=True,
+        # A resolved episode is terminal UI state, not another spoken turn.
+        need_dialogue=False,
         dialogue_goal=None,
         consent_required=False,
         response_timeout_ms=None,
@@ -192,11 +195,14 @@ def _family_alert(
     mimo_task: MimoTask | None = None,
     alarm_trigger: AlarmTrigger | None = None,
 ) -> Directive:
+    # Alarm-bearing decisions are rendered through ring/vibration/flash only;
+    # an elder-facing TTS turn here would duplicate the alert sound.
+    spoken_dialogue = need_dialogue and alarm_trigger is None
     skeleton = DecisionSkeleton(
         state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
         risk_level=3,
         action=DecisionAction.NOTIFY_FAMILY,
-        need_dialogue=need_dialogue,
+        need_dialogue=spoken_dialogue,
         dialogue_goal=None,
         consent_required=False,
         response_timeout_ms=response_timeout_ms,
@@ -397,7 +403,7 @@ def _kitchen_share_notification(state: SessionState) -> Directive:
         state=DecisionState.RESOLVED,
         risk_level=0,
         action=DecisionAction.NOTIFY_FAMILY,
-        need_dialogue=True,
+        need_dialogue=False,
         dialogue_goal=None,
         consent_required=False,
         response_timeout_ms=None,

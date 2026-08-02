@@ -152,6 +152,36 @@ class _FakeConfirmClient:
         return MimoCallResult(content=reply, latency_ms=42.0, attempts=1)
 
 
+class _FrameEnabledService:
+    """Expose the isolated visual controller in tests without advertising it to C."""
+
+    def __init__(self, inner: DecisionService) -> None:
+        self._inner = inner
+
+    @property
+    def demo_mode(self) -> DemoMode:
+        return self._inner.demo_mode
+
+    def pending_confirm_target(self, scene_id: str) -> tuple[str, tuple[str, ...]] | None:
+        target = self._inner.pending_confirm_target(scene_id)
+        if target is None:
+            return None
+        decision_id, channels = target
+        return decision_id, channels if "frame" in channels else (*channels, "frame")
+
+    def confirm_danger(
+        self, *, scene_id: str, timestamp_ms: float, note: str | None = None
+    ) -> CareDecision | None:
+        return self._inner.confirm_danger(
+            scene_id=scene_id,
+            timestamp_ms=timestamp_ms,
+            note=note,
+        )
+
+    def submit_response(self, response: InteractionResponse) -> CareDecision:
+        return self._inner.submit_response(response)
+
+
 def _service(tmp_path: Path, publisher: _Publisher) -> DecisionService:
     return DecisionService(
         scenes=_fall_scenes(tmp_path),
@@ -172,7 +202,7 @@ def _controller(
     config: DangerConfig | None = None,
 ) -> DangerConfirmController:
     return DangerConfirmController(
-        service=service,
+        service=_FrameEnabledService(service),
         client=client,
         config=config if config is not None else DangerConfig(),
         spawn=lambda work: work(),
@@ -205,10 +235,10 @@ def _b64(data: bytes) -> str:
 def test_fall_check_in_carries_confirm_channels_and_voice_asset(tmp_path: Path) -> None:
     publisher = _Publisher()
     decision = _open_fall_check_in(_service(tmp_path, publisher))
-    assert decision.confirm_channels == ("frame", "voice")
+    assert decision.confirm_channels == ("voice",)
     assert decision.voice_asset == "/voice/fall_check_in.m4a"
     payload = decision.to_payload()
-    assert payload["confirm_channels"] == ["frame", "voice"]
+    assert payload["confirm_channels"] == ["voice"]
     assert payload["voice_asset"] == "/voice/fall_check_in.m4a"
     assert parse_care_decision(payload) == decision
 
@@ -510,7 +540,10 @@ def test_race_confirm_after_resolution_commits_nothing(tmp_path: Path) -> None:
         work()
 
     controller = DangerConfirmController(
-        service=service, client=client, config=DangerConfig(), spawn=race_spawn
+        service=_FrameEnabledService(service),
+        client=client,
+        config=DangerConfig(),
+        spawn=race_spawn,
     )
     controller.submit_frame(
         scene_id="fall_demo_01",
@@ -731,7 +764,7 @@ def test_voice_unclear_clarifies_when_upgrade_disabled(tmp_path: Path) -> None:
     assert clarify.state is DecisionState.CHECK_IN_REQUIRED
     assert clarify.decision_id != check_in.decision_id
     # The clarify decision keeps the confirm window open for the retry.
-    assert clarify.confirm_channels == ("frame", "voice")
+    assert clarify.confirm_channels == ("voice",)
 
 
 def test_voice_validation_rejects_ambiguous_payloads(tmp_path: Path) -> None:

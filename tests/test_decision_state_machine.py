@@ -159,6 +159,7 @@ def test_fall_trigger_enters_awaiting_elder_with_mandatory_timeout() -> None:
     assert directive.skeleton.state is DecisionState.CHECK_IN_REQUIRED
     assert directive.skeleton.response_timeout_ms == _CONFIG.check_in_timeout_ms
     assert directive.skeleton.template is TemplateId.FALL_CHECK_IN
+    assert directive.skeleton.confirm_channels == ("voice",)
     assert directive.mimo_task is None
     assert directive.next_state.phase is SessionPhase.AWAITING_ELDER
     assert directive.next_state.escalation is EscalationKind.FALL
@@ -262,6 +263,7 @@ def test_safe_response_resolves_check_in() -> None:
     assert directive.skeleton is not None
     assert directive.skeleton.state is DecisionState.RESOLVED
     assert directive.skeleton.action is DecisionAction.MARK_RESOLVED
+    assert directive.skeleton.need_dialogue is False
     assert directive.next_state.phase is SessionPhase.RESOLVED
     assert directive.next_state.risk_floor == 0
 
@@ -350,6 +352,7 @@ def test_need_help_on_fall_path_notifies_family_immediately() -> None:
     assert directive.skeleton is not None
     assert directive.skeleton.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
     assert directive.skeleton.template is TemplateId.FALL_HELP_ALERT
+    assert directive.skeleton.need_dialogue is False
     assert directive.mimo_task is None
 
 
@@ -420,6 +423,7 @@ def test_kitchen_share_only_notifies_after_explicit_consent() -> None:
     assert granted.skeleton.action is DecisionAction.NOTIFY_FAMILY
     assert granted.skeleton.template is TemplateId.KITCHEN_SHARE_GRANTED
     assert granted.skeleton.risk_level == 0
+    assert granted.skeleton.need_dialogue is False
     assert granted.mimo_task is None
 
     denied = on_response(
@@ -435,6 +439,7 @@ def test_kitchen_share_only_notifies_after_explicit_consent() -> None:
     assert denied.skeleton.state is DecisionState.RESOLVED
     assert denied.skeleton.action is DecisionAction.MARK_RESOLVED
     assert denied.skeleton.template is TemplateId.KITCHEN_SHARE_DENIED
+    assert denied.skeleton.need_dialogue is False
 
 
 def test_manual_proactive_check_in_uses_normal_mimo_question_path() -> None:

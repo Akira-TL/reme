@@ -158,11 +158,11 @@ def _open_check_in(server: ThreadingHTTPServer) -> str:
     assert status == 200 and payload["state"] == "check_in_required"
     decision_id = payload["decision_id"]
     assert isinstance(decision_id, str)
-    assert payload["confirm_channels"] == ["frame", "voice"]
+    assert payload["confirm_channels"] == ["voice"]
     return decision_id
 
 
-def test_danger_frame_endpoint_accepts_and_escalates(tmp_path: Path) -> None:
+def test_danger_frame_endpoint_is_not_offered_during_initial_check_in(tmp_path: Path) -> None:
     server, thread, service = _start(tmp_path)
     try:
         decision_id = _open_check_in(server)
@@ -176,16 +176,14 @@ def test_danger_frame_endpoint_accepts_and_escalates(tmp_path: Path) -> None:
                 "image_b64": JPEG_B64,
             },
         )
-        assert status == 200 and payload == {"accepted": "visual_confirm"}
+        assert status == 422
+        assert payload["error"]["code"] == "channel_not_offered"
         status, payload = _post(
             server, "/api/decision", {"scene_id": "fall_demo_01", "timestamp_ms": 14500.0}
         )
         assert status == 200
-        assert payload["state"] == "family_notification_required"
-        assert payload["alarm"] == {
-            "channels": ["vibrate", "ring", "flash"],
-            "trigger": "visual_confirm",
-        }
+        assert payload["state"] == "check_in_required"
+        assert payload["alarm"] is None
     finally:
         _stop(server, thread)
 
