@@ -1,0 +1,64 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "reme-demo-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "relay.reme.maniforld.com",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "ALLOWED_ORIGINS": "https://reme.maniforld.com,https://monitor.reme.maniforld.com,https://reme-sage.vercel.app"
+  },
+  "secrets": {
+    "required": ["CONTROL_KEY_SHA256"]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DEMO_ROOM",
+        "class_name": "DemoRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DemoRoom"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "env": {
+    "staging": {
+      "name": "reme-demo-relay-staging",
+      "workers_dev": true,
+      "routes": [],
+      "vars": {
+        "ALLOWED_ORIGINS": "http://127.0.0.1:4174,http://127.0.0.1:4187,https://reme-sage.vercel.app"
+      },
+      "secrets": {
+        "required": ["CONTROL_KEY_SHA256"]
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "DEMO_ROOM",
+            "class_name": "DemoRoom"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["DemoRoom"]
+        }
+      ]
+    }
+  }
+}

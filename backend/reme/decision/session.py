@@ -19,6 +19,7 @@ Frozen decisions:
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 
 from reme.pose.runtime import (
     Component,
@@ -122,6 +123,30 @@ class RuntimeSessionRegistry:
             self._sequence = 0
             return status
 
+    def replace_active(
+        self, request: RuntimeSessionRequest
+    ) -> tuple[str | None, RuntimeSessionStatus]:
+        """Atomically replace a stale local-demo session with ``request``.
+
+        The normal :meth:`start` contract remains strict. This explicit path is
+        reserved for C's single-page local demo, where browser refresh/HMR can
+        terminate JavaScript before the old ``/api/session/stop`` reaches B.
+        """
+
+        with self._lock:
+            previous_session_id = self._active_session_id_locked()
+            status = RuntimeSessionStatus(
+                session_id=request.session_id,
+                component=Component.DECISION,
+                requested_profile=request.profile,
+                effective_profile=request.profile,
+                state=RuntimeSessionState.RUNNING,
+            )
+            self._request = request
+            self._status = status
+            self._sequence = 0
+            return previous_session_id, status
+
     def stop(self, session_id: str) -> RuntimeSessionStatus:
         """Stop the session (idempotent); returns a STOPPED status."""
 
@@ -165,6 +190,25 @@ class RuntimeSessionRegistry:
             if self._active_session_id_locked() is None or self._request is None:
                 return None
             return self._request.scene_id
+
+    def switch_scene(self, session_id: str, scene_id: str) -> RuntimeSessionStatus:
+        """Rebind the active session to another scene without replacing the session."""
+
+        if not scene_id.strip():
+            raise SessionRegistryError("bad_request", "scene_id must be non-empty")
+        with self._lock:
+            request = self._request
+            status = self._status
+            if (
+                request is None
+                or status is None
+                or self._active_session_id_locked() != session_id
+            ):
+                raise SessionRegistryError(
+                    "unknown_session", f"unknown session_id: {session_id!r}"
+                )
+            self._request = replace(request, scene_id=scene_id.strip())
+            return status
 
     def is_active(self, session_id: str) -> bool:
         """True when ``session_id`` is the currently running session."""

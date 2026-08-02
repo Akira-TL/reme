@@ -6,11 +6,15 @@ import {
 } from "../adapters/perception";
 import {
   getDecisionUrls,
+  requestDecisionVoice,
+  resetScene as requestSceneReset,
+  startDemoConversation as requestDemoConversation,
   startSessionWithTakeover,
+  submitVoiceDialogue,
+  switchSessionScene,
   stopSession,
   submitResponse,
   uploadDangerFrame,
-  uploadDangerVoice,
 } from "../services/decisionClient";
 import {
   ensureAudioUnlock,
@@ -18,6 +22,8 @@ import {
   playAssetUrl,
 } from "../utils/audioEngine";
 import { recordVoiceReply } from "../utils/wavRecorder";
+
+let pendingSessionStop = Promise.resolve();
 
 function pluckDecision(payload) {
   if (payload?.decision_id) return payload;
@@ -42,16 +48,74 @@ function captureJpegBase64(video) {
   }
 }
 
+function playAudioElement(audio) {
+  return new Promise((resolve, reject) => {
+    audio.onended = () => resolve();
+    audio.onerror = () => reject(new Error("音频播放失败"));
+    try {
+      const playing = audio.play();
+      playing?.catch?.(reject);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function playBase64Audio(audioB64, audioFormat = "wav") {
+  if (!audioB64) return Promise.reject(new Error("语音数据为空"));
+  const mimeType = audioFormat === "mp3" ? "audio/mpeg" : "audio/wav";
+  const url = `data:${mimeType};base64,${audioB64}`;
+  return playAssetUrl(url).catch(() => playAudioElement(new Audio(url)));
+}
+
 function speakElderMessage(text) {
-  if (!text || !("speechSynthesis" in window)) return;
-  try {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "zh-CN";
-    window.speechSynthesis.speak(utterance);
-  } catch {
-    // 语音播报失败静默
-  }
+  if (!text || !("speechSynthesis" in window)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "zh-CN";
+      utterance.onend = () => resolve();
+      utterance.onerror = () => reject(new Error("浏览器语音播放失败"));
+      window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function decisionAwaitsReply(payload) {
+  return Boolean(
+    payload?.need_dialogue
+    && ["check_in_required", "consent_required"].includes(payload.state),
+  );
+}
+
+function decisionIsPassiveObservation(payload) {
+  return Boolean(
+    payload
+    && ["normal", "observe"].includes(payload.state)
+    && !payload.need_dialogue
+    && !payload.alarm,
+  );
+}
+
+function createVoiceState() {
+  return {
+    supported: typeof window !== "undefined"
+      && typeof navigator !== "undefined"
+      && Boolean(navigator.mediaDevices?.getUserMedia)
+      && Boolean(window.AudioContext || window.webkitAudioContext),
+    listening: false,
+    stage: "idle",
+    transcript: "",
+    responseValue: "",
+    asrModel: "mimo-v2.5-asr",
+    ttsModel: "mimo-v2.5-tts",
+    asrLatencyMs: null,
+    ttsLatencyMs: null,
+    error: "",
+  };
 }
 
 export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled = true }) {
@@ -62,6 +126,16 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const [replies, setReplies] = useState([]);
   const [deadline, setDeadline] = useState(null);
   const [alarm, setAlarm] = useState(null);
+  const [mimoRequest, setMimoRequest] = useState({
+    status: "idle",
+    scenario: null,
+    requestedAt: null,
+    respondedAt: null,
+    source: null,
+    decisionId: null,
+    error: "",
+  });
+  const [voice, setVoice] = useState(createVoiceState);
 
   const sceneRef = useRef(sceneId);
   const videoRef = useRef(videoElement);
@@ -84,6 +158,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   }, [enabled]);
 
   useEffect(() => {
+    if (sceneRef.current === sceneId) return;
+    if (apiRef.current.switchScene) {
+      apiRef.current.switchScene(sceneId).catch(() => {});
+      return;
+    }
     sceneRef.current = sceneId;
   }, [sceneId]);
 
@@ -101,6 +180,16 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         setReplies([]);
         setDeadline(null);
         setAlarm(null);
+        setMimoRequest({
+          status: "idle",
+          scenario: null,
+          requestedAt: null,
+          respondedAt: null,
+          source: null,
+          decisionId: null,
+          error: "",
+        });
+        setVoice(createVoiceState());
       }, 0);
       return () => window.clearTimeout(timer);
     }
@@ -114,8 +203,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     let latestDecision = null;
     let latestAlarmDecision = null;
     let countdown = { decisionId: null, timer: 0 };
+    let pendingSceneSwitch = Promise.resolve();
     let vibrateTimer = 0;
     let ring = null;
+    let voiceTurnDecisionId = null;
+    const spokenDecisionIds = new Set();
     let voiceCapture = null; // {decisionId, recorder, cancelled, pending}
 
     function stopVoiceCapture(cancel) {
@@ -125,33 +217,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         // 按钮/新决策已接管：录到一半的音频不再上传。
         capture.cancelled = true;
         voiceCapture = null;
+        if (voiceTurnDecisionId === capture.decisionId) voiceTurnDecisionId = null;
       }
       capture.recorder.stop();
-    }
-
-    function startVoiceCapture(payload) {
-      const capture = {
-        decisionId: payload.decision_id,
-        recorder: recordVoiceReply(),
-        cancelled: false,
-        pending: true,
-      };
-      voiceCapture = capture;
-      capture.recorder.promise
-        .then((audioB64) => {
-          if (!audioB64 || capture.cancelled || disposed) return undefined;
-          return uploadDangerVoice(httpBase, {
-            sceneId: payload.scene_id || sceneRef.current,
-            decisionId: payload.decision_id,
-            timestampMs: performance.now(),
-            audioB64,
-          });
-        })
-        .catch(() => {})
-        .finally(() => {
-          capture.pending = false;
-          if (voiceCapture === capture) voiceCapture = null;
-        });
     }
 
     function stopAlarmLocal() {
@@ -232,26 +300,164 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setDeadline(null);
     }
 
-    function playDecisionVoice(payload) {
-      if (payload.voice_asset) {
-        const url = `${httpBase}${payload.voice_asset}`;
-        // 首选手势解锁过的共享上下文（不受自动播放限制），失败再退
-        // HTMLAudio，最后退语音合成。
-        playAssetUrl(url).catch(() => {
-          try {
-            const audio = new Audio(url);
-            const playing = audio.play();
-            playing?.catch?.(() => speakElderMessage(payload.elder_message));
-          } catch {
-            speakElderMessage(payload.elder_message);
-          }
+    async function playDecisionVoice(payload, { force = false, autoReply = true } = {}) {
+      if (!payload?.elder_message) return;
+      if (!force && spokenDecisionIds.has(payload.decision_id)) return;
+      spokenDecisionIds.add(payload.decision_id);
+      setVoice((current) => ({
+        ...current,
+        stage: "tts_request",
+        listening: false,
+        error: "",
+      }));
+      try {
+        const speech = await requestDecisionVoice(httpBase, {
+          sceneId: payload.scene_id || sceneRef.current,
+          decisionId: payload.decision_id,
         });
-        return;
+        if (disposed) return;
+        setVoice((current) => ({
+          ...current,
+          stage: "playing",
+          ttsModel: speech.tts_model || current.ttsModel,
+          ttsLatencyMs: speech.tts_latency_ms ?? null,
+          error: "",
+        }));
+        await playBase64Audio(speech.audio_b64, speech.audio_format);
+      } catch (error) {
+        if (disposed) return;
+        try {
+          if (payload.voice_asset) {
+            const url = `${httpBase}${payload.voice_asset}`;
+            await playAssetUrl(url).catch(() => playAudioElement(new Audio(url)));
+          } else {
+            await speakElderMessage(payload.elder_message);
+          }
+          setVoice((current) => ({
+            ...current,
+            stage: "playing_fallback",
+            error: `MiMo TTS 失败，已降级播放：${error.message || "unknown"}`,
+          }));
+        } catch (fallbackError) {
+          setVoice((current) => ({
+            ...current,
+            stage: "failed",
+            error: fallbackError.message || "语音播放失败",
+          }));
+          return;
+        }
       }
-      if (payload.elder_message && payload.need_dialogue) speakElderMessage(payload.elder_message);
+      if (disposed) return;
+      setVoice((current) => ({
+        ...current,
+        stage: decisionAwaitsReply(payload) ? "waiting_reply" : "complete",
+      }));
+      if (
+        autoReply
+        && decisionAwaitsReply(payload)
+        && !respondedDecisionIds.has(payload.decision_id)
+      ) {
+        window.setTimeout(() => runVoiceReply(payload), 250);
+      }
     }
 
-    async function submitFor(target, response, source) {
+    async function runVoiceReply(target = latestDecision) {
+      if (
+        !target?.decision_id
+        || target.scene_id !== sceneRef.current
+        || !decisionAwaitsReply(target)
+        || respondedDecisionIds.has(target.decision_id)
+        || voiceTurnDecisionId === target.decision_id
+      ) return;
+      if (!createVoiceState().supported) {
+        setVoice((current) => ({
+          ...current,
+          supported: false,
+          stage: "failed",
+          error: "当前浏览器无法采集麦克风 WAV",
+        }));
+        return;
+      }
+      voiceTurnDecisionId = target.decision_id;
+      setVoice((current) => ({
+        ...current,
+        supported: true,
+        listening: true,
+        stage: "recording",
+        transcript: "",
+        responseValue: "",
+        asrLatencyMs: null,
+        error: "",
+      }));
+      let marked = false;
+      let capture = null;
+      try {
+        capture = {
+          decisionId: target.decision_id,
+          recorder: recordVoiceReply(),
+          cancelled: false,
+          pending: true,
+        };
+        voiceCapture = capture;
+        const audioB64 = await capture.recorder.promise;
+        capture.pending = false;
+        if (voiceCapture === capture) voiceCapture = null;
+        if (!audioB64 || capture.cancelled || disposed) return;
+        markResponded(target.decision_id);
+        marked = true;
+        setVoice((current) => ({
+          ...current,
+          listening: false,
+          stage: "asr_request",
+        }));
+        const result = await submitVoiceDialogue(httpBase, {
+          sceneId: target.scene_id || sceneRef.current,
+          decisionId: target.decision_id,
+          timestampMs: performance.now(),
+          audioB64,
+        });
+        if (disposed) return;
+        const next = pluckDecision(result);
+        if (next) ingestDecision(next, { suppressVoice: true });
+        setVoice((current) => ({
+          ...current,
+          listening: false,
+          stage: result.audio_b64 ? "playing" : "complete",
+          transcript: result.transcript || "",
+          responseValue: result.response_value || "",
+          asrModel: result.asr_model || current.asrModel,
+          ttsModel: result.tts_model || current.ttsModel,
+          asrLatencyMs: result.asr_latency_ms ?? null,
+          ttsLatencyMs: result.tts_latency_ms ?? null,
+          error: "",
+        }));
+        if (result.audio_b64) {
+          await playBase64Audio(result.audio_b64, result.audio_format);
+        }
+        if (disposed) return;
+        setVoice((current) => ({
+          ...current,
+          stage: decisionAwaitsReply(next) ? "waiting_reply" : "complete",
+        }));
+        voiceTurnDecisionId = null;
+        if (decisionAwaitsReply(next) && !respondedDecisionIds.has(next.decision_id)) {
+          window.setTimeout(() => runVoiceReply(next), 250);
+        }
+      } catch (error) {
+        if (capture) capture.pending = false;
+        if (voiceCapture === capture) voiceCapture = null;
+        voiceTurnDecisionId = null;
+        setVoice((current) => ({
+          ...current,
+          listening: false,
+          stage: "failed",
+          error: error.message || "MiMo 语音对话失败",
+        }));
+        if (marked && !disposed) submitFor(target, "none", "timeout");
+      }
+    }
+
+    async function submitFor(target, response, source, text = null) {
       try {
         const result = await submitResponse(httpBase, {
           scene_id: target.scene_id || sceneRef.current,
@@ -259,6 +465,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           timestamp_ms: performance.now(),
           response,
           source,
+          ...(text ? { text } : {}),
         });
         if (!disposed) {
           const next = pluckDecision(result);
@@ -278,10 +485,17 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       if (voiceCapture?.decisionId === decisionId) stopVoiceCapture(true);
     }
 
-    function ingestDecision(payload) {
+    function ingestDecision(payload, { suppressVoice = false } = {}) {
       if (disposed || !payload?.decision_id) return;
       if (seenDecisionIds.has(payload.decision_id)) return;
       seenDecisionIds.add(payload.decision_id);
+      if (
+        decisionAwaitsReply(latestDecision)
+        && payload.scene_id === latestDecision.scene_id
+        && decisionIsPassiveObservation(payload)
+      ) {
+        return;
+      }
 
       latestDecision = payload;
       setDecision(payload);
@@ -290,7 +504,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       // 任何新 decision 到达都清掉旧倒计时
       clearCountdown();
 
-      playDecisionVoice(payload);
+      if (!suppressVoice && voiceTurnDecisionId === null) playDecisionVoice(payload);
 
       if (Number.isFinite(payload.response_timeout_ms) && payload.response_timeout_ms > 0) {
         const decisionId = payload.decision_id;
@@ -332,10 +546,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           }).catch(() => {});
         }
       }
-      // 旧决策的录音一律作废（新决策若带 voice 通道会重新开麦）。
+      // 旧决策的录音一律作废；新决策播放问询后会重新开始静音收尾录音。
       stopVoiceCapture(true);
-      if (channels.includes("voice")) startVoiceCapture(payload);
-
       if (payload.alarm) {
         latestAlarmDecision = payload;
         setAlarm({
@@ -376,11 +588,122 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     }
 
     apiRef.current = {
-      respond(response, source) {
+      respond(response, source, text = null) {
         const target = latestDecision;
         if (!target?.decision_id || respondedDecisionIds.has(target.decision_id)) return;
         markResponded(target.decision_id);
-        submitFor(target, response, source);
+        submitFor(target, response, source, text);
+      },
+      replayVoice() {
+        if (latestDecision) playDecisionVoice(latestDecision, { force: true, autoReply: false });
+      },
+      startVoiceReply() {
+        runVoiceReply(latestDecision);
+      },
+      switchScene(nextSceneId) {
+        if (!nextSceneId || nextSceneId === sceneRef.current) return pendingSceneSwitch;
+        pendingSceneSwitch = switchSessionScene(httpBase, {
+          sessionId,
+          sceneId: nextSceneId,
+        }).then(() => {
+          if (disposed) return;
+          sceneRef.current = nextSceneId;
+          latestDecision = null;
+          latestAlarmDecision = null;
+          clearAlarmState();
+          clearCountdown();
+          setDecision(null);
+          setHistory([]);
+          setMimoRequest({
+            status: "idle",
+            scenario: null,
+            requestedAt: null,
+            respondedAt: null,
+            source: null,
+            decisionId: null,
+            error: "",
+          });
+          setVoice((current) => ({
+            ...current,
+            listening: false,
+            transcript: "",
+            error: "",
+          }));
+        }).catch((error) => {
+          if (!disposed) setReason(error.message || "B 场景切换失败");
+          throw error;
+        });
+        return pendingSceneSwitch;
+      },
+      startDemoConversation(scenario) {
+        let requestedAt = null;
+        setMimoRequest({
+          status: "waiting_scene",
+          scenario,
+          requestedAt: null,
+          respondedAt: null,
+          source: null,
+          decisionId: null,
+          error: "",
+        });
+        return pendingSceneSwitch.then(() => {
+          requestedAt = Date.now();
+          if (!disposed) {
+            setMimoRequest({
+              status: "requesting",
+              scenario,
+              requestedAt,
+              respondedAt: null,
+              source: null,
+              decisionId: null,
+              error: "",
+            });
+          }
+          return requestDemoConversation(httpBase, {
+            sceneId: sceneRef.current,
+            scenario,
+            timestampMs: performance.now(),
+          });
+        }).then((payload) => {
+          if (disposed) return null;
+          const next = pluckDecision(payload);
+          if (next) ingestDecision(next);
+          setMimoRequest({
+            status: "succeeded",
+            scenario,
+            requestedAt,
+            respondedAt: Date.now(),
+            source: next?.source || null,
+            decisionId: next?.decision_id || null,
+            error: "",
+          });
+          return next;
+        }).catch((error) => {
+          if (!disposed) {
+            setMimoRequest({
+              status: "failed",
+              scenario,
+              requestedAt: requestedAt || Date.now(),
+              respondedAt: Date.now(),
+              source: null,
+              decisionId: null,
+              error: error.message || "MiMo 请求失败",
+            });
+          }
+          throw error;
+        });
+      },
+      resetScene() {
+        return requestSceneReset(httpBase, sceneRef.current)
+          .then(() => {
+            if (disposed) return;
+            latestDecision = null;
+            clearAlarmState();
+            clearCountdown();
+            setDecision(null);
+            setHistory([]);
+          })
+          .catch(() => {});
       },
       confirmAlarm() {
         const target = latestAlarmDecision || latestDecision;
@@ -408,7 +731,19 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setReplies([]);
       setDeadline(null);
       setAlarm(null);
+      setMimoRequest({
+        status: "idle",
+        scenario: null,
+        requestedAt: null,
+        respondedAt: null,
+        source: null,
+        decisionId: null,
+        error: "",
+      });
+      setVoice(createVoiceState());
       try {
+        await pendingSessionStop;
+        if (disposed) return;
         await startSessionWithTakeover(
           httpBase,
           createSessionRequest(sessionId, sceneRef.current),
@@ -450,7 +785,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       } catch {
         // 忽略关闭失败
       }
-      stopSession(httpBase, sessionId).catch(() => {});
+      pendingSessionStop = stopSession(httpBase, sessionId).catch(() => {});
     };
   }, [enabled, sessionId]);
 
@@ -460,12 +795,30 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const respondNeedHelp = useCallback(() => {
     apiRef.current.respond?.("need_help", "user_input");
   }, []);
+  const respondConsentGranted = useCallback(() => {
+    apiRef.current.respond?.("consent_granted", "user_input");
+  }, []);
+  const respondConsentDenied = useCallback(() => {
+    apiRef.current.respond?.("consent_denied", "user_input");
+  }, []);
+  const startDemoConversation = useCallback((scenario) => (
+    apiRef.current.startDemoConversation?.(scenario) || Promise.resolve(null)
+  ), []);
   const confirmAlarm = useCallback(() => {
     apiRef.current.confirmAlarm?.();
   }, []);
   const dismissAlarm = useCallback(() => {
     apiRef.current.dismissAlarm?.();
   }, []);
+  const replayVoice = useCallback(() => {
+    apiRef.current.replayVoice?.();
+  }, []);
+  const startVoiceReply = useCallback(() => {
+    apiRef.current.startVoiceReply?.();
+  }, []);
+  const resetSceneState = useCallback(() => (
+    apiRef.current.resetScene?.() || Promise.resolve()
+  ), []);
 
   return {
     connection,
@@ -475,9 +828,17 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     replies,
     deadline,
     alarm,
+    mimoRequest,
     respondSafe,
     respondNeedHelp,
+    respondConsentGranted,
+    respondConsentDenied,
+    startDemoConversation,
     confirmAlarm,
     dismissAlarm,
+    replayVoice,
+    startVoiceReply,
+    resetSceneState,
+    voice,
   };
 }

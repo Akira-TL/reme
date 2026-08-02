@@ -1,16 +1,24 @@
-# Reme 手机端交互 Demo
+# Reme 前端与共享现场 Demo
 
-Reme 前端使用 Vite、React、TailwindCSS v4 与 MUI 构建。7 张高保真设计稿继续作为视觉基准，React 组件负责页面状态、场景切换、风险弹窗、设置交互、本地姿态识别，以及 A 感知运行时接入。
+Reme 前端使用 Vite、React、TailwindCSS v4 与 MUI 构建。当前正式入口优先服务单手机采集、多评委只读旁观的现场演示；既有四场景演示保留为明确的单机备份。
 
 ## 启动
 
-macOS 可直接双击：
+完整 ABC 单机验收请在仓库根目录执行：
 
-```text
-启动Reme手机演示.command
+```bash
+uv run reme-local-demo
 ```
 
-也可以使用命令：
+然后访问：
+
+```text
+http://127.0.0.1:4174/typical-demo.html
+```
+
+该命令以前台进程组方式同时启动 A、B 和 Vite，按 `Ctrl+C` 会依次输出 `[C] stopped`、`[B] stopped`、`[A] stopped` 并统一退出；不使用 systemd，也不由 B 静态托管前端。
+
+仅调试前端时可执行：
 
 ```bash
 npm install
@@ -19,7 +27,39 @@ npm run dev
 
 默认地址：`http://127.0.0.1:4174`
 
-首次打开时允许浏览器使用摄像头。页面不会显示摄像头原画，只在本地运行姿态识别并绘制 17 节点火柴人。首次初始化姿态模型需要联网；模型不可用时会明确进入动态演示模式。
+评委域名是只读端，不会请求摄像头或下载姿态模型。只有打开独立监控域名、输入正确控制密钥并主动点击“开启后置摄像头”后，监控页才会请求摄像头并在本地加载模型。
+
+## 双网址共享现场 Demo
+
+正式入口按主机名区分角色：
+
+```text
+https://reme.maniforld.com/          # 评委只读旁观端
+https://monitor.reme.maniforld.com/  # 唯一手机监控端
+```
+
+两个网址是不同的浏览器 Origin；它们不依赖 localStorage、IndexedDB 或所谓“同域存储”共享数据，而是连接同一个临时 relay 房间。`https://reme.maniforld.com/monitor` 仅保留为兼容入口。
+
+监控端在浏览器本地运行版本化 MoveNet 权重，只把不高于 10Hz 的 17 点骨架发送到 `relay.reme.maniforld.com`。评委端不下载模型、不请求摄像头，也不接收原始视频。Cloudflare Durable Object 只保存短期控制租约；最新骨架只附着在活跃控制 WebSocket 上，不建立业务数据库或录像存储。
+
+控制密钥原文不在仓库或 Vite 环境变量中。本机部署者可将它直接复制到剪贴板：
+
+```bash
+security find-generic-password \
+  -a reme-demo-monitor \
+  -s reme-shared-live-control-key \
+  -w | pbcopy
+```
+
+本地联调可在 `.env.local` 指向隔离的 Worker staging：
+
+```text
+VITE_REME_DEMO_RELAY_URL=https://reme-demo-relay-staging.lx-0506.workers.dev
+```
+
+staging 只允许已列出的本地端口和 Preview；正式 Worker 只允许评委域名、独立监控域名与固定 Preview 别名。
+
+`/typical-demo.html` 是 ABC 单机验收备份：非浴室场景的家中面板显示本地视频与骨架，家属面板默认只显示骨架且需主动操作才开放视频；浴室始终强制仅骨架。MediaPipe wasm 与姿态模型均从本地资产加载，不依赖运行时 CDN；模型不可用或 15 秒内未加载完成时会明确进入降级模式。
 
 ## 接入 A 感知服务
 
@@ -36,9 +76,9 @@ VITE_REME_PERCEPTION_INPUT_WS_URL=ws://127.0.0.1:8770/ws/camera-input
 
 前端使用 A 已公布的 HTTP 控制接口启动/停止会话，通过 `/ws/events` 接收 `frame_landmarks`、`posture_observation` 和 `transition_event`。摄像头输入采用浏览器直连 A 的设计：先发送 `scene_signal`，再以 `frame_meta + binary JPEG` 发送 10 FPS、最长边 640px 的帧。
 
-截至 `develop/akira@8ef0df8`，A 尚未提供 `/ws/camera-input`，其现有正式实现仍要求 A 反向连接 C 的 Camera WebSocket。页面会将这种情况显示为“A输入待接入”，并继续使用浏览器本地 MediaPipe 作为明确的后备，不会把本地结果伪装成 A 输出。点击状态标签可在 A 服务部署或恢复后重新创建会话。
+当前 A 正式提供 `/ws/camera-input`。`auto` 模式优先接收浏览器 JPEG 并在 A 内运行 MoveNet；本地推理栈不可用时，C 才会按能力声明切换为 17 点关键点直传。两种模式都会如实显示数据源和降级状态，不会把演示骨架伪装成 A 输出。
 
-## 四场景双端现场演示
+## 四场景单机现场验收
 
 独立入口：
 
@@ -48,14 +88,18 @@ http://127.0.0.1:4174/typical-demo.html
 
 macOS 可双击 `启动Reme典型场景演示.command`，也可以执行 `npm run dev`。
 
-该页面同时显示智能设备端和子女手机端，并复用同一个电脑摄像头：
+该页面在同一设备上显示老人端与家属手机端，并复用同一个电脑摄像头：
 
-1. 客厅行走：双端只显示实时17节点骨架。
-2. 厨房包饺子：显示实时人物抠像；长辈确认分享后，子女端立即收到生活片段卡片。
-3. 浴室洗澡：强制骨架模式，显示隐私幕布、关闭真人画面与音频。
-4. 深夜跌倒：点击“开始跌倒流程”或按空格，依次演示候选检测、主动询问、紧急视频和联系人响应。
+1. 客厅行走：老人端只显示现场视频与 A 返回骨架；可手动触发 MiMo 主动关怀。
+2. 厨房包包子：进入约 3 秒后由 B 调用 MiMo 询问是否分享给孩子；只有老人明确同意后，家属手机才显示生活提醒。
+3. 浴室洗澡：强制骨架模式，家属端永不开放原视频。
+4. 深夜跌倒：可使用真人动作，也可点击 `手动触发跌倒报警`，由真实 C→A→B 链路产生询问和家属告警。
 
-数字键 `1`–`4` 可快速切换四个场景。跌倒流程使用明确标注的演示编排，不宣称当前模型已经完成真实跌倒确诊；摄像头帧只在页面内存中处理，默认不录制。
+家属手机在浴室以外的场景都可主动点击 `查看原视频 + 骨架`。厨房拒绝分享或不回应时不会产生家属生活提醒。页面工具栏提供 MiMo 主动询问、厨房分享/不分享、跌倒报警、重播询问和语音回复；所有回复按真实 `/api/response` 合同提交给 B。
+
+数字键 `1`–`4` 可快速切换四个场景。页面左下角的 `Debug` 按钮可展开 A 的会话状态、当前帧活动、人物检测、姿态分类来源、MIL v3 分数，以及 B 的 MiMo 模型、决策、语音识别文本和完整 JSON。`running` 只表示会话运行，不表示当前检测到动作。使用 `?debug=1` 可在打开页面时自动展开调试面板。
+
+当前 MoveNet 单人检测需要全身尽量进入画面，半身取景可能在姿态分类前被判为关键点不可用。摄像头帧只在页面内存中处理，默认不录制；手动测试使用合成运行时事件并明确标注为 `manual_debug`。
 
 ## 目录
 
@@ -68,13 +112,17 @@ frontend/
 │   ├── data/               # 场景、看板和设置文案
 │   ├── hooks/              # 摄像头、MediaPipe 与 A 运行时生命周期
 │   ├── services/           # A HTTP/WS 地址与控制请求
-│   ├── typical-demo/       # 四场景双端现场演示
+│   ├── model/              # 自训练 MoveNet 的 LiteRT.js 浏览器适配
+│   ├── shared-demo/        # 评委只读页与唯一监控端
+│   ├── typical-demo/       # 四场景 ABC 单机现场验收
 │   ├── utils/              # 17 节点映射与 Canvas 绘制
 │   ├── App.jsx             # 产品状态与场景编排
 │   ├── index.css           # TailwindCSS + 精确坐标样式
 │   └── main.jsx            # React 入口和 MUI 主题
 ├── index.html
+├── monitor.html
 ├── typical-demo.html
+├── viewer.html
 ├── package.json
 └── vite.config.js
 ```

@@ -19,12 +19,18 @@ class StubPredictor:
         return self.predictions.popleft()
 
 
-def _prediction(posture: str, confidence: float = 0.9) -> PosturePrediction:
+def _prediction(
+    posture: str,
+    confidence: float = 0.9,
+    *,
+    source: str = "test_predictor",
+) -> PosturePrediction:
     return PosturePrediction(
         posture=posture,
         confidence=confidence,
         probabilities={posture: confidence},
         visible_keypoint_ratio=1.0,
+        classification_source=source,
     )
 
 
@@ -79,6 +85,7 @@ def test_tracker_emits_at_configured_frequency_and_tracks_duration() -> None:
     assert [event.payload["timestamp_ms"] for event in emitted] == [0.0, 200.0, 400.0]
     assert [event.payload["posture_duration_ms"] for event in emitted] == [0.0, 200.0, 400.0]
     assert emitted[1].payload["motion_level"] == "still"
+    assert emitted[1].payload["classification_source"] == "test_predictor"
 
 
 def test_unknown_is_immediate_and_resets_duration() -> None:

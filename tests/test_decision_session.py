@@ -71,6 +71,24 @@ def test_second_start_without_stop_conflicts() -> None:
     assert registry.active_session_id() == "session-live-001"
 
 
+def test_replace_active_atomically_takes_over_stale_browser_session() -> None:
+    registry = RuntimeSessionRegistry()
+    registry.start(_live_request(session_id="session-stale", scene_id="fall"))
+    registry.next_sequence("session-stale")
+
+    previous_id, status = registry.replace_active(
+        _live_request(session_id="session-fresh", scene_id="kitchen")
+    )
+
+    assert previous_id == "session-stale"
+    assert status.session_id == "session-fresh"
+    assert status.state is RuntimeSessionState.RUNNING
+    assert registry.active_session_id() == "session-fresh"
+    assert registry.active_scene_id() == "kitchen"
+    assert registry.next_sequence("session-fresh") == 1
+    assert not registry.is_active("session-stale")
+
+
 def test_restarting_the_same_session_id_after_stop_is_rejected() -> None:
     registry = RuntimeSessionRegistry()
     registry.start(_live_request())
@@ -120,6 +138,33 @@ def test_stopping_an_unknown_session_id_raises_unknown_session() -> None:
         registry.stop("session-live-999")
     assert during.value.code == "unknown_session"
     assert registry.active_session_id() == "session-live-001"
+
+
+def test_switch_scene_keeps_session_and_sequence_active() -> None:
+    registry = RuntimeSessionRegistry()
+    registry.start(_live_request(scene_id="fall"))
+    assert registry.next_sequence("session-live-001") == 1
+
+    status = registry.switch_scene("session-live-001", "kitchen")
+
+    assert status.state is RuntimeSessionState.RUNNING
+    assert registry.active_session_id() == "session-live-001"
+    assert registry.active_scene_id() == "kitchen"
+    assert registry.next_sequence("session-live-001") == 2
+
+
+def test_switch_scene_rejects_unknown_session_and_empty_scene() -> None:
+    registry = RuntimeSessionRegistry()
+    registry.start(_live_request(scene_id="fall"))
+
+    with pytest.raises(SessionRegistryError) as unknown:
+        registry.switch_scene("session-live-999", "kitchen")
+    assert unknown.value.code == "unknown_session"
+
+    with pytest.raises(SessionRegistryError) as empty:
+        registry.switch_scene("session-live-001", "   ")
+    assert empty.value.code == "bad_request"
+    assert registry.active_scene_id() == "fall"
 
 
 def test_next_sequence_increments_and_resets_for_a_new_session() -> None:

@@ -8,13 +8,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "node --test src/adapters/perception.test.js src/services/decisionClient.test.js src/viewer/viewerFeed.test.js",
-    "predev": "node scripts/copy-mediapipe.mjs",
-    "prebuild": "node scripts/copy-mediapipe.mjs"
+    "test": "node --test src/adapters/perception.test.js src/model/movenet.test.js src/services/decisionClient.test.js src/shared-demo/protocol.test.js src/shared-demo/route-role.test.js src/typical-demo/useLiveDemoCamera.test.js src/viewer/viewerFeed.test.js",
+    "predev": "node scripts/copy-mediapipe.mjs && node scripts/copy-litert.mjs",
+    "prebuild": "node scripts/copy-mediapipe.mjs && node scripts/copy-litert.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@litertjs/core": "2.5.3",
     "@mediapipe/tasks-vision": "^1.0.1",
     "@mui/icons-material": "^9.2.0",
     "@mui/material": "^9.2.0",

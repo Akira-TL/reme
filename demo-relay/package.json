@@ -1,0 +1,23 @@
+{
+  "name": "reme-demo-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "types": "wrangler types",
+    "types:check": "wrangler types --check",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run types:check && npm run typecheck",
+    "dry-run:production": "wrangler deploy --env= --dry-run --outdir dist-production",
+    "dry-run:staging": "wrangler deploy --env staging --dry-run --outdir dist-staging",
+    "dry-run": "npm run dry-run:production && npm run dry-run:staging"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.20.1",
+    "@types/node": "^26.1.2",
+    "typescript": "^5.9.3",
+    "vitest": "4.1.10",
+    "wrangler": "4.118.0"
+  }
+}

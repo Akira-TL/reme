@@ -7,7 +7,8 @@
 前置（两个终端分别启动，先 A 后 B）：
 
   .venv/bin/python -m reme.pose.runtime_server \
-      --host 127.0.0.1 --port 8770 --input-adapter c_ws_server
+      --host 127.0.0.1 --port 8770 --input-adapter c_ws_server \
+      --browser-input-mode landmarks
 
   source ~/.config/reme/mimo.env && .venv/bin/python -m reme.decision.server \
       --host 127.0.0.1 --port 8100 --a-events-url ws://127.0.0.1:8770/ws/events
@@ -122,6 +123,18 @@ def _require_health(name: str, base: str) -> None:
         raise SystemExit(f"{name} 无法连接（{base}）：{exc}；请先启动 {name} 服务") from exc
     if status != 200:
         raise SystemExit(f"{name} 健康检查失败：HTTP {status} {body!r}")
+
+
+def _require_landmark_input(base: str) -> None:
+    status, body = _request(base, "GET", "/api/runtime/capabilities")
+    input_capabilities = body.get("input") if status == 200 and isinstance(body, dict) else None
+    accepts = input_capabilities.get("accepts") if isinstance(input_capabilities, dict) else None
+    if isinstance(accepts, list) and "landmarks_frame" in accepts:
+        return
+    raise SystemExit(
+        "A 当前未开放 landmarks_frame；本驱动只注入合成关键点。请用 "
+        "--input-adapter c_ws_server --browser-input-mode landmarks 重启 A。"
+    )
 
 
 # -- 最小 RFC6455 发送端（camera-input 注入用） ------------------------------
@@ -435,7 +448,8 @@ class LinkObserver:
                 "A",
                 f"转变候选 {payload.get('transition')} conf={payload.get('transition_confidence')} "
                 f"{payload.get('start_ms')}→{payload.get('end_ms')}ms "
-                f"{evidence.get('posture_before')}→{evidence.get('posture_after')}",
+                f"{evidence.get('posture_before')}→{evidence.get('posture_after')} "
+                f"mil={evidence.get('fall_mil_probability', '—')}",
             )
 
     def on_b_event(self, event: RuntimeEvent) -> None:
@@ -491,8 +505,12 @@ class LinkObserver:
             )
         if self.transitions:
             for item in self.transitions:
+                evidence = item.get("evidence") or {}
+                transition_name = item.get("transition")
+                transition_confidence = item.get("transition_confidence")
                 lines.append(
-                    f"A 转变候选: {item.get('transition')} conf={item.get('transition_confidence')}"
+                    f"A 转变候选: {transition_name} conf={transition_confidence} "
+                    f"mil={evidence.get('fall_mil_probability', '—')}"
                 )
         decision_kinds = Counter(
             f"{item.get('state')}({item.get('source')})" for item in self.decisions
@@ -636,6 +654,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     _require_health("A", args.a_url)
+    if not args.attach:
+        _require_landmark_input(args.a_url)
     _require_health("B", args.b_url)
 
     a_ws = args.a_url.replace("http://", "ws://", 1) + "/ws/events"

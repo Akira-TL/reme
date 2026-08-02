@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+dist/
+dist-production/
+dist-staging/
+.dev.vars*
+.env*

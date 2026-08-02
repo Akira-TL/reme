@@ -107,6 +107,14 @@ def _service(tmp_path: Path) -> DecisionService:
     )
 
 
+def _service_with_kitchen_alias(tmp_path: Path) -> DecisionService:
+    manifest_path = _write_fall_bundle(tmp_path)
+    streams = load_scene_streams(manifest_path)
+    return DecisionService(
+        scenes={"fall_demo_01": streams, "kitchen": streams}, config=PolicyConfig()
+    )
+
+
 def _start_server(service: DecisionService) -> tuple[ThreadingHTTPServer, threading.Thread]:
     handler = build_decision_handler(service=service, static_dir=None)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -127,7 +135,7 @@ def _post(port: int, path: str, payload: dict[str, Any]) -> tuple[int, dict[str,
         connection.request(
             "POST",
             path,
-            body=json.dumps(payload, ensure_ascii=False),
+            body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
         response = connection.getresponse()
@@ -192,6 +200,84 @@ def test_response_endpoint_advances_state_machine(tmp_path: Path) -> None:
         assert status == 200
         assert second["state"] == "family_notification_required"
         assert second["source"] == "rule"
+    finally:
+        _stop_server(server, thread)
+
+
+def test_demo_kitchen_conversation_only_notifies_after_consent(tmp_path: Path) -> None:
+    server, thread = _start_server(_service(tmp_path))
+    try:
+        port = server.server_address[1]
+        status, question = _post(
+            port,
+            "/api/demo/conversation",
+            {
+                "scene_id": "fall_demo_01",
+                "scenario": "kitchen_share",
+                "timestamp_ms": 15000.0,
+            },
+        )
+        assert status == 200
+        assert question["state"] == "consent_required"
+        assert question["action"] == "ask_elder"
+        assert question["family_notification"] is None
+        assert "包包子" in question["elder_message"]
+
+        status, shared = _post(
+            port,
+            "/api/response",
+            {
+                "schema_version": "reme-interaction-response/v0-experiment",
+                "scene_id": "fall_demo_01",
+                "decision_id": question["decision_id"],
+                "timestamp_ms": 16000.0,
+                "response": "consent_granted",
+                "source": "user_input",
+                "demo_mode": "live",
+                "text": "分享给孩子吧",
+            },
+        )
+        assert status == 200
+        assert shared["state"] == "resolved"
+        assert shared["risk_level"] == 0
+        assert shared["action"] == "notify_family"
+        assert "包包子" in shared["family_notification"]
+        assert shared["alarm"] is None
+    finally:
+        _stop_server(server, thread)
+
+
+def test_demo_kitchen_conversation_denial_sends_no_family_notice(tmp_path: Path) -> None:
+    server, thread = _start_server(_service(tmp_path))
+    try:
+        port = server.server_address[1]
+        _, question = _post(
+            port,
+            "/api/demo/conversation",
+            {
+                "scene_id": "fall_demo_01",
+                "scenario": "kitchen_share",
+                "timestamp_ms": 15000.0,
+            },
+        )
+        status, declined = _post(
+            port,
+            "/api/response",
+            {
+                "schema_version": "reme-interaction-response/v0-experiment",
+                "scene_id": "fall_demo_01",
+                "decision_id": question["decision_id"],
+                "timestamp_ms": 16000.0,
+                "response": "consent_denied",
+                "source": "user_input",
+                "demo_mode": "live",
+                "text": "这次不分享",
+            },
+        )
+        assert status == 200
+        assert declined["state"] == "resolved"
+        assert declined["action"] == "mark_resolved"
+        assert declined["family_notification"] is None
     finally:
         _stop_server(server, thread)
 
@@ -596,6 +682,45 @@ def test_session_start_conflict_returns_409(tmp_path: Path) -> None:
         _stop_server(server, thread)
 
 
+def test_session_start_replace_active_recovers_stale_browser_session(tmp_path: Path) -> None:
+    registry = RuntimeSessionRegistry()
+    server, thread = _start_runtime_server(_service(tmp_path), registry=registry)
+    try:
+        port = server.server_address[1]
+        stale = _session_body("session-stale")
+        status, _ = _post(port, "/api/session", stale)
+        assert status == 200
+        assert registry.active_session_id() == "session-stale"
+
+        fresh = _session_body("session-fresh")
+        fresh["scene_id"] = "kitchen"
+        fresh["replace_active"] = True
+        status, body = _post(port, "/api/session", fresh)
+
+        assert status == 200
+        assert body["session_id"] == "session-fresh"
+        assert body["state"] == "running"
+        assert registry.active_session_id() == "session-fresh"
+        assert registry.active_scene_id() == "kitchen"
+        assert not registry.is_active("session-stale")
+    finally:
+        _stop_server(server, thread)
+
+
+def test_session_start_rejects_non_boolean_replace_active(tmp_path: Path) -> None:
+    registry = RuntimeSessionRegistry()
+    server, thread = _start_runtime_server(_service(tmp_path), registry=registry)
+    try:
+        payload = _session_body()
+        payload["replace_active"] = "yes"
+        status, body = _post(server.server_address[1], "/api/session", payload)
+        assert status == 400
+        assert body["error"]["code"] == "bad_request"
+        assert registry.active_session_id() is None
+    finally:
+        _stop_server(server, thread)
+
+
 def test_session_start_rejects_malformed_body_with_400(tmp_path: Path) -> None:
     calls: list[str] = []
     registry = _FakeRegistry(calls)
@@ -761,6 +886,49 @@ def test_websocket_upgrade_hands_the_socket_to_the_hub(tmp_path: Path) -> None:
         assert calls == ["hub.accept"]
         assert hub.close_connection_at_accept is True
         assert len(hub.accepted) == 1
+    finally:
+        _stop_server(server, thread)
+
+
+def test_session_scene_switch_allows_kitchen_conversation_without_restarting(
+    tmp_path: Path,
+) -> None:
+    registry = RuntimeSessionRegistry()
+    ingest = EventIngest()
+    server, thread = _start_runtime_server(
+        _service_with_kitchen_alias(tmp_path), registry=registry, ingest=ingest
+    )
+    try:
+        port = server.server_address[1]
+        status, _ = _post(port, "/api/session", _session_body())
+        assert status == 200
+        assert registry.active_scene_id() == "fall_demo_01"
+
+        status, switched = _post(
+            port,
+            "/api/session/scene",
+            {"session_id": "session-0001", "scene_id": "kitchen"},
+        )
+        assert status == 200
+        assert switched == {
+            "session_id": "session-0001",
+            "scene_id": "kitchen",
+            "state": "running",
+        }
+        assert registry.active_scene_id() == "kitchen"
+
+        status, question = _post(
+            port,
+            "/api/demo/conversation",
+            {
+                "scene_id": "kitchen",
+                "scenario": "kitchen_share",
+                "timestamp_ms": 3000.0,
+            },
+        )
+        assert status == 200
+        assert question["scene_id"] == "kitchen"
+        assert question["state"] == "consent_required"
     finally:
         _stop_server(server, thread)
 
@@ -1005,8 +1173,9 @@ def test_health_reports_degraded_when_the_perception_stream_is_down(tmp_path: Pa
         assert body["status"] == "degraded"
         assert body["perception"]["attached"] is True
         assert body["perception"]["connected"] is False
-        assert registry.current_status() is not None
-        assert registry.current_status().state is RuntimeSessionState.DEGRADED
+        current_status = registry.current_status()
+        assert current_status is not None
+        assert current_status.state is RuntimeSessionState.DEGRADED
     finally:
         server.shutdown()
         server.server_close()
