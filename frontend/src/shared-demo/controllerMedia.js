@@ -8,6 +8,97 @@ export const DEFAULT_MEDIA_ICE_SERVERS = Object.freeze([
   Object.freeze({ urls: ["stun:stun.cloudflare.com:3478"] }),
 ]);
 
+function grantPayload(event) {
+  return isDemoEvent(event) && event.event_type === "media_grant"
+    ? event.payload
+    : null;
+}
+
+function matchesGrant(left, right) {
+  const a = grantPayload(left);
+  const b = grantPayload(right);
+  return Boolean(
+    a && b
+    && a.grant_id === b.grant_id
+    && a.event_id === b.event_id
+    && a.scope === b.scope,
+  );
+}
+
+function contextAllowsGrant(grant, context) {
+  const payload = grantPayload(grant);
+  if (
+    !payload
+    || payload.status !== "active"
+    || payload.expires_at_ms <= Date.now()
+    || !context?.captureActive
+    || context.visibilityState !== "visible"
+  ) return false;
+  if (payload.scope === "kitchen_moment") {
+    return context.sceneId === "kitchen"
+      && context.kitchenEventId === payload.event_id;
+  }
+  if (payload.scope === "fall_emergency") {
+    return context.sceneId === "fall"
+      && context.fall?.eventId === payload.event_id
+      && context.fall.phase === "escalated"
+      && context.fall.delivery === "accepted";
+  }
+  return false;
+}
+
+export function createMediaGrantRequestTracker() {
+  let generation = 0;
+  let pending = null;
+
+  return {
+    begin({ eventId, scope, sceneId, captureGeneration, visibilityState }) {
+      generation += 1;
+      pending = {
+        generation,
+        eventId,
+        scope,
+        sceneId,
+        captureGeneration,
+        visibilityState,
+      };
+      return pending;
+    },
+    invalidate() {
+      generation += 1;
+      pending = null;
+    },
+    classify(grant, { activeGrant = null, activeContext = null, current } = {}) {
+      if (!contextAllowsGrant(grant, current)) return "revoke";
+      if (matchesGrant(grant, activeGrant)) {
+        return activeContext?.captureGeneration === current.captureGeneration
+          ? "accept_repeat"
+          : "revoke";
+      }
+      const payload = grantPayload(grant);
+      if (
+        !payload
+        || !pending
+        || pending.generation !== generation
+        || pending.eventId !== payload.event_id
+        || pending.scope !== payload.scope
+        || pending.sceneId !== current.sceneId
+        || pending.captureGeneration !== current.captureGeneration
+        || pending.visibilityState !== "visible"
+      ) return "revoke";
+      return "accept_initial";
+    },
+    accept() {
+      const accepted = pending;
+      pending = null;
+      return accepted;
+    },
+    pending() {
+      return pending;
+    },
+  };
+}
+
 function sendJson(socket, value) {
   if (!socket || socket.readyState !== 1 || !value) return false;
   socket.send(JSON.stringify(value));
@@ -113,9 +204,24 @@ export function createControllerMediaBridge({
       onStatus({ state: "stream_unavailable", viewerId: null, grantId: grantEvent.payload.grant_id });
       return false;
     }
-    stopGrant(null, "replaced");
+    const grantId = grantEvent.payload.grant_id;
+    const sameGrant = activeGrant?.payload.grant_id === grantId;
+    if (!sameGrant) stopGrant(null, "replaced");
     activeGrant = grantEvent;
-    await Promise.all(viewerIds.map((viewerId) => startPeer(viewerId, grantEvent, stream)));
+    const nextViewerIds = [...new Set(viewerIds)];
+    if (sameGrant) {
+      const nextAudience = new Set(nextViewerIds);
+      for (const viewerId of [...peers.keys()]) {
+        if (!nextAudience.has(viewerId)) closePeer(viewerId, "audience_removed");
+      }
+    }
+    const missingViewerIds = nextViewerIds.filter((viewerId) => {
+      const record = peers.get(viewerId);
+      return !record || record.grantId !== grantId;
+    });
+    await Promise.all(
+      missingViewerIds.map((viewerId) => startPeer(viewerId, grantEvent, stream)),
+    );
     return true;
   }
 

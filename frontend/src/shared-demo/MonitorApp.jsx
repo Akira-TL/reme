@@ -20,7 +20,10 @@ import {
   selectAutomaticSceneAction,
 } from "./automaticSceneRecognition.js";
 import { getRelayBase, relayHttpUrl, relayWebSocketUrl } from "./config.js";
-import { createControllerMediaBridge } from "./controllerMedia.js";
+import {
+  createControllerMediaBridge,
+  createMediaGrantRequestTracker,
+} from "./controllerMedia.js";
 import {
   clearPendingFallRecovery,
   clearControllerSession,
@@ -287,6 +290,7 @@ export function MonitorApp() {
   const [fallDetectionArmed, setFallDetectionArmed] = useState(false);
   const [activity, setActivity] = useState(createActivityState);
   const [heartCard, setHeartCard] = useState(null);
+  const [kitchenLiveEventId, setKitchenLiveEventId] = useState(null);
   const [moment, setMoment] = useState({ status: "idle", size: 0, mimeType: "" });
   const [fall, setFall] = useState(authoritativeRestoredFall);
   const [voice, setVoice] = useState(createVoiceState);
@@ -326,7 +330,11 @@ export function MonitorApp() {
   const momentBlobRef = useRef(null);
   const momentExpiryRef = useRef(0);
   const activeGrantRef = useRef(null);
+  const activeGrantContextRef = useRef(null);
+  const mediaRequestTrackerRef = useRef(createMediaGrantRequestTracker());
   const grantExpiryRef = useRef(0);
+  const pendingKitchenGrantRef = useRef(null);
+  const kitchenLiveEventIdRef = useRef(null);
   const checkInAudioRef = useRef(null);
   const voiceAudioContextRef = useRef(null);
   const voiceCapabilityRef = useRef("unknown");
@@ -368,11 +376,22 @@ export function MonitorApp() {
   const requestMediaGrant = useCallback((eventId, scope, expiresInMs) => {
     const socket = controllerRef.current?.socket;
     const command = createMediaGrantRequest({ eventId, scope, expiresInMs });
-    if (socket?.readyState !== WebSocket.OPEN || !command) return false;
+    if (socket?.readyState !== WebSocket.OPEN || !command) {
+      mediaRequestTrackerRef.current.invalidate();
+      return false;
+    }
+    mediaRequestTrackerRef.current.begin({
+      eventId,
+      scope,
+      sceneId: sceneIdRef.current,
+      captureGeneration: captureGenerationRef.current,
+      visibilityState: document.visibilityState,
+    });
     try {
       socket.send(JSON.stringify(command));
       return true;
     } catch {
+      mediaRequestTrackerRef.current.invalidate();
       return false;
     }
   }, []);
@@ -459,13 +478,16 @@ export function MonitorApp() {
     pendingAlarmAckRef.current = null;
     if (accepted !== current) commitFallState(accepted);
     if (current.phase === "escalated") {
+      const requested = requestMediaGrant(current.eventId, "fall_emergency", 30_000);
       setMediaStatus({
-        state: "authorizing",
-        detail: "告警已由 Relay 确认；事件视频授权按在场评委情况处理。",
+        state: requested ? "authorizing" : "waiting_viewer",
+        detail: requested
+          ? "告警已由 Relay 确认，正在签发 30 秒事件视频授权。"
+          : "告警已由 Relay 确认；当前控制链路无法签发视频，告警仍保持有效。",
       });
     }
     return true;
-  }, [commitFallState]);
+  }, [commitFallState, requestMediaGrant]);
 
   const stopLocalMoment = useCallback(() => {
     momentRecorderRef.current?.cancel?.();
@@ -477,6 +499,7 @@ export function MonitorApp() {
   }, []);
 
   const revokeActiveGrant = useCallback((reason = "revoked") => {
+    mediaRequestTrackerRef.current.invalidate();
     const grantId = activeGrantRef.current?.payload?.grant_id;
     if (grantId) {
       const socket = controllerRef.current?.socket;
@@ -491,10 +514,37 @@ export function MonitorApp() {
       mediaBridgeRef.current?.stopGrant(grantId, reason);
     }
     activeGrantRef.current = null;
+    activeGrantContextRef.current = null;
     window.clearTimeout(grantExpiryRef.current);
     grantExpiryRef.current = 0;
     setMediaStatus({ state: "idle", detail: "" });
   }, []);
+
+  const clearKitchenCaptureEvidence = useCallback((reason, {
+    publishUnavailable = false,
+  } = {}) => {
+    if (publishUnavailable) {
+      publishEvent("activity_state", {
+        activity: "cooking",
+        phase: "unavailable",
+        source: "mimo_visual",
+        confidence: null,
+        reason,
+      });
+    }
+    pendingKitchenGrantRef.current = null;
+    kitchenLiveEventIdRef.current = null;
+    setKitchenLiveEventId(null);
+    cookingTrackerRef.current.reset();
+    recognitionUnavailableRef.current = false;
+    setActivity(publishUnavailable
+      ? {
+        ...createActivityState(),
+        phase: "unavailable",
+        reason,
+      }
+      : createActivityState());
+  }, [publishEvent]);
 
   const clearFallTimer = useCallback(() => {
     window.clearTimeout(fallTimerRef.current);
@@ -899,18 +949,20 @@ export function MonitorApp() {
       }
       if (!connection.ready) return;
       if (isMediaGrantError(value)) {
+        mediaRequestTrackerRef.current.invalidate();
         if (value.error === "media_grant_already_active" && activeGrantRef.current) {
           return;
         }
         const noViewer = value.error === "no_connected_viewers";
         const waiting = noViewer || value.error === "media_grant_already_active";
+        const kitchenContext = sceneIdRef.current === "kitchen";
         setMediaStatus({
           state: waiting ? "waiting_viewer" : "failed",
           detail: noViewer
-            ? "当前没有家属端在线；告警仍有效，视频保持关闭。"
+            ? `当前没有评委端在线；${kitchenContext ? "厨房实景" : "告警视频"}保持关闭。`
             : value.error === "media_grant_already_active"
-              ? "本事件已有一份短时视频授权；告警仍有效，授权到期后自动回到骨架。"
-              : "当前事件不满足视频授权条件；告警仍有效，视频保持关闭。",
+              ? "本事件已有一份短时视频授权；授权到期后自动回到骨架。"
+              : `当前事件不满足${kitchenContext ? "厨房实景" : "告警视频"}授权条件；视频保持关闭。`,
         });
         return;
       }
@@ -960,28 +1012,100 @@ export function MonitorApp() {
         if (value.event_type === "alarm_state") {
           acceptAlarmEvent(value.event_sequence);
         }
+        if (value.event_type === "activity_state") {
+          const pending = pendingKitchenGrantRef.current;
+          if (pending?.eventSequence === value.event_sequence) {
+            pendingKitchenGrantRef.current = null;
+            if (
+              sceneIdRef.current === "kitchen"
+              && captureActiveRef.current
+              && document.visibilityState !== "hidden"
+            ) {
+              const requested = requestMediaGrant(
+                pending.eventId,
+                "kitchen_moment",
+                60_000,
+              );
+              setMediaStatus({
+                state: requested ? "authorizing" : "failed",
+                detail: requested
+                  ? "做饭活动已由 Relay 确认，正在开放最多 60 秒厨房实时画面。"
+                  : "做饭活动已确认，但当前控制链路无法签发厨房实景。",
+              });
+            }
+          }
+        }
         return;
       }
       if (value?.type === "media_grant_accepted" && isDemoEvent(value.grant)) {
+        const grantAction = mediaRequestTrackerRef.current.classify(value.grant, {
+          activeGrant: activeGrantRef.current,
+          activeContext: activeGrantContextRef.current,
+          current: {
+            sceneId: sceneIdRef.current,
+            captureActive: captureActiveRef.current,
+            captureGeneration: captureGenerationRef.current,
+            visibilityState: document.visibilityState,
+            kitchenEventId: kitchenLiveEventIdRef.current,
+            fall: fallRef.current,
+          },
+        });
+        if (grantAction === "revoke") {
+          mediaRequestTrackerRef.current.invalidate();
+          const command = createMediaGrantRevoke(value.grant.payload.grant_id);
+          if (socket.readyState === WebSocket.OPEN && command) {
+            try {
+              socket.send(JSON.stringify(command));
+            } catch {
+              // The controller socket close path is independently fail-closed.
+            }
+          }
+          mediaBridgeRef.current?.stopGrant(value.grant.payload.grant_id, "stale_ack");
+          setMediaStatus({
+            state: "failed",
+            detail: "迟到的视频授权与当前场景或采集状态不匹配，已立即撤销。",
+          });
+          return;
+        }
         eventSequenceRef.current = advanceControllerEventSequence(
           eventSequenceRef.current,
           value.grant.event_sequence,
         );
+        if (grantAction === "accept_initial") {
+          activeGrantContextRef.current = mediaRequestTrackerRef.current.accept();
+        }
         activeGrantRef.current = value.grant;
         const viewerIds = Array.isArray(value.viewer_ids) ? value.viewer_ids : [];
         setMediaStatus({
           state: viewerIds.length ? "connecting" : "waiting_viewer",
           detail: viewerIds.length
-            ? `正在向 ${viewerIds.length} 个已在场评委建立短期原画…`
-            : "授权已生效，但签发时没有在场评委",
+            ? `正在向 ${viewerIds.length} 个授权评委建立短期原画…`
+            : value.grant.payload.scope === "kitchen_moment"
+              ? "厨房实景授权已生效；评委在到期前打开页面会自动接入。"
+              : "授权已生效，但签发时没有在场评委",
         });
         void mediaBridgeRef.current?.startGrant(value.grant, viewerIds);
         window.clearTimeout(grantExpiryRef.current);
+        const receivedAtMs = Date.now();
+        const serverTtlMs = Math.max(
+          0,
+          value.grant.payload.expires_at_ms - value.grant.timestamp_ms,
+        );
+        const fallbackExpiryMs = Math.max(0, Math.min(
+          serverTtlMs,
+          value.grant.payload.expires_at_ms - receivedAtMs,
+        ));
         grantExpiryRef.current = window.setTimeout(() => {
           mediaBridgeRef.current?.stopGrant(value.grant.payload.grant_id, "expired");
           activeGrantRef.current = null;
-          setMediaStatus({ state: "expired", detail: "事件视频授权已到期，已回到骨架" });
-        }, Math.max(0, value.grant.payload.expires_at_ms - Date.now()));
+          activeGrantContextRef.current = null;
+          setMediaStatus({
+            state: "expired",
+            detail: value.grant.payload.scope === "kitchen_moment"
+              ? "厨房实景 60 秒授权已到期，评委端已回到家具背景板与骨架。"
+              : "事件视频授权已到期，评委端已回到骨架。",
+          });
+        }, fallbackExpiryMs);
         return;
       }
       if (value?.type === "media_grant_revoked") {
@@ -993,10 +1117,21 @@ export function MonitorApp() {
             grant.event_sequence,
           );
         }
+        const activeGrantId = activeGrantRef.current?.payload?.grant_id;
+        if (!activeGrantId || grantId !== activeGrantId) return;
         mediaBridgeRef.current?.stopGrant(grantId, "revoked");
         activeGrantRef.current = null;
+        activeGrantContextRef.current = null;
+        mediaRequestTrackerRef.current.invalidate();
         window.clearTimeout(grantExpiryRef.current);
-        setMediaStatus({ state: "idle", detail: "" });
+        setMediaStatus(grant?.payload?.status === "expired"
+          ? {
+            state: "expired",
+            detail: grant.payload.scope === "kitchen_moment"
+              ? "厨房实景已由 Relay 权威时钟关闭，评委端已回到家具背景板与骨架。"
+              : "事件视频已由 Relay 权威时钟关闭，评委端已回到骨架。",
+          }
+          : { state: "idle", detail: "" });
       }
     };
     socket.onclose = () => {
@@ -1015,6 +1150,9 @@ export function MonitorApp() {
       }
       mediaBridgeRef.current?.stopGrant(null, "socket_closed");
       activeGrantRef.current = null;
+      activeGrantContextRef.current = null;
+      mediaRequestTrackerRef.current.invalidate();
+      clearKitchenCaptureEvidence("控制链路中断，旧做饭确认已失效；重连后需要重新取得真实证据。");
       window.clearTimeout(grantExpiryRef.current);
       grantExpiryRef.current = 0;
       setMediaStatus({ state: "idle", detail: "" });
@@ -1024,12 +1162,14 @@ export function MonitorApp() {
   }, [
     acceptAuthoritativeAlarmEvent,
     acceptAlarmEvent,
+    clearKitchenCaptureEvidence,
     clearReconnectTimer,
     closeControllerSocket,
     invalidateControllerSession,
     persistFallRecoveryState,
     presentAuthoritativeFall,
     publishEvent,
+    requestMediaGrant,
     scheduleControllerReconnect,
     setSessionPersistenceStatus,
   ]);
@@ -1096,13 +1236,12 @@ export function MonitorApp() {
         ? "告警正在同步，Relay 确认后将签发 30 秒事件视频授权…"
         : "控制链路离线，告警尚未送达；重连后会自动同步。",
     });
-    if (published) requestMediaGrant(eventId, "fall_emergency", 30_000);
     try {
       navigator.vibrate?.([350, 120, 350, 120, 700]);
     } catch {
       // 振动不可用不影响规则告警。
     }
-  }, [cancelVoiceInteraction, clearFallTimer, commitFallState, publishAlarmState, requestMediaGrant]);
+  }, [cancelVoiceInteraction, clearFallTimer, commitFallState, publishAlarmState]);
 
   const resolveFallSafe = useCallback((requestedEventId = null, {
     trigger = null,
@@ -1480,28 +1619,23 @@ export function MonitorApp() {
     }
   }, [armFallResponseWindow, cancelVoiceInteraction, clearFallTimer, commitFallState, escalateFall, publishAlarmState]);
 
-  const updateHeartCard = useCallback((shareState) => {
-    const current = heartCardRef.current;
-    if (!current) return null;
-    const next = { ...current, share_state: shareState };
-    heartCardRef.current = next;
-    setHeartCard(next);
-    publishEvent("care_card", next);
-    return next;
-  }, [publishEvent]);
-
-  const consentKitchenMoment = useCallback(() => {
-    const card = updateHeartCard("consented");
-    if (!card) return;
-    setMediaStatus({ state: "authorizing", detail: "本人已同意，正在签发 15 秒厨房时刻授权…" });
-    requestMediaGrant(card.event_id, "kitchen_moment", 15_000);
-  }, [requestMediaGrant, updateHeartCard]);
-
-  const denyKitchenMoment = useCallback(() => {
-    updateHeartCard("denied");
-    revokeActiveGrant("denied");
-    stopLocalMoment();
-  }, [revokeActiveGrant, stopLocalMoment, updateHeartCard]);
+  const continueKitchenLive = useCallback(() => {
+    const eventId = kitchenLiveEventIdRef.current;
+    if (
+      !eventId
+      || activeGrantRef.current
+      || sceneIdRef.current !== "kitchen"
+      || !captureActiveRef.current
+      || document.visibilityState === "hidden"
+    ) return;
+    const requested = requestMediaGrant(eventId, "kitchen_moment", 60_000);
+    setMediaStatus({
+      state: requested ? "authorizing" : "failed",
+      detail: requested
+        ? "正在重新开放最多 60 秒厨房实时画面；心跳卡与本机短片不受影响。"
+        : "当前控制链路无法重新开放厨房实景。",
+    });
+  }, [requestMediaGrant]);
 
   const cancelAutomaticSceneRecognition = useCallback((reason) => {
     automaticSceneGenerationRef.current += 1;
@@ -1545,10 +1679,10 @@ export function MonitorApp() {
       });
       return;
     }
-    if (heartCardRef.current && !["denied", "expired"].includes(heartCardRef.current.share_state)) {
-      updateHeartCard("expired");
-    }
     revokeActiveGrant("scene_changed");
+    clearKitchenCaptureEvidence("场景已切换，旧做饭确认已失效；再次进入厨房需要重新识别。", {
+      publishUnavailable: sceneIdRef.current === "kitchen" || nextSceneId === "kitchen",
+    });
     stopLocalMoment();
     clearFallTimer();
     releaseVoiceResources(createVoiceState({
@@ -1556,8 +1690,6 @@ export function MonitorApp() {
         ? "正在准备事件触发式语音回应。"
         : VOICE_PHASE_COPY.idle[1],
     }));
-    cookingTrackerRef.current.reset();
-    recognitionUnavailableRef.current = false;
     fallDetectorRef.current.reset();
     const emptyFall = createFallState();
     if (!clearPendingFallRecovery()) {
@@ -1567,14 +1699,12 @@ export function MonitorApp() {
     if (!persistControllerSessionPatch({ fall: emptyFall, sceneId: nextSceneId })) return;
     fallRef.current = emptyFall;
     setFall(emptyFall);
-    heartCardRef.current = null;
     fallDetectionArmedRef.current = nextSceneId === "fall";
     setFallDetectionArmed(nextSceneId === "fall");
     setSceneSelectionSource("manual");
     sceneIdRef.current = nextSceneId;
     setSceneId(nextSceneId);
     setActivity(createActivityState());
-    setHeartCard(null);
     publishEvent("scene_state", {
       scene_id: nextSceneId,
       visual_mode: nextSceneId === "bathroom" ? "skeleton_only" : "abstract_environment",
@@ -1582,6 +1712,7 @@ export function MonitorApp() {
     if (nextSceneId === "fall") void preauthorizeMicrophone();
   }, [
     clearFallTimer,
+    clearKitchenCaptureEvidence,
     failClosedFallCheckIn,
     persistControllerSessionPatch,
     preauthorizeMicrophone,
@@ -1590,7 +1721,6 @@ export function MonitorApp() {
     revokeActiveGrant,
     setSessionPersistenceStatus,
     stopLocalMoment,
-    updateHeartCard,
   ]);
 
   const selectScene = useCallback((nextSceneId) => {
@@ -1622,8 +1752,10 @@ export function MonitorApp() {
       return;
     }
     if (
-      heartCardRef.current
-      && !["denied", "expired"].includes(heartCardRef.current.share_state)
+      pendingKitchenGrantRef.current
+      || kitchenLiveEventIdRef.current
+      || activeGrantRef.current?.payload?.scope === "kitchen_moment"
+      || momentRecorderRef.current
     ) {
       setAutomaticScene(createAutomaticSceneState("请先处理当前厨房时刻与授权，再进行真实识别。"));
       return;
@@ -1686,7 +1818,10 @@ export function MonitorApp() {
         !sessionPersistenceHealthyRef.current
         || fallRef.current.phase !== "idle"
         || fallDetectionArmedRef.current
-        || (heartCardRef.current && !["denied", "expired"].includes(heartCardRef.current.share_state))
+        || pendingKitchenGrantRef.current
+        || kitchenLiveEventIdRef.current
+        || activeGrantRef.current?.payload?.scope === "kitchen_moment"
+        || momentRecorderRef.current
       ) {
         setAutomaticScene({
           ...createAutomaticSceneState("识别期间出现安全事件或待处理授权，结果已丢弃，当前模式保持不变。"),
@@ -1777,7 +1912,12 @@ export function MonitorApp() {
       );
       return;
     }
-    if (heartCard && !["denied", "expired"].includes(heartCard.share_state)) {
+    if (
+      pendingKitchenGrantRef.current
+      || kitchenLiveEventIdRef.current
+      || activeGrantRef.current?.payload?.scope === "kitchen_moment"
+      || moment.status === "recording"
+    ) {
       automaticSceneAbortRef.current.abort("厨房时刻或授权处理中，本次 MiMo 请求已取消。");
       return;
     }
@@ -1786,7 +1926,7 @@ export function MonitorApp() {
         "控制链路中断，本次 MiMo 请求已取消；连接恢复后可再次识别。",
       );
     }
-  }, [fall.phase, fallDetectionArmed, heartCard, sessionPersistenceHealthy, ui.connection]);
+  }, [fall.phase, fallDetectionArmed, mediaStatus.state, moment.status, sessionPersistenceHealthy, ui.connection]);
 
   const stopCapture = useCallback(async () => {
     cancelAutomaticSceneRecognition("摄像头已停止；自动识别样本与待返回结果均已取消。");
@@ -1796,7 +1936,10 @@ export function MonitorApp() {
     animationRef.current = 0;
     failClosedFallCheckIn();
     releaseVoiceResources();
-    mediaBridgeRef.current?.stopGrant(null, "capture_stopped");
+    clearKitchenCaptureEvidence("摄像头已停止，旧做饭确认不能用于后续实景。", {
+      publishUnavailable: sceneIdRef.current === "kitchen",
+    });
+    revokeActiveGrant("capture_stopped");
     stopLocalMoment();
 
     const stream = streamRef.current;
@@ -1816,8 +1959,10 @@ export function MonitorApp() {
     setLocalFrame(null);
   }, [
     cancelAutomaticSceneRecognition,
+    clearKitchenCaptureEvidence,
     failClosedFallCheckIn,
     releaseVoiceResources,
+    revokeActiveGrant,
     stopLocalMoment,
   ]);
 
@@ -1942,6 +2087,7 @@ export function MonitorApp() {
     }
 
     dispatch({ type: "starting" });
+    clearKitchenCaptureEvidence("新一轮采集尚未形成做饭确认。");
     if (fallDetectionArmedRef.current) void preauthorizeMicrophone();
     const checkInAudio = new Audio("/voice/fall_check_in.m4a");
     checkInAudio.preload = "auto";
@@ -2070,13 +2216,12 @@ export function MonitorApp() {
         error: `无法开始采集：${error instanceof Error ? error.message : "摄像头或模型不可用"}`,
       });
     }
-  }, [preauthorizeMicrophone, startFallCheckIn, stopCapture, ui.connection, ui.sessionId]);
+  }, [clearKitchenCaptureEvidence, preauthorizeMicrophone, startFallCheckIn, stopCapture, ui.connection, ui.sessionId]);
 
   const stopOnly = useCallback(async () => {
-    revokeActiveGrant("capture_stopped");
     await stopCapture();
     dispatch({ type: "capture_stopped" });
-  }, [revokeActiveGrant, stopCapture]);
+  }, [stopCapture]);
 
   const releaseControl = useCallback(async () => {
     const exitAction = selectFallExitAction(fallRef.current, {
@@ -2184,7 +2329,7 @@ export function MonitorApp() {
         cancelled
         || inFlight
         || recognitionUnavailableRef.current
-        || heartCardRef.current
+        || kitchenLiveEventIdRef.current
         || document.visibilityState === "hidden"
       ) return;
       const imageB64 = captureJpegBase64(videoRef.current);
@@ -2219,33 +2364,48 @@ export function MonitorApp() {
           || document.visibilityState === "hidden"
         ) return;
         const tracked = cookingTrackerRef.current.push(verdict);
+        const serverVerified = Boolean(
+          tracked.confirmed
+          && verdict.receiptId
+          && verdict.consecutive >= 2,
+        );
+        const activityPhase = serverVerified
+          ? "confirmed"
+          : tracked.phase === "confirmed" ? "candidate" : tracked.phase;
         const reason = verdict.reason.slice(0, 240);
         setActivity({
-          phase: tracked.phase,
+          phase: activityPhase,
           classification: verdict.classification,
           confidence: verdict.confidence,
           reason,
           latencyMs: verdict.latencyMs,
           model: verdict.model,
-          consecutive: tracked.consecutive,
+          consecutive: verdict.consecutive,
         });
-        publishEvent("activity_state", {
+        const activityEvent = publishEvent("activity_state", {
           activity: "cooking",
-          phase: tracked.phase,
+          phase: activityPhase,
           source: "mimo_visual",
           confidence: verdict.confidence,
           reason,
         });
-        if (tracked.confirmed && !heartCardRef.current) {
-          const eventId = randomId("cooking");
+        if (serverVerified && !kitchenLiveEventIdRef.current) {
+          const eventId = activityEvent
+            ? `activity-${activityEvent.event_sequence}`
+            : randomId("activity-unconfirmed");
+          kitchenLiveEventIdRef.current = activityEvent ? eventId : null;
+          setKitchenLiveEventId(activityEvent ? eventId : null);
+          pendingKitchenGrantRef.current = activityEvent
+            ? { eventId, eventSequence: activityEvent.event_sequence }
+            : null;
           const card = {
             card_id: randomId("heartbeat"),
             event_id: eventId,
             kind: "family_heartbeat",
             title: "厨房里的家庭心跳",
-            body: "连续两次视觉判定观察到做饭活动；短时刻只在本机暂存，等待本人决定是否分享。",
+            body: "连续两次真实视觉判定观察到做饭活动；已形成家庭心跳，6 秒短时刻仅在本机内存暂存。",
             occurred_at_ms: Date.now(),
-            share_state: "consent_pending",
+            share_state: "local_only",
           };
           heartCardRef.current = card;
           setHeartCard(card);
@@ -2268,7 +2428,6 @@ export function MonitorApp() {
             });
             window.clearTimeout(momentExpiryRef.current);
             momentExpiryRef.current = window.setTimeout(() => {
-              if (heartCardRef.current) updateHeartCard("expired");
               stopLocalMoment();
             }, 60_000);
           });
@@ -2314,7 +2473,6 @@ export function MonitorApp() {
     stopLocalMoment,
     ui.captureActive,
     ui.connection,
-    updateHeartCard,
   ]);
 
   useEffect(() => {
@@ -2341,6 +2499,10 @@ export function MonitorApp() {
         );
         const checkingEventId = selectFailClosedFallEvent(fallRef.current);
         if (checkingEventId) failClosedFallCheckIn();
+        clearKitchenCaptureEvidence("页面已隐藏，旧做饭确认和实景授权已失效。", {
+          publishUnavailable: sceneIdRef.current === "kitchen",
+        });
+        revokeActiveGrant("page_hidden");
         if (sceneIdRef.current === "kitchen") stopLocalMoment();
         releaseVoiceResources(checkingEventId
           ? createVoiceState({
@@ -2370,10 +2532,12 @@ export function MonitorApp() {
     };
   }, [
     cancelAutomaticSceneRecognition,
+    clearKitchenCaptureEvidence,
     clearReconnectTimer,
     closeControllerSocket,
     failClosedFallCheckIn,
     releaseVoiceResources,
+    revokeActiveGrant,
     stopLocalMoment,
     stopCapture,
   ]);
@@ -2383,10 +2547,15 @@ export function MonitorApp() {
   const activeScene = DEMO_SCENES.find((scene) => scene.id === sceneId) || DEMO_SCENES[0];
   const fallExitAction = selectFallExitAction(fall, { persistenceHealthy: sessionPersistenceHealthy });
   const automaticSceneBusy = ["capturing", "analyzing"].includes(automaticScene.phase);
+  const kitchenOperationActive = Boolean(
+    kitchenLiveEventId
+    || (sceneId === "kitchen" && ["authorizing", "connecting"].includes(mediaStatus.state))
+    || moment.status === "recording",
+  );
   const automaticSceneSafetyBlocked = !sessionPersistenceHealthy
     || fallDetectionArmed
     || fall.phase !== "idle"
-    || (heartCard && !["denied", "expired"].includes(heartCard.share_state));
+    || kitchenOperationActive;
   const canRecognizeScene = ui.captureActive
     && ui.connection === "connected"
     && !automaticSceneBusy
@@ -2404,7 +2573,7 @@ export function MonitorApp() {
       ? "安全事件尚未关闭 · 先完成确认"
       : fallDetectionArmed
         ? "本地跌倒规则已启用 · 先手动切换其他场景"
-        : heartCard && !["denied", "expired"].includes(heartCard.share_state)
+        : kitchenOperationActive
           ? "厨房时刻处理中 · 完成后可识别"
           : sceneId === "bathroom"
             ? "完全隐私例外 · 向 MiMo 上传一次真实画面"
@@ -2444,7 +2613,7 @@ export function MonitorApp() {
               <span><i>1</i>解锁唯一控制租约</span>
               <span><i>2</i>主动授权摄像头；跌倒场景预授权麦克风后立即释放</span>
               <span><i>3</i>默认只发布骨架与结构化事件</span>
-              <span><i>4</i>厨房同意或跌倒告警后才短期开原画</span>
+              <span><i>4</i>真实做饭确认或跌倒告警后才短期开原画</span>
             </div>
           </section>
           <form className="unlock-card" onSubmit={unlock} autoComplete="off">
@@ -2512,7 +2681,7 @@ export function MonitorApp() {
             <div>
               <div className="eyebrow">CONTROLLER</div>
               <h1>四场景监控端</h1>
-              <p className="intro-copy">后置摄像头在本机运行自训练 MoveNet。骨架、事件、授权视频与事件语音保持独立通道。</p>
+              <p className="intro-copy">后置摄像头在本机运行团队提供的 MoveNet 权重。骨架、事件、授权视频与事件语音保持独立通道。</p>
             </div>
 
             <button
@@ -2647,15 +2816,19 @@ export function MonitorApp() {
                       : moment.status === "ready" ? `${Math.ceil(moment.size / 1024)} KB · 内存暂存`
                         : moment.status === "unavailable" ? "浏览器不支持录制"
                           : "已清理"}</small>
-                    {heartCard.share_state === "consent_pending" && (
-                      <div className="consent-actions">
-                        <button type="button" className="primary-action" onClick={consentKitchenMoment}>本人同意分享 15 秒现场</button>
-                        <button type="button" className="release-action" onClick={denyKitchenMoment}>不同意，仅保留心跳卡</button>
-                      </div>
-                    )}
-                    {heartCard.share_state !== "consent_pending" && (
-                      <small>授权状态：{heartCard.share_state}</small>
-                    )}
+                    <small>家庭心跳与 6 秒本机短片不会上传；评委实景是独立、最长 60 秒的 WebRTC 演示通道。</small>
+                    {heartCard.share_state === "local_only"
+                      && heartCard.event_id === kitchenLiveEventId
+                      && ["idle", "expired"].includes(mediaStatus.state)
+                      && (
+                        <button
+                          type="button"
+                          className="primary-action"
+                          onClick={continueKitchenLive}
+                          disabled={!ui.captureActive}
+                        >继续向评委开放 60 秒厨房实景</button>
+                      )}
+                    <small>心跳记录状态：{heartCard.share_state}</small>
                   </div>
                 )}
               </div>
@@ -2728,7 +2901,7 @@ export function MonitorApp() {
 
             {mediaStatus.state !== "idle" && (
               <div className={`media-status is-${mediaStatus.state}`} role="status">
-                <b>事件视频通道</b>
+                <b>{sceneId === "kitchen" ? "厨房实景演示通道" : "事件视频通道"}</b>
                 <p>{mediaStatus.detail}</p>
               </div>
             )}

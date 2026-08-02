@@ -7,7 +7,10 @@ import {
   selectActiveMediaGrant,
   selectViewerScene,
 } from "./state.js";
-import { parseViewerReady } from "./useViewerRelay.js";
+import {
+  createForwardedMediaSignalBuffer,
+  parseViewerReady,
+} from "./useViewerRelay.js";
 
 function event(eventSequence, eventType, payload, sessionId = "session-a") {
   return {
@@ -60,12 +63,22 @@ test("demo events are monotonic and a new session clears stale scene state", () 
   assert.equal(duplicate, state);
   assert.equal(selectViewerScene(state).scene_id, "kitchen");
 
+  state = applyEvent(state, event(3, "activity_state", {
+    activity: "cooking",
+    confidence: 0.51,
+    phase: "candidate",
+    reason: "等待更多证据",
+    source: "mimo_visual",
+  }));
+  assert.equal(state.activityEventSequence, 3);
+
   state = applyEvent(state, event(0, "scene_state", {
     scene_id: "bathroom",
     visual_mode: "skeleton_only",
   }, "session-b"));
   assert.equal(state.sessionId, "session-b");
   assert.equal(state.activity, null);
+  assert.equal(state.activityEventSequence, null);
   assert.equal(selectViewerScene(state).scene_id, "bathroom");
 });
 
@@ -105,11 +118,17 @@ test("fall media stays closed during checking and opens only for matching escala
   assert.equal(selectActiveMediaGrant(state, 2_000)?.grant_id, "grant-1");
   assert.equal(selectActiveMediaGrant(state, 31_000), null);
 
+  state = applyEvent(state, event(5, "scene_state", {
+    scene_id: "living",
+    visual_mode: "abstract_environment",
+  }));
+  assert.equal(selectActiveMediaGrant(state, 2_000), null);
+
   state = reduceViewerState(state, { type: "disconnected" });
   assert.equal(selectActiveMediaGrant(state, 2_000), null);
 });
 
-test("bathroom fails closed and kitchen grants require a consented heartbeat", () => {
+test("bathroom fails closed and kitchen grants bind to the latest confirmed activity", () => {
   let state = createViewerState();
   state = reduceViewerState(state, { type: "viewer_ready", viewerId: "viewer-1" });
   state = reduceViewerState(state, { type: "connected" });
@@ -117,33 +136,156 @@ test("bathroom fails closed and kitchen grants require a consented heartbeat", (
     scene_id: "kitchen",
     visual_mode: "abstract_environment",
   }));
-  state = applyEvent(state, event(2, "care_card", {
-    card_id: "card-1",
-    event_id: "cook-1",
-    kind: "family_heartbeat",
-    title: "今天也在认真生活",
-    body: "记录到一段做饭时光。",
-    occurred_at_ms: 1_000,
-    share_state: "consent_pending",
+  state = applyEvent(state, event(2, "activity_state", {
+    activity: "cooking",
+    confidence: 0.54,
+    phase: "candidate",
+    reason: "仅有一次证据",
+    source: "mimo_visual",
   }));
   state = applyEvent(state, event(3, "media_grant", {
     grant_id: "grant-1",
-    event_id: "cook-1",
+    event_id: "activity-2",
     scope: "kitchen_moment",
     expires_at_ms: 30_000,
     status: "active",
   }));
   assert.equal(selectActiveMediaGrant(state, 2_000), null);
 
-  state = applyEvent(state, event(4, "care_card", {
-    ...state.careCard,
-    share_state: "consented",
+  state = applyEvent(state, event(4, "activity_state", {
+    ...state.activity,
+    confidence: 0.88,
+    phase: "confirmed",
+    reason: "连续证据确认",
+    source: "manual_debug",
   }));
-  assert.equal(selectActiveMediaGrant(state, 2_000)?.grant_id, "grant-1");
+  assert.equal(state.activityEventSequence, 4);
+  assert.equal(selectActiveMediaGrant(state, 2_000), null);
 
-  state = applyEvent(state, event(5, "scene_state", {
+  state = applyEvent(state, event(5, "media_grant", {
+    grant_id: "grant-2",
+    event_id: "activity-4",
+    scope: "kitchen_moment",
+    expires_at_ms: 30_000,
+    status: "active",
+  }));
+  assert.equal(selectActiveMediaGrant(state, 2_000), null);
+
+  state = applyEvent(state, event(6, "activity_state", {
+    ...state.activity,
+    confidence: 0.91,
+    phase: "confirmed",
+    reason: "真实 MiMo 连续证据确认",
+    source: "mimo_visual",
+  }));
+  state = applyEvent(state, event(7, "care_card", {
+    card_id: "heartbeat-1",
+    event_id: "activity-6",
+    kind: "family_heartbeat",
+    title: "厨房里的家庭心跳",
+    body: "真实做饭确认已记录；本地短片与实景授权相互独立。",
+    occurred_at_ms: 1_000,
+    share_state: "local_only",
+  }));
+  state = applyEvent(state, event(8, "media_grant", {
+    grant_id: "grant-3",
+    event_id: "activity-6",
+    scope: "kitchen_moment",
+    expires_at_ms: 30_000,
+    status: "active",
+  }));
+  assert.equal(selectActiveMediaGrant(state, 2_000)?.grant_id, "grant-3");
+
+  state = applyEvent(state, event(9, "care_card", {
+    ...state.careCard,
+    share_state: "expired",
+  }));
+  assert.equal(selectActiveMediaGrant(state, 2_000)?.grant_id, "grant-3");
+
+  state = applyEvent(state, event(10, "scene_state", {
     scene_id: "bathroom",
     visual_mode: "skeleton_only",
   }));
   assert.equal(selectActiveMediaGrant(state, 2_000), null);
+});
+
+test("viewer grant fallback expires by server-issued duration despite a slow absolute clock", () => {
+  let state = createViewerState();
+  state = reduceViewerState(state, { type: "viewer_ready", viewerId: "viewer-1" });
+  state = reduceViewerState(state, { type: "connected" });
+  state = applyEvent(state, event(1, "scene_state", {
+    scene_id: "fall",
+    visual_mode: "abstract_environment",
+  }));
+  state = applyEvent(state, event(2, "alarm_state", {
+    event_id: "fall-1",
+    phase: "escalated",
+    trigger: "check_in_timeout",
+    message: "已升级",
+    response_deadline_ms: null,
+    media_scope: "fall_emergency",
+  }));
+  const grantEvent = {
+    ...event(3, "media_grant", {
+      grant_id: "grant-clock",
+      event_id: "fall-1",
+      scope: "fall_emergency",
+      expires_at_ms: 160_000,
+      status: "active",
+    }),
+    timestamp_ms: 100_000,
+  };
+  state = reduceViewerState(state, {
+    type: "demo_event",
+    event: grantEvent,
+    receivedAtMs: 10_000,
+  });
+  assert.equal(selectActiveMediaGrant(state, 69_999)?.grant_id, "grant-clock");
+  assert.equal(selectActiveMediaGrant(state, 70_000), null);
+});
+
+test("forwarded media signal buffer is bounded and drains only matching signals", () => {
+  const buffer = createForwardedMediaSignalBuffer(3);
+  buffer.push({ grant_id: "grant-old", signal_type: "offer" });
+  buffer.push({ grant_id: "grant-other", signal_type: "offer" });
+  buffer.push({ grant_id: "grant-1", signal_type: "offer" });
+  buffer.push({ grant_id: "grant-1", signal_type: "ice_candidate" });
+
+  assert.equal(buffer.size(), 3);
+  assert.deepEqual(
+    buffer.drain((signal) => signal.grant_id === "grant-1"),
+    [
+      { grant_id: "grant-1", signal_type: "offer" },
+      { grant_id: "grant-1", signal_type: "ice_candidate" },
+    ],
+  );
+  assert.equal(buffer.size(), 1);
+  assert.deepEqual(buffer.drain(), [{ grant_id: "grant-other", signal_type: "offer" }]);
+  assert.throws(() => createForwardedMediaSignalBuffer(0), /positive integer/);
+});
+
+test("forwarded signal buffer preserves the only offer when ICE reaches capacity", () => {
+  const buffer = createForwardedMediaSignalBuffer(64);
+  const offer = {
+    grant_id: "grant-1",
+    target_id: "viewer-1",
+    from_id: "controller-1",
+    signal_type: "offer",
+  };
+  buffer.push(offer);
+  for (let index = 0; index < 64; index += 1) {
+    buffer.push({
+      grant_id: "grant-1",
+      target_id: "viewer-1",
+      from_id: "controller-1",
+      signal_type: "ice_candidate",
+      signal: { candidate: `candidate:${index}` },
+    });
+  }
+
+  const signals = buffer.drain();
+  assert.equal(signals.length, 64);
+  assert.equal(signals[0], offer);
+  assert.equal(signals.filter((signal) => signal.signal_type === "offer").length, 1);
+  assert.equal(signals.filter((signal) => signal.signal_type === "ice_candidate").length, 63);
 });

@@ -1,6 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 
-import { handleActivityRecognition } from "./activity";
+import {
+  handleActivityRecognition,
+  type ActivityRecognitionAttemptStart,
+  type ActivityRecognitionEvidence,
+  type ActivityVerdict,
+} from "./activity";
 import {
   handleDangerVoice,
   type DangerVoiceAttemptFinish,
@@ -46,6 +51,14 @@ const MAX_TRACKED_CLIENTS = 1_024;
 const SCENE_RECOGNITION_WINDOW_MS = 60_000;
 const MAX_SCENE_RECOGNITIONS_PER_WINDOW = 6;
 const SCENE_RECOGNITION_INFLIGHT_STALE_MS = 10_000;
+const ACTIVITY_COOKING_MIN_CONFIDENCE = 0.65;
+const ACTIVITY_EVIDENCE_MAX_GAP_MS = 10_000;
+const ACTIVITY_RECEIPT_TTL_MS = 15_000;
+const ACTIVITY_RECOGNITION_INFLIGHT_STALE_MS = 10_000;
+
+function kitchenActivityEventId(eventSequence: number): string {
+  return `activity-${eventSequence}`;
+}
 
 const MOVENET_KEYPOINT_NAMES = [
   "nose",
@@ -166,6 +179,20 @@ interface SceneRecognitionBudgetRow {
   inflight_started_at_ms: number | null;
 }
 
+interface ActivityRecognitionRow {
+  [key: string]: SqlStorageValue;
+  session_id: string;
+  consecutive: number;
+  last_observed_at_ms: number;
+  receipt_id: string | null;
+  receipt_expires_at_ms: number | null;
+  receipt_confidence: number | null;
+  receipt_after_event_sequence: number | null;
+  verified_event_sequence: number | null;
+  inflight_attempt_id: string | null;
+  inflight_started_at_ms: number | null;
+}
+
 interface DangerWatchdogRow {
   [key: string]: SqlStorageValue;
   session_id: string;
@@ -282,6 +309,20 @@ export class DemoRoom extends DurableObject<Env> {
           inflight_request_id TEXT,
           inflight_started_at_ms INTEGER
         );
+        CREATE TABLE IF NOT EXISTS activity_recognition_evidence (
+          session_id TEXT PRIMARY KEY,
+          consecutive INTEGER NOT NULL CHECK (consecutive >= 0),
+          last_observed_at_ms INTEGER NOT NULL CHECK (last_observed_at_ms >= 0),
+          receipt_id TEXT UNIQUE,
+          receipt_expires_at_ms INTEGER,
+          receipt_confidence REAL,
+          receipt_after_event_sequence INTEGER,
+          verified_event_sequence INTEGER,
+          inflight_attempt_id TEXT,
+          inflight_started_at_ms INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS activity_receipt_lookup_idx
+          ON activity_recognition_evidence (receipt_id, receipt_expires_at_ms);
       `);
       await this.backfillLegacyDangerWatchdog();
     });
@@ -313,6 +354,140 @@ export class DemoRoom extends DurableObject<Env> {
     if (!/^[a-f0-9]{64}$/.test(tokenHash)) return false;
     const lease = this.currentLease(Date.now());
     return lease !== null && constantTimeHexEqual(lease.token_hash, tokenHash);
+  }
+
+  async beginActivityRecognitionAttempt(
+    tokenHash: string,
+  ): Promise<ActivityRecognitionAttemptStart> {
+    if (!/^[a-f0-9]{64}$/.test(tokenHash)) {
+      return { ok: false, error: "invalid_control_token" };
+    }
+    const now = Date.now();
+    const lease = this.currentLease(now);
+    if (
+      lease === null
+      || !constantTimeHexEqual(lease.token_hash, tokenHash)
+      || this.controllerSocket(lease.session_id) === null
+    ) return { ok: false, error: "invalid_control_token" };
+    const scene = this.structuredEvent(lease.session_id, "scene_state");
+    if (scene?.event_type !== "scene_state" || scene.payload.scene_id !== "kitchen") {
+      this.clearActivityRecognitionEvidence(lease.session_id);
+      return { ok: false, error: "activity_context_stale" };
+    }
+
+    const existing = this.activityRecognitionRow(lease.session_id);
+    if (
+      existing !== null
+      && existing.inflight_attempt_id !== null
+      && existing.inflight_started_at_ms !== null
+      && now - existing.inflight_started_at_ms < ACTIVITY_RECOGNITION_INFLIGHT_STALE_MS
+    ) return { ok: false, error: "activity_request_in_progress" };
+
+    const attemptId = crypto.randomUUID();
+    this.ctx.storage.sql.exec(
+      `INSERT INTO activity_recognition_evidence
+         (session_id, consecutive, last_observed_at_ms, receipt_id,
+          receipt_expires_at_ms, receipt_confidence, receipt_after_event_sequence,
+          verified_event_sequence, inflight_attempt_id, inflight_started_at_ms)
+       VALUES (?, 0, 0, NULL, NULL, NULL, NULL, NULL, ?, ?)
+       ON CONFLICT(session_id) DO UPDATE SET
+         inflight_attempt_id = excluded.inflight_attempt_id,
+         inflight_started_at_ms = excluded.inflight_started_at_ms`,
+      lease.session_id,
+      attemptId,
+      now,
+    );
+    return { ok: true, attempt_id: attemptId };
+  }
+
+  async cancelActivityRecognitionAttempt(
+    tokenHash: string,
+    attemptId: string,
+  ): Promise<void> {
+    if (!/^[a-f0-9]{64}$/.test(tokenHash) || !/^[a-f0-9-]{36}$/i.test(attemptId)) return;
+    const lease = this.currentLease(Date.now());
+    if (lease === null || !constantTimeHexEqual(lease.token_hash, tokenHash)) return;
+    this.ctx.storage.sql.exec(
+      `UPDATE activity_recognition_evidence
+          SET inflight_attempt_id = NULL,
+              inflight_started_at_ms = NULL
+        WHERE session_id = ? AND inflight_attempt_id = ?`,
+      lease.session_id,
+      attemptId,
+    );
+  }
+
+  async finishActivityRecognitionAttempt(
+    tokenHash: string,
+    attemptId: string,
+    verdict: ActivityVerdict,
+  ): Promise<ActivityRecognitionEvidence | null> {
+    if (
+      !/^[a-f0-9]{64}$/.test(tokenHash)
+      || !/^[a-f0-9-]{36}$/i.test(attemptId)
+      || !this.isActivityVerdict(verdict)
+    ) return null;
+    const now = Date.now();
+    const lease = this.currentLease(now);
+    if (
+      lease === null
+      || !constantTimeHexEqual(lease.token_hash, tokenHash)
+      || this.controllerSocket(lease.session_id) === null
+    ) return null;
+    const scene = this.structuredEvent(lease.session_id, "scene_state");
+    const row = this.activityRecognitionRow(lease.session_id);
+    if (
+      scene?.event_type !== "scene_state"
+      || scene.payload.scene_id !== "kitchen"
+      || row === null
+    ) {
+      this.clearActivityRecognitionEvidence(lease.session_id);
+      return null;
+    }
+    if (row.inflight_attempt_id !== attemptId) return null;
+    if (
+      row.inflight_started_at_ms === null
+      || now - row.inflight_started_at_ms > ACTIVITY_RECOGNITION_INFLIGHT_STALE_MS
+    ) {
+      this.clearActivityRecognitionEvidence(lease.session_id);
+      return null;
+    }
+
+    const isCooking = verdict.classification === "cooking"
+      && verdict.confidence >= ACTIVITY_COOKING_MIN_CONFIDENCE;
+    const consecutive = isCooking
+      ? row.last_observed_at_ms > 0
+        && now - row.last_observed_at_ms <= ACTIVITY_EVIDENCE_MAX_GAP_MS
+        ? row.consecutive + 1
+        : 1
+      : 0;
+    const receiptId = consecutive >= 2 ? `activity-receipt-${randomHex(16)}` : null;
+    const receiptExpiresAtMs = receiptId === null ? null : now + ACTIVITY_RECEIPT_TTL_MS;
+    const eventSequenceFloor = receiptId === null
+      ? null
+      : this.eventSequence(lease.session_id).last_event_sequence;
+    this.ctx.storage.sql.exec(
+      `UPDATE activity_recognition_evidence
+          SET consecutive = ?,
+              last_observed_at_ms = ?,
+              receipt_id = ?,
+              receipt_expires_at_ms = ?,
+              receipt_confidence = ?,
+              receipt_after_event_sequence = ?,
+              verified_event_sequence = NULL,
+              inflight_attempt_id = NULL,
+              inflight_started_at_ms = NULL
+        WHERE session_id = ? AND inflight_attempt_id = ?`,
+      consecutive,
+      isCooking ? now : 0,
+      receiptId,
+      receiptExpiresAtMs,
+      receiptId === null ? null : verdict.confidence,
+      eventSequenceFloor,
+      lease.session_id,
+      attemptId,
+    );
+    return { receipt_id: receiptId, consecutive };
   }
 
   async beginDangerVoiceAttempt(
@@ -462,33 +637,23 @@ export class DemoRoom extends DurableObject<Env> {
 
   async alarm(): Promise<void> {
     const now = Date.now();
-    const watchdog = this.activeDangerWatchdog();
-    if (watchdog === null) return;
-
+    this.expireAllDueGrants(now);
     const lease = this.leaseRow();
-    if (
-      lease === null
-      || lease.session_id !== watchdog.session_id
-      || lease.expires_at_ms <= now
-    ) {
-      if (this.escalateDangerWatchdog(watchdog, now) === null) {
-        throw new Error("danger watchdog could not be escalated");
+    if (lease !== null && lease.expires_at_ms <= now) {
+      this.expireLease(lease, now);
+    } else {
+      const watchdog = this.activeDangerWatchdog();
+      if (watchdog !== null && (
+        lease === null
+        || lease.session_id !== watchdog.session_id
+        || watchdog.deadline_ms <= now
+      )) {
+        if (this.escalateDangerWatchdog(watchdog, now) === null) {
+          throw new Error("danger watchdog could not be escalated");
+        }
       }
-      await this.ctx.storage.deleteAlarm();
-      if (lease !== null && lease.session_id === watchdog.session_id) {
-        this.expireLease(lease, now);
-      }
-      return;
     }
-
-    if (watchdog.deadline_ms > now) {
-      await this.ctx.storage.setAlarm(Math.min(watchdog.deadline_ms, lease.expires_at_ms));
-      return;
-    }
-    if (this.escalateDangerWatchdog(watchdog, now) === null) {
-      throw new Error("danger watchdog could not be escalated");
-    }
-    await this.ctx.storage.deleteAlarm();
+    await this.scheduleNextAuthorityAlarm();
   }
 
   async beginSceneRecognitionAttempt(
@@ -656,6 +821,7 @@ export class DemoRoom extends DurableObject<Env> {
         ...attachment,
         leaseExpiresAtMs,
       } satisfies ControllerAttachment);
+      await this.scheduleNextAuthorityAlarm();
       safeSend(ws, JSON.stringify({ type: "heartbeat_ack", lease_expires_at_ms: leaseExpiresAtMs }));
       return;
     }
@@ -667,7 +833,7 @@ export class DemoRoom extends DurableObject<Env> {
     }
 
     if (validateMediaGrantRequest(decoded)) {
-      this.issueMediaGrant(ws, attachment, decoded, Date.now());
+      await this.issueMediaGrant(ws, attachment, decoded, Date.now());
       return;
     }
     if (isExactObject(decoded, ["type", "event_id", "scope", "expires_in_ms"])
@@ -764,6 +930,9 @@ export class DemoRoom extends DurableObject<Env> {
       // The lease remains briefly reconnectable, but event-scoped media is
       // fail-closed immediately when the publishing socket disappears.
       this.revokeAllActiveGrants(attachment.sessionId, Date.now(), null);
+      this.clearActivityRecognitionEvidence(attachment.sessionId);
+    } else if (attachment?.role === "viewer") {
+      this.removeViewerFromActiveAudiences(attachment.viewerId, Date.now());
     }
   }
 
@@ -771,6 +940,9 @@ export class DemoRoom extends DurableObject<Env> {
     const attachment = readAttachment(ws);
     if (attachment?.role === "controller") {
       this.revokeAllActiveGrants(attachment.sessionId, Date.now(), null);
+      this.clearActivityRecognitionEvidence(attachment.sessionId);
+    } else if (attachment?.role === "viewer") {
+      this.removeViewerFromActiveAudiences(attachment.viewerId, Date.now());
     }
   }
 
@@ -795,7 +967,7 @@ export class DemoRoom extends DurableObject<Env> {
       && now >= eventWatchdog.deadline_ms
     ) {
       this.escalateDangerWatchdog(eventWatchdog, now);
-      await this.ctx.storage.deleteAlarm();
+      await this.scheduleNextAuthorityAlarm();
       sendSocketError(ws, "danger_deadline_elapsed");
       return;
     }
@@ -807,7 +979,7 @@ export class DemoRoom extends DurableObject<Env> {
     ) {
       if (activeWatchdog !== null && now >= activeWatchdog.deadline_ms) {
         this.escalateDangerWatchdog(activeWatchdog, now);
-        await this.ctx.storage.deleteAlarm();
+        await this.scheduleNextAuthorityAlarm();
         sendSocketError(ws, "danger_deadline_elapsed");
       } else {
         sendSocketError(
@@ -932,7 +1104,7 @@ export class DemoRoom extends DurableObject<Env> {
         : acceptedCheckingDeadline;
       // Do not acknowledge or persist a safety promise until the wakeup exists.
       // If scheduling fails, the controller can retry the same sequence.
-      await this.ctx.storage.setAlarm(scheduledAt);
+      await this.scheduleAlarmIncluding(scheduledAt);
     }
 
     this.ctx.storage.transactionSync(() => {
@@ -997,11 +1169,17 @@ export class DemoRoom extends DurableObject<Env> {
       this.persistDangerAlarmCheckpoint(event);
     });
 
+    if (event.event_type === "scene_state" && event.payload.scene_id !== "kitchen") {
+      this.clearActivityRecognitionEvidence(attachment.sessionId);
+    } else if (event.event_type === "activity_state") {
+      this.bindOrInvalidateActivityFact(event, now);
+    }
+
     if (
       event.event_type === "alarm_state"
       && event.payload.phase !== "checking"
     ) {
-      await this.ctx.storage.deleteAlarm();
+      await this.scheduleNextAuthorityAlarm();
     }
 
     this.broadcastToAllViewers(event);
@@ -1013,7 +1191,7 @@ export class DemoRoom extends DurableObject<Env> {
     this.revokeInvalidatedGrants(event, ws);
   }
 
-  private issueMediaGrant(
+  private async issueMediaGrant(
     ws: WebSocket,
     attachment: ControllerAttachment,
     request: {
@@ -1022,20 +1200,25 @@ export class DemoRoom extends DurableObject<Env> {
       expires_in_ms: number;
     },
     now: number,
-  ): void {
+  ): Promise<void> {
     this.expireGrantRows(attachment.sessionId, now);
-    if (!this.isGrantEligible(attachment.sessionId, request.event_id, request.scope)) {
+    const kitchenFact = request.scope === "kitchen_moment"
+      ? this.eligibleKitchenFact(attachment.sessionId, request.event_id, now)
+      : null;
+    if (
+      request.scope === "kitchen_moment"
+        ? kitchenFact === null
+        : !this.isGrantEligible(attachment.sessionId, request.event_id, request.scope, now)
+    ) {
       sendSocketError(ws, "media_grant_not_eligible");
       return;
     }
     const existing = this.ctx.storage.sql.exec<GrantRow>(
       `SELECT grant_id, session_id, event_id, scope, expires_at_ms, status
          FROM media_grant
-        WHERE session_id = ? AND event_id = ? AND scope = ? AND status = 'active'
+        WHERE session_id = ? AND status = 'active'
         LIMIT 1`,
       attachment.sessionId,
-      request.event_id,
-      request.scope,
     ).toArray()[0];
     if (existing !== undefined) {
       sendSocketError(ws, "media_grant_already_active");
@@ -1047,14 +1230,17 @@ export class DemoRoom extends DurableObject<Env> {
       .filter((value): value is ViewerAttachment => value?.role === "viewer")
       .map((value) => value.viewerId);
     const uniqueViewerIds = [...new Set(viewerIds)].sort();
-    if (uniqueViewerIds.length === 0) {
+    if (uniqueViewerIds.length === 0 && request.scope !== "kitchen_moment") {
       sendSocketError(ws, "no_connected_viewers");
       return;
     }
 
-    const eventSequence = this.nextServerEventSequence(attachment.sessionId);
     const grantId = `grant-${randomHex(16)}`;
     const expiresAtMs = now + request.expires_in_ms;
+    // The authority wakeup exists before the active grant is made observable.
+    // A harmless early wakeup is preferable to a grant without a server clock.
+    await this.scheduleAlarmIncluding(expiresAtMs);
+    const eventSequence = this.nextServerEventSequence(attachment.sessionId);
     const payload: MediaGrantPayload = {
       grant_id: grantId,
       event_id: request.event_id,
@@ -1071,23 +1257,25 @@ export class DemoRoom extends DurableObject<Env> {
       payload,
     };
 
-    this.ctx.storage.sql.exec(
-      `INSERT INTO media_grant
-         (grant_id, session_id, event_id, scope, expires_at_ms, status)
-       VALUES (?, ?, ?, ?, ?, 'active')`,
-      grantId,
-      attachment.sessionId,
-      request.event_id,
-      request.scope,
-      expiresAtMs,
-    );
-    for (const viewerId of uniqueViewerIds) {
+    this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
-        `INSERT INTO media_grant_audience (grant_id, viewer_id) VALUES (?, ?)`,
+        `INSERT INTO media_grant
+           (grant_id, session_id, event_id, scope, expires_at_ms, status)
+         VALUES (?, ?, ?, ?, ?, 'active')`,
         grantId,
-        viewerId,
+        attachment.sessionId,
+        request.event_id,
+        request.scope,
+        expiresAtMs,
       );
-    }
+      for (const viewerId of uniqueViewerIds) {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO media_grant_audience (grant_id, viewer_id) VALUES (?, ?)`,
+          grantId,
+          viewerId,
+        );
+      }
+    });
 
     this.broadcastToViewerIds(uniqueViewerIds, event);
     safeSend(ws, JSON.stringify({
@@ -1111,10 +1299,7 @@ export class DemoRoom extends DurableObject<Env> {
       || grant.expires_at_ms <= now
     ) {
       if (grant?.status === "active" && grant.expires_at_ms <= now) {
-        this.ctx.storage.sql.exec(
-          "UPDATE media_grant SET status = 'expired' WHERE grant_id = ?",
-          grant.grant_id,
-        );
+        this.expireGrantRow(grant, now);
       }
       sendSocketError(ws, "invalid_media_grant");
       return;
@@ -1182,15 +1367,14 @@ export class DemoRoom extends DurableObject<Env> {
         (grant.scope === "kitchen_moment" && event.payload.scene_id !== "kitchen")
         || (grant.scope === "fall_emergency" && event.payload.scene_id !== "fall")
       );
-      const revokedByCard = event.event_type === "care_card"
+      const revokedByActivity = event.event_type === "activity_state"
         && grant.scope === "kitchen_moment"
-        && grant.event_id === event.payload.event_id
-        && event.payload.share_state !== "consented";
+        && this.eligibleKitchenFact(event.session_id, grant.event_id, now) === null;
       const revokedByAlarm = event.event_type === "alarm_state"
         && grant.scope === "fall_emergency"
         && grant.event_id === event.payload.event_id
         && event.payload.phase !== "escalated";
-      if (revokedByScene || revokedByCard || revokedByAlarm) {
+      if (revokedByScene || revokedByActivity || revokedByAlarm) {
         this.revokeGrantRow(grant, now, controller);
       }
     }
@@ -1240,15 +1424,11 @@ export class DemoRoom extends DurableObject<Env> {
     sessionId: string,
     eventId: string,
     scope: MediaGrantScope,
+    now = Date.now(),
   ): boolean {
     const scene = this.structuredEvent(sessionId, "scene_state");
     if (scope === "kitchen_moment") {
-      const event = this.structuredEvent(sessionId, "care_card");
-      return scene?.event_type === "scene_state"
-        && scene.payload.scene_id === "kitchen"
-        && event?.event_type === "care_card"
-        && event.payload.event_id === eventId
-        && event.payload.share_state === "consented";
+      return this.eligibleKitchenFact(sessionId, eventId, now) !== null;
     }
     const event = this.structuredEvent(sessionId, "alarm_state");
     return scene?.event_type === "scene_state"
@@ -1257,6 +1437,110 @@ export class DemoRoom extends DurableObject<Env> {
       && event.payload.event_id === eventId
       && event.payload.phase === "escalated"
       && event.payload.media_scope === "fall_emergency";
+  }
+
+  private eligibleKitchenFact(
+    sessionId: string,
+    activityEventId: string,
+    _now: number,
+  ): ActivityRecognitionRow | null {
+    const scene = this.structuredEvent(sessionId, "scene_state");
+    const activity = this.structuredEvent(sessionId, "activity_state");
+    const row = this.activityRecognitionRow(sessionId);
+    if (
+      scene?.event_type !== "scene_state"
+      || scene.payload.scene_id !== "kitchen"
+      || activity?.event_type !== "activity_state"
+      || activity.payload.phase !== "confirmed"
+      || activity.payload.source !== "mimo_visual"
+      || activity.payload.confidence === null
+      || row === null
+      || row.verified_event_sequence === null
+      || row.verified_event_sequence !== activity.event_sequence
+      || row.consecutive < 2
+      || kitchenActivityEventId(row.verified_event_sequence) !== activityEventId
+    ) return null;
+    return row;
+  }
+
+  private activityRecognitionRow(sessionId: string): ActivityRecognitionRow | null {
+    return this.ctx.storage.sql.exec<ActivityRecognitionRow>(
+      `SELECT session_id, consecutive, last_observed_at_ms, receipt_id,
+              receipt_expires_at_ms, receipt_confidence,
+              receipt_after_event_sequence, verified_event_sequence,
+              inflight_attempt_id, inflight_started_at_ms
+         FROM activity_recognition_evidence
+        WHERE session_id = ?`,
+      sessionId,
+    ).toArray()[0] ?? null;
+  }
+
+  private clearActivityRecognitionEvidence(sessionId: string): void {
+    this.ctx.storage.sql.exec(
+      "DELETE FROM activity_recognition_evidence WHERE session_id = ?",
+      sessionId,
+    );
+  }
+
+  private invalidateActivityReceipt(sessionId: string): void {
+    this.ctx.storage.sql.exec(
+      `UPDATE activity_recognition_evidence
+          SET receipt_id = NULL,
+              receipt_expires_at_ms = NULL,
+              receipt_confidence = NULL,
+              receipt_after_event_sequence = NULL,
+              verified_event_sequence = NULL
+        WHERE session_id = ?`,
+      sessionId,
+    );
+  }
+
+  private bindOrInvalidateActivityFact(
+    event: Extract<DemoEvent, { event_type: "activity_state" }>,
+    now: number,
+  ): void {
+    const row = this.activityRecognitionRow(event.session_id);
+    const matchesReceipt = event.payload.phase === "confirmed"
+      && event.payload.source === "mimo_visual"
+      && event.payload.confidence !== null
+      && row !== null
+      && row.receipt_id !== null
+      && row.receipt_expires_at_ms !== null
+      && row.receipt_expires_at_ms > now
+      && row.receipt_confidence === event.payload.confidence
+      && row.receipt_after_event_sequence !== null
+      && event.event_sequence > row.receipt_after_event_sequence
+      && row.consecutive >= 2;
+    if (!matchesReceipt || row === null) {
+      this.invalidateActivityReceipt(event.session_id);
+      return;
+    }
+    this.ctx.storage.sql.exec(
+      `UPDATE activity_recognition_evidence
+          SET receipt_id = NULL,
+              receipt_expires_at_ms = NULL,
+              receipt_confidence = NULL,
+              receipt_after_event_sequence = NULL,
+              verified_event_sequence = ?
+        WHERE session_id = ? AND receipt_id = ?`,
+      event.event_sequence,
+      event.session_id,
+      row.receipt_id,
+    );
+  }
+
+  private isActivityVerdict(value: ActivityVerdict): boolean {
+    return (
+      (value.classification === "cooking"
+        || value.classification === "not_cooking"
+        || value.classification === "uncertain")
+      && Number.isFinite(value.confidence)
+      && value.confidence >= 0
+      && value.confidence <= 1
+      && typeof value.reason === "string"
+      && value.reason.length >= 1
+      && value.reason.length <= 240
+    );
   }
 
   private structuredEvent(sessionId: string, eventType: DemoEventType): DemoEvent | null {
@@ -1574,12 +1858,12 @@ export class DemoRoom extends DurableObject<Env> {
       if (watchdog === null || this.escalateDangerWatchdog(watchdog, now) === null) {
         throw new Error("inconsistent legacy danger check-in could not be escalated");
       }
-      await this.ctx.storage.deleteAlarm();
+      await this.scheduleNextAuthorityAlarm();
       return;
     }
     if (eventToBroadcast !== null) this.broadcastToAllViewers(eventToBroadcast);
     if (watchdog === null || watchdog.status !== "checking") {
-      await this.ctx.storage.deleteAlarm();
+      await this.scheduleNextAuthorityAlarm();
       return;
     }
 
@@ -1594,10 +1878,10 @@ export class DemoRoom extends DurableObject<Env> {
       if (this.escalateDangerWatchdog(watchdog, now) === null) {
         throw new Error("legacy danger check-in could not be escalated");
       }
-      await this.ctx.storage.deleteAlarm();
+      await this.scheduleNextAuthorityAlarm();
       return;
     }
-    await this.ctx.storage.setAlarm(Math.min(deadline, lease.expires_at_ms));
+    await this.scheduleAlarmIncluding(Math.min(deadline, lease.expires_at_ms));
   }
 
   private dangerWatchdog(sessionId: string, eventId: string): DangerWatchdogRow | null {
@@ -1805,10 +2089,7 @@ export class DemoRoom extends DurableObject<Env> {
     const grant = this.grantById(grantId);
     if (grant === null || grant.session_id !== sessionId || grant.status !== "active") return null;
     if (grant.expires_at_ms <= now) {
-      this.ctx.storage.sql.exec(
-        "UPDATE media_grant SET status = 'expired' WHERE grant_id = ?",
-        grant.grant_id,
-      );
+      this.expireGrantRow(grant, now);
       return null;
     }
     return grant;
@@ -1835,13 +2116,53 @@ export class DemoRoom extends DurableObject<Env> {
   }
 
   private expireGrantRows(sessionId: string, now: number): void {
-    this.ctx.storage.sql.exec(
-      `UPDATE media_grant
-          SET status = 'expired'
-        WHERE session_id = ? AND status = 'active' AND expires_at_ms <= ?`,
+    const due = this.ctx.storage.sql.exec<GrantRow>(
+      `SELECT grant_id, session_id, event_id, scope, expires_at_ms, status
+         FROM media_grant
+        WHERE session_id = ? AND status = 'active' AND expires_at_ms <= ?
+        ORDER BY expires_at_ms ASC`,
       sessionId,
       now,
+    ).toArray();
+    for (const grant of due) this.expireGrantRow(grant, now);
+  }
+
+  private expireAllDueGrants(now: number): void {
+    const due = this.ctx.storage.sql.exec<GrantRow>(
+      `SELECT grant_id, session_id, event_id, scope, expires_at_ms, status
+         FROM media_grant
+        WHERE status = 'active' AND expires_at_ms <= ?
+        ORDER BY expires_at_ms ASC`,
+      now,
+    ).toArray();
+    for (const grant of due) this.expireGrantRow(grant, now);
+  }
+
+  private expireGrantRow(grant: GrantRow, now: number): void {
+    const changed = this.ctx.storage.sql.exec(
+      "UPDATE media_grant SET status = 'expired' WHERE grant_id = ? AND status = 'active'",
+      grant.grant_id,
     );
+    if (changed.rowsWritten === 0) return;
+    const event: DemoEvent = {
+      schema_version: DEMO_EVENT_SCHEMA_VERSION,
+      session_id: grant.session_id,
+      event_sequence: this.nextServerEventSequence(grant.session_id),
+      timestamp_ms: now,
+      event_type: "media_grant",
+      payload: {
+        grant_id: grant.grant_id,
+        event_id: grant.event_id,
+        scope: grant.scope,
+        expires_at_ms: grant.expires_at_ms,
+        status: "expired",
+      },
+    };
+    this.broadcastToViewerIds(this.grantViewerIds(grant.grant_id), event);
+    const controller = this.controllerSocket(grant.session_id);
+    if (controller !== null) {
+      safeSend(controller, JSON.stringify({ type: "media_grant_revoked", grant: event }));
+    }
   }
 
   private grantIncludesViewer(grantId: string, viewerId: string): boolean {
@@ -1862,6 +2183,46 @@ export class DemoRoom extends DurableObject<Env> {
         ORDER BY viewer_id ASC`,
       grantId,
     ).toArray().map((row) => row.viewer_id);
+  }
+
+  private removeViewerFromActiveAudiences(viewerId: string, now: number): void {
+    const grants = this.ctx.storage.sql.exec<GrantRow>(
+      `SELECT grant.grant_id, grant.session_id, grant.event_id, grant.scope,
+              grant.expires_at_ms, grant.status
+         FROM media_grant AS grant
+         JOIN media_grant_audience AS audience
+           ON audience.grant_id = grant.grant_id
+        WHERE audience.viewer_id = ? AND grant.status = 'active'`,
+      viewerId,
+    ).toArray();
+    this.ctx.storage.sql.exec(
+      "DELETE FROM media_grant_audience WHERE viewer_id = ?",
+      viewerId,
+    );
+    for (const grant of grants) {
+      if (grant.expires_at_ms <= now) continue;
+      const controller = this.controllerSocket(grant.session_id);
+      if (controller === null) continue;
+      const event: DemoEvent = {
+        schema_version: DEMO_EVENT_SCHEMA_VERSION,
+        session_id: grant.session_id,
+        event_sequence: this.nextServerEventSequence(grant.session_id),
+        timestamp_ms: now,
+        event_type: "media_grant",
+        payload: {
+          grant_id: grant.grant_id,
+          event_id: grant.event_id,
+          scope: grant.scope,
+          expires_at_ms: grant.expires_at_ms,
+          status: "active",
+        },
+      };
+      safeSend(controller, JSON.stringify({
+        type: "media_grant_accepted",
+        grant: event,
+        viewer_ids: this.grantViewerIds(grant.grant_id),
+      }));
+    }
   }
 
   private viewerSocket(viewerId: string): WebSocket | null {
@@ -1974,6 +2335,7 @@ export class DemoRoom extends DurableObject<Env> {
       this.ctx.storage.sql.exec("DELETE FROM media_grant");
       this.ctx.storage.sql.exec("DELETE FROM danger_voice_attempt");
       this.ctx.storage.sql.exec("DELETE FROM scene_recognition_budget");
+      this.ctx.storage.sql.exec("DELETE FROM activity_recognition_evidence");
       this.ctx.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
       this.ctx.storage.sql.exec("DELETE FROM danger_watchdog");
       this.ctx.storage.sql.exec("DELETE FROM demo_event_state");
@@ -2012,6 +2374,7 @@ export class DemoRoom extends DurableObject<Env> {
       }
     });
     if (currentAlarm !== null) this.broadcastToAllViewers(currentAlarm);
+    await this.scheduleNextAuthorityAlarm();
 
     return json({
       ok: true,
@@ -2070,6 +2433,7 @@ export class DemoRoom extends DurableObject<Env> {
       for (const event of this.replayableEvents(lease.session_id)) {
         safeSend(server, JSON.stringify(event));
       }
+      this.attachLateViewerToKitchenGrant(server, viewerId, lease.session_id, now);
     } else {
       const unresolvedEscalation = this.authoritativeEscalatedAlarm();
       if (unresolvedEscalation !== null) {
@@ -2086,6 +2450,47 @@ export class DemoRoom extends DurableObject<Env> {
       webSocket: client,
       headers: { "Sec-WebSocket-Protocol": VIEWER_PROTOCOL },
     });
+  }
+
+  private attachLateViewerToKitchenGrant(
+    viewer: WebSocket,
+    viewerId: string,
+    sessionId: string,
+    now: number,
+  ): void {
+    const controller = this.controllerSocket(sessionId);
+    if (controller === null) return;
+    const grant = this.activeGrants(sessionId, now).find((candidate) => (
+      candidate.scope === "kitchen_moment"
+      && this.eligibleKitchenFact(sessionId, candidate.event_id, now) !== null
+    ));
+    if (grant === undefined || this.grantIncludesViewer(grant.grant_id, viewerId)) return;
+
+    this.ctx.storage.sql.exec(
+      `INSERT OR IGNORE INTO media_grant_audience (grant_id, viewer_id) VALUES (?, ?)`,
+      grant.grant_id,
+      viewerId,
+    );
+    const event: DemoEvent = {
+      schema_version: DEMO_EVENT_SCHEMA_VERSION,
+      session_id: sessionId,
+      event_sequence: this.nextServerEventSequence(sessionId),
+      timestamp_ms: now,
+      event_type: "media_grant",
+      payload: {
+        grant_id: grant.grant_id,
+        event_id: grant.event_id,
+        scope: grant.scope,
+        expires_at_ms: grant.expires_at_ms,
+        status: "active",
+      },
+    };
+    safeSend(viewer, JSON.stringify(event));
+    safeSend(controller, JSON.stringify({
+      type: "media_grant_accepted",
+      grant: event,
+      viewer_ids: this.grantViewerIds(grant.grant_id),
+    }));
   }
 
   private async openController(request: Request): Promise<Response> {
@@ -2171,6 +2576,7 @@ export class DemoRoom extends DurableObject<Env> {
     const watchdog = this.activeDangerWatchdog(lease.session_id);
     if (watchdog !== null) this.escalateDangerWatchdog(watchdog, now);
     this.revokeAllActiveGrants(lease.session_id, now, null);
+    this.clearActivityRecognitionEvidence(lease.session_id);
     this.ctx.storage.sql.exec(
       "DELETE FROM control_lease WHERE singleton = 1 AND session_id = ?",
       lease.session_id,
@@ -2187,7 +2593,7 @@ export class DemoRoom extends DurableObject<Env> {
       const watchdog = this.activeDangerWatchdog(lease.session_id);
       if (watchdog !== null) this.escalateDangerWatchdog(watchdog, now);
       this.revokeAllActiveGrants(lease.session_id, now, null);
-      await this.ctx.storage.deleteAlarm();
+      this.clearActivityRecognitionEvidence(lease.session_id);
     }
     this.ctx.storage.sql.exec(
       "DELETE FROM control_lease WHERE singleton = 1 AND token_hash = ?",
@@ -2202,12 +2608,46 @@ export class DemoRoom extends DurableObject<Env> {
         socket.close(1000, "controller_released");
       }
     }
+    await this.scheduleNextAuthorityAlarm();
   }
 
   private openSockets(tag: "controller" | "viewer"): WebSocket[] {
     return this.ctx
       .getWebSockets(tag)
       .filter((socket) => socket.readyState === WebSocket.OPEN);
+  }
+
+  private authorityDeadline(): number | null {
+    const deadlines: number[] = [];
+    const lease = this.leaseRow();
+    if (lease !== null) deadlines.push(lease.expires_at_ms);
+    const watchdog = this.activeDangerWatchdog();
+    if (watchdog !== null) deadlines.push(watchdog.deadline_ms);
+    const grant = this.ctx.storage.sql.exec<{ [key: string]: SqlStorageValue; expires_at_ms: number }>(
+      `SELECT expires_at_ms
+         FROM media_grant
+        WHERE status = 'active'
+        ORDER BY expires_at_ms ASC
+        LIMIT 1`,
+    ).toArray()[0];
+    if (grant !== undefined) deadlines.push(grant.expires_at_ms);
+    return deadlines.length === 0 ? null : Math.min(...deadlines);
+  }
+
+  private async scheduleAlarmIncluding(candidateMs: number): Promise<void> {
+    const persisted = this.authorityDeadline();
+    await this.ctx.storage.setAlarm(
+      persisted === null ? candidateMs : Math.min(candidateMs, persisted),
+    );
+  }
+
+  private async scheduleNextAuthorityAlarm(): Promise<void> {
+    const deadline = this.authorityDeadline();
+    if (deadline === null) {
+      await this.ctx.storage.deleteAlarm();
+    } else {
+      await this.ctx.storage.setAlarm(deadline);
+    }
   }
 
   private latestControllerFrame(now: number): FrameLandmarks | null {
@@ -2289,7 +2729,15 @@ const worker = {
         const response = await handleActivityRecognition(
           request,
           env,
-          (tokenHash) => stub.authorizeControlTokenHash(tokenHash),
+          {
+            beginAttempt: (tokenHash) => stub.beginActivityRecognitionAttempt(tokenHash),
+            cancelAttempt: (tokenHash, attemptId) => (
+              stub.cancelActivityRecognitionAttempt(tokenHash, attemptId)
+            ),
+            finishAttempt: (tokenHash, attemptId, verdict) => (
+              stub.finishActivityRecognitionAttempt(tokenHash, attemptId, verdict)
+            ),
+          },
         );
         return withCors(response, origin);
       }

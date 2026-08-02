@@ -9,6 +9,7 @@ export function createViewerState() {
     eventReceivedAtMs: null,
     scene: null,
     activity: null,
+    activityEventSequence: null,
     careCard: null,
     alarm: null,
     mediaGrant: null,
@@ -32,6 +33,7 @@ function resetViewerSession(state, sessionId) {
     eventReceivedAtMs: null,
     scene: null,
     activity: null,
+    activityEventSequence: null,
     careCard: null,
     alarm: null,
     mediaGrant: null,
@@ -50,6 +52,11 @@ export function selectActiveMediaGrant(state, nowMs) {
     || !grant
     || grant.status !== "active"
     || grant.expires_at_ms <= nowMs
+    || (
+      Number.isFinite(grant.received_at_ms)
+      && Number.isFinite(grant.server_ttl_ms)
+      && grant.received_at_ms + grant.server_ttl_ms <= nowMs
+    )
   ) {
     return null;
   }
@@ -59,7 +66,8 @@ export function selectActiveMediaGrant(state, nowMs) {
 
   if (grant.scope === "fall_emergency") {
     const alarm = state.alarm;
-    return alarm
+    return scene.scene_id === "fall"
+      && alarm
       && alarm.event_id === grant.event_id
       && alarm.phase === "escalated"
       && alarm.media_scope === "fall_emergency"
@@ -68,11 +76,13 @@ export function selectActiveMediaGrant(state, nowMs) {
   }
 
   if (grant.scope === "kitchen_moment") {
-    const card = state.careCard;
+    const activity = state.activity;
     return scene.scene_id === "kitchen"
-      && card
-      && card.event_id === grant.event_id
-      && card.share_state === "consented"
+      && activity
+      && activity.phase === "confirmed"
+      && activity.source === "mimo_visual"
+      && Number.isSafeInteger(state.activityEventSequence)
+      && grant.event_id === `activity-${state.activityEventSequence}`
       ? grant
       : null;
   }
@@ -146,14 +156,20 @@ export function reduceViewerState(state, action) {
         eventReceivedAtMs: action.receivedAtMs,
       };
       if (event.event_type === "scene_state") next.scene = event.payload;
-      if (event.event_type === "activity_state") next.activity = event.payload;
+      if (event.event_type === "activity_state") {
+        next.activity = event.payload;
+        next.activityEventSequence = event.event_sequence;
+      }
       if (event.event_type === "care_card") next.careCard = event.payload;
       if (event.event_type === "alarm_state") next.alarm = event.payload;
       if (event.event_type === "media_grant") {
-        if (
-          event.payload.status === "active"
-          || next.mediaGrant?.grant_id === event.payload.grant_id
-        ) {
+        if (event.payload.status === "active") {
+          next.mediaGrant = {
+            ...event.payload,
+            received_at_ms: action.receivedAtMs,
+            server_ttl_ms: Math.max(0, event.payload.expires_at_ms - event.timestamp_ms),
+          };
+        } else if (next.mediaGrant?.grant_id === event.payload.grant_id) {
           next.mediaGrant = event.payload;
         }
       }

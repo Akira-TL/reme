@@ -8,10 +8,35 @@ const DEFAULT_MIMO_MODEL = "mimo-v2.5";
 
 type ActivityClassification = "cooking" | "not_cooking" | "uncertain";
 
-interface ActivityVerdict {
+export interface ActivityVerdict {
   classification: ActivityClassification;
   confidence: number;
   reason: string;
+}
+
+export interface ActivityRecognitionEvidence {
+  receipt_id: string | null;
+  consecutive: number;
+}
+
+export type ActivityRecognitionAttemptStart =
+  | { ok: true; attempt_id: string }
+  | {
+    ok: false;
+    error:
+      | "invalid_control_token"
+      | "activity_context_stale"
+      | "activity_request_in_progress";
+  };
+
+export interface ActivityRecognitionAuthority {
+  beginAttempt(tokenHash: string): Promise<ActivityRecognitionAttemptStart>;
+  cancelAttempt(tokenHash: string, attemptId: string): Promise<void>;
+  finishAttempt(
+    tokenHash: string,
+    attemptId: string,
+    verdict: ActivityVerdict,
+  ): Promise<ActivityRecognitionEvidence | null>;
 }
 
 type BoundedRead =
@@ -21,7 +46,7 @@ type BoundedRead =
 export async function handleActivityRecognition(
   request: Request,
   env: Env,
-  authorizeTokenHash: (tokenHash: string) => Promise<boolean>,
+  authority: ActivityRecognitionAuthority,
 ): Promise<Response> {
   const token = readBearerToken(request);
   if (token === null) {
@@ -31,9 +56,6 @@ export async function handleActivityRecognition(
     return activityJson({ ok: false, error: "invalid_control_token" }, 401);
   }
   const tokenHash = await sha256Hex(token);
-  if (!await authorizeTokenHash(tokenHash)) {
-    return activityJson({ ok: false, error: "invalid_control_token" }, 401);
-  }
 
   const contentType = request.headers.get("Content-Type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
@@ -79,100 +101,121 @@ export async function handleActivityRecognition(
     return activityJson({ ok: false, error: "activity_recognition_misconfigured" }, 503);
   }
 
-  const startedAt = performance.now();
-  const timeoutSignal = AbortSignal.timeout(MIMO_TIMEOUT_MS);
-  const upstreamSignal = AbortSignal.any([request.signal, timeoutSignal]);
-  let upstream: Response;
+  const attempt = await authority.beginAttempt(tokenHash);
+  if (!attempt.ok) {
+    return activityJson(
+      { ok: false, error: attempt.error },
+      attempt.error === "invalid_control_token" ? 401 : 409,
+    );
+  }
+
+  let attemptFinished = false;
   try {
-    upstream = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "User-Agent": "reme-demo-relay/0.2",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "system",
-            content: [
-              "你是家庭照护演示的保守视觉分类器。",
-              "只判断当前单张图片是否明确显示人物正在做饭或备菜。",
-              "洗碗、打扫、仅站在厨房、看不清或证据不足都不要判 cooking。",
-              "只返回 JSON：classification 必须是 cooking、not_cooking 或 uncertain；",
-              "confidence 是 0 到 1；reason 是不超过 240 字的一句可观察依据。",
-            ].join(""),
-          },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "请保守分类这一个最小现场样本。" },
-              {
-                type: "image_url",
-                image_url: { url: `data:image/jpeg;base64,${decoded.image_b64}` },
-              },
-            ],
-          },
-        ],
-        max_completion_tokens: 160,
-        temperature: 0,
-        thinking: { type: "disabled" },
-        response_format: { type: "json_object" },
-      }),
-      signal: upstreamSignal,
+    const startedAt = performance.now();
+    const timeoutSignal = AbortSignal.timeout(MIMO_TIMEOUT_MS);
+    const upstreamSignal = AbortSignal.any([request.signal, timeoutSignal]);
+    let upstream: Response;
+    try {
+      upstream = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "User-Agent": "reme-demo-relay/0.2",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "system",
+              content: [
+                "你是家庭照护演示的保守视觉分类器。",
+                "只判断当前单张图片是否明确显示人物正在做饭或备菜。",
+                "洗碗、打扫、仅站在厨房、看不清或证据不足都不要判 cooking。",
+                "只返回 JSON：classification 必须是 cooking、not_cooking 或 uncertain；",
+                "confidence 是 0 到 1；reason 是不超过 240 字的一句可观察依据。",
+              ].join(""),
+            },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "请保守分类这一个最小现场样本。" },
+                {
+                  type: "image_url",
+                  image_url: { url: `data:image/jpeg;base64,${decoded.image_b64}` },
+                },
+              ],
+            },
+          ],
+          max_completion_tokens: 160,
+          temperature: 0,
+          thinking: { type: "disabled" },
+          response_format: { type: "json_object" },
+        }),
+        signal: upstreamSignal,
+      });
+    } catch (error) {
+      const requestCancelled = request.signal.aborted && !timeoutSignal.aborted;
+      const timedOut = timeoutSignal.aborted
+        || (error instanceof DOMException && error.name === "TimeoutError");
+      return activityJson(
+        {
+          ok: false,
+          error: requestCancelled
+            ? "request_cancelled"
+            : timedOut ? "mimo_timeout" : "mimo_unavailable",
+        },
+        requestCancelled ? 499 : timedOut ? 504 : 502,
+      );
+    }
+
+    if (request.signal.aborted) {
+      if (upstream.body !== null) await upstream.body.cancel().catch(() => undefined);
+      return activityJson({ ok: false, error: "request_cancelled" }, 499);
+    }
+    if (timeoutSignal.aborted) {
+      if (upstream.body !== null) await upstream.body.cancel().catch(() => undefined);
+      return activityJson({ ok: false, error: "mimo_timeout" }, 504);
+    }
+    if (!upstream.ok) {
+      return activityJson(
+        { ok: false, error: "mimo_unavailable", upstream_status: upstream.status },
+        502,
+      );
+    }
+    const responseBody = await readBoundedText(upstream.body, MAX_MIMO_RESPONSE_BYTES);
+    if (request.signal.aborted) {
+      return activityJson({ ok: false, error: "request_cancelled" }, 499);
+    }
+    if (timeoutSignal.aborted) {
+      return activityJson({ ok: false, error: "mimo_timeout" }, 504);
+    }
+    if (!responseBody.ok) {
+      return activityJson({ ok: false, error: "invalid_mimo_response" }, 502);
+    }
+    const verdict = parseMimoVerdict(responseBody.text);
+    if (verdict === null) {
+      return activityJson({ ok: false, error: "invalid_mimo_response" }, 502);
+    }
+    const evidence = await authority.finishAttempt(tokenHash, attempt.attempt_id, verdict);
+    if (evidence === null) {
+      return activityJson({ ok: false, error: "activity_context_stale" }, 409);
+    }
+    attemptFinished = true;
+
+    return activityJson({
+      ok: true,
+      ...verdict,
+      ...evidence,
+      model,
+      latency_ms: Math.max(0, Math.round(performance.now() - startedAt)),
     });
-  } catch (error) {
-    const requestCancelled = request.signal.aborted && !timeoutSignal.aborted;
-    const timedOut = timeoutSignal.aborted
-      || (error instanceof DOMException && error.name === "TimeoutError");
-    return activityJson(
-      {
-        ok: false,
-        error: requestCancelled
-          ? "request_cancelled"
-          : timedOut ? "mimo_timeout" : "mimo_unavailable",
-      },
-      requestCancelled ? 499 : timedOut ? 504 : 502,
-    );
+  } finally {
+    if (!attemptFinished) {
+      await authority.cancelAttempt(tokenHash, attempt.attempt_id).catch(() => undefined);
+    }
   }
-
-  if (request.signal.aborted) {
-    if (upstream.body !== null) await upstream.body.cancel().catch(() => undefined);
-    return activityJson({ ok: false, error: "request_cancelled" }, 499);
-  }
-  if (timeoutSignal.aborted) {
-    if (upstream.body !== null) await upstream.body.cancel().catch(() => undefined);
-    return activityJson({ ok: false, error: "mimo_timeout" }, 504);
-  }
-  if (!upstream.ok) {
-    return activityJson(
-      { ok: false, error: "mimo_unavailable", upstream_status: upstream.status },
-      502,
-    );
-  }
-  const responseBody = await readBoundedText(upstream.body, MAX_MIMO_RESPONSE_BYTES);
-  if (request.signal.aborted) {
-    return activityJson({ ok: false, error: "request_cancelled" }, 499);
-  }
-  if (timeoutSignal.aborted) {
-    return activityJson({ ok: false, error: "mimo_timeout" }, 504);
-  }
-  if (!responseBody.ok) {
-    return activityJson({ ok: false, error: "invalid_mimo_response" }, 502);
-  }
-  const verdict = parseMimoVerdict(responseBody.text);
-  if (verdict === null) {
-    return activityJson({ ok: false, error: "invalid_mimo_response" }, 502);
-  }
-
-  return activityJson({
-    ok: true,
-    ...verdict,
-    model,
-    latency_ms: Math.max(0, Math.round(performance.now() - startedAt)),
-  });
 }
 
 function readBearerToken(request: Request): string | null {

@@ -4,6 +4,7 @@
 - Date: 2026-08-02
 - Owner: C（跨设备演示）
 - Depends on: ADR-0003、ADR-0005、ADR-0007
+- Superseded-in-part by: ADR-0011（仅 LBX 路演：厨房本人同意 Gate 与静态 audience 两点）
 
 ## 背景
 

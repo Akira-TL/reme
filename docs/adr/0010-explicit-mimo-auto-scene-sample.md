@@ -5,6 +5,7 @@
 - Date: 2026-08-02
 - Owner: C（LBX 公网共享 Demo）
 - Depends on: ADR-0003、ADR-0005、ADR-0008
+- Clarified by: ADR-0011（自动场景提议仍不得触发 activity、短片或媒体 grant）
 
 ## 背景
 

@@ -41,6 +41,8 @@ test("activity recognition sends one exact JPEG request and validates the result
         reason: "正在使用锅具",
         model: "mimo-v2.5",
         latency_ms: 850,
+        receipt_id: "activity-receipt-0123456789abcdef0123456789abcdef",
+        consecutive: 2,
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     },
   );
@@ -49,6 +51,8 @@ test("activity recognition sends one exact JPEG request and validates the result
   assert.deepEqual(JSON.parse(request.init.body), { image_b64: "jpeg-base64" });
   assert.equal(result.classification, "cooking");
   assert.equal(result.latencyMs, 850);
+  assert.equal(result.receiptId, "activity-receipt-0123456789abcdef0123456789abcdef");
+  assert.equal(result.consecutive, 2);
 });
 
 test("activity recognition exposes relay errors and rejects malformed successes", async () => {
@@ -66,6 +70,22 @@ test("activity recognition exposes relay errors and rejects malformed successes"
         confidence: 4,
         reason: "",
         model: "mimo",
+        receipt_id: null,
+        consecutive: 0,
+      }), { status: 200 })
+    )),
+    /不符合合同/,
+  );
+  await assert.rejects(
+    recognizeCooking("https://relay.example", "token", "jpeg", async () => (
+      new Response(JSON.stringify({
+        ok: true,
+        classification: "cooking",
+        confidence: 0.9,
+        reason: "正在备菜",
+        model: "mimo",
+        receipt_id: "client-forged",
+        consecutive: 2,
       }), { status: 200 })
     )),
     /不符合合同/,

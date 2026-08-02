@@ -1,6 +1,7 @@
 import { captureJpegBase64 } from "./activityRecognition.js";
 
 export const AUTOMATIC_SCENE_SAMPLE_DURATION_MS = 2_000;
+export const AUTOMATIC_SCENE_RECORDER_SETTLE_TIMEOUT_MS = 1_000;
 const MAX_AUTOMATIC_SCENE_CLIP_BYTES = 2 * 1_024 * 1_024;
 const MAX_AUTOMATIC_SCENE_KEYFRAME_BYTES = 640 * 1_024;
 export const MAX_AUTOMATIC_SCENE_CLIP_BASE64_CHARS = Math.ceil(
@@ -317,13 +318,16 @@ export function recordAutomaticSceneSample(
 
   return new Promise((resolve, reject) => {
     const chunks = [];
-    let timer = null;
+    let captureTimer = null;
+    let settlementTimer = null;
     let settled = false;
     let finishing = false;
 
-    const clearTimer = () => {
-      if (timer !== null) clearTimeoutImpl(timer);
-      timer = null;
+    const clearTimers = () => {
+      if (captureTimer !== null) clearTimeoutImpl(captureTimer);
+      if (settlementTimer !== null) clearTimeoutImpl(settlementTimer);
+      captureTimer = null;
+      settlementTimer = null;
     };
     const removeRecorderListeners = () => {
       recorder.removeEventListener?.("dataavailable", onData);
@@ -331,7 +335,7 @@ export function recordAutomaticSceneSample(
       recorder.removeEventListener?.("error", onError);
     };
     const cleanup = () => {
-      clearTimer();
+      clearTimers();
       removeRecorderListeners();
       signal?.removeEventListener?.("abort", onAbort);
     };
@@ -350,10 +354,28 @@ export function recordAutomaticSceneSample(
         settle(reject, error);
       }
     };
+    const settleRecorderTimeout = () => {
+      if (settled) return;
+      try {
+        if (recorder.state !== "inactive") recorder.stop();
+      } catch {
+        // The bounded keyframe fallback remains available even when shutdown fails.
+      }
+      fallback();
+    };
     const stopRecorder = () => {
-      if (recorder.state === "inactive") return;
+      if (recorder.state === "inactive") {
+        fallback();
+        return;
+      }
       try {
         recorder.stop();
+        if (!settled) {
+          settlementTimer = setTimeoutImpl(
+            settleRecorderTimeout,
+            AUTOMATIC_SCENE_RECORDER_SETTLE_TIMEOUT_MS,
+          );
+        }
       } catch {
         fallback();
       }
@@ -361,7 +383,8 @@ export function recordAutomaticSceneSample(
     const finishClip = async () => {
       if (settled || finishing) return;
       finishing = true;
-      clearTimer();
+      if (captureTimer !== null) clearTimeoutImpl(captureTimer);
+      captureTimer = null;
       if (chunks.length === 0) {
         fallback();
         return;
@@ -428,7 +451,7 @@ export function recordAutomaticSceneSample(
     signal?.addEventListener?.("abort", onAbort, { once: true });
     try {
       recorder.start(250);
-      if (!settled) timer = setTimeoutImpl(stopRecorder, durationMs);
+      if (!settled) captureTimer = setTimeoutImpl(stopRecorder, durationMs);
     } catch {
       fallback();
     }

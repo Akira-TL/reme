@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  AUTOMATIC_SCENE_RECORDER_SETTLE_TIMEOUT_MS,
   MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS,
   recognizeScene,
   recordAutomaticSceneSample,
@@ -263,8 +264,8 @@ test("automatic sampling records a two-second video-only MP4 without stopping ca
   const sample = await recordAutomaticSceneSample(stream, {}, {
     MediaRecorderImpl: FakeMediaRecorder,
     MediaStreamImpl: FakeMediaStream,
-    setTimeoutImpl(callback) {
-      queueMicrotask(callback);
+    setTimeoutImpl(callback, delayMs) {
+      if (delayMs !== AUTOMATIC_SCENE_RECORDER_SETTLE_TIMEOUT_MS) queueMicrotask(callback);
       return 7;
     },
     clearTimeoutImpl() {},
@@ -285,6 +286,39 @@ test("automatic sampling records a two-second video-only MP4 without stopping ca
     media_b64: "AAEC",
     duration_ms: 2_000,
   });
+  assert.equal(track.stopCalls, 0);
+});
+
+test("automatic sampling falls back when recorder stop never settles", async () => {
+  class HangingStopRecorder extends FakeMediaRecorder {
+    stop() {
+      this.stopCalls += 1;
+      this.state = "inactive";
+    }
+  }
+  const scheduled = [];
+  const cleared = [];
+  const { stream, track } = sharedCamera();
+  const promise = recordAutomaticSceneSample(stream, {}, {
+    MediaRecorderImpl: HangingStopRecorder,
+    MediaStreamImpl: FakeMediaStream,
+    setTimeoutImpl(callback, delayMs) {
+      const id = scheduled.length + 1;
+      scheduled.push({ id, callback, delayMs });
+      return id;
+    },
+    clearTimeoutImpl: (id) => cleared.push(id),
+    captureJpegImpl: () => KEYFRAME_SAMPLE.media_b64,
+  });
+
+  assert.equal(scheduled[0].delayMs, 2_000);
+  scheduled[0].callback();
+  assert.equal(HangingStopRecorder.instances.at(-1).stopCalls, 1);
+  assert.equal(scheduled[1].delayMs, AUTOMATIC_SCENE_RECORDER_SETTLE_TIMEOUT_MS);
+  scheduled[1].callback();
+
+  assert.deepEqual(await promise, KEYFRAME_SAMPLE);
+  assert.ok(cleared.includes(scheduled[1].id));
   assert.equal(track.stopCalls, 0);
 });
 

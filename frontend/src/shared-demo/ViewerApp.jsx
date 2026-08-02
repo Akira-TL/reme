@@ -26,8 +26,8 @@ const SCENE_COPY = Object.freeze({
     index: "02",
     eyebrow: "FAMILY HEARTBEAT",
     name: "做饭心跳",
-    title: "看见生活节奏，\n分享仍由本人决定。",
-    description: "厨房环境是固定抽象示意。只有收到实验活动事件后才显示判定，收到同意与媒体授权后才接收短期画面。",
+    title: "识别真实做饭，\n让关怀有迹可循。",
+    description: "连续视觉证据确认做饭后，短期授权实景才会接通；这次活动同时形成家庭心跳卡与本地短时记录。",
   },
   bathroom: {
     index: "03",
@@ -54,10 +54,10 @@ const ACTIVITY_PHASE_COPY = Object.freeze({
 
 const SHARE_STATE_COPY = Object.freeze({
   local_only: "仅监控端草稿",
-  consent_pending: "等待本人决定",
-  consented: "本人已同意分享",
-  denied: "本人已拒绝分享",
-  expired: "分享草稿已过期",
+  consent_pending: "旧版待处理状态",
+  consented: "旧版已开放状态",
+  denied: "旧版未开放状态",
+  expired: "本地记录已过期",
 });
 
 function shortId(value) {
@@ -249,21 +249,28 @@ function AlarmCard({ alarm, nowMs, onRetrySound, soundBlocked }) {
 function MediaStatus({ grant, media, nowMs, alarmActive }) {
   if (!grant) return null;
   const remaining = secondsRemaining(grant.expires_at_ms, nowMs);
+  const kitchenLive = grant.scope === "kitchen_moment";
   if (media.status === "live") {
     return (
       <div className="media-live-pill" role="status">
-        <i />事件授权现场 · {remaining} 秒后自动关闭
+        <i />{kitchenLive ? "做饭实景" : "告警实景"}已接通 · {remaining} 秒后自动关闭
       </div>
     );
   }
   const waiting = ["idle", "waiting", "connecting"].includes(media.status);
   return (
     <div className={`media-status-card ${media.status === "failed" ? "is-failed" : ""}`} role="status">
-      <b>{waiting ? "已授权，正在建立点对点视频" : "授权视频暂不可用"}</b>
+      <b>
+        {waiting
+          ? kitchenLive ? "做饭已确认，正在接通实景" : "告警已升级，正在接通实景"
+          : "临时实景暂不可用"}
+      </b>
       <span>
         {waiting
-          ? `仍以骨架显示，授权还剩 ${remaining} 秒。`
-          : media.error || (alarmActive ? "告警保持有效并继续显示骨架。" : "家庭心跳卡保持有效。")}
+          ? `连接完成前继续显示隐私骨架，授权还剩 ${remaining} 秒。`
+          : media.error || (alarmActive
+            ? "告警保持有效，画面已回到家具示意与骨架。"
+            : "家庭心跳保持有效，画面已回到厨房示意与骨架。")}
       </span>
       {media.status === "failed" && media.stream ? (
         <button type="button" onClick={media.retryPlayback}>重试播放</button>
@@ -294,23 +301,38 @@ export function ViewerApp() {
   } = useViewerMedia({
     socket: relay.socket,
     sendSignal: relay.sendSignal,
+    drainSignals: relay.drainMediaSignals,
     viewerId: relay.viewerId,
     grant: activeGrant,
   });
   const alarmEffects = useAlarmEffects(relay.alarm);
   const { ageMs } = presentation;
-  const showsSkeleton = presentation.kind === "live" || presentation.kind === "degraded";
   const videoVisible = Boolean(
-    activeGrant && mediaStream && ["connecting", "live"].includes(mediaStatus),
+    activeGrant && mediaStream && mediaStatus === "live",
   );
+  const realVideoMode = videoVisible ? activeGrant.scope : null;
+  const showsSkeleton = !videoVisible
+    && (presentation.kind === "live" || presentation.kind === "degraded");
   const alarmActive = relay.alarm?.phase === "escalated";
-  const stageStatus = {
-    live: { label: "LIVE", dot: "live-dot" },
-    degraded: { label: "DEGRADED", dot: "degraded-dot" },
-    unavailable: { label: "NO PERSON", dot: "no-person-dot" },
-    stale: { label: "WAITING", dot: "wait-dot" },
-    waiting: { label: "WAITING", dot: "wait-dot" },
-  }[presentation.kind];
+  const stageStatus = videoVisible
+    ? {
+      label: realVideoMode === "kitchen_moment" ? "COOKING LIVE" : "ALERT LIVE",
+      dot: "live-dot",
+    }
+    : {
+      live: { label: "LIVE", dot: "live-dot" },
+      degraded: { label: "DEGRADED", dot: "degraded-dot" },
+      unavailable: { label: "NO PERSON", dot: "no-person-dot" },
+      stale: { label: "WAITING", dot: "wait-dot" },
+      waiting: { label: "WAITING", dot: "wait-dot" },
+    }[presentation.kind];
+  const stageModeCopy = (() => {
+    if (realVideoMode === "kitchen_moment") return "真实做饭已确认 · 临时实时实景";
+    if (realVideoMode === "fall_emergency") return "权威告警已升级 · 临时实时实景";
+    if (scene.scene_id === "bathroom") return "完全隐私 · 强制纯骨架";
+    if (scene.scene_id === "kitchen") return "厨房固定示意 · 实景未接通时显示骨架";
+    return "固定家具示意 · 不代表现场识别或复原";
+  })();
   const primaryStatus = (() => {
     if (relay.alarm?.phase === "escalated") {
       return {
@@ -340,6 +362,39 @@ export function ViewerApp() {
         Icon: VisibilityOffRoundedIcon,
       };
     }
+    if (scene.scene_id === "kitchen") {
+      const activityUnavailable = relay.activity?.phase === "unavailable";
+      if (realVideoMode === "kitchen_moment") {
+        return {
+          tone: "normal",
+          label: "已识别做饭，实时实景已接通",
+          detail: "本次实景只在当前短期媒体授权内显示；家庭心跳卡独立记录本次活动。",
+          Icon: RestaurantRoundedIcon,
+        };
+      }
+      if (activeGrant) {
+        return {
+          tone: "pending",
+          label: "已识别做饭，正在接通实景",
+          detail: "视频接通前保持厨房示意与抽象骨架；失败或到期也会回到该隐私视图。",
+          Icon: RestaurantRoundedIcon,
+        };
+      }
+      return {
+        tone: activityUnavailable
+          ? "warning"
+          : relay.activity?.phase === "confirmed" ? "normal" : "pending",
+        label: activityUnavailable
+          ? "做饭识别暂不可用"
+          : relay.activity?.phase === "confirmed" ? "已识别到做饭活动" : "正在观察做饭活动",
+        detail: activityUnavailable
+          ? relay.activity.reason
+          : relay.activity?.phase === "confirmed"
+            ? "家庭心跳已形成；只有与这次确认事件绑定的短期授权才能打开实景。"
+            : "系统只在连续真实证据确认后形成家庭心跳并申请短期实景。",
+        Icon: RestaurantRoundedIcon,
+      };
+    }
     if (["waiting", "stale"].includes(presentation.kind)) {
       return {
         tone: "pending",
@@ -354,21 +409,6 @@ export function ViewerApp() {
         label: presentation.kind === "degraded" ? "骨架质量较低" : "当前未检测到人物",
         detail: "系统正在明确显示降级状态，不会用假画面替代真实检测结果。",
         Icon: ShieldRoundedIcon,
-      };
-    }
-    if (scene.scene_id === "kitchen") {
-      const activityUnavailable = relay.activity?.phase === "unavailable";
-      return {
-        tone: activityUnavailable
-          ? "warning"
-          : relay.activity?.phase === "confirmed" ? "normal" : "pending",
-        label: activityUnavailable
-          ? "做饭识别暂不可用"
-          : relay.activity?.phase === "confirmed" ? "已识别到做饭活动" : "正在观察做饭活动",
-        detail: activityUnavailable
-          ? relay.activity.reason
-          : "系统只在连续证据确认后形成家庭心跳，分享仍由本人决定。",
-        Icon: RestaurantRoundedIcon,
       };
     }
     return {
@@ -396,27 +436,28 @@ export function ViewerApp() {
       </header>
 
       <main className="viewer-layout">
-        <section className="shared-stage" aria-label={`${sceneCopy.name}实时隐私画面`}>
-          <SceneEnvironment sceneId={scene.scene_id} />
-          <div className="stage-grid" />
+        <section
+          className={`shared-stage ${videoVisible ? "is-media-live" : ""}`}
+          aria-label={`${sceneCopy.name}实时隐私画面`}
+        >
+          {!videoVisible ? <SceneEnvironment sceneId={scene.scene_id} /> : null}
+          {!videoVisible ? <div className="stage-grid" /> : null}
           <video
             ref={videoRef}
             className={`authorized-video ${videoVisible ? "is-visible" : ""}`}
             muted
             playsInline
             autoPlay
-            aria-label="事件授权的临时现场画面"
+            aria-label={realVideoMode === "kitchen_moment"
+              ? "已确认做饭活动的临时实时画面"
+              : "权威跌倒告警后的临时实时画面"}
           />
-          <SkeletonStage frame={showsSkeleton ? relay.frame : null} />
+          {!videoVisible ? <SkeletonStage frame={showsSkeleton ? relay.frame : null} /> : null}
           <div className="stage-topline">
             <span><i className={stageStatus.dot} />{stageStatus.label}</span>
-            <span>
-              {scene.scene_id === "bathroom"
-                ? "完全隐私 · 强制纯骨架"
-                : "通用环境抽象 · 不代表真实家具复原"}
-            </span>
+            <span>{stageModeCopy}</span>
           </div>
-          {presentation.kind === "degraded" ? (
+          {presentation.kind === "degraded" && !videoVisible ? (
             <div className="quality-notice" role="status">
               <b>关键点质量较低</b>
               <span>部分肢体关键点置信度不足，当前画面已明确降级。</span>
@@ -454,11 +495,13 @@ export function ViewerApp() {
           />
           <div className="privacy-ribbon">
             <ShieldRoundedIcon aria-hidden="true" />
-            {videoVisible
-              ? "事件授权画面经 WebRTC 点对点接收，不由骨架中继存储"
+            {realVideoMode === "kitchen_moment"
+              ? "已确认做饭活动：临时实景经 WebRTC 点对点接收"
+              : realVideoMode === "fall_emergency"
+                ? "权威跌倒告警：临时实景经 WebRTC 点对点接收"
               : scene.scene_id === "bathroom"
                 ? "完全隐私：始终只显示 17 点抽象骨架"
-                : "手机本地识别，日常仅同步 17 点抽象骨架"}
+                : "手机本地识别，当前仅同步 17 点抽象骨架"}
           </div>
         </section>
 
@@ -509,7 +552,14 @@ export function ViewerApp() {
             <div><dt>会话</dt><dd title={relay.sessionId}>{shortId(relay.sessionId)}</dd></div>
             <div><dt>评委连接</dt><dd title={relay.viewerId}>{shortId(relay.viewerId)}</dd></div>
             <div><dt>最近同步</dt><dd>{ageMs == null ? "等待首帧" : ageMs < 1000 ? "刚刚" : `${Math.floor(ageMs / 1000)} 秒前`}</dd></div>
-            <div><dt>数据范围</dt><dd>{videoVisible ? "短期事件授权" : "17 点骨架"}</dd></div>
+            <div>
+              <dt>数据范围</dt>
+              <dd>
+                {realVideoMode === "kitchen_moment"
+                  ? "做饭活动临时实景"
+                  : realVideoMode === "fall_emergency" ? "跌倒告警临时实景" : "17 点骨架"}
+              </dd>
+            </div>
           </dl>
 
           <div className="readonly-note">

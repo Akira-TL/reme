@@ -89,6 +89,17 @@ export async function recognizeCooking(
     || !isUnitNumber(payload.confidence)
     || typeof payload.reason !== "string"
     || typeof payload.model !== "string"
+    || !Number.isSafeInteger(payload.consecutive)
+    || payload.consecutive < 0
+    || payload.consecutive > 100
+    || !(
+      payload.receipt_id === null
+      || (typeof payload.receipt_id === "string"
+        && /^activity-receipt-[a-f0-9]{32}$/.test(payload.receipt_id))
+    )
+    || ((payload.consecutive >= 2) !== (payload.receipt_id !== null))
+    || (payload.receipt_id !== null
+      && (payload.classification !== "cooking" || payload.confidence < DEFAULT_MIN_CONFIDENCE))
   ) {
     throw new Error("活动识别响应不符合合同");
   }
@@ -97,6 +108,8 @@ export async function recognizeCooking(
     confidence: payload.confidence,
     reason: payload.reason,
     model: payload.model,
+    receiptId: payload.receipt_id,
+    consecutive: payload.consecutive,
     latencyMs: Number.isFinite(payload.latency_ms)
       ? payload.latency_ms
       : performance.now() - startedAt,

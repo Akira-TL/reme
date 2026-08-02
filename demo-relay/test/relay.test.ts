@@ -1,6 +1,8 @@
 import { env, exports as workerExports } from "cloudflare:workers";
 import {
+  abortAllDurableObjects,
   evictDurableObject,
+  reset as resetCloudflareBindings,
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
@@ -31,6 +33,16 @@ const MINIMAL_JPEG_B64 = "/9j/2Q==";
 const sockets: WebSocket[] = [];
 const issuedTokens: string[] = [];
 const viewerIds = new WeakMap<WebSocket, string>();
+const socketInboxes = new WeakMap<WebSocket, SocketInbox>();
+
+interface SocketInbox {
+  messages: Array<{ value?: unknown; error?: Error }>;
+  waiters: Array<{
+    resolve(value: unknown): void;
+    reject(error: Error): void;
+    timeout: ReturnType<typeof setTimeout>;
+  }>;
+}
 
 interface UnlockSuccess {
   ok: true;
@@ -57,18 +69,16 @@ type AlarmStateEvent = Extract<DemoEvent, { event_type: "alarm_state" }>;
 afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  for (const token of issuedTokens.splice(0)) {
-    await relayFetch("/api/release", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  }
   for (const socket of sockets.splice(0)) {
     if (socket.readyState === WebSocket.OPEN) {
       socket.close(1000, "test_cleanup");
     }
   }
+  issuedTokens.splice(0);
+  await abortAllDurableObjects();
+  await resetCloudflareBindings();
   await resetRoomStorage();
+  await abortAllDurableObjects();
 });
 
 describe("single-room demo relay", () => {
@@ -394,22 +404,16 @@ describe("single-room demo relay", () => {
     });
   });
 
-  it("issues kitchen grants only after matching consent and excludes late viewers", async () => {
+  it("issues kitchen live grants only after confirmed activity and adds late viewers", async () => {
     const lease = await unlock();
     const controller = await connectController(lease.token);
     await nextJson(controller);
-    const viewerA = await connectViewer();
-    const viewerB = await connectViewer();
 
-    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), [viewerA, viewerB]);
-    await publishEvent(
-      controller,
-      makeCareCardEvent(lease.session_id, 1, "consent_pending"),
-      [viewerA, viewerB],
-    );
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), []);
+    await publishEvent(controller, makeActivityEvent(lease.session_id, 1), []);
     controller.send(JSON.stringify({
       type: "media_grant_request",
-      event_id: "cooking-1",
+      event_id: "activity-1",
       scope: "kitchen_moment",
       expires_in_ms: 30_000,
     }));
@@ -418,37 +422,88 @@ describe("single-room demo relay", () => {
       error: "media_grant_not_eligible",
     });
 
-    await publishEvent(
-      controller,
-      makeCareCardEvent(lease.session_id, 2, "consented"),
-      [viewerA, viewerB],
-    );
-    const grantForA = nextJson(viewerA);
-    const grantForB = nextJson(viewerB);
+    const outbound = vi.fn(async () => mimoActivityResponse("cooking", 0.87));
+    vi.stubGlobal("fetch", outbound);
+    const firstVerdict = await (await recognize(lease.token, MINIMAL_JPEG_B64)).json<{
+      receipt_id: string | null;
+      consecutive: number;
+    }>();
+    expect(firstVerdict).toMatchObject({ receipt_id: null, consecutive: 1 });
+    await publishEvent(controller, makeActivityEvent(lease.session_id, 2, "candidate"), []);
+
+    const secondVerdict = await (await recognize(lease.token, MINIMAL_JPEG_B64)).json<{
+      receipt_id: string | null;
+      consecutive: number;
+    }>();
+    expect(secondVerdict.consecutive).toBe(2);
+    expect(secondVerdict.receipt_id).toMatch(/^activity-receipt-[a-f0-9]{32}$/);
+    await publishEvent(controller, makeActivityEvent(lease.session_id, 3), []);
+
+    // The public event id remains stable and carries no secret receipt. Relay
+    // binds it to the just-consumed server receipt before signing media.
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "activity-forged",
+      scope: "kitchen_moment",
+      expires_in_ms: 30_000,
+    }));
+    await expect(nextJson(controller)).resolves.toEqual({
+      type: "error",
+      error: "media_grant_not_eligible",
+    });
+
     const grantAckPromise = nextJson(controller);
     controller.send(JSON.stringify({
       type: "media_grant_request",
-      event_id: "cooking-1",
+      event_id: "activity-3",
       scope: "kitchen_moment",
       expires_in_ms: 30_000,
     }));
     const grantAck = readGrantAck(await grantAckPromise, "media_grant_accepted");
-    expect(grantAck.viewer_ids).toEqual([viewerId(viewerA), viewerId(viewerB)].sort());
-    await expect(grantForA).resolves.toEqual(grantAck.grant);
-    await expect(grantForB).resolves.toEqual(grantAck.grant);
-    expect(grantAck.grant.event_sequence).toBe(3);
+    expect(grantAck.viewer_ids).toEqual([]);
+    expect(grantAck.grant.event_sequence).toBe(4);
     expect(grantAck.grant.payload).toMatchObject({
-      event_id: "cooking-1",
+      event_id: "activity-3",
       scope: "kitchen_moment",
       status: "active",
     });
 
+    const viewerAAckPromise = nextJson(controller);
+    const viewerA = await connectViewer();
+    await expect(nextJson(viewerA)).resolves.toEqual(makeSceneEvent(lease.session_id, 0, "kitchen"));
+    await expect(nextJson(viewerA)).resolves.toEqual(makeActivityEvent(lease.session_id, 3));
+    const viewerAAck = readGrantAck(await viewerAAckPromise, "media_grant_accepted");
+    expect(viewerAAck.viewer_ids).toEqual([viewerId(viewerA)]);
+    expect(viewerAAck.grant.event_sequence).toBe(5);
+    await expect(nextJson(viewerA)).resolves.toEqual(viewerAAck.grant);
+
+    const viewerBAckPromise = nextJson(controller);
+    const viewerB = await connectViewer();
+    await expect(nextJson(viewerB)).resolves.toEqual(makeSceneEvent(lease.session_id, 0, "kitchen"));
+    await expect(nextJson(viewerB)).resolves.toEqual(makeActivityEvent(lease.session_id, 3));
+    const viewerBAck = readGrantAck(await viewerBAckPromise, "media_grant_accepted");
+    expect(viewerBAck.viewer_ids).toEqual([viewerId(viewerA), viewerId(viewerB)].sort());
+    expect(viewerBAck.grant.event_sequence).toBe(6);
+    await expect(nextJson(viewerB)).resolves.toEqual(viewerBAck.grant);
+
+    const localCard = makeCareCardEvent(lease.session_id, 7, "local_only", "activity-3");
+    await publishEvent(controller, localCard, [viewerA, viewerB]);
+    await expectNoMessage(viewerA);
+    await expectNoMessage(viewerB);
+
+    const lateGrantAckPromise = nextJson(controller);
     const lateViewer = await connectViewer();
     await expect(nextJson(lateViewer)).resolves.toEqual(makeSceneEvent(lease.session_id, 0, "kitchen"));
-    await expect(nextJson(lateViewer)).resolves.toEqual(
-      makeCareCardEvent(lease.session_id, 2, "consented"),
-    );
-    await expectNoMessage(lateViewer);
+    await expect(nextJson(lateViewer)).resolves.toEqual(makeActivityEvent(lease.session_id, 3));
+    await expect(nextJson(lateViewer)).resolves.toEqual(localCard);
+    const lateGrantAck = readGrantAck(await lateGrantAckPromise, "media_grant_accepted");
+    expect(lateGrantAck.viewer_ids).toEqual([
+      viewerId(viewerA),
+      viewerId(viewerB),
+      viewerId(lateViewer),
+    ].sort());
+    expect(lateGrantAck.grant.event_sequence).toBe(8);
+    await expect(nextJson(lateViewer)).resolves.toEqual(lateGrantAck.grant);
 
     const grantId = mediaGrantId(grantAck.grant);
     const offer: MediaSignal = {
@@ -504,22 +559,32 @@ describe("single-room demo relay", () => {
       from_id: viewerId(viewerB),
     });
 
-    lateViewer.send(JSON.stringify(answer));
-    await expect(nextJson(lateViewer)).resolves.toEqual({
-      type: "error",
-      error: "media_signal_not_authorized",
+    const lateAnswer = { ...answer };
+    const forwardedLateAnswer = nextJson(controller);
+    lateViewer.send(JSON.stringify(lateAnswer));
+    await expect(forwardedLateAnswer).resolves.toEqual({
+      ...lateAnswer,
+      from_id: viewerId(lateViewer),
     });
 
+    const audienceAfterClose = nextJson(controller);
+    viewerB.close(1000, "viewer_hidden");
+    const audienceAck = readGrantAck(await audienceAfterClose, "media_grant_accepted");
+    expect(audienceAck.grant.event_sequence).toBe(9);
+    expect(audienceAck.viewer_ids).toEqual([
+      viewerId(viewerA),
+      viewerId(lateViewer),
+    ].sort());
+
     const revokeForA = nextJson(viewerA);
-    const revokeForB = nextJson(viewerB);
+    const revokeForLate = nextJson(lateViewer);
     const revokeAckPromise = nextJson(controller);
     controller.send(JSON.stringify({ type: "media_grant_revoke", grant_id: grantId }));
     const revokeAck = readGrantAck(await revokeAckPromise, "media_grant_revoked");
-    expect(revokeAck.grant.event_sequence).toBe(4);
+    expect(revokeAck.grant.event_sequence).toBe(10);
     expect(revokeAck.grant.payload).toMatchObject({ grant_id: grantId, status: "revoked" });
     await expect(revokeForA).resolves.toEqual(revokeAck.grant);
-    await expect(revokeForB).resolves.toEqual(revokeAck.grant);
-    await expectNoMessage(lateViewer);
+    await expect(revokeForLate).resolves.toEqual(revokeAck.grant);
   });
 
   it("revokes media grants on disconnect while keeping the lease resumable", async () => {
@@ -528,17 +593,16 @@ describe("single-room demo relay", () => {
     await nextJson(controller);
     const viewer = await connectViewer();
     await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), [viewer]);
-    await publishEvent(
-      controller,
-      makeCareCardEvent(lease.session_id, 1, "consented"),
-      [viewer],
-    );
+    vi.stubGlobal("fetch", vi.fn(async () => mimoActivityResponse("cooking", 0.87)));
+    await recognize(lease.token, MINIMAL_JPEG_B64);
+    await recognize(lease.token, MINIMAL_JPEG_B64);
+    await publishEvent(controller, makeActivityEvent(lease.session_id, 1), [viewer]);
 
     const grantedForViewer = nextJson(viewer);
     const grantAckPromise = nextJson(controller);
     controller.send(JSON.stringify({
       type: "media_grant_request",
-      event_id: "cooking-1",
+      event_id: "activity-1",
       scope: "kitchen_moment",
       expires_in_ms: 30_000,
     }));
@@ -569,6 +633,193 @@ describe("single-room demo relay", () => {
       last_event_sequence: 3,
       last_frame_sequence: -1,
     });
+  });
+
+  it("keeps a verified cooking fact across 200 seconds of one capture but closes on unavailable", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "kitchen", baseTime),
+        [],
+      );
+      vi.stubGlobal("fetch", vi.fn(async () => mimoActivityResponse("cooking", 0.87)));
+      const first = await (await recognize(lease.token, MINIMAL_JPEG_B64)).json<{
+        receipt_id: string | null;
+        consecutive: number;
+      }>();
+      const second = await (await recognize(lease.token, MINIMAL_JPEG_B64)).json<{
+        receipt_id: string | null;
+        consecutive: number;
+      }>();
+      expect(first).toMatchObject({ receipt_id: null, consecutive: 1 });
+      expect(second).toMatchObject({ consecutive: 2 });
+      expect(second.receipt_id).toMatch(/^activity-receipt-[a-f0-9]{32}$/);
+      await publishEvent(controller, makeActivityEvent(lease.session_id, 1), []);
+
+      const firstGrantPromise = nextJson(controller);
+      controller.send(JSON.stringify({
+        type: "media_grant_request",
+        event_id: "activity-1",
+        scope: "kitchen_moment",
+        expires_in_ms: 5_000,
+      }));
+      const firstGrant = readGrantAck(await firstGrantPromise, "media_grant_accepted");
+
+      now.mockReturnValue(baseTime + 5_001);
+      const firstExpired = nextJson(controller);
+      await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(true);
+      expect(readGrantAck(await firstExpired, "media_grant_revoked").grant.payload)
+        .toMatchObject({ status: "expired" });
+
+      for (let offsetMs = 25_000; offsetMs <= 200_000; offsetMs += 25_000) {
+        now.mockReturnValue(baseTime + offsetMs);
+        const heartbeatAck = nextJson(controller);
+        controller.send(JSON.stringify({ type: "heartbeat" }));
+        await expect(heartbeatAck).resolves.toEqual({
+          type: "heartbeat_ack",
+          lease_expires_at_ms: baseTime + offsetMs + 30_000,
+        });
+      }
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: baseTime + 230_000,
+      });
+
+      const continuedPromise = nextJson(controller);
+      controller.send(JSON.stringify({
+        type: "media_grant_request",
+        event_id: "activity-1",
+        scope: "kitchen_moment",
+        expires_in_ms: 5_000,
+      }));
+      const continued = readGrantAck(await continuedPromise, "media_grant_accepted");
+      expect(mediaGrantId(continued.grant)).not.toBe(mediaGrantId(firstGrant.grant));
+      if (continued.grant.event_type !== "media_grant") throw new Error("expected media grant");
+      const continuedExpiry = continued.grant.payload.expires_at_ms;
+
+      const lateAudience = nextJson(controller);
+      const lateViewer = await connectViewer();
+      await expect(nextJson(lateViewer)).resolves.toEqual(
+        makeSceneEvent(lease.session_id, 0, "kitchen", baseTime),
+      );
+      await expect(nextJson(lateViewer)).resolves.toEqual(makeActivityEvent(lease.session_id, 1));
+      const lateAck = readGrantAck(await lateAudience, "media_grant_accepted");
+      expect(lateAck.viewer_ids).toEqual([viewerId(lateViewer)]);
+      if (lateAck.grant.event_type !== "media_grant") throw new Error("expected media grant");
+      expect(lateAck.grant.payload.expires_at_ms).toBe(continuedExpiry);
+      await expect(nextJson(lateViewer)).resolves.toEqual(lateAck.grant);
+
+      const unavailable = makeActivityEvent(
+        lease.session_id,
+        6,
+        "unavailable",
+      );
+      const viewerClosed = nextJsonBatch(lateViewer, 2);
+      const controllerClosed = nextJsonBatch(controller, 2);
+      controller.send(JSON.stringify(unavailable));
+      const [unavailableForViewer, revokedForViewer] = await viewerClosed;
+      expect(unavailableForViewer).toEqual(unavailable);
+      const [unavailableAck, revokedAckValue] = await controllerClosed;
+      expect(unavailableAck).toEqual({
+        type: "event_accepted",
+        event_sequence: 6,
+        event_type: "activity_state",
+      });
+      const revokedAck = readGrantAck(revokedAckValue, "media_grant_revoked");
+      expect(revokedAck.grant.payload).toMatchObject({ status: "revoked" });
+      expect(revokedForViewer).toEqual(revokedAck.grant);
+
+      controller.send(JSON.stringify({
+        type: "media_grant_request",
+        event_id: "activity-1",
+        scope: "kitchen_moment",
+        expires_in_ms: 5_000,
+      }));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "media_grant_not_eligible",
+      });
+
+      const restartedWithoutEvidence = makeActivityEvent(lease.session_id, 8);
+      await publishEvent(controller, restartedWithoutEvidence, [lateViewer]);
+      controller.send(JSON.stringify({
+        type: "media_grant_request",
+        event_id: "activity-8",
+        scope: "kitchen_moment",
+        expires_in_ms: 5_000,
+      }));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "media_grant_not_eligible",
+      });
+
+      const afterRestart = await connectViewer();
+      await expect(nextJson(afterRestart)).resolves.toEqual(
+        makeSceneEvent(lease.session_id, 0, "kitchen", baseTime),
+      );
+      await expect(nextJson(afterRestart)).resolves.toEqual(restartedWithoutEvidence);
+      await expectNoMessage(afterRestart);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("revokes verified kitchen media on scene leave and never admits a late viewer", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), [viewer]);
+    vi.stubGlobal("fetch", vi.fn(async () => mimoActivityResponse("cooking", 0.87)));
+    await recognize(lease.token, MINIMAL_JPEG_B64);
+    await recognize(lease.token, MINIMAL_JPEG_B64);
+    await publishEvent(controller, makeActivityEvent(lease.session_id, 1), [viewer]);
+
+    const activeForViewer = nextJson(viewer);
+    const activeForController = nextJson(controller);
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "activity-1",
+      scope: "kitchen_moment",
+      expires_in_ms: 30_000,
+    }));
+    const active = readGrantAck(await activeForController, "media_grant_accepted");
+    await expect(activeForViewer).resolves.toEqual(active.grant);
+
+    const living = makeSceneEvent(lease.session_id, 3, "living");
+    const viewerMessages = nextJsonBatch(viewer, 2);
+    const controllerMessages = nextJsonBatch(controller, 2);
+    controller.send(JSON.stringify(living));
+    const [livingForViewer, revokedForViewer] = await viewerMessages;
+    expect(livingForViewer).toEqual(living);
+    const [livingAck, revokedAckValue] = await controllerMessages;
+    expect(livingAck).toEqual({
+      type: "event_accepted",
+      event_sequence: 3,
+      event_type: "scene_state",
+    });
+    const revokedAck = readGrantAck(revokedAckValue, "media_grant_revoked");
+    expect(revokedAck.grant.payload).toMatchObject({ status: "revoked" });
+    expect(revokedForViewer).toEqual(revokedAck.grant);
+
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "activity-1",
+      scope: "kitchen_moment",
+      expires_in_ms: 30_000,
+    }));
+    await expect(nextJson(controller)).resolves.toEqual({
+      type: "error",
+      error: "media_grant_not_eligible",
+    });
+    const lateViewer = await connectViewer();
+    await expect(nextJson(lateViewer)).resolves.toEqual(makeActivityEvent(lease.session_id, 1));
+    await expect(nextJson(lateViewer)).resolves.toEqual(living);
+    await expectNoMessage(lateViewer);
   });
 
   it("issues fall media only for a matching escalated alarm", async () => {
@@ -630,6 +881,63 @@ describe("single-room demo relay", () => {
     expect(revokedForViewer).toEqual(revokeAck.grant);
   });
 
+  it("expires an idle media grant from the Durable Object clock and reschedules the lease", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const viewer = await connectViewer();
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "fall", baseTime),
+        [viewer],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(lease.session_id, 1, "escalated", baseTime),
+        [viewer],
+      );
+      const viewerGrant = nextJson(viewer);
+      const grantAckPromise = nextJson(controller);
+      controller.send(JSON.stringify({
+        type: "media_grant_request",
+        event_id: "fall-1",
+        scope: "fall_emergency",
+        expires_in_ms: 5_000,
+      }));
+      const grantAck = readGrantAck(await grantAckPromise, "media_grant_accepted");
+      await expect(viewerGrant).resolves.toEqual(grantAck.grant);
+      if (grantAck.grant.event_type !== "media_grant") throw new Error("expected media grant");
+      const authoritativeExpiry = grantAck.grant.payload.expires_at_ms;
+      expect(authoritativeExpiry).toBe(baseTime + 5_000);
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: authoritativeExpiry,
+      });
+
+      now.mockReturnValue(authoritativeExpiry + 1);
+      const expiredForViewer = nextJson(viewer);
+      const expiredForController = nextJson(controller);
+      await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(true);
+      const expiredAck = readGrantAck(
+        await expiredForController,
+        "media_grant_revoked",
+      );
+      expect(expiredAck.grant.payload).toMatchObject({
+        grant_id: mediaGrantId(grantAck.grant),
+        expires_at_ms: authoritativeExpiry,
+        status: "expired",
+      });
+      await expect(expiredForViewer).resolves.toEqual(expiredAck.grant);
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: lease.lease_expires_at_ms,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("rejects signal media fields, binary data, wrong directions, and expired grants", async () => {
     const baseTime = Date.now();
     const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
@@ -670,11 +978,17 @@ describe("single-room demo relay", () => {
       });
 
       now.mockReturnValue(baseTime + 5_001);
+      const expiredForViewer = nextJson(viewer);
+      const controllerExpiry = nextJsonBatch(controller, 2);
       controller.send(JSON.stringify({
         ...wrongDirection,
         signal_type: "offer",
       }));
-      await expect(nextJson(controller)).resolves.toEqual({
+      const [expiredAckValue, signalError] = await controllerExpiry;
+      const expiredAck = readGrantAck(expiredAckValue, "media_grant_revoked");
+      expect(expiredAck.grant.payload).toMatchObject({ status: "expired" });
+      await expect(expiredForViewer).resolves.toEqual(expiredAck.grant);
+      expect(signalError).toEqual({
         type: "error",
         error: "media_signal_not_authorized",
       });
@@ -685,6 +999,9 @@ describe("single-room demo relay", () => {
 
   it("recognizes one bounded JPEG only with the active control token", async () => {
     const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), []);
     const outbound = vi.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => Response.json({
       choices: [{
         message: {
@@ -714,6 +1031,8 @@ describe("single-room demo relay", () => {
       confidence: 0.87,
       reason: "画面中人物正在案板前切配食材",
       model: "mimo-v2.5",
+      receipt_id: null,
+      consecutive: 1,
     });
     expect(outbound).toHaveBeenCalledTimes(1);
     const call = outbound.mock.calls[0];
@@ -730,6 +1049,9 @@ describe("single-room demo relay", () => {
     await expect(missing.json()).resolves.toEqual({ ok: false, error: "missing_control_token" });
 
     const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), []);
     const invalidJpeg = await recognize(lease.token, "bm90LWEtanBlZw==");
     expect(invalidJpeg.status).toBe(415);
     await expect(invalidJpeg.json()).resolves.toEqual({ ok: false, error: "invalid_jpeg" });
@@ -755,6 +1077,122 @@ describe("single-room demo relay", () => {
       ok: false,
       error: "invalid_mimo_response",
     });
+
+    vi.stubGlobal("fetch", vi.fn(async () => mimoActivityResponse("cooking", 0.87)));
+    const retry = await recognize(lease.token, "/9j/2Q==");
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({
+      ok: true,
+      classification: "cooking",
+      consecutive: 1,
+    });
+  });
+
+  it("single-flights overlapping activity recognition before a second MiMo call", async () => {
+    const token = "b".repeat(64);
+    let inflight = false;
+    const authority = {
+      beginAttempt: vi.fn(async () => {
+        if (inflight) {
+          return { ok: false, error: "activity_request_in_progress" } as const;
+        }
+        inflight = true;
+        return { ok: true, attempt_id: crypto.randomUUID() } as const;
+      }),
+      cancelAttempt: vi.fn(async () => {
+        inflight = false;
+      }),
+      finishAttempt: vi.fn(async () => {
+        inflight = false;
+        return { receipt_id: null, consecutive: 1 };
+      }),
+    };
+    let resolveUpstream: (response: Response) => void = () => {
+      throw new Error("activity upstream resolver was not installed");
+    };
+    const outbound = vi.fn(async () => new Promise<Response>((resolve) => {
+      resolveUpstream = resolve;
+    }));
+    vi.stubGlobal("fetch", outbound);
+
+    const request = () => new Request("https://relay.example/api/activity/recognize", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ image_b64: MINIMAL_JPEG_B64 }),
+    });
+    const activityEnv = {
+      MIMO_API_KEY: "test-key",
+      MIMO_BASE_URL: "https://api.xiaomimimo.com/v1",
+      MIMO_MODEL: "mimo-v2.5",
+    } as unknown as Env;
+    const first = handleActivityRecognition(request(), activityEnv, authority);
+    await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
+    const overlapping = await handleActivityRecognition(request(), activityEnv, authority);
+    expect(overlapping.status).toBe(409);
+    await expect(overlapping.json()).resolves.toEqual({
+      ok: false,
+      error: "activity_request_in_progress",
+    });
+    expect(outbound).toHaveBeenCalledTimes(1);
+
+    resolveUpstream(mimoActivityResponse("cooking", 0.87));
+    const firstResponse = await first;
+    expect(firstResponse.status).toBe(200);
+    await expect(firstResponse.json()).resolves.toMatchObject({
+      receipt_id: null,
+      consecutive: 1,
+    });
+    expect(authority.finishAttempt).toHaveBeenCalledTimes(1);
+    expect(authority.cancelAttempt).not.toHaveBeenCalled();
+  });
+
+  it("a stale activity finish cannot clear the newer in-flight attempt", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "kitchen", baseTime),
+        [],
+      );
+      const tokenHash = await testSha256Hex(lease.token);
+      const first = await runInDurableObject(
+        roomStub(),
+        (instance) => instance.beginActivityRecognitionAttempt(tokenHash),
+      );
+      if (!first.ok) throw new Error("first activity attempt should start");
+
+      now.mockReturnValue(baseTime + 10_001);
+      const second = await runInDurableObject(
+        roomStub(),
+        (instance) => instance.beginActivityRecognitionAttempt(tokenHash),
+      );
+      if (!second.ok) throw new Error("stale activity attempt should be replaceable");
+      await expect(runInDurableObject(
+        roomStub(),
+        (instance) => instance.finishActivityRecognitionAttempt(
+          tokenHash,
+          first.attempt_id,
+          { classification: "cooking", confidence: 0.87, reason: "旧响应" },
+        ),
+      )).resolves.toBeNull();
+      await expect(runInDurableObject(
+        roomStub(),
+        (instance) => instance.finishActivityRecognitionAttempt(
+          tokenHash,
+          second.attempt_id,
+          { classification: "cooking", confidence: 0.87, reason: "新响应" },
+        ),
+      )).resolves.toEqual({ receipt_id: null, consecutive: 1 });
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("recognizes one event-scoped WAV through the MiMo input_audio path without sensitive logs", async () => {
@@ -1169,7 +1607,7 @@ describe("single-room demo relay", () => {
       });
       await expect(escalatedForController).resolves.toEqual(authoritativeEscalation);
       await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
-        alarm_at_ms: null,
+        alarm_at_ms: lease.lease_expires_at_ms,
         watchdogs: [{ status: "escalated", deadline_ms: deadline }],
         alarm_event: {
           event_sequence: 2,
@@ -1183,12 +1621,13 @@ describe("single-room demo relay", () => {
       await runInDurableObject(roomStub(), (instance) => instance.alarm());
       await Promise.all([noViewerDuplicate, noControllerDuplicate]);
       await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
-        alarm_at_ms: null,
+        alarm_at_ms: lease.lease_expires_at_ms,
         watchdogs: [{ status: "escalated", deadline_ms: deadline }],
         alarm_event: { event_sequence: 2, event_type: "alarm_state" },
         last_event_sequence: 2,
       });
-      await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(false);
+      // The lease deadline remains scheduled after the watchdog is terminal.
+      await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(true);
     } finally {
       now.mockRestore();
     }
@@ -1398,7 +1837,7 @@ describe("single-room demo relay", () => {
       });
       expect(escalatedForController).toEqual(authoritativeEscalation);
       await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
-        alarm_at_ms: null,
+        alarm_at_ms: lease.lease_expires_at_ms,
         watchdogs: [{ status: "escalated" }],
         alarm_event: {
           event_sequence: 2,
@@ -1490,7 +1929,7 @@ describe("single-room demo relay", () => {
         },
       });
       await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
-        alarm_at_ms: null,
+        alarm_at_ms: nextLease.lease_expires_at_ms,
         watchdogs: [{
           session_id: nextLease.session_id,
           event_id: "fall-1",
@@ -1549,7 +1988,7 @@ describe("single-room demo relay", () => {
       const finalLease = await unlock();
       expect(finalLease.session_id).not.toBe(nextLease.session_id);
       await expect(dangerWatchdogSnapshot()).resolves.toEqual({
-        alarm_at_ms: null,
+        alarm_at_ms: finalLease.lease_expires_at_ms,
         watchdogs: [],
         alarm_event: null,
         last_event_sequence: -1,
@@ -1586,7 +2025,7 @@ describe("single-room demo relay", () => {
         [viewer],
       );
       await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
-        alarm_at_ms: null,
+        alarm_at_ms: lease.lease_expires_at_ms,
         watchdogs: [{
           session_id: lease.session_id,
           event_id: "fall-offline",
@@ -1732,7 +2171,7 @@ describe("single-room demo relay", () => {
       now.mockReturnValue(deadline + 1);
       await expect(runDurableObjectAlarm(legacyStub)).resolves.toBe(true);
       await expect(dangerWatchdogSnapshot(legacyStub)).resolves.toMatchObject({
-        alarm_at_ms: null,
+        alarm_at_ms: baseTime + 30_000,
         watchdogs: [{ status: "escalated", deadline_ms: deadline }],
         alarm_event: {
           session_id: sessionId,
@@ -1767,7 +2206,7 @@ describe("single-room demo relay", () => {
       );
 
       await expect(dangerWatchdogSnapshot(legacyStub)).resolves.toMatchObject({
-        alarm_at_ms: null,
+        alarm_at_ms: baseTime + 30_000,
         watchdogs: [{
           session_id: sessionId,
           event_id: "fall-expired",
@@ -2133,6 +2572,7 @@ describe("single-room demo relay", () => {
     });
     vi.stubGlobal("fetch", outbound);
 
+    const cancelAttempt = vi.fn(async () => undefined);
     const pending = handleActivityRecognition(new Request(
       "https://relay.example/api/activity/recognize",
       {
@@ -2148,7 +2588,11 @@ describe("single-room demo relay", () => {
       MIMO_API_KEY: "test-key",
       MIMO_BASE_URL: "https://api.xiaomimimo.com/v1",
       MIMO_MODEL: "mimo-v2.5",
-    } as unknown as Env, async () => true);
+    } as unknown as Env, {
+      beginAttempt: async () => ({ ok: true, attempt_id: crypto.randomUUID() }),
+      cancelAttempt,
+      finishAttempt: async () => ({ receipt_id: null, consecutive: 0 }),
+    });
     await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
     requestController.abort();
 
@@ -2160,10 +2604,12 @@ describe("single-room demo relay", () => {
     });
     const observedSignal = outbound.mock.calls[0]?.[1]?.signal;
     expect(observedSignal?.aborted).toBe(true);
+    expect(cancelAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("classifies one explicit short MP4 and emits metadata-only logs", async () => {
     const lease = await unlock();
+    const authorityBefore = await demoAuthoritySnapshot();
     const outbound = vi.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => (
       mimoSceneResponse("kitchen", true, "人物连续切配食材并操作锅具")
     ));
@@ -2214,6 +2660,7 @@ describe("single-room demo relay", () => {
         duration_ms: 2_000,
         bytes: 12,
       });
+      await expect(demoAuthoritySnapshot()).resolves.toEqual(authorityBefore);
     } finally {
       log.mockRestore();
     }
@@ -2221,6 +2668,7 @@ describe("single-room demo relay", () => {
 
   it("accepts the exact JPEG keyframe fallback and keeps fall as a classification only", async () => {
     const lease = await unlock();
+    const authorityBefore = await demoAuthoritySnapshot();
     const outbound = vi.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => (
       mimoSceneResponse("fall", false, "人物疑似倒地，但单帧没有跨帧证据")
     ));
@@ -2251,6 +2699,7 @@ describe("single-room demo relay", () => {
 
       const viewer = await connectViewer();
       await expectNoMessage(viewer);
+      await expect(demoAuthoritySnapshot()).resolves.toEqual(authorityBefore);
     } finally {
       log.mockRestore();
     }
@@ -2571,6 +3020,41 @@ describe("single-room demo relay", () => {
     expect(preflight.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
     expect(preflight.headers.get("Vary")).toBe("Origin");
   });
+
+  it("keeps late fall viewers outside an already-issued emergency audience", async () => {
+    const baseTime = Date.now();
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const initialViewer = await connectViewer();
+    await publishEvent(
+      controller,
+      makeSceneEvent(lease.session_id, 0, "fall"),
+      [initialViewer],
+    );
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 1, "escalated", baseTime),
+      [initialViewer],
+    );
+    const initialGrant = nextJson(initialViewer);
+    const grantAck = nextJson(controller);
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "fall-1",
+      scope: "fall_emergency",
+      expires_in_ms: 30_000,
+    }));
+    await initialGrant;
+    await grantAck;
+
+    const lateViewer = await connectViewer();
+    await expect(nextJson(lateViewer)).resolves.toEqual(makeSceneEvent(lease.session_id, 0, "fall"));
+    await expect(nextJson(lateViewer)).resolves.toEqual(
+      makeAlarmEvent(lease.session_id, 1, "escalated", baseTime),
+    );
+    await expectNoMessage(lateViewer);
+  });
 });
 
 async function relayFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -2655,6 +3139,24 @@ async function dangerWatchdogSnapshot(
   });
 }
 
+async function demoAuthoritySnapshot(): Promise<Record<string, number>> {
+  return runInDurableObject(roomStub(), (_instance, state) => {
+    const count = (table: string): number => state.storage.sql.exec<{
+      [key: string]: SqlStorageValue;
+      count: number;
+    }>(`SELECT COUNT(*) AS count FROM ${table}`).one().count;
+    return {
+      demo_events: count("demo_event_state"),
+      media_grants: count("media_grant"),
+      media_audience: count("media_grant_audience"),
+      activity_evidence: count("activity_recognition_evidence"),
+      danger_watchdogs: count("danger_watchdog"),
+      danger_checkpoints: count("danger_alarm_checkpoint"),
+      danger_voice_attempts: count("danger_voice_attempt"),
+    };
+  });
+}
+
 async function resetRoomStorage(): Promise<void> {
   await runInDurableObject(roomStub(), async (_instance, state) => {
     await state.storage.deleteAlarm();
@@ -2662,6 +3164,7 @@ async function resetRoomStorage(): Promise<void> {
       state.storage.sql.exec("DELETE FROM media_grant_audience");
       state.storage.sql.exec("DELETE FROM media_grant");
       state.storage.sql.exec("DELETE FROM danger_voice_attempt");
+      state.storage.sql.exec("DELETE FROM activity_recognition_evidence");
       state.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
       state.storage.sql.exec("DELETE FROM danger_watchdog");
       state.storage.sql.exec("DELETE FROM demo_event_state");
@@ -2689,6 +3192,7 @@ async function seedLegacyAlarmState(
       state.storage.sql.exec("DELETE FROM media_grant_audience");
       state.storage.sql.exec("DELETE FROM media_grant");
       state.storage.sql.exec("DELETE FROM danger_voice_attempt");
+      state.storage.sql.exec("DELETE FROM activity_recognition_evidence");
       state.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
       state.storage.sql.exec("DELETE FROM danger_watchdog");
       state.storage.sql.exec("DELETE FROM demo_event_state");
@@ -2860,61 +3364,70 @@ function requireSocket(response: Response): WebSocket {
   if (response.webSocket === null) {
     throw new Error("expected a WebSocket response");
   }
-  return response.webSocket;
+  const socket = response.webSocket;
+  ensureSocketInbox(socket);
+  return socket;
 }
 
 function nextJson(socket: WebSocket): Promise<unknown> {
+  const inbox = ensureSocketInbox(socket);
+  const queued = inbox.messages.shift();
+  if (queued !== undefined) {
+    return queued.error === undefined
+      ? Promise.resolve(queued.value)
+      : Promise.reject(queued.error);
+  }
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("timed out waiting for WebSocket message")), 2_000);
-    socket.addEventListener(
-      "message",
-      (event) => {
-        clearTimeout(timeout);
-        if (typeof event.data !== "string") {
-          reject(new Error("expected a text WebSocket message"));
-          return;
-        }
-        resolve(JSON.parse(event.data) as unknown);
-      },
-      { once: true },
-    );
+    const waiter = {
+      resolve,
+      reject,
+      timeout: setTimeout(() => {
+        const index = inbox.waiters.indexOf(waiter);
+        if (index >= 0) inbox.waiters.splice(index, 1);
+        reject(new Error("timed out waiting for WebSocket message"));
+      }, 2_000),
+    };
+    inbox.waiters.push(waiter);
   });
 }
 
 function nextJsonBatch(socket: WebSocket, count: number): Promise<unknown[]> {
-  return new Promise((resolve, reject) => {
-    const messages: unknown[] = [];
-    const timeout = setTimeout(() => {
-      socket.removeEventListener("message", onMessage);
-      reject(new Error(`timed out waiting for ${count} WebSocket messages`));
-    }, 2_000);
-    const onMessage = (event: MessageEvent) => {
-      if (typeof event.data !== "string") {
-        clearTimeout(timeout);
-        socket.removeEventListener("message", onMessage);
-        reject(new Error("expected a text WebSocket message"));
-        return;
-      }
-      messages.push(JSON.parse(event.data) as unknown);
-      if (messages.length === count) {
-        clearTimeout(timeout);
-        socket.removeEventListener("message", onMessage);
-        resolve(messages);
-      }
-    };
-    socket.addEventListener("message", onMessage);
-  });
+  return Promise.all(Array.from({ length: count }, () => nextJson(socket)));
 }
 
 async function expectNoMessage(socket: WebSocket, waitMs = 75): Promise<void> {
-  let received = false;
-  const onMessage = () => {
-    received = true;
-  };
-  socket.addEventListener("message", onMessage);
+  const inbox = ensureSocketInbox(socket);
+  expect(inbox.messages).toHaveLength(0);
   await new Promise((resolve) => setTimeout(resolve, waitMs));
-  socket.removeEventListener("message", onMessage);
-  expect(received).toBe(false);
+  expect(inbox.messages).toHaveLength(0);
+}
+
+function ensureSocketInbox(socket: WebSocket): SocketInbox {
+  const existing = socketInboxes.get(socket);
+  if (existing !== undefined) return existing;
+  const inbox: SocketInbox = { messages: [], waiters: [] };
+  socketInboxes.set(socket, inbox);
+  socket.addEventListener("message", (event) => {
+    let message: { value?: unknown; error?: Error };
+    if (typeof event.data !== "string") {
+      message = { error: new Error("expected a text WebSocket message") };
+    } else {
+      try {
+        message = { value: JSON.parse(event.data) as unknown };
+      } catch {
+        message = { error: new Error("expected valid JSON WebSocket message") };
+      }
+    }
+    const waiter = inbox.waiters.shift();
+    if (waiter === undefined) {
+      inbox.messages.push(message);
+      return;
+    }
+    clearTimeout(waiter.timeout);
+    if (message.error === undefined) waiter.resolve(message.value);
+    else waiter.reject(message.error);
+  });
+  return inbox;
 }
 
 function makeFrame(sessionId: string, sequence: number): FrameLandmarks {
@@ -2974,7 +3487,12 @@ function makeSceneEvent(
   };
 }
 
-function makeActivityEvent(sessionId: string, eventSequence: number): DemoEvent {
+function makeActivityEvent(
+  sessionId: string,
+  eventSequence: number,
+  phase: "sampling" | "candidate" | "confirmed" | "unavailable" = "confirmed",
+  source: "mimo_visual" | "manual_debug" = "mimo_visual",
+): DemoEvent {
   return {
     schema_version: EVENT_SCHEMA_VERSION,
     session_id: sessionId,
@@ -2983,8 +3501,8 @@ function makeActivityEvent(sessionId: string, eventSequence: number): DemoEvent 
     event_type: "activity_state",
     payload: {
       activity: "cooking",
-      phase: "confirmed",
-      source: "mimo_visual",
+      phase,
+      source,
       confidence: 0.87,
       reason: "连续样本显示人物正在备菜",
     },
@@ -2995,6 +3513,7 @@ function makeCareCardEvent(
   sessionId: string,
   eventSequence: number,
   shareState: "local_only" | "consent_pending" | "consented" | "denied" | "expired",
+  eventId = "cooking-1",
 ): DemoEvent {
   return {
     schema_version: EVENT_SCHEMA_VERSION,
@@ -3004,7 +3523,7 @@ function makeCareCardEvent(
     event_type: "care_card",
     payload: {
       card_id: "card-1",
-      event_id: "cooking-1",
+      event_id: eventId,
       kind: "family_heartbeat",
       title: "厨房里的家庭心跳",
       body: "检测到一段做饭时光，等待本人决定是否分享。",
@@ -3103,6 +3622,28 @@ async function recognize(token: string, imageB64: string): Promise<Response> {
     },
     body: JSON.stringify({ image_b64: imageB64 }),
   });
+}
+
+function mimoActivityResponse(
+  classification: "cooking" | "not_cooking" | "uncertain",
+  confidence: number,
+  reason = "画面中人物正在案板前切配食材",
+): Response {
+  return Response.json({
+    choices: [{
+      message: {
+        content: JSON.stringify({ classification, confidence, reason }),
+      },
+    }],
+  });
+}
+
+async function testSha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 function sceneKeyframeBody(): Record<string, unknown> {
