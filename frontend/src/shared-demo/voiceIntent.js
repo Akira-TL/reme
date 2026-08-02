@@ -63,6 +63,76 @@ export function selectFailClosedFallEvent(fall) {
     : null;
 }
 
+export function selectFallCheckInStartAction(visibilityState) {
+  return visibilityState === "hidden" ? "escalate" : "prompt";
+}
+
+export function prepareFallRecoveryForNewSession(fall, nowMs = Date.now()) {
+  if (
+    !fall
+    || typeof fall.eventId !== "string"
+    || fall.eventId.length === 0
+    || fall.phase === "idle"
+  ) return null;
+  if (
+    fall.phase === "checking"
+    && (!Number.isFinite(fall.deadlineMs) || fall.deadlineMs <= nowMs)
+  ) {
+    return {
+      ...fall,
+      phase: "escalated",
+      deadlineMs: null,
+      trigger: "check_in_timeout",
+      message: "完整问询窗口没有收到回应，规则已进入告警状态。",
+      delivery: "pending",
+    };
+  }
+  return { ...fall, delivery: "pending" };
+}
+
+export function reconcileFallWithAuthoritativeAlarm(fall, alarm) {
+  if (
+    !alarm
+    || typeof alarm.event_id !== "string"
+    || !["checking", "escalated", "resolved"].includes(alarm.phase)
+  ) return { action: "ignore", fall };
+
+  const authoritative = {
+    phase: alarm.phase,
+    eventId: alarm.event_id,
+    deadlineMs: alarm.response_deadline_ms,
+    trigger: alarm.trigger,
+    message: alarm.message,
+    delivery: "accepted",
+  };
+  const sameEvent = fall?.eventId === alarm.event_id;
+
+  if (alarm.phase === "checking" && sameEvent) {
+    if (["escalated", "resolved"].includes(fall.phase)) {
+      return { action: "republish", fall };
+    }
+    if (
+      fall.phase === "checking"
+      && Number.isFinite(fall.deadlineMs)
+      && fall.deadlineMs < alarm.response_deadline_ms
+    ) {
+      return {
+        action: "republish",
+        fall: fall.delivery === "pending" ? fall : { ...fall, delivery: "pending" },
+      };
+    }
+  }
+
+  if (alarm.phase === "resolved") {
+    if (fall?.phase === "idle") return { action: "ignore", fall };
+    if (!sameEvent) return { action: "republish", fall };
+  }
+
+  const unchanged = fall
+    && Object.keys(authoritative).every((key) => fall[key] === authoritative[key]);
+  return { action: "adopt", fall: unchanged ? fall : authoritative };
+}
+
 export function selectFallReconnectAction(fall, nowMs = Date.now()) {
   if (
     !fall
@@ -77,6 +147,53 @@ export function selectFallReconnectAction(fall, nowMs = Date.now()) {
   if (fall.phase === "escalated") return "republish_escalated";
   if (fall.phase === "resolved") return "republish_resolved";
   return "none";
+}
+
+export function selectFallResolutionAction(fall, requestedEventId = null, nowMs = Date.now()) {
+  const eventId = typeof requestedEventId === "string" ? requestedEventId : fall?.eventId;
+  if (
+    !fall
+    || !eventId
+    || fall.eventId !== eventId
+    || fall.phase === "idle"
+    || fall.phase === "resolved"
+  ) return "ignore";
+  if (fall.phase === "checking") {
+    return Number.isFinite(fall.deadlineMs) && fall.deadlineMs > nowMs
+      ? "resolve"
+      : "escalate";
+  }
+  if (fall.phase === "escalated") {
+    return fall.delivery === "accepted" ? "resolve" : "block";
+  }
+  return "ignore";
+}
+
+export function selectFallExitAction(fall, { persistenceHealthy = true } = {}) {
+  if (!persistenceHealthy) return "block";
+  if (!fall || !fall.eventId || fall.phase === "idle") return "allow";
+  if (fall.phase === "checking") return "escalate";
+  if (fall.phase === "resolved" && fall.delivery === "accepted") return "allow";
+  return "block";
+}
+
+export function selectControlReleaseAction(status) {
+  return status === 401 || (Number.isInteger(status) && status >= 200 && status < 300)
+    ? "complete"
+    : "retry";
+}
+
+export function applyAlarmDeliveryAck({ fall, pending, eventSequence }) {
+  if (
+    !fall
+    || !pending
+    || pending.eventSequence !== eventSequence
+    || pending.eventId !== fall.eventId
+    || pending.phase !== fall.phase
+  ) return null;
+  return fall.delivery === "accepted"
+    ? fall
+    : { ...fall, delivery: "accepted" };
 }
 
 export async function recognizeDangerVoice(

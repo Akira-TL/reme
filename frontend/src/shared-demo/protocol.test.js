@@ -17,6 +17,7 @@ import {
   isControllerReady,
   isForwardedMediaSignal,
   isHeartbeatAck,
+  isMediaGrantError,
   isMediaSignal,
   isPoseFrame,
   parseDemoEvent,
@@ -420,11 +421,44 @@ test("controller resume messages require exact authoritative cursors", () => {
     lease_expires_at_ms: 31_000,
     last_event_sequence: -1,
     last_frame_sequence: 42,
+    current_alarm: null,
   };
   assert.equal(isControllerReady(ready), true);
+  const legacyReady = { ...ready };
+  delete legacyReady.current_alarm;
+  assert.equal(isControllerReady(legacyReady), true);
   assert.equal(isControllerReady({ ...ready, last_frame_sequence: -2 }), false);
   assert.equal(isControllerReady({ ...ready, token: "forbidden" }), false);
   assert.equal(isControllerReady({ ...ready, session_id: "bad session" }), false);
+  const currentAlarm = createDemoEvent({
+    sessionId: "session-a",
+    eventSequence: 7,
+    timestampMs: 30_000,
+    eventType: "alarm_state",
+    payload: {
+      event_id: "fall-123",
+      phase: "escalated",
+      trigger: "check_in_timeout",
+      message: "完整问询窗口没有收到回应，规则已进入告警状态。",
+      response_deadline_ms: null,
+      media_scope: "fall_emergency",
+    },
+  });
+  assert.equal(isControllerReady({
+    ...ready,
+    last_event_sequence: 7,
+    current_alarm: currentAlarm,
+  }), true);
+  assert.equal(isControllerReady({
+    ...ready,
+    last_event_sequence: 6,
+    current_alarm: currentAlarm,
+  }), false);
+  assert.equal(isControllerReady({
+    ...ready,
+    last_event_sequence: 7,
+    current_alarm: { ...currentAlarm, session_id: "session-b" },
+  }), false);
 
   assert.equal(isHeartbeatAck({
     type: "heartbeat_ack",
@@ -434,5 +468,17 @@ test("controller resume messages require exact authoritative cursors", () => {
     type: "heartbeat_ack",
     lease_expires_at_ms: 45_000,
     session_id: "session-a",
+  }), false);
+});
+
+test("media grant errors use an exact closed controller contract", () => {
+  assert.equal(isMediaGrantError({ type: "error", error: "no_connected_viewers" }), true);
+  assert.equal(isMediaGrantError({ type: "error", error: "media_grant_not_eligible" }), true);
+  assert.equal(isMediaGrantError({ type: "error", error: "media_grant_already_active" }), true);
+  assert.equal(isMediaGrantError({ type: "error", error: "unknown" }), false);
+  assert.equal(isMediaGrantError({
+    type: "error",
+    error: "no_connected_viewers",
+    detail: "forbidden expansion",
   }), false);
 });

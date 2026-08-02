@@ -28,14 +28,15 @@
 ## 端到端流程
 
 1. 用户解锁唯一监控端，并在“开启后置摄像头”的明确手势中授予相机和麦克风权限；预授权完成后立即停止麦克风轨道，日常采集期不占麦。
-2. 真实姿态流产生跌倒候选，监控端发布 `alarm_state(checking)` 并播放本地预置问询。
+2. 真实姿态流产生跌倒候选，监控端先写入不含令牌/音频/转写的会话级恢复记录，再发布 `alarm_state(checking)`；Relay 持久化绝对 deadline、成功设置 Durable Object alarm 后才返回事件确认，然后页面播放本地预置问询。
 3. 只有问询实际结束后才打开新的麦克风轨道；若播放失败，以有界回退时点开始，不录入提示音回声。
 4. 录音器输出 16 kHz、单声道、PCM WAV。检测到开口后以尾部静音收尾；无声、事件变化、页面隐藏、停止采集或规则截止均取消并释放轨道。
 5. 监控端调用独立鉴权 HTTP 端点；音频不进入 WebRTC 视频 offer，也不进入共享 WebSocket。
 6. Relay 验证控制租约、当前活跃 danger event、请求与 WAV，再进行一次 `mimo-v2.5` `input_audio` 调用。
 7. `safe` 在事件仍为 `checking` 时关闭事件；`need_help` 立即升级家属告警；`unclear`、空录音、拒权、无网络、MiMo 失败或迟到均保持确定性倒计时兜底。
-8. `checking` 期间停止采集、释放控制、切场景或 `pagehide` 必须先按超时 fail-closed 升级；仅切到后台但页面仍存活时只释放麦克风、不清倒计时。控制 WebSocket 重连后必须按绝对 deadline 对账并重发当前 alarm 状态，避免本地与 Relay/旁观端分叉。
-8. UI 显式显示 `waiting / listening / transcribing / safe / help / unclear / unavailable`，但 transcript 只在当前监控端内存里短暂显示，事件结束即清理。
+8. `checking` 期间停止采集、释放控制、切场景或 `pagehide` 必须先按超时 fail-closed 升级；若页面已经隐藏后才完成一次在途姿态推理，新事件直接升级，不进入可能被节流的问询计时。控制 WebSocket 重连后必须按绝对 deadline 对账并重发当前 alarm 状态。
+9. Relay 在 deadline、仍 checking 的主动释放或租约到期时独立合成并广播 `check_in_timeout` 升级。服务端升级不凭空签发视频；控制端缺席时 viewer 显示告警但视频不可用。该未结案升级会滚入下一次合法 session，`controller_ready.current_alarm` 使监控端在补发前先收敛到权威状态并强制回到 fall 场景。
+10. UI 显式显示 `waiting / listening / transcribing / safe / help / unclear / unavailable` 以及 Relay delivery 状态；未确认的升级不能被本地“关闭事件”覆盖，未确认结案或存储故障时不能切场景或释放控制权。transcript 只在当前监控端内存里短暂显示，事件结束即清理。
 
 ## HTTP 合同
 
@@ -78,6 +79,9 @@ Content-Type: application/json
 - Relay 仅在控制令牌仍属于当前租约、`event_id` 对应最新 `alarm_state(checking)` 时允许调用；每事件只消费一次语音预算，防止重复计费和迟到结果。
 - MiMo API key 只来自 Worker secret；浏览器不得直连 MiMo。
 - DO 只可原子校验租约、当前结构事件和预算；不得接收、保存或返回音频、Base64、transcript。
+- DO 只维护一个活跃 checking watchdog：绝对 deadline 可单调缩短、不可延长；alarm 到期时以事务原子推进事件序列、watchdog 状态和最新 `alarm_state`，再广播给 viewer。
+- watchdog 与结构化 alarm checkpoint 同事务更新；冷启动会幂等接管升级前已有的 `alarm_state`，并按单调状态机合并旧 Worker 回滚窗口内的写入，已落盘 escalation 不得被更高客户端 sequence 重开或改写 trigger。
+- 未结案 fall 另存为 24 小时上限的严格 `sessionStorage` 恢复记录；它不含 token、audio、Base64 或 transcript。新租约必须把恢复记录的 delivery 重置为 pending 后重放；只有 Relay 已确认的 resolved 或确认无事件的正常退出才清理。
 - 结构日志只含 request/event 标识、provider/model、状态、上游 HTTP 状态、耗时、字节数与 intent；严禁 transcript、音频、Base64、Bearer token、API key。
 - Cloudflare 持久化 invocation logs 必须关闭，仅保留上述自定义结构日志；显式实时 tail 会看到瞬时请求元数据，只能由受信任发布者短时开启并在 smoke 后关闭。
 - WebRTC bridge 继续只取 `getVideoTracks()`；麦克风权限不能扩大 viewer 的能力。
@@ -87,9 +91,13 @@ Content-Type: application/json
 
 - 本地规则截止时间从问询窗口建立时冻结，录音与上传不延长它。
 - `safe` 只在相同 `event_id` 仍为 `checking` 时生效；超时已经升级后，迟到 `safe` 不自动撤销已发送的家属告警。
+- 按钮“我没事”与 MiMo `safe` 使用同一绝对 deadline 边界；deadline 相等也视为迟到并先升级。
+- `escalated/pending` 不允许转为 `resolved`；只有当前升级获得匹配的 Relay `event_accepted` 后，才开放本人显式关闭。
+- 服务端 timeout escalation 优先于离线形成的 stale safe；跨重连或新租约只有与权威 escalation trigger 相同的显式 resolved 才可结案。
 - `need_help` 可以更早升级，但不得产生第二次告警或第二个媒体授权。
 - `unclear` 不清除倒计时；本轮不增加第二次云端语音调用。
 - stop、scene change、pagehide、release 会同时取消录音与在途 fetch；迟到 Promise 不得覆盖新事件状态。
+- release HTTP 网络错误或非终态响应不得清本地凭证；仅 Relay 2xx 或代表旧令牌已无控制权的 401 可完成本地释放。
 
 ## 自动化验收
 
@@ -109,6 +117,8 @@ Relay：
 - MiMo payload 精确使用 `input_audio` WAV、JSON mode、thinking disabled；
 - 上游超时、网络错误、非 2xx、超大/非法 JSON、未知 intent；
 - 升级式危险词 guardrail；
+- Durable Object alarm 的 early-fire 重排、到期升级、重复执行幂等、deadline 只缩不延、late resolved 拒绝、checking release/lease expiry 升级与新 session 清理；
+- 旧 `alarm_state` 冷启动迁移、旧 Worker 回滚写入的单调合并，以及服务端 timeout 与客户端 help 同时升级时的权威 trigger 收敛；
 - 日志不含 transcript/audio/token；
 - `wrangler types --check`、测试、staging/production dry-run。
 
@@ -117,9 +127,9 @@ Relay：
 1. 本地全绿并确认 `frontend/`、`demo-relay/`、本 SPEC/ADR 之外无意外改动。
 2. 先部署 Worker staging；用本地受允 Origin 验证 CORS、401/4xx 不触发 MiMo，再用合成“我没事/需要帮助”WAV 做一次真实授权调用。
 3. Vercel Preview 验证构建、`Permissions-Policy`、viewer 不请求麦克风和 monitor 状态机；随机 Preview Origin 未加入 staging allowlist 时不得伪称跨域 Gate 已过。
-4. 先 Worker production、后 Vercel production；上线后做安全 smoke、真实 MiMo synthetic WAV 和脱敏日志核对。
+4. `controller_ready` 新前端在发布窗口内同时严格接受旧五字段合同与带 `current_alarm` 的新合同；因此先发布 Vercel production（旧 Worker 下语音端点只会显式降级），确认控制链路正常后再发布 Worker production。上线后做安全 smoke、权威 alarm 收敛、真实 MiMo synthetic WAV 和脱敏日志核对。
 5. 目标 iPhone Safari 与 Android Chrome 人工 Gate：HTTPS 权限、提示音回声、自然换气、噪声、safe/help、拒权、后台/前台恢复、停止后麦克风指示器熄灭。
-6. 回滚先恢复上一 Vercel production，使前端回到按钮回应；必要时再回滚 Worker。独立新增端点若保持安全，可只回滚前端。
+6. 回滚先恢复上一 Worker production，再恢复上一 Vercel production，避免旧前端遇到新增 `current_alarm` 字段；独立新增端点若保持安全且 controller 合同不变，才可只回滚前端。
 
 ## Go / No-Go
 

@@ -50,6 +50,27 @@ session until the lease TTL expires; disconnecting the socket does not release
 the lease, but it immediately revokes every active media grant for fail-closed
 privacy.
 
+An accepted fall `alarm_state(checking)` also creates a structured Durable Object
+watchdog and schedules the room alarm at the earlier of its absolute response
+deadline and current lease expiry. The same event may shorten that deadline but
+cannot extend it. If the deadline arrives, the controller releases while still
+checking, or its lease expires, the Durable Object atomically advances the event
+sequence, persists `alarm_state(escalated)` with `check_in_timeout`, and broadcasts
+it without waiting for the browser. Repeated alarm delivery is idempotent. A late
+direct `checking -> resolved` transition is rejected after first persisting the
+upgrade; a later explicit `escalated -> resolved` remains valid. Server-side
+escalation does not manufacture a video grant when no controller is present.
+The latest authoritative alarm is returned as strict `current_alarm` metadata in
+`controller_ready`. An unresolved escalation survives lease replacement by being
+rewritten into the new session with the same event and trigger but a new session
+ID and sequence; stale offline safety state cannot erase it. Only a resolved event
+whose trigger matches that authoritative escalation can close it. A structured
+alarm checkpoint is updated in the same transaction as each watchdog transition.
+On cold start it idempotently backfills pre-watchdog `alarm_state` rows and
+monotonically reconciles any writes made while an older Worker version was active;
+an already authoritative escalation cannot be reopened or have its trigger
+rewritten by a higher client sequence.
+
 `media_grant_request` is accepted only for a matching consented kitchen care card
 or matching escalated fall alarm. The generated short-lived grant includes only
 viewers connected at issuance; a late viewer never inherits it. Strict

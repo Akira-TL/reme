@@ -1,16 +1,40 @@
 export const CONTROLLER_SESSION_STORAGE_KEY = "reme.controller-session.v1";
+export const PENDING_FALL_STORAGE_KEY = "reme.pending-fall.v1";
 
-const CONTROLLER_SESSION_VERSION = 1;
+const CONTROLLER_SESSION_VERSION = 2;
+const PENDING_FALL_VERSION = 1;
 const MAX_LEASE_AHEAD_MS = 120_000;
+const MAX_RECOVERY_AGE_MS = 24 * 60 * 60 * 1_000;
+const MAX_RECOVERY_CLOCK_SKEW_MS = 60_000;
 const SESSION_KEYS = Object.freeze([
   "version",
   "token",
   "sessionId",
   "leaseExpiresAtMs",
   "sceneId",
+  "fall",
 ]);
-const UPDATE_KEYS = new Set(["leaseExpiresAtMs", "sceneId"]);
+const FALL_KEYS = Object.freeze([
+  "phase",
+  "eventId",
+  "deadlineMs",
+  "trigger",
+  "message",
+  "delivery",
+]);
+const UPDATE_KEYS = new Set(["leaseExpiresAtMs", "sceneId", "fall"]);
 const SCENE_IDS = new Set(["living", "kitchen", "bathroom", "fall"]);
+const FALL_PHASES = new Set(["idle", "checking", "escalated", "resolved"]);
+const FALL_TRIGGERS = new Set([
+  "fall_transition",
+  "voice_intent",
+  "elder_need_help",
+  "check_in_timeout",
+  "visual_confirm",
+  "manual_debug",
+]);
+const FALL_DELIVERY_STATES = new Set(["none", "pending", "accepted"]);
+const PENDING_FALL_KEYS = Object.freeze(["version", "savedAtMs", "fall"]);
 const RECONNECT_DELAYS_MS = Object.freeze([500, 1_000, 2_000, 4_000, 5_000]);
 
 function resolveStorage(storage) {
@@ -38,6 +62,41 @@ function hasExactKeys(value, expectedKeys) {
     && keys.every((key) => expectedKeys.includes(key));
 }
 
+function normalizeFall(value) {
+  if (!hasExactKeys(value, FALL_KEYS)) return null;
+  if (!FALL_PHASES.has(value.phase)) return null;
+  if (typeof value.message !== "string" || value.message.length > 320) return null;
+  if (!FALL_DELIVERY_STATES.has(value.delivery)) return null;
+
+  if (value.phase === "idle") {
+    if (
+      value.eventId !== null
+      || value.deadlineMs !== null
+      || value.trigger !== null
+      || value.delivery !== "none"
+    ) return null;
+  } else {
+    if (typeof value.eventId !== "string" || !/^[a-z0-9_-]+$/i.test(value.eventId)) {
+      return null;
+    }
+    if (!FALL_TRIGGERS.has(value.trigger) || value.delivery === "none") return null;
+    if (value.phase === "checking") {
+      if (!Number.isFinite(value.deadlineMs) || value.deadlineMs < 0) return null;
+    } else if (value.deadlineMs !== null) {
+      return null;
+    }
+  }
+
+  return {
+    phase: value.phase,
+    eventId: value.eventId,
+    deadlineMs: value.deadlineMs,
+    trigger: value.trigger,
+    message: value.message,
+    delivery: value.delivery,
+  };
+}
+
 function normalizeSession(value, nowMs) {
   if (!hasExactKeys(value, SESSION_KEYS)) return null;
   if (value.version !== CONTROLLER_SESSION_VERSION) return null;
@@ -57,6 +116,8 @@ function normalizeSession(value, nowMs) {
     return null;
   }
   if (typeof value.sceneId !== "string" || !SCENE_IDS.has(value.sceneId)) return null;
+  const fall = normalizeFall(value.fall);
+  if (fall === null || (fall.phase !== "idle" && value.sceneId !== "fall")) return null;
 
   return {
     version: CONTROLLER_SESSION_VERSION,
@@ -64,6 +125,7 @@ function normalizeSession(value, nowMs) {
     sessionId: value.sessionId,
     leaseExpiresAtMs: value.leaseExpiresAtMs,
     sceneId: value.sceneId,
+    fall,
   };
 }
 
@@ -124,8 +186,9 @@ export function writeControllerSession(value, { storage, now = Date.now } = {}) 
 }
 
 /**
- * Updates only the renewable expiry and/or selected demo scene on an existing,
- * still-valid record.
+ * Updates only the renewable expiry, selected demo scene, and/or the minimal
+ * structured fall state on an existing, still-valid record. Audio and
+ * transcripts are not accepted fields.
  */
 export function updateControllerSession(patch, { storage, now = Date.now } = {}) {
   if (!isObject(patch)) return null;
@@ -149,6 +212,85 @@ export function clearControllerSession({ storage } = {}) {
   const target = resolveStorage(storage);
   if (target === null) return false;
   return removeStoredSession(target);
+}
+
+/**
+ * Keeps only the unresolved structured fall state across lease expiry/reload in
+ * the current tab. The recovery record never contains a token, audio, or text
+ * transcript and must be reconciled through a newly authenticated session.
+ */
+export function readPendingFallRecovery({ storage, now = Date.now } = {}) {
+  const target = resolveStorage(storage);
+  if (target === null) return null;
+
+  let serialized;
+  try {
+    serialized = target.getItem(PENDING_FALL_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+  if (serialized === null) return null;
+
+  let decoded;
+  try {
+    decoded = JSON.parse(serialized);
+  } catch {
+    removePendingFallRecovery(target);
+    return null;
+  }
+  const nowMs = resolveNow(now);
+  if (
+    !hasExactKeys(decoded, PENDING_FALL_KEYS)
+    || decoded.version !== PENDING_FALL_VERSION
+    || !Number.isFinite(nowMs)
+    || !Number.isSafeInteger(decoded.savedAtMs)
+    || decoded.savedAtMs > nowMs + MAX_RECOVERY_CLOCK_SKEW_MS
+    || decoded.savedAtMs < nowMs - MAX_RECOVERY_AGE_MS
+  ) {
+    removePendingFallRecovery(target);
+    return null;
+  }
+  const fall = normalizeFall(decoded.fall);
+  if (fall === null || fall.phase === "idle") {
+    removePendingFallRecovery(target);
+    return null;
+  }
+  return fall;
+}
+
+export function writePendingFallRecovery(fall, { storage, now = Date.now } = {}) {
+  const target = resolveStorage(storage);
+  if (target === null) return null;
+  const nowMs = resolveNow(now);
+  const normalized = normalizeFall(fall);
+  if (!Number.isSafeInteger(nowMs) || normalized === null || normalized.phase === "idle") {
+    return null;
+  }
+  try {
+    target.setItem(PENDING_FALL_STORAGE_KEY, JSON.stringify({
+      version: PENDING_FALL_VERSION,
+      savedAtMs: nowMs,
+      fall: normalized,
+    }));
+    return normalized;
+  } catch {
+    return null;
+  }
+}
+
+function removePendingFallRecovery(storage) {
+  try {
+    storage?.removeItem?.(PENDING_FALL_STORAGE_KEY);
+    return storage !== null;
+  } catch {
+    return false;
+  }
+}
+
+export function clearPendingFallRecovery({ storage } = {}) {
+  const target = resolveStorage(storage);
+  if (target === null) return false;
+  return removePendingFallRecovery(target);
 }
 
 /** Zero-based retry attempt: 0.5s, 1s, 2s, 4s, then a 5s cap. */

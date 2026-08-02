@@ -1,4 +1,9 @@
-import { exports as workerExports } from "cloudflare:workers";
+import { env, exports as workerExports } from "cloudflare:workers";
+import {
+  evictDurableObject,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -17,6 +22,7 @@ const EVENT_SCHEMA_VERSION = "reme-demo-event/v1";
 const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
 const VIEWER_PROTOCOL = "reme-viewer-v1";
 const CONTROLLER_PROTOCOL = "reme-controller-v1";
+const ROOM_NAME = "shared-live-demo";
 
 const sockets: WebSocket[] = [];
 const issuedTokens: string[] = [];
@@ -28,6 +34,21 @@ interface UnlockSuccess {
   session_id: string;
   lease_expires_at_ms: number;
 }
+
+interface DangerWatchdogSnapshot {
+  alarm_at_ms: number | null;
+  watchdogs: Array<{
+    session_id: string;
+    event_id: string;
+    deadline_ms: number;
+    status: "checking" | "escalated" | "resolved";
+  }>;
+  alarm_event: DemoEvent | null;
+  last_event_sequence: number | null;
+}
+
+type AlarmTrigger = Extract<DemoEvent, { event_type: "alarm_state" }>["payload"]["trigger"];
+type AlarmStateEvent = Extract<DemoEvent, { event_type: "alarm_state" }>;
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -43,6 +64,7 @@ afterEach(async () => {
       socket.close(1000, "test_cleanup");
     }
   }
+  await resetRoomStorage();
 });
 
 describe("single-room demo relay", () => {
@@ -94,6 +116,7 @@ describe("single-room demo relay", () => {
       lease_expires_at_ms: lease.lease_expires_at_ms,
       last_event_sequence: -1,
       last_frame_sequence: -1,
+      current_alarm: null,
     });
   });
 
@@ -152,6 +175,7 @@ describe("single-room demo relay", () => {
       lease_expires_at_ms: lease.lease_expires_at_ms,
       last_event_sequence: 3,
       last_frame_sequence: 7,
+      current_alarm: null,
     });
 
     await publishEvent(
@@ -544,12 +568,17 @@ describe("single-room demo relay", () => {
   });
 
   it("issues fall media only for a matching escalated alarm", async () => {
+    const baseTime = Date.now();
     const lease = await unlock();
     const controller = await connectController(lease.token);
     await nextJson(controller);
     const viewer = await connectViewer();
     await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "fall"), [viewer]);
-    await publishEvent(controller, makeAlarmEvent(lease.session_id, 1, "checking"), [viewer]);
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 1, "checking", baseTime),
+      [viewer],
+    );
 
     controller.send(JSON.stringify({
       type: "media_grant_request",
@@ -562,7 +591,11 @@ describe("single-room demo relay", () => {
       error: "media_grant_not_eligible",
     });
 
-    await publishEvent(controller, makeAlarmEvent(lease.session_id, 2, "escalated"), [viewer]);
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 2, "escalated", baseTime + 1),
+      [viewer],
+    );
     const viewerGrant = nextJson(viewer);
     const ackPromise = nextJson(controller);
     controller.send(JSON.stringify({
@@ -575,7 +608,7 @@ describe("single-room demo relay", () => {
     expect(ack.grant.event_sequence).toBe(3);
     await expect(viewerGrant).resolves.toEqual(ack.grant);
 
-    const resolved = makeAlarmEvent(lease.session_id, 4, "resolved");
+    const resolved = makeAlarmEvent(lease.session_id, 4, "resolved", baseTime + 2);
     const viewerMessages = nextJsonBatch(viewer, 2);
     const controllerMessages = nextJsonBatch(controller, 2);
     controller.send(JSON.stringify(resolved));
@@ -888,26 +921,51 @@ describe("single-room demo relay", () => {
     );
     const explicitHelp = await recognizeDangerVoice(lease.token, "fall-help");
     await expect(explicitHelp.json()).resolves.toMatchObject({ ok: true, intent: "need_help" });
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 2, "escalated", baseTime + 1, "fall-help"),
+      [],
+    );
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 3, "resolved", baseTime + 2, "fall-help"),
+      [],
+    );
 
     await publishEvent(
       controller,
-      makeAlarmEvent(lease.session_id, 2, "checking", baseTime + 1, "fall-safe"),
+      makeAlarmEvent(lease.session_id, 4, "checking", baseTime + 3, "fall-safe"),
       [],
     );
     const negated = await recognizeDangerVoice(lease.token, "fall-safe");
     await expect(negated.json()).resolves.toMatchObject({ ok: true, intent: "safe" });
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 5, "resolved", baseTime + 4, "fall-safe"),
+      [],
+    );
 
     await publishEvent(
       controller,
-      makeAlarmEvent(lease.session_id, 3, "checking", baseTime + 2, "fall-soft"),
+      makeAlarmEvent(lease.session_id, 6, "checking", baseTime + 5, "fall-soft"),
       [],
     );
     const softConcern = await recognizeDangerVoice(lease.token, "fall-soft");
     await expect(softConcern.json()).resolves.toMatchObject({ ok: true, intent: "need_help" });
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 7, "escalated", baseTime + 6, "fall-soft"),
+      [],
+    );
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 8, "resolved", baseTime + 7, "fall-soft"),
+      [],
+    );
 
     await publishEvent(
       controller,
-      makeAlarmEvent(lease.session_id, 4, "checking", baseTime + 3, "fall-silent"),
+      makeAlarmEvent(lease.session_id, 9, "checking", baseTime + 8, "fall-silent"),
       [],
     );
     const silentSafe = await recognizeDangerVoice(lease.token, "fall-silent");
@@ -932,7 +990,7 @@ describe("single-room demo relay", () => {
 
     await publishEvent(
       controller,
-      makeAlarmEvent(lease.session_id, 2, "checking", baseTime + 1, "fall-1"),
+      makeAlarmEvent(lease.session_id, 2, "checking", baseTime, "fall-1"),
       [],
     );
     const republished = await recognizeDangerVoice(lease.token);
@@ -1048,6 +1106,908 @@ describe("single-room demo relay", () => {
     });
   });
 
+  it("persists a checking deadline and reschedules an early Durable Object alarm", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const viewer = await connectViewer();
+      const deadline = baseTime + 8_000;
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "fall", baseTime),
+        [viewer],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(lease.session_id, 1, "checking", baseTime, "fall-1", deadline),
+        [viewer],
+      );
+
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: deadline,
+        watchdogs: [{
+          session_id: lease.session_id,
+          event_id: "fall-1",
+          deadline_ms: deadline,
+          status: "checking",
+        }],
+        last_event_sequence: 1,
+      });
+
+      await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(true);
+      await expectNoMessage(viewer);
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: deadline,
+        watchdogs: [{ status: "checking", deadline_ms: deadline }],
+        last_event_sequence: 1,
+      });
+
+      now.mockReturnValue(deadline + 1);
+      const escalatedForViewer = nextJson(viewer);
+      const escalatedForController = nextJson(controller);
+      await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(true);
+      const authoritativeEscalation = await escalatedForViewer;
+      expect(authoritativeEscalation).toMatchObject({
+        session_id: lease.session_id,
+        event_sequence: 2,
+        timestamp_ms: deadline + 1,
+        event_type: "alarm_state",
+        payload: {
+          event_id: "fall-1",
+          phase: "escalated",
+          trigger: "check_in_timeout",
+          response_deadline_ms: null,
+          media_scope: "fall_emergency",
+        },
+      });
+      await expect(escalatedForController).resolves.toEqual(authoritativeEscalation);
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{ status: "escalated", deadline_ms: deadline }],
+        alarm_event: {
+          event_sequence: 2,
+          event_type: "alarm_state",
+          payload: { phase: "escalated", trigger: "check_in_timeout" },
+        },
+        last_event_sequence: 2,
+      });
+      const noViewerDuplicate = expectNoMessage(viewer);
+      const noControllerDuplicate = expectNoMessage(controller);
+      await runInDurableObject(roomStub(), (instance) => instance.alarm());
+      await Promise.all([noViewerDuplicate, noControllerDuplicate]);
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{ status: "escalated", deadline_ms: deadline }],
+        alarm_event: { event_sequence: 2, event_type: "alarm_state" },
+        last_event_sequence: 2,
+      });
+      await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(false);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("ACKs a controller escalation that races with the authoritative watchdog", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const viewer = await connectViewer();
+      const deadline = baseTime + 8_000;
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "fall", baseTime),
+        [viewer],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(lease.session_id, 1, "checking", baseTime, "fall-1", deadline),
+        [viewer],
+      );
+
+      now.mockReturnValue(deadline + 1);
+      const escalatedForViewer = nextJson(viewer);
+      const escalatedForController = nextJson(controller);
+      await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(true);
+      const authoritativeEscalation = await escalatedForViewer;
+      expect(authoritativeEscalation).toMatchObject({
+        event_sequence: 2,
+        event_type: "alarm_state",
+        payload: { event_id: "fall-1", phase: "escalated" },
+      });
+      await expect(escalatedForController).resolves.toEqual(authoritativeEscalation);
+
+      const noConflictDuplicate = expectNoMessage(viewer);
+      const conflictMessages = nextJsonBatch(controller, 2);
+      controller.send(JSON.stringify(makeAlarmEvent(
+        lease.session_id,
+        3,
+        "escalated",
+        deadline + 1,
+        "fall-1",
+        null,
+        "elder_need_help",
+      )));
+      await expect(conflictMessages).resolves.toEqual([
+        authoritativeEscalation,
+        { type: "error", error: "danger_authoritative_alarm_conflict" },
+      ]);
+      await noConflictDuplicate;
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        watchdogs: [{ status: "escalated" }],
+        alarm_event: {
+          event_sequence: 2,
+          payload: { phase: "escalated", trigger: "check_in_timeout" },
+        },
+        last_event_sequence: 2,
+      });
+
+      const noDuplicate = expectNoMessage(viewer);
+      controller.send(JSON.stringify(
+        makeAlarmEvent(lease.session_id, 2, "escalated", deadline + 1),
+      ));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "event_accepted",
+        event_sequence: 2,
+        event_type: "alarm_state",
+      });
+      await noDuplicate;
+
+      await publishEvent(
+        controller,
+        makeAlarmEvent(lease.session_id, 3, "resolved", deadline + 2),
+        [viewer],
+      );
+      expect(controller.readyState).toBe(WebSocket.OPEN);
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        watchdogs: [{ status: "resolved" }],
+        alarm_event: { event_sequence: 3, event_type: "alarm_state" },
+        last_event_sequence: 3,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("allows a checking deadline to shorten but rejects extension and scene abandonment", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "fall", baseTime),
+        [],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(
+          lease.session_id,
+          1,
+          "checking",
+          baseTime,
+          "fall-1",
+          baseTime + 8_000,
+        ),
+        [],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(
+          lease.session_id,
+          2,
+          "checking",
+          baseTime + 100,
+          "fall-1",
+          baseTime + 6_000,
+        ),
+        [],
+      );
+
+      controller.send(JSON.stringify(makeAlarmEvent(
+        lease.session_id,
+        3,
+        "checking",
+        baseTime + 200,
+        "fall-1",
+        baseTime + 7_000,
+      )));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "danger_deadline_extension_forbidden",
+      });
+
+      controller.send(JSON.stringify(
+        makeSceneEvent(lease.session_id, 3, "living", baseTime + 300),
+      ));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "danger_check_in_active",
+      });
+
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: baseTime + 6_000,
+        watchdogs: [{
+          event_id: "fall-1",
+          deadline_ms: baseTime + 6_000,
+          status: "checking",
+        }],
+        alarm_event: {
+          event_sequence: 2,
+          event_type: "alarm_state",
+          payload: { response_deadline_ms: baseTime + 6_000 },
+        },
+        last_event_sequence: 2,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("upgrades before rejecting a resolved event received after its deadline", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const viewer = await connectViewer();
+      const deadline = baseTime + 8_000;
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "fall", baseTime),
+        [viewer],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(lease.session_id, 1, "checking", baseTime, "fall-1", deadline),
+        [viewer],
+      );
+
+      now.mockReturnValue(deadline + 1);
+      const escalatedForViewer = nextJson(viewer);
+      const controllerMessages = nextJsonBatch(controller, 2);
+      controller.send(JSON.stringify(
+        makeAlarmEvent(lease.session_id, 2, "resolved", deadline + 1),
+      ));
+      const [escalatedForController, rejection] = await controllerMessages;
+      expect(rejection).toEqual({
+        type: "error",
+        error: "danger_deadline_elapsed",
+      });
+      const authoritativeEscalation = await escalatedForViewer;
+      expect(authoritativeEscalation).toMatchObject({
+        event_sequence: 2,
+        event_type: "alarm_state",
+        payload: {
+          event_id: "fall-1",
+          phase: "escalated",
+          trigger: "check_in_timeout",
+        },
+      });
+      expect(escalatedForController).toEqual(authoritativeEscalation);
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{ status: "escalated" }],
+        alarm_event: {
+          event_sequence: 2,
+          event_type: "alarm_state",
+          payload: { phase: "escalated" },
+        },
+        last_event_sequence: 2,
+      });
+
+      await publishEvent(
+        controller,
+        makeAlarmEvent(lease.session_id, 3, "resolved", deadline + 2),
+        [viewer],
+      );
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        watchdogs: [{ status: "resolved" }],
+        alarm_event: {
+          event_sequence: 3,
+          event_type: "alarm_state",
+          payload: { phase: "resolved" },
+        },
+        last_event_sequence: 3,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("rolls an unresolved release escalation into the next session until explicitly closed", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const viewer = await connectViewer();
+      const deadline = baseTime + 8_000;
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "fall", baseTime),
+        [viewer],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(lease.session_id, 1, "checking", baseTime, "fall-1", deadline),
+        [viewer],
+      );
+
+      const escalatedForViewer = nextJson(viewer);
+      await release(lease.token);
+      const releasedEscalation = await escalatedForViewer;
+      expect(releasedEscalation).toMatchObject({
+        session_id: lease.session_id,
+        event_sequence: 2,
+        event_type: "alarm_state",
+        payload: { phase: "escalated", trigger: "check_in_timeout" },
+      });
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{ status: "escalated" }],
+        alarm_event: {
+          event_sequence: 2,
+          event_type: "alarm_state",
+          payload: { phase: "escalated" },
+        },
+        last_event_sequence: 2,
+      });
+      const releasedStatus = await relayFetch("/api/status");
+      await expect(releasedStatus.json()).resolves.toMatchObject({
+        controller_locked: false,
+        controller_connected: false,
+      });
+
+      const freshViewer = await connectViewer();
+      await expect(nextJson(freshViewer)).resolves.toEqual(releasedEscalation);
+
+      const rolloverForViewer = nextJson(viewer);
+      const nextLease = await unlock();
+      expect(nextLease.session_id).not.toBe(lease.session_id);
+      const rolledAlarm = await rolloverForViewer;
+      expect(rolledAlarm).toMatchObject({
+        session_id: nextLease.session_id,
+        event_sequence: 0,
+        event_type: "alarm_state",
+        payload: {
+          event_id: "fall-1",
+          phase: "escalated",
+          trigger: "check_in_timeout",
+        },
+      });
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{
+          session_id: nextLease.session_id,
+          event_id: "fall-1",
+          deadline_ms: deadline,
+          status: "escalated",
+        }],
+        alarm_event: rolledAlarm,
+        last_event_sequence: 0,
+      });
+
+      const nextController = await connectController(nextLease.token);
+      await expect(nextJson(nextController)).resolves.toEqual({
+        type: "controller_ready",
+        session_id: nextLease.session_id,
+        lease_expires_at_ms: nextLease.lease_expires_at_ms,
+        last_event_sequence: 0,
+        last_frame_sequence: -1,
+        current_alarm: rolledAlarm,
+      });
+
+      for (const staleTrigger of ["fall_transition", "voice_intent"] as const) {
+        nextController.send(JSON.stringify(makeAlarmEvent(
+          nextLease.session_id,
+          1,
+          "resolved",
+          baseTime + 1,
+          "fall-1",
+          null,
+          staleTrigger,
+        )));
+        await expect(nextJson(nextController)).resolves.toEqual({
+          type: "error",
+          error: "danger_stale_resolution",
+        });
+      }
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        watchdogs: [{ status: "escalated" }],
+        alarm_event: rolledAlarm,
+        last_event_sequence: 0,
+      });
+
+      await publishEvent(
+        nextController,
+        makeAlarmEvent(
+          nextLease.session_id,
+          1,
+          "resolved",
+          baseTime + 2,
+          "fall-1",
+          null,
+          "check_in_timeout",
+        ),
+        [viewer],
+      );
+      await release(nextLease.token);
+      const finalLease = await unlock();
+      expect(finalLease.session_id).not.toBe(nextLease.session_id);
+      await expect(dangerWatchdogSnapshot()).resolves.toEqual({
+        alarm_at_ms: null,
+        watchdogs: [],
+        alarm_event: null,
+        last_event_sequence: -1,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("makes an escalated-first reconnect authoritative across lease rollover", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const viewer = await connectViewer();
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "fall", baseTime),
+        [viewer],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(
+          lease.session_id,
+          1,
+          "escalated",
+          baseTime,
+          "fall-offline",
+          null,
+          "voice_intent",
+        ),
+        [viewer],
+      );
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{
+          session_id: lease.session_id,
+          event_id: "fall-offline",
+          deadline_ms: baseTime,
+          status: "escalated",
+        }],
+        alarm_event: {
+          session_id: lease.session_id,
+          event_sequence: 1,
+          payload: { trigger: "voice_intent" },
+        },
+        last_event_sequence: 1,
+      });
+
+      controller.send(JSON.stringify(makeAlarmEvent(
+        lease.session_id,
+        2,
+        "checking",
+        baseTime + 1,
+        "fall-new",
+      )));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "danger_alarm_unresolved",
+      });
+      controller.send(JSON.stringify(
+        makeSceneEvent(lease.session_id, 2, "living", baseTime + 1),
+      ));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "danger_alarm_unresolved",
+      });
+      controller.send(JSON.stringify(makeAlarmEvent(
+        lease.session_id,
+        2,
+        "resolved",
+        baseTime + 1,
+        "fall-offline",
+        null,
+        "fall_transition",
+      )));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "danger_stale_resolution",
+      });
+
+      await release(lease.token);
+      const rolloverForViewer = nextJson(viewer);
+      const nextLease = await unlock();
+      const rolledAlarm = await rolloverForViewer;
+      expect(rolledAlarm).toMatchObject({
+        session_id: nextLease.session_id,
+        event_sequence: 0,
+        event_type: "alarm_state",
+        payload: {
+          event_id: "fall-offline",
+          phase: "escalated",
+          trigger: "voice_intent",
+        },
+      });
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        watchdogs: [{
+          session_id: nextLease.session_id,
+          event_id: "fall-offline",
+          deadline_ms: baseTime,
+          status: "escalated",
+        }],
+        alarm_event: rolledAlarm,
+        last_event_sequence: 0,
+      });
+
+      const nextController = await connectController(nextLease.token);
+      await expect(nextJson(nextController)).resolves.toMatchObject({
+        type: "controller_ready",
+        session_id: nextLease.session_id,
+        last_event_sequence: 0,
+        current_alarm: rolledAlarm,
+      });
+      await publishEvent(
+        nextController,
+        makeAlarmEvent(
+          nextLease.session_id,
+          1,
+          "resolved",
+          baseTime + 2,
+          "fall-offline",
+          null,
+          "voice_intent",
+        ),
+        [viewer],
+      );
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        watchdogs: [{ status: "resolved" }],
+        alarm_event: {
+          session_id: nextLease.session_id,
+          event_sequence: 1,
+          payload: { phase: "resolved", trigger: "voice_intent" },
+        },
+        last_event_sequence: 1,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("backfills and idempotently reschedules a legacy checking alarm after eviction", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const legacyStub = roomStub("legacy-checking-migration");
+      const sessionId = "legacy-checking-session";
+      const deadline = baseTime + 8_000;
+      await seedLegacyAlarmState(
+        makeAlarmEvent(sessionId, 1, "checking", baseTime, "fall-legacy", deadline),
+        { leaseExpiresAtMs: baseTime + 30_000, lastEventSequence: -1 },
+        legacyStub,
+      );
+
+      await expect(dangerWatchdogSnapshot(legacyStub)).resolves.toMatchObject({
+        alarm_at_ms: deadline,
+        watchdogs: [{
+          session_id: sessionId,
+          event_id: "fall-legacy",
+          deadline_ms: deadline,
+          status: "checking",
+        }],
+        alarm_event: {
+          session_id: sessionId,
+          event_sequence: 1,
+          payload: { phase: "checking", response_deadline_ms: deadline },
+        },
+        last_event_sequence: 1,
+      });
+
+      await runInDurableObject(legacyStub, (_instance, state) => state.storage.deleteAlarm());
+      await evictDurableObject(legacyStub);
+      await expect(dangerWatchdogSnapshot(legacyStub)).resolves.toMatchObject({
+        alarm_at_ms: deadline,
+        watchdogs: [{ status: "checking", deadline_ms: deadline }],
+        last_event_sequence: 1,
+      });
+
+      now.mockReturnValue(deadline + 1);
+      await expect(runDurableObjectAlarm(legacyStub)).resolves.toBe(true);
+      await expect(dangerWatchdogSnapshot(legacyStub)).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{ status: "escalated", deadline_ms: deadline }],
+        alarm_event: {
+          session_id: sessionId,
+          event_sequence: 2,
+          payload: { phase: "escalated", trigger: "check_in_timeout" },
+        },
+        last_event_sequence: 2,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("immediately escalates an expired legacy checking alarm during cold start", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const legacyStub = roomStub("legacy-expired-migration");
+      const sessionId = "legacy-expired-session";
+      const deadline = baseTime - 1;
+      await seedLegacyAlarmState(
+        makeAlarmEvent(
+          sessionId,
+          1,
+          "checking",
+          baseTime - 8_000,
+          "fall-expired",
+          deadline,
+        ),
+        { leaseExpiresAtMs: baseTime + 30_000, lastEventSequence: 1 },
+        legacyStub,
+      );
+
+      await expect(dangerWatchdogSnapshot(legacyStub)).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{
+          session_id: sessionId,
+          event_id: "fall-expired",
+          deadline_ms: deadline,
+          status: "escalated",
+        }],
+        alarm_event: {
+          session_id: sessionId,
+          event_sequence: 2,
+          payload: { phase: "escalated", trigger: "check_in_timeout" },
+        },
+        last_event_sequence: 2,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("backfills legacy escalated authority while keeping resolved state inactive", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const oldSessionId = "legacy-escalated-session";
+      const legacyEscalation = makeAlarmEvent(
+        oldSessionId,
+        5,
+        "escalated",
+        baseTime - 2_000,
+        "fall-escalated",
+        null,
+        "elder_need_help",
+      );
+      await seedLegacyAlarmState(legacyEscalation, { lastEventSequence: 4 });
+
+      const lateViewer = await connectViewer();
+      await expect(nextJson(lateViewer)).resolves.toEqual(legacyEscalation);
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{
+          session_id: oldSessionId,
+          event_id: "fall-escalated",
+          deadline_ms: expect.any(Number),
+          status: "escalated",
+        }],
+        last_event_sequence: 5,
+      });
+
+      const rolloverForViewer = nextJson(lateViewer);
+      const lease = await unlock();
+      await expect(rolloverForViewer).resolves.toMatchObject({
+        session_id: lease.session_id,
+        event_sequence: 0,
+        payload: {
+          event_id: "fall-escalated",
+          phase: "escalated",
+          trigger: "elder_need_help",
+        },
+      });
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        watchdogs: [{ session_id: lease.session_id, status: "escalated" }],
+        alarm_event: { session_id: lease.session_id, event_sequence: 0 },
+        last_event_sequence: 0,
+      });
+
+      await resetRoomStorage();
+      const resolvedSessionId = "legacy-resolved-session";
+      const legacyResolution = makeAlarmEvent(
+        resolvedSessionId,
+        3,
+        "resolved",
+        baseTime - 1_000,
+        "fall-resolved",
+        null,
+        "check_in_timeout",
+      );
+      await seedLegacyAlarmState(legacyResolution, { lastEventSequence: 2 });
+      await expect(dangerWatchdogSnapshot()).resolves.toEqual({
+        alarm_at_ms: null,
+        watchdogs: [{
+          session_id: resolvedSessionId,
+          event_id: "fall-resolved",
+          deadline_ms: expect.any(Number),
+          status: "resolved",
+        }],
+        alarm_event: legacyResolution,
+        last_event_sequence: 3,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("monotonically reconciles rollback writes against persisted alarm authority", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const sessionId = "rollback-merge-session";
+      const authority = makeAlarmEvent(
+        sessionId,
+        2,
+        "escalated",
+        baseTime - 2_000,
+        "fall-rollback",
+        null,
+        "check_in_timeout",
+      );
+
+      const reopenedStub = roomStub("legacy-rollback-reopen");
+      await seedDivergentAlarmAuthority(
+        authority,
+        makeAlarmEvent(
+          sessionId,
+          3,
+          "checking",
+          baseTime - 1_000,
+          "fall-rollback",
+          baseTime + 8_000,
+        ),
+        reopenedStub,
+      );
+      await expect(dangerWatchdogSnapshot(reopenedStub)).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{ status: "escalated" }],
+        alarm_event: {
+          event_sequence: 4,
+          payload: { phase: "escalated", trigger: "check_in_timeout" },
+        },
+        last_event_sequence: 4,
+      });
+
+      const mismatchedResolutionStub = roomStub("legacy-rollback-stale-resolution");
+      await seedDivergentAlarmAuthority(
+        authority,
+        makeAlarmEvent(
+          sessionId,
+          3,
+          "resolved",
+          baseTime - 1_000,
+          "fall-rollback",
+          null,
+          "voice_intent",
+        ),
+        mismatchedResolutionStub,
+      );
+      await expect(dangerWatchdogSnapshot(mismatchedResolutionStub)).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{ status: "escalated" }],
+        alarm_event: {
+          event_sequence: 4,
+          payload: { phase: "escalated", trigger: "check_in_timeout" },
+        },
+        last_event_sequence: 4,
+      });
+
+      const matchingResolution = makeAlarmEvent(
+        sessionId,
+        3,
+        "resolved",
+        baseTime - 1_000,
+        "fall-rollback",
+        null,
+        "check_in_timeout",
+      );
+      const matchingResolutionStub = roomStub("legacy-rollback-matching-resolution");
+      await seedDivergentAlarmAuthority(
+        authority,
+        matchingResolution,
+        matchingResolutionStub,
+      );
+      await expect(dangerWatchdogSnapshot(matchingResolutionStub)).resolves.toEqual({
+        alarm_at_ms: null,
+        watchdogs: [{
+          session_id: sessionId,
+          event_id: "fall-rollback",
+          deadline_ms: baseTime - 8_000,
+          status: "resolved",
+        }],
+        alarm_event: matchingResolution,
+        last_event_sequence: 3,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("escalates rather than abandoning checking when the controller lease expires", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const viewer = await connectViewer();
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "fall", baseTime),
+        [viewer],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(
+          lease.session_id,
+          1,
+          "checking",
+          baseTime,
+          "fall-1",
+          baseTime + 40_000,
+        ),
+        [viewer],
+      );
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: lease.lease_expires_at_ms,
+        watchdogs: [{ status: "checking", deadline_ms: baseTime + 40_000 }],
+      });
+
+      now.mockReturnValue(lease.lease_expires_at_ms + 1);
+      const escalatedForViewer = nextJson(viewer);
+      await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(true);
+      await expect(escalatedForViewer).resolves.toMatchObject({
+        session_id: lease.session_id,
+        event_sequence: 2,
+        event_type: "alarm_state",
+        payload: { phase: "escalated", trigger: "check_in_timeout" },
+      });
+      const expiredStatus = await relayFetch("/api/status");
+      await expect(expiredStatus.json()).resolves.toMatchObject({
+        controller_locked: false,
+        controller_connected: false,
+      });
+      await expect(dangerWatchdogSnapshot()).resolves.toMatchObject({
+        alarm_at_ms: null,
+        watchdogs: [{ status: "escalated" }],
+        alarm_event: {
+          event_sequence: 2,
+          event_type: "alarm_state",
+          payload: { phase: "escalated" },
+        },
+        last_event_sequence: 2,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("makes strict MiMo response, rate-limit, network, and timeout failures explicit", async () => {
     const lease = await unlock();
     const baseTime = Date.now();
@@ -1074,10 +2034,20 @@ describe("single-room demo relay", () => {
       ok: false,
       error: "invalid_mimo_response",
     });
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 2, "escalated", baseTime + 1, "fall-invalid"),
+      [],
+    );
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 3, "resolved", baseTime + 2, "fall-invalid"),
+      [],
+    );
 
     await publishEvent(
       controller,
-      makeAlarmEvent(lease.session_id, 2, "checking", baseTime + 1, "fall-rate"),
+      makeAlarmEvent(lease.session_id, 4, "checking", baseTime + 3, "fall-rate"),
       [],
     );
     const rateLimited = await recognizeDangerVoice(lease.token, "fall-rate");
@@ -1086,19 +2056,39 @@ describe("single-room demo relay", () => {
       ok: false,
       error: "mimo_rate_limited",
     });
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 5, "escalated", baseTime + 4, "fall-rate"),
+      [],
+    );
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 6, "resolved", baseTime + 5, "fall-rate"),
+      [],
+    );
 
     await publishEvent(
       controller,
-      makeAlarmEvent(lease.session_id, 3, "checking", baseTime + 2, "fall-network"),
+      makeAlarmEvent(lease.session_id, 7, "checking", baseTime + 6, "fall-network"),
       [],
     );
     const network = await recognizeDangerVoice(lease.token, "fall-network");
     expect(network.status).toBe(502);
     await expect(network.json()).resolves.toEqual({ ok: false, error: "mimo_unavailable" });
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 8, "escalated", baseTime + 7, "fall-network"),
+      [],
+    );
+    await publishEvent(
+      controller,
+      makeAlarmEvent(lease.session_id, 9, "resolved", baseTime + 8, "fall-network"),
+      [],
+    );
 
     await publishEvent(
       controller,
-      makeAlarmEvent(lease.session_id, 4, "checking", baseTime + 3, "fall-timeout"),
+      makeAlarmEvent(lease.session_id, 10, "checking", baseTime + 9, "fall-timeout"),
       [],
     );
     const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => AbortSignal.abort());
@@ -1228,6 +2218,195 @@ async function release(token: string): Promise<void> {
   if (index >= 0) {
     issuedTokens.splice(index, 1);
   }
+}
+
+function roomStub(name = ROOM_NAME): DurableObjectStub<import("../src/index").DemoRoom> {
+  return env.DEMO_ROOM.getByName(name);
+}
+
+async function dangerWatchdogSnapshot(
+  stub = roomStub(),
+): Promise<DangerWatchdogSnapshot> {
+  return runInDurableObject(stub, async (_instance, state) => {
+    const watchdogs = state.storage.sql.exec<{
+      [key: string]: SqlStorageValue;
+      session_id: string;
+      event_id: string;
+      deadline_ms: number;
+      status: "checking" | "escalated" | "resolved";
+    }>(
+      `SELECT session_id, event_id, deadline_ms, status
+         FROM danger_watchdog
+        ORDER BY event_id ASC`,
+    ).toArray().map((row) => ({
+      session_id: row.session_id,
+      event_id: row.event_id,
+      deadline_ms: row.deadline_ms,
+      status: row.status,
+    }));
+    const eventRow = state.storage.sql.exec<{
+      [key: string]: SqlStorageValue;
+      event_json: string;
+    }>(
+      `SELECT event_json
+         FROM demo_event_state
+        WHERE event_type = 'alarm_state'`,
+    ).toArray()[0];
+    const sequenceRow = state.storage.sql.exec<{
+      [key: string]: SqlStorageValue;
+      last_event_sequence: number;
+    }>(
+      "SELECT last_event_sequence FROM room_event_sequence WHERE singleton = 1",
+    ).toArray()[0];
+
+    return {
+      alarm_at_ms: await state.storage.getAlarm(),
+      watchdogs,
+      alarm_event: eventRow === undefined
+        ? null
+        : JSON.parse(eventRow.event_json) as DemoEvent,
+      last_event_sequence: sequenceRow?.last_event_sequence ?? null,
+    };
+  });
+}
+
+async function resetRoomStorage(): Promise<void> {
+  await runInDurableObject(roomStub(), async (_instance, state) => {
+    await state.storage.deleteAlarm();
+    state.storage.transactionSync(() => {
+      state.storage.sql.exec("DELETE FROM media_grant_audience");
+      state.storage.sql.exec("DELETE FROM media_grant");
+      state.storage.sql.exec("DELETE FROM danger_voice_attempt");
+      state.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
+      state.storage.sql.exec("DELETE FROM danger_watchdog");
+      state.storage.sql.exec("DELETE FROM demo_event_state");
+      state.storage.sql.exec("DELETE FROM room_event_sequence");
+      state.storage.sql.exec("DELETE FROM room_frame_sequence");
+      state.storage.sql.exec("DELETE FROM control_lease");
+    });
+  });
+}
+
+async function seedLegacyAlarmState(
+  event: Extract<DemoEvent, { event_type: "alarm_state" }>,
+  {
+    leaseExpiresAtMs = null,
+    lastEventSequence = event.event_sequence,
+  }: {
+    leaseExpiresAtMs?: number | null;
+    lastEventSequence?: number;
+  } = {},
+  stub = roomStub(),
+): Promise<void> {
+  await runInDurableObject(stub, async (_instance, state) => {
+    await state.storage.deleteAlarm();
+    state.storage.transactionSync(() => {
+      state.storage.sql.exec("DELETE FROM media_grant_audience");
+      state.storage.sql.exec("DELETE FROM media_grant");
+      state.storage.sql.exec("DELETE FROM danger_voice_attempt");
+      state.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
+      state.storage.sql.exec("DELETE FROM danger_watchdog");
+      state.storage.sql.exec("DELETE FROM demo_event_state");
+      state.storage.sql.exec("DELETE FROM room_event_sequence");
+      state.storage.sql.exec("DELETE FROM room_frame_sequence");
+      state.storage.sql.exec("DELETE FROM control_lease");
+      state.storage.sql.exec(
+        `INSERT INTO room_event_sequence
+           (singleton, session_id, last_event_sequence)
+         VALUES (1, ?, ?)`,
+        event.session_id,
+        lastEventSequence,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO room_frame_sequence
+           (singleton, session_id, last_frame_sequence)
+         VALUES (1, ?, -1)`,
+        event.session_id,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO demo_event_state
+           (event_type, session_id, event_sequence, event_json)
+         VALUES ('alarm_state', ?, ?, ?)`,
+        event.session_id,
+        event.event_sequence,
+        JSON.stringify(event),
+      );
+      if (leaseExpiresAtMs !== null) {
+        state.storage.sql.exec(
+          `INSERT INTO control_lease
+             (singleton, token_hash, session_id, expires_at_ms)
+           VALUES (1, ?, ?, ?)`,
+          "a".repeat(64),
+          event.session_id,
+          leaseExpiresAtMs,
+        );
+      }
+    });
+  });
+  await evictDurableObject(stub, { webSockets: "close" });
+}
+
+async function seedDivergentAlarmAuthority(
+  authority: AlarmStateEvent,
+  legacyEvent: AlarmStateEvent,
+  stub: DurableObjectStub<import("../src/index").DemoRoom>,
+): Promise<void> {
+  if (
+    authority.session_id !== legacyEvent.session_id
+    || authority.payload.event_id !== legacyEvent.payload.event_id
+    || authority.payload.phase !== "escalated"
+  ) {
+    throw new Error("divergent authority seed requires one matching escalated alarm");
+  }
+  await runInDurableObject(stub, async (_instance, state) => {
+    await state.storage.deleteAlarm();
+    state.storage.transactionSync(() => {
+      state.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
+      state.storage.sql.exec("DELETE FROM danger_watchdog");
+      state.storage.sql.exec("DELETE FROM demo_event_state");
+      state.storage.sql.exec("DELETE FROM room_event_sequence");
+      state.storage.sql.exec("DELETE FROM room_frame_sequence");
+      state.storage.sql.exec("DELETE FROM control_lease");
+      state.storage.sql.exec(
+        `INSERT INTO room_event_sequence
+           (singleton, session_id, last_event_sequence)
+         VALUES (1, ?, ?)`,
+        legacyEvent.session_id,
+        legacyEvent.event_sequence,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO room_frame_sequence
+           (singleton, session_id, last_frame_sequence)
+         VALUES (1, ?, -1)`,
+        legacyEvent.session_id,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO demo_event_state
+           (event_type, session_id, event_sequence, event_json)
+         VALUES ('alarm_state', ?, ?, ?)`,
+        legacyEvent.session_id,
+        legacyEvent.event_sequence,
+        JSON.stringify(legacyEvent),
+      );
+      state.storage.sql.exec(
+        `INSERT INTO danger_watchdog
+           (session_id, event_id, deadline_ms, status)
+         VALUES (?, ?, ?, 'escalated')`,
+        authority.session_id,
+        authority.payload.event_id,
+        authority.timestamp_ms - 6_000,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO danger_alarm_checkpoint
+           (session_id, event_id, event_json)
+         VALUES (?, ?, ?)`,
+        authority.session_id,
+        authority.payload.event_id,
+        JSON.stringify(authority),
+      );
+    });
+  });
+  await evictDurableObject(stub, { webSockets: "close" });
 }
 
 async function connectViewer(): Promise<WebSocket> {
@@ -1456,7 +2635,9 @@ function makeAlarmEvent(
   phase: "checking" | "escalated" | "resolved",
   timestampMs = eventSequence * 1_000,
   eventId = "fall-1",
-): DemoEvent {
+  checkingDeadlineMs: number | null = null,
+  trigger: AlarmTrigger | null = null,
+): AlarmStateEvent {
   return {
     schema_version: EVENT_SCHEMA_VERSION,
     session_id: sessionId,
@@ -1466,9 +2647,11 @@ function makeAlarmEvent(
     payload: {
       event_id: eventId,
       phase,
-      trigger: phase === "checking" ? "fall_transition" : "check_in_timeout",
+      trigger: trigger ?? (phase === "checking" ? "fall_transition" : "check_in_timeout"),
       message: phase === "checking" ? "刚才的动作有些突然，您还好吗？" : "未收到回应，已通知家人。",
-      response_deadline_ms: phase === "checking" ? timestampMs + 8_000 : null,
+      response_deadline_ms: phase === "checking"
+        ? checkingDeadlineMs ?? timestampMs + 8_000
+        : null,
       media_scope: phase === "escalated" ? "fall_emergency" : "none",
     },
   };

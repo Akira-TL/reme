@@ -149,6 +149,29 @@ interface DangerVoiceAttemptRow {
   inflight_started_at_ms: number | null;
 }
 
+interface DangerWatchdogRow {
+  [key: string]: SqlStorageValue;
+  session_id: string;
+  event_id: string;
+  deadline_ms: number;
+  status: "checking" | "escalated" | "resolved";
+}
+
+type AlarmStateEvent = Extract<DemoEvent, { event_type: "alarm_state" }>;
+
+interface AlarmEventStateRow {
+  [key: string]: SqlStorageValue;
+  session_id: string;
+  event_json: string;
+}
+
+interface DangerAlarmCheckpointRow {
+  [key: string]: SqlStorageValue;
+  session_id: string;
+  event_id: string;
+  event_json: string;
+}
+
 const FORBIDDEN_MEDIA_KEYS = new Set([
   "audio",
   "base64",
@@ -219,8 +242,24 @@ export class DemoRoom extends DurableObject<Env> {
           inflight_request_id TEXT,
           inflight_started_at_ms INTEGER,
           PRIMARY KEY (session_id, event_id)
+        );
+        CREATE TABLE IF NOT EXISTS danger_watchdog (
+          session_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          deadline_ms INTEGER NOT NULL CHECK (deadline_ms >= 0),
+          status TEXT NOT NULL CHECK (status IN ('checking', 'escalated', 'resolved')),
+          PRIMARY KEY (session_id, event_id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS danger_watchdog_active_idx
+          ON danger_watchdog (session_id) WHERE status = 'checking';
+        CREATE TABLE IF NOT EXISTS danger_alarm_checkpoint (
+          session_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          event_json TEXT NOT NULL,
+          PRIMARY KEY (session_id, event_id)
         )
       `);
+      await this.backfillLegacyDangerWatchdog();
     });
   }
 
@@ -273,6 +312,17 @@ export class DemoRoom extends DurableObject<Env> {
     }
     const scene = this.structuredEvent(lease.session_id, "scene_state");
     const alarm = this.structuredEvent(lease.session_id, "alarm_state");
+    const watchdog = this.dangerWatchdog(lease.session_id, eventId);
+    if (
+      alarm?.event_type === "alarm_state"
+      && alarm.payload.phase === "checking"
+      && alarm.payload.event_id === eventId
+      && watchdog?.status === "checking"
+      && watchdog.deadline_ms <= now
+    ) {
+      this.escalateDangerWatchdog(watchdog, now);
+      return { ok: false, error: "no_active_danger_event" };
+    }
     if (
       scene?.event_type !== "scene_state"
       || scene.payload.scene_id !== "fall"
@@ -366,6 +416,11 @@ export class DemoRoom extends DurableObject<Env> {
     }
     const scene = this.structuredEvent(sessionId, "scene_state");
     const alarm = this.structuredEvent(sessionId, "alarm_state");
+    const watchdog = this.dangerWatchdog(sessionId, eventId);
+    if (watchdog?.status === "checking" && watchdog.deadline_ms <= now) {
+      this.escalateDangerWatchdog(watchdog, now);
+      return { ok: false, error: "stale_danger_event" };
+    }
     if (
       scene?.event_type !== "scene_state"
       || scene.payload.scene_id !== "fall"
@@ -379,6 +434,37 @@ export class DemoRoom extends DurableObject<Env> {
       return { ok: false, error: "stale_danger_event" };
     }
     return { ok: true };
+  }
+
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    const watchdog = this.activeDangerWatchdog();
+    if (watchdog === null) return;
+
+    const lease = this.leaseRow();
+    if (
+      lease === null
+      || lease.session_id !== watchdog.session_id
+      || lease.expires_at_ms <= now
+    ) {
+      if (this.escalateDangerWatchdog(watchdog, now) === null) {
+        throw new Error("danger watchdog could not be escalated");
+      }
+      await this.ctx.storage.deleteAlarm();
+      if (lease !== null && lease.session_id === watchdog.session_id) {
+        this.expireLease(lease, now);
+      }
+      return;
+    }
+
+    if (watchdog.deadline_ms > now) {
+      await this.ctx.storage.setAlarm(Math.min(watchdog.deadline_ms, lease.expires_at_ms));
+      return;
+    }
+    if (this.escalateDangerWatchdog(watchdog, now) === null) {
+      throw new Error("danger watchdog could not be escalated");
+    }
+    await this.ctx.storage.deleteAlarm();
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -438,7 +524,7 @@ export class DemoRoom extends DurableObject<Env> {
 
     if (isExactObject(decoded, ["type"]) && decoded.type === "release") {
       safeSend(ws, JSON.stringify({ type: "released" }));
-      this.dropLease(attachment.tokenHash);
+      await this.dropLease(attachment.tokenHash);
       return;
     }
 
@@ -467,7 +553,7 @@ export class DemoRoom extends DurableObject<Env> {
         rejectSocket(ws, "server_managed_event_type", 1008);
         return;
       }
-      this.acceptDemoEvent(ws, attachment, decoded);
+      await this.acceptDemoEvent(ws, attachment, decoded);
       return;
     }
     if (
@@ -550,37 +636,235 @@ export class DemoRoom extends DurableObject<Env> {
     }
   }
 
-  private acceptDemoEvent(
+  private async acceptDemoEvent(
     ws: WebSocket,
     attachment: ControllerAttachment,
     event: Exclude<DemoEvent, { event_type: "media_grant" }>,
-  ): void {
+  ): Promise<void> {
+    const now = Date.now();
+    const activeWatchdog = this.activeDangerWatchdog(attachment.sessionId);
+    const unresolvedEscalation = this.authoritativeEscalatedAlarm(attachment.sessionId);
+    const eventWatchdog = event.event_type === "alarm_state"
+      ? this.dangerWatchdog(attachment.sessionId, event.payload.event_id)
+      : null;
+    let acceptedCheckingDeadline: number | null = null;
+
+    if (
+      event.event_type === "alarm_state"
+      && event.payload.phase === "resolved"
+      && eventWatchdog !== null
+      && eventWatchdog.status === "checking"
+      && now >= eventWatchdog.deadline_ms
+    ) {
+      this.escalateDangerWatchdog(eventWatchdog, now);
+      await this.ctx.storage.deleteAlarm();
+      sendSocketError(ws, "danger_deadline_elapsed");
+      return;
+    }
+
+    if (
+      (activeWatchdog !== null || unresolvedEscalation !== null)
+      && event.event_type === "scene_state"
+      && event.payload.scene_id !== "fall"
+    ) {
+      if (activeWatchdog !== null && now >= activeWatchdog.deadline_ms) {
+        this.escalateDangerWatchdog(activeWatchdog, now);
+        await this.ctx.storage.deleteAlarm();
+        sendSocketError(ws, "danger_deadline_elapsed");
+      } else {
+        sendSocketError(
+          ws,
+          unresolvedEscalation === null ? "danger_check_in_active" : "danger_alarm_unresolved",
+        );
+      }
+      return;
+    }
+
+    if (event.event_type === "alarm_state") {
+      if (
+        unresolvedEscalation !== null
+        && unresolvedEscalation.event.payload.event_id !== event.payload.event_id
+      ) {
+        sendSocketError(ws, "danger_alarm_unresolved");
+        return;
+      }
+      if (activeWatchdog !== null && activeWatchdog.event_id !== event.payload.event_id) {
+        sendSocketError(ws, "danger_check_in_active");
+        return;
+      }
+      if (event.payload.phase === "checking") {
+        const deadline = event.payload.response_deadline_ms;
+        if (deadline === null || deadline <= now) {
+          sendSocketError(ws, "danger_deadline_elapsed");
+          return;
+        }
+        acceptedCheckingDeadline = deadline;
+        if (eventWatchdog !== null) {
+          if (eventWatchdog.status !== "checking") {
+            sendSocketError(ws, "danger_event_reopen_forbidden");
+            return;
+          }
+          if (deadline > eventWatchdog.deadline_ms) {
+            sendSocketError(ws, "danger_deadline_extension_forbidden");
+            return;
+          }
+        }
+      } else {
+        if (eventWatchdog?.status === "resolved" && event.payload.phase !== "resolved") {
+          sendSocketError(ws, "danger_state_regression_forbidden");
+          return;
+        }
+        if (eventWatchdog?.status === "escalated" && event.payload.phase === "resolved") {
+          const authoritative = this.authoritativeEscalatedAlarm(attachment.sessionId);
+          if (
+            authoritative === null
+            || authoritative.event.payload.event_id !== event.payload.event_id
+            || authoritative.event.payload.trigger !== event.payload.trigger
+          ) {
+            sendSocketError(ws, "danger_stale_resolution");
+            return;
+          }
+        }
+      }
+    }
+
+    if (
+      event.event_type === "alarm_state"
+      && event.payload.phase === "escalated"
+      && eventWatchdog?.status === "escalated"
+    ) {
+      if (
+        unresolvedEscalation !== null
+        && event.payload.trigger === unresolvedEscalation.event.payload.trigger
+        && event.payload.response_deadline_ms === null
+        && event.payload.media_scope === unresolvedEscalation.event.payload.media_scope
+      ) {
+        // The watchdog owns the terminal transition. A controller copy is a
+        // semantic retry even when its locally allocated sequence is higher.
+        safeSend(ws, JSON.stringify({
+          type: "event_accepted",
+          event_sequence: event.event_sequence,
+          event_type: event.event_type,
+        }));
+      } else {
+        // Send the exact persisted authority before the error so the browser
+        // can converge its trigger and subsequently close the same alarm.
+        if (unresolvedEscalation !== null) {
+          safeSend(ws, JSON.stringify(unresolvedEscalation.event));
+        }
+        sendSocketError(ws, "danger_authoritative_alarm_conflict");
+      }
+      return;
+    }
+
     const sequence = this.eventSequence(attachment.sessionId);
     if (event.event_sequence <= sequence.last_event_sequence) {
+      const authoritative = this.authoritativeEscalationCollision(
+        attachment.sessionId,
+        event,
+      );
+      if (authoritative !== null) {
+        if (
+          event.event_type === "alarm_state"
+          && event.payload.trigger === authoritative.payload.trigger
+          && event.payload.response_deadline_ms === null
+          && event.payload.media_scope === authoritative.payload.media_scope
+        ) {
+          safeSend(ws, JSON.stringify({
+            type: "event_accepted",
+            event_sequence: event.event_sequence,
+            event_type: event.event_type,
+          }));
+        } else {
+          sendSocketError(ws, "danger_authoritative_alarm_conflict");
+        }
+        return;
+      }
       rejectSocket(ws, "non_increasing_event_sequence", 1008);
       return;
     }
 
-    this.ctx.storage.sql.exec(
-      `UPDATE room_event_sequence
-         SET last_event_sequence = ?
-       WHERE singleton = 1 AND session_id = ?`,
-      event.event_sequence,
-      attachment.sessionId,
-    );
-    this.ctx.storage.sql.exec(
-      `INSERT INTO demo_event_state
-         (event_type, session_id, event_sequence, event_json)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(event_type) DO UPDATE SET
-         session_id = excluded.session_id,
-         event_sequence = excluded.event_sequence,
-         event_json = excluded.event_json`,
-      event.event_type,
-      attachment.sessionId,
-      event.event_sequence,
-      JSON.stringify(event),
-    );
+    if (event.event_type === "alarm_state" && event.payload.phase === "checking") {
+      if (acceptedCheckingDeadline === null) {
+        throw new Error("validated checking alarm is missing a deadline");
+      }
+      const lease = this.leaseRow();
+      const scheduledAt = lease !== null && lease.session_id === attachment.sessionId
+        ? Math.min(acceptedCheckingDeadline, lease.expires_at_ms)
+        : acceptedCheckingDeadline;
+      // Do not acknowledge or persist a safety promise until the wakeup exists.
+      // If scheduling fails, the controller can retry the same sequence.
+      await this.ctx.storage.setAlarm(scheduledAt);
+    }
+
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        `UPDATE room_event_sequence
+           SET last_event_sequence = ?
+         WHERE singleton = 1 AND session_id = ?`,
+        event.event_sequence,
+        attachment.sessionId,
+      );
+      this.persistDemoEvent(event);
+
+      if (event.event_type !== "alarm_state") return;
+      if (event.payload.phase === "checking") {
+        if (acceptedCheckingDeadline === null) {
+          throw new Error("validated checking alarm is missing a deadline");
+        }
+        if (eventWatchdog === null) {
+          this.ctx.storage.sql.exec(
+            `INSERT INTO danger_watchdog
+               (session_id, event_id, deadline_ms, status)
+             VALUES (?, ?, ?, 'checking')`,
+            attachment.sessionId,
+            event.payload.event_id,
+            acceptedCheckingDeadline,
+          );
+        } else if (acceptedCheckingDeadline < eventWatchdog.deadline_ms) {
+          this.ctx.storage.sql.exec(
+            `UPDATE danger_watchdog
+                SET deadline_ms = ?
+              WHERE session_id = ? AND event_id = ? AND status = 'checking'`,
+            acceptedCheckingDeadline,
+            attachment.sessionId,
+            event.payload.event_id,
+          );
+        }
+      } else {
+        if (eventWatchdog === null) {
+          // A reconnect may deliver a terminal alarm before Relay ever saw its
+          // checking phase. `deadline_ms` records the authority acceptance time;
+          // terminal rows never schedule a deadline alarm.
+          this.ctx.storage.sql.exec(
+            `INSERT INTO danger_watchdog
+               (session_id, event_id, deadline_ms, status)
+             VALUES (?, ?, ?, ?)`,
+            attachment.sessionId,
+            event.payload.event_id,
+            now,
+            event.payload.phase,
+          );
+        } else if (eventWatchdog.status !== event.payload.phase) {
+          this.ctx.storage.sql.exec(
+            `UPDATE danger_watchdog
+                SET status = ?
+              WHERE session_id = ? AND event_id = ?`,
+            event.payload.phase,
+            attachment.sessionId,
+            event.payload.event_id,
+          );
+        }
+      }
+      this.persistDangerAlarmCheckpoint(event);
+    });
+
+    if (
+      event.event_type === "alarm_state"
+      && event.payload.phase !== "checking"
+    ) {
+      await this.ctx.storage.deleteAlarm();
+    }
 
     this.broadcastToAllViewers(event);
     safeSend(ws, JSON.stringify({
@@ -850,6 +1134,464 @@ export class DemoRoom extends DurableObject<Env> {
     return validateDemoEvent(decoded, sessionId) ? decoded : null;
   }
 
+  private persistDemoEvent(event: DemoEvent): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO demo_event_state
+         (event_type, session_id, event_sequence, event_json)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(event_type) DO UPDATE SET
+         session_id = excluded.session_id,
+         event_sequence = excluded.event_sequence,
+         event_json = excluded.event_json`,
+      event.event_type,
+      event.session_id,
+      event.event_sequence,
+      JSON.stringify(event),
+    );
+  }
+
+  private dangerAlarmCheckpoint(sessionId: string, eventId: string): AlarmStateEvent | null {
+    const row = this.ctx.storage.sql.exec<DangerAlarmCheckpointRow>(
+      `SELECT session_id, event_id, event_json
+         FROM danger_alarm_checkpoint
+        WHERE session_id = ? AND event_id = ?`,
+      sessionId,
+      eventId,
+    ).toArray()[0];
+    if (row === undefined) return null;
+    const decoded = parseJson(row.event_json);
+    return validateDemoEvent(decoded, row.session_id)
+      && decoded.event_type === "alarm_state"
+      && decoded.payload.event_id === row.event_id
+      ? decoded
+      : null;
+  }
+
+  private persistDangerAlarmCheckpoint(event: AlarmStateEvent): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO danger_alarm_checkpoint
+         (session_id, event_id, event_json)
+       VALUES (?, ?, ?)
+       ON CONFLICT(session_id, event_id) DO UPDATE SET
+         event_json = excluded.event_json`,
+      event.session_id,
+      event.payload.event_id,
+      JSON.stringify(event),
+    );
+  }
+
+  private async backfillLegacyDangerWatchdog(): Promise<void> {
+    const row = this.ctx.storage.sql.exec<AlarmEventStateRow>(
+      `SELECT session_id, event_json
+         FROM demo_event_state
+        WHERE event_type = 'alarm_state'
+        LIMIT 1`,
+    ).toArray()[0];
+    if (row === undefined) return;
+    const decoded = parseJson(row.event_json);
+    if (!validateDemoEvent(decoded, row.session_id) || decoded.event_type !== "alarm_state") {
+      return;
+    }
+
+    const now = Date.now();
+    const legacyCheckingDeadline = decoded.payload.phase === "checking"
+      ? decoded.payload.response_deadline_ms
+      : null;
+    if (decoded.payload.phase === "checking" && legacyCheckingDeadline === null) {
+      throw new Error("legacy checking alarm is missing a deadline");
+    }
+    let watchdog = this.dangerWatchdog(row.session_id, decoded.payload.event_id);
+    let checkpoint = watchdog === null
+      ? null
+      : this.dangerAlarmCheckpoint(watchdog.session_id, watchdog.event_id);
+    let forceCheckingEscalation = false;
+    let eventToBroadcast: AlarmStateEvent | null = null;
+    this.ctx.storage.transactionSync(() => {
+      const sequence = this.eventSequence(row.session_id);
+      const checkpointSequence = checkpoint?.event_sequence ?? -1;
+      const recoveredSequence = Math.max(decoded.event_sequence, checkpointSequence);
+      if (sequence.last_event_sequence < recoveredSequence) {
+        this.ctx.storage.sql.exec(
+          `UPDATE room_event_sequence
+              SET last_event_sequence = ?
+            WHERE singleton = 1 AND session_id = ?`,
+          recoveredSequence,
+          row.session_id,
+        );
+      }
+
+      if (watchdog === null) {
+        const deadline = decoded.payload.phase === "checking"
+          ? legacyCheckingDeadline
+          : now;
+        if (deadline === null) {
+          throw new Error("legacy checking alarm is missing a deadline");
+        }
+        this.ctx.storage.sql.exec(
+          `INSERT INTO danger_watchdog
+             (session_id, event_id, deadline_ms, status)
+           VALUES (?, ?, ?, ?)`,
+          row.session_id,
+          decoded.payload.event_id,
+          deadline,
+          decoded.payload.phase,
+        );
+        this.persistDangerAlarmCheckpoint(decoded);
+        watchdog = {
+          session_id: row.session_id,
+          event_id: decoded.payload.event_id,
+          deadline_ms: deadline,
+          status: decoded.payload.phase,
+        };
+        checkpoint = decoded;
+        return;
+      }
+
+      if (watchdog.status === "checking") {
+        const checkingCheckpoint = checkpoint?.payload.phase === "checking"
+          ? checkpoint
+          : null;
+        if (decoded.payload.phase === "checking") {
+          if (legacyCheckingDeadline === null) {
+            throw new Error("legacy checking alarm is missing a deadline");
+          }
+          const checkpointDeadline = checkingCheckpoint?.payload.response_deadline_ms;
+          const deadline = Math.min(
+            watchdog.deadline_ms,
+            legacyCheckingDeadline,
+            checkpointDeadline ?? Number.POSITIVE_INFINITY,
+          );
+          if (deadline < watchdog.deadline_ms) {
+            this.ctx.storage.sql.exec(
+              `UPDATE danger_watchdog
+                  SET deadline_ms = ?
+                WHERE session_id = ? AND event_id = ? AND status = 'checking'`,
+              deadline,
+              watchdog.session_id,
+              watchdog.event_id,
+            );
+            watchdog = { ...watchdog, deadline_ms: deadline };
+          }
+          if (legacyCheckingDeadline === deadline) {
+            this.persistDangerAlarmCheckpoint(decoded);
+            checkpoint = decoded;
+          } else {
+            const recoveredChecking: AlarmStateEvent = {
+              ...decoded,
+              event_sequence: this.nextServerEventSequence(watchdog.session_id),
+              timestamp_ms: now,
+              payload: {
+                ...decoded.payload,
+                response_deadline_ms: deadline,
+              },
+            };
+            this.persistDemoEvent(recoveredChecking);
+            this.persistDangerAlarmCheckpoint(recoveredChecking);
+            checkpoint = recoveredChecking;
+            eventToBroadcast = recoveredChecking;
+          }
+          return;
+        }
+
+        const checkpointSequenceForTransition = checkingCheckpoint?.event_sequence ?? -1;
+        if (
+          decoded.payload.phase === "resolved"
+          && decoded.event_sequence > checkpointSequenceForTransition
+          && decoded.timestamp_ms < watchdog.deadline_ms
+        ) {
+          this.ctx.storage.sql.exec(
+            `UPDATE danger_watchdog
+                SET status = 'resolved'
+              WHERE session_id = ? AND event_id = ? AND status = 'checking'`,
+            watchdog.session_id,
+            watchdog.event_id,
+          );
+          this.persistDangerAlarmCheckpoint(decoded);
+          watchdog = { ...watchdog, status: "resolved" };
+          checkpoint = decoded;
+          return;
+        }
+        if (
+          decoded.payload.phase === "escalated"
+          && decoded.event_sequence > checkpointSequenceForTransition
+        ) {
+          this.ctx.storage.sql.exec(
+            `UPDATE danger_watchdog
+                SET status = 'escalated'
+              WHERE session_id = ? AND event_id = ? AND status = 'checking'`,
+            watchdog.session_id,
+            watchdog.event_id,
+          );
+          this.persistDangerAlarmCheckpoint(decoded);
+          watchdog = { ...watchdog, status: "escalated" };
+          checkpoint = decoded;
+          return;
+        }
+        forceCheckingEscalation = true;
+        return;
+      }
+
+      if (watchdog.status === "escalated") {
+        const escalatedCheckpoint = checkpoint?.payload.phase === "escalated"
+          ? checkpoint
+          : null;
+        if (
+          escalatedCheckpoint !== null
+          && decoded.payload.phase === "resolved"
+          && decoded.event_sequence > escalatedCheckpoint.event_sequence
+          && decoded.payload.trigger === escalatedCheckpoint.payload.trigger
+        ) {
+          this.ctx.storage.sql.exec(
+            `UPDATE danger_watchdog
+                SET status = 'resolved'
+              WHERE session_id = ? AND event_id = ? AND status = 'escalated'`,
+            watchdog.session_id,
+            watchdog.event_id,
+          );
+          this.persistDangerAlarmCheckpoint(decoded);
+          watchdog = { ...watchdog, status: "resolved" };
+          checkpoint = decoded;
+          return;
+        }
+        if (
+          decoded.payload.phase === "escalated"
+          && (
+            escalatedCheckpoint === null
+            || (
+              decoded.event_sequence >= escalatedCheckpoint.event_sequence
+              && decoded.payload.trigger === escalatedCheckpoint.payload.trigger
+            )
+          )
+        ) {
+          this.persistDangerAlarmCheckpoint(decoded);
+          checkpoint = decoded;
+          return;
+        }
+
+        const authority = escalatedCheckpoint ?? {
+          schema_version: DEMO_EVENT_SCHEMA_VERSION,
+          session_id: watchdog.session_id,
+          event_sequence: this.nextServerEventSequence(watchdog.session_id),
+          timestamp_ms: now,
+          event_type: "alarm_state" as const,
+          payload: {
+            event_id: watchdog.event_id,
+            phase: "escalated" as const,
+            trigger: "check_in_timeout" as const,
+            message: "已存在未结案告警，Relay 已恢复确定性告警状态。",
+            response_deadline_ms: null,
+            media_scope: "fall_emergency" as const,
+          },
+        };
+        const recoveredEscalation: AlarmStateEvent = escalatedCheckpoint === null
+          ? authority
+          : {
+            ...authority,
+            event_sequence: this.nextServerEventSequence(watchdog.session_id),
+            timestamp_ms: now,
+          };
+        this.persistDemoEvent(recoveredEscalation);
+        this.persistDangerAlarmCheckpoint(recoveredEscalation);
+        checkpoint = recoveredEscalation;
+        eventToBroadcast = recoveredEscalation;
+        return;
+      }
+
+      // Resolved is terminal for an event ID. An older Worker may rewrite the
+      // public state, but it must not reopen the same watchdog after rollback.
+      if (decoded.payload.phase === "resolved") {
+        this.persistDangerAlarmCheckpoint(decoded);
+        checkpoint = decoded;
+        return;
+      }
+      const resolvedCheckpoint = checkpoint?.payload.phase === "resolved"
+        ? checkpoint
+        : null;
+      const recoveredResolution: AlarmStateEvent = resolvedCheckpoint === null
+        ? {
+          ...decoded,
+          event_sequence: this.nextServerEventSequence(watchdog.session_id),
+          timestamp_ms: now,
+          payload: {
+            ...decoded.payload,
+            event_id: watchdog.event_id,
+            phase: "resolved",
+            message: "该告警已结案。",
+            response_deadline_ms: null,
+            media_scope: "none",
+          },
+        }
+        : {
+          ...resolvedCheckpoint,
+          event_sequence: this.nextServerEventSequence(watchdog.session_id),
+          timestamp_ms: now,
+        };
+      this.persistDemoEvent(recoveredResolution);
+      this.persistDangerAlarmCheckpoint(recoveredResolution);
+      checkpoint = recoveredResolution;
+      eventToBroadcast = recoveredResolution;
+    });
+
+    if (forceCheckingEscalation) {
+      if (watchdog === null || this.escalateDangerWatchdog(watchdog, now) === null) {
+        throw new Error("inconsistent legacy danger check-in could not be escalated");
+      }
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    if (eventToBroadcast !== null) this.broadcastToAllViewers(eventToBroadcast);
+    if (watchdog === null || watchdog.status !== "checking") {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+
+    const deadline = watchdog.deadline_ms;
+    const lease = this.leaseRow();
+    if (
+      deadline <= now
+      || lease === null
+      || lease.session_id !== watchdog.session_id
+      || lease.expires_at_ms <= now
+    ) {
+      if (this.escalateDangerWatchdog(watchdog, now) === null) {
+        throw new Error("legacy danger check-in could not be escalated");
+      }
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    await this.ctx.storage.setAlarm(Math.min(deadline, lease.expires_at_ms));
+  }
+
+  private dangerWatchdog(sessionId: string, eventId: string): DangerWatchdogRow | null {
+    return this.ctx.storage.sql.exec<DangerWatchdogRow>(
+      `SELECT session_id, event_id, deadline_ms, status
+         FROM danger_watchdog
+        WHERE session_id = ? AND event_id = ?`,
+      sessionId,
+      eventId,
+    ).toArray()[0] ?? null;
+  }
+
+  private activeDangerWatchdog(sessionId?: string): DangerWatchdogRow | null {
+    const query = sessionId === undefined
+      ? this.ctx.storage.sql.exec<DangerWatchdogRow>(
+        `SELECT session_id, event_id, deadline_ms, status
+           FROM danger_watchdog
+          WHERE status = 'checking'
+          ORDER BY deadline_ms ASC
+          LIMIT 1`,
+      )
+      : this.ctx.storage.sql.exec<DangerWatchdogRow>(
+        `SELECT session_id, event_id, deadline_ms, status
+           FROM danger_watchdog
+          WHERE session_id = ? AND status = 'checking'
+          ORDER BY deadline_ms ASC
+          LIMIT 1`,
+        sessionId,
+      );
+    return query.toArray()[0] ?? null;
+  }
+
+  private authoritativeEscalatedAlarm(
+    sessionId?: string,
+  ): { event: AlarmStateEvent; watchdog: DangerWatchdogRow } | null {
+    const query = sessionId === undefined
+      ? this.ctx.storage.sql.exec<AlarmEventStateRow>(
+        `SELECT session_id, event_json
+           FROM demo_event_state
+          WHERE event_type = 'alarm_state'
+          LIMIT 1`,
+      )
+      : this.ctx.storage.sql.exec<AlarmEventStateRow>(
+        `SELECT session_id, event_json
+           FROM demo_event_state
+          WHERE event_type = 'alarm_state' AND session_id = ?
+          LIMIT 1`,
+        sessionId,
+      );
+    const row = query.toArray()[0];
+    if (row === undefined) return null;
+    const decoded = parseJson(row.event_json);
+    if (
+      !validateDemoEvent(decoded, row.session_id)
+      || decoded.event_type !== "alarm_state"
+      || decoded.payload.phase !== "escalated"
+    ) {
+      return null;
+    }
+    const watchdog = this.dangerWatchdog(row.session_id, decoded.payload.event_id);
+    if (watchdog?.status !== "escalated") return null;
+    return { event: decoded, watchdog };
+  }
+
+  private authoritativeEscalationCollision(
+    sessionId: string,
+    event: Exclude<DemoEvent, { event_type: "media_grant" }>,
+  ): AlarmStateEvent | null {
+    if (event.event_type !== "alarm_state" || event.payload.phase !== "escalated") return null;
+    const alarm = this.structuredEvent(sessionId, "alarm_state");
+    const watchdog = this.dangerWatchdog(sessionId, event.payload.event_id);
+    return alarm?.event_type === "alarm_state"
+      && alarm.event_sequence === event.event_sequence
+      && alarm.payload.event_id === event.payload.event_id
+      && alarm.payload.phase === "escalated"
+      && watchdog?.status === "escalated"
+      ? alarm
+      : null;
+  }
+
+  private escalateDangerWatchdog(watchdog: DangerWatchdogRow, now: number): DemoEvent | null {
+    const event = this.ctx.storage.transactionSync((): DemoEvent | null => {
+      const current = this.dangerWatchdog(watchdog.session_id, watchdog.event_id);
+      if (current === null || current.status !== "checking") return null;
+
+      const escalated: DemoEvent = {
+        schema_version: DEMO_EVENT_SCHEMA_VERSION,
+        session_id: watchdog.session_id,
+        event_sequence: this.nextServerEventSequence(watchdog.session_id),
+        timestamp_ms: now,
+        event_type: "alarm_state",
+        payload: {
+          event_id: watchdog.event_id,
+          phase: "escalated",
+          trigger: "check_in_timeout",
+          message: "问询窗口未收到可确认的安全回应，已按确定性规则进入告警状态。",
+          response_deadline_ms: null,
+          media_scope: "fall_emergency",
+        },
+      };
+      this.ctx.storage.sql.exec(
+        `UPDATE danger_watchdog
+            SET status = 'escalated'
+          WHERE session_id = ? AND event_id = ? AND status = 'checking'`,
+        watchdog.session_id,
+        watchdog.event_id,
+      );
+      this.persistDemoEvent(escalated);
+      this.persistDangerAlarmCheckpoint(escalated);
+      return escalated;
+    });
+    if (event === null) return null;
+
+    this.broadcastToAllViewers(event);
+    for (const socket of this.openSockets("controller")) {
+      const attachment = readAttachment(socket);
+      if (attachment?.role === "controller" && attachment.sessionId === event.session_id) {
+        safeSend(socket, JSON.stringify(event));
+      }
+    }
+    console.log(JSON.stringify({
+      event: "danger_watchdog_escalated",
+      session_id: watchdog.session_id,
+      event_id: watchdog.event_id,
+      event_sequence: event.event_sequence,
+      deadline_ms: watchdog.deadline_ms,
+      escalated_at_ms: now,
+      trigger: "check_in_timeout",
+    }));
+    return event;
+  }
+
   private replayableEvents(sessionId: string): DemoEvent[] {
     const rows = this.ctx.storage.sql.exec<EventStateRow>(
       `SELECT event_type, event_sequence, event_json
@@ -1060,37 +1802,77 @@ export class DemoRoom extends DurableObject<Env> {
     const token = randomHex(32);
     const tokenHash = await sha256Hex(token);
     const sessionId = crypto.randomUUID();
-    const leaseExpiresAtMs = Date.now() + LEASE_TTL_MS;
+    const now = Date.now();
+    const leaseExpiresAtMs = now + LEASE_TTL_MS;
 
-    // All awaited work is complete before the check-and-insert sequence. Durable
-    // Object event serialization therefore makes the single-row claim atomic.
+    if (this.currentLease(now) !== null) {
+      return json({ ok: false, error: "controller_locked" }, 423);
+    }
+    const orphanedChecking = this.activeDangerWatchdog();
+    if (
+      orphanedChecking !== null
+      && this.escalateDangerWatchdog(orphanedChecking, Date.now()) === null
+    ) {
+      throw new Error("orphaned danger check-in could not be escalated");
+    }
+    // A new session must never inherit the previous session's scheduled wakeup.
+    // Any orphaned check-in is first made authoritative, then carried forward as
+    // an unresolved escalation rather than silently erased by the takeover.
+    await this.ctx.storage.deleteAlarm();
     if (this.currentLease(Date.now()) !== null) {
       return json({ ok: false, error: "controller_locked" }, 423);
     }
-    this.ctx.storage.sql.exec("DELETE FROM media_grant_audience");
-    this.ctx.storage.sql.exec("DELETE FROM media_grant");
-    this.ctx.storage.sql.exec("DELETE FROM danger_voice_attempt");
-    this.ctx.storage.sql.exec("DELETE FROM demo_event_state");
-    this.ctx.storage.sql.exec("DELETE FROM room_event_sequence WHERE singleton = 1");
-    this.ctx.storage.sql.exec("DELETE FROM room_frame_sequence WHERE singleton = 1");
-    this.ctx.storage.sql.exec(
-      `INSERT INTO control_lease
-         (singleton, token_hash, session_id, expires_at_ms)
-       VALUES (1, ?, ?, ?)`,
-      tokenHash,
-      sessionId,
-      leaseExpiresAtMs,
-    );
-    this.ctx.storage.sql.exec(
-      `INSERT INTO room_event_sequence (singleton, session_id, last_event_sequence)
-       VALUES (1, ?, -1)`,
-      sessionId,
-    );
-    this.ctx.storage.sql.exec(
-      `INSERT INTO room_frame_sequence (singleton, session_id, last_frame_sequence)
-       VALUES (1, ?, -1)`,
-      sessionId,
-    );
+    const rollover = this.authoritativeEscalatedAlarm();
+    const currentAlarm: AlarmStateEvent | null = rollover === null
+      ? null
+      : {
+        ...rollover.event,
+        session_id: sessionId,
+        event_sequence: 0,
+      };
+
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec("DELETE FROM media_grant_audience");
+      this.ctx.storage.sql.exec("DELETE FROM media_grant");
+      this.ctx.storage.sql.exec("DELETE FROM danger_voice_attempt");
+      this.ctx.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
+      this.ctx.storage.sql.exec("DELETE FROM danger_watchdog");
+      this.ctx.storage.sql.exec("DELETE FROM demo_event_state");
+      this.ctx.storage.sql.exec("DELETE FROM room_event_sequence WHERE singleton = 1");
+      this.ctx.storage.sql.exec("DELETE FROM room_frame_sequence WHERE singleton = 1");
+      this.ctx.storage.sql.exec(
+        `INSERT INTO control_lease
+           (singleton, token_hash, session_id, expires_at_ms)
+         VALUES (1, ?, ?, ?)`,
+        tokenHash,
+        sessionId,
+        leaseExpiresAtMs,
+      );
+      this.ctx.storage.sql.exec(
+        `INSERT INTO room_event_sequence (singleton, session_id, last_event_sequence)
+         VALUES (1, ?, ?)`,
+        sessionId,
+        currentAlarm === null ? -1 : currentAlarm.event_sequence,
+      );
+      this.ctx.storage.sql.exec(
+        `INSERT INTO room_frame_sequence (singleton, session_id, last_frame_sequence)
+         VALUES (1, ?, -1)`,
+        sessionId,
+      );
+      if (currentAlarm !== null && rollover !== null) {
+        this.persistDemoEvent(currentAlarm);
+        this.ctx.storage.sql.exec(
+          `INSERT INTO danger_watchdog
+             (session_id, event_id, deadline_ms, status)
+           VALUES (?, ?, ?, 'escalated')`,
+          sessionId,
+          currentAlarm.payload.event_id,
+          rollover.watchdog.deadline_ms,
+        );
+        this.persistDangerAlarmCheckpoint(currentAlarm);
+      }
+    });
+    if (currentAlarm !== null) this.broadcastToAllViewers(currentAlarm);
 
     return json({
       ok: true,
@@ -1116,7 +1898,7 @@ export class DemoRoom extends DurableObject<Env> {
       return json({ ok: false, error: "invalid_control_token" }, 401);
     }
 
-    this.dropLease(tokenHash);
+    await this.dropLease(tokenHash);
     return json({ ok: true });
   }
 
@@ -1129,6 +1911,8 @@ export class DemoRoom extends DurableObject<Env> {
       return json({ ok: false, error: "invalid_websocket_protocol" }, 400);
     }
 
+    const now = Date.now();
+    const lease = this.currentLease(now);
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
@@ -1143,11 +1927,14 @@ export class DemoRoom extends DurableObject<Env> {
     // grant-bound WebRTC signalling to this exact hibernating connection.
     safeSend(server, JSON.stringify({ type: "viewer_ready", viewer_id: viewerId }));
 
-    const now = Date.now();
-    const lease = this.currentLease(now);
     if (lease !== null) {
       for (const event of this.replayableEvents(lease.session_id)) {
         safeSend(server, JSON.stringify(event));
+      }
+    } else {
+      const unresolvedEscalation = this.authoritativeEscalatedAlarm();
+      if (unresolvedEscalation !== null) {
+        safeSend(server, JSON.stringify(unresolvedEscalation.event));
       }
     }
     const latestFrame = lease === null ? null : this.latestControllerFrame(now);
@@ -1195,6 +1982,7 @@ export class DemoRoom extends DurableObject<Env> {
     const server = pair[1];
     const eventSequence = this.eventSequence(lease.session_id);
     const frameSequence = this.frameSequence(lease.session_id);
+    const currentAlarm = this.structuredEvent(lease.session_id, "alarm_state");
     const attachment: ControllerAttachment = {
       role: "controller",
       tokenHash,
@@ -1213,6 +2001,7 @@ export class DemoRoom extends DurableObject<Env> {
         lease_expires_at_ms: lease.expires_at_ms,
         last_event_sequence: eventSequence.last_event_sequence,
         last_frame_sequence: frameSequence.last_frame_sequence,
+        current_alarm: currentAlarm?.event_type === "alarm_state" ? currentAlarm : null,
       }),
     );
 
@@ -1224,32 +2013,42 @@ export class DemoRoom extends DurableObject<Env> {
   }
 
   private currentLease(now: number): LeaseRow | null {
-    const lease =
-      this.ctx.storage.sql
-        .exec<LeaseRow>(
-          "SELECT token_hash, session_id, expires_at_ms FROM control_lease WHERE singleton = 1",
-        )
-        .toArray()[0] ?? null;
+    const lease = this.leaseRow();
 
     if (lease !== null && lease.expires_at_ms <= now) {
-      this.revokeAllActiveGrants(lease.session_id, now, null);
-      this.ctx.storage.sql.exec("DELETE FROM control_lease WHERE singleton = 1");
-      for (const socket of this.ctx.getWebSockets("controller")) {
-        socket.close(1008, "controller_lease_expired");
-      }
+      this.expireLease(lease, now);
       return null;
     }
     return lease;
   }
 
-  private dropLease(tokenHash: string): void {
-    const lease = this.ctx.storage.sql.exec<LeaseRow>(
-      `SELECT token_hash, session_id, expires_at_ms
-         FROM control_lease
-        WHERE singleton = 1`,
-    ).toArray()[0];
-    if (lease !== undefined && constantTimeHexEqual(lease.token_hash, tokenHash)) {
-      this.revokeAllActiveGrants(lease.session_id, Date.now(), null);
+  private leaseRow(): LeaseRow | null {
+    return this.ctx.storage.sql.exec<LeaseRow>(
+      "SELECT token_hash, session_id, expires_at_ms FROM control_lease WHERE singleton = 1",
+    ).toArray()[0] ?? null;
+  }
+
+  private expireLease(lease: LeaseRow, now: number): void {
+    const watchdog = this.activeDangerWatchdog(lease.session_id);
+    if (watchdog !== null) this.escalateDangerWatchdog(watchdog, now);
+    this.revokeAllActiveGrants(lease.session_id, now, null);
+    this.ctx.storage.sql.exec(
+      "DELETE FROM control_lease WHERE singleton = 1 AND session_id = ?",
+      lease.session_id,
+    );
+    for (const socket of this.ctx.getWebSockets("controller")) {
+      socket.close(1008, "controller_lease_expired");
+    }
+  }
+
+  private async dropLease(tokenHash: string): Promise<void> {
+    const lease = this.leaseRow();
+    if (lease !== null && constantTimeHexEqual(lease.token_hash, tokenHash)) {
+      const now = Date.now();
+      const watchdog = this.activeDangerWatchdog(lease.session_id);
+      if (watchdog !== null) this.escalateDangerWatchdog(watchdog, now);
+      this.revokeAllActiveGrants(lease.session_id, now, null);
+      await this.ctx.storage.deleteAlarm();
     }
     this.ctx.storage.sql.exec(
       "DELETE FROM control_lease WHERE singleton = 1 AND token_hash = ?",

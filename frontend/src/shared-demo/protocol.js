@@ -109,13 +109,23 @@ const FORWARDED_MEDIA_SIGNAL_KEYS = [
   "target_id",
 ];
 const CONTROLLER_READY_KEYS = [
+  "current_alarm",
   "last_event_sequence",
   "last_frame_sequence",
   "lease_expires_at_ms",
   "session_id",
   "type",
 ];
+const LEGACY_CONTROLLER_READY_KEYS = CONTROLLER_READY_KEYS.filter(
+  (key) => key !== "current_alarm",
+);
 const HEARTBEAT_ACK_KEYS = ["lease_expires_at_ms", "type"];
+const SOCKET_ERROR_KEYS = ["error", "type"];
+const MEDIA_GRANT_ERROR_CODES = Object.freeze([
+  "media_grant_already_active",
+  "media_grant_not_eligible",
+  "no_connected_viewers",
+]);
 const DESCRIPTION_SIGNAL_KEYS = ["sdp"];
 const ICE_SIGNAL_KEYS = ["candidate", "sdp_mid", "sdp_mline_index"];
 const TORSO_SHOULDER_INDICES = Object.freeze([5, 6]);
@@ -155,13 +165,23 @@ function isSequenceCursor(value) {
 }
 
 export function isControllerReady(value) {
-  return hasExactKeys(value, CONTROLLER_READY_KEYS)
+  const hasCurrentAlarm = hasExactKeys(value, CONTROLLER_READY_KEYS);
+  const isLegacyTransition = hasExactKeys(value, LEGACY_CONTROLLER_READY_KEYS);
+  return (hasCurrentAlarm || isLegacyTransition)
     && value.type === "controller_ready"
     && isOpaqueId(value.session_id)
     && Number.isFinite(value.lease_expires_at_ms)
     && value.lease_expires_at_ms >= 0
     && isSequenceCursor(value.last_event_sequence)
-    && isSequenceCursor(value.last_frame_sequence);
+    && isSequenceCursor(value.last_frame_sequence)
+    && (!hasCurrentAlarm || (
+      value.current_alarm === null
+      || (
+        isDemoEvent(value.current_alarm, { sessionId: value.session_id })
+        && value.current_alarm.event_type === "alarm_state"
+        && value.current_alarm.event_sequence <= value.last_event_sequence
+      )
+    ));
 }
 
 export function isHeartbeatAck(value) {
@@ -169,6 +189,12 @@ export function isHeartbeatAck(value) {
     && value.type === "heartbeat_ack"
     && Number.isFinite(value.lease_expires_at_ms)
     && value.lease_expires_at_ms >= 0;
+}
+
+export function isMediaGrantError(value) {
+  return hasExactKeys(value, SOCKET_ERROR_KEYS)
+    && value.type === "error"
+    && MEDIA_GRANT_ERROR_CODES.includes(value.error);
 }
 
 function isSceneStatePayload(value) {

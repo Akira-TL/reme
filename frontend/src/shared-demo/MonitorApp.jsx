@@ -16,10 +16,13 @@ import {
 import { getRelayBase, relayHttpUrl, relayWebSocketUrl } from "./config.js";
 import { createControllerMediaBridge } from "./controllerMedia.js";
 import {
+  clearPendingFallRecovery,
   clearControllerSession,
   controllerReconnectDelayMs,
   readControllerSession,
+  readPendingFallRecovery,
   updateControllerSession,
+  writePendingFallRecovery,
   writeControllerSession,
 } from "./controllerSession.js";
 import { createFallTransitionDetector } from "./fallDetection.js";
@@ -35,13 +38,21 @@ import {
   isDemoEvent,
   isForwardedMediaSignal,
   isHeartbeatAck,
+  isMediaGrantError,
 } from "./protocol.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import { createMonitorState, reduceMonitorState } from "./state.js";
 import {
+  applyAlarmDeliveryAck,
   estimatePromptLeadMs,
+  prepareFallRecoveryForNewSession,
+  reconcileFallWithAuthoritativeAlarm,
   recognizeDangerVoice,
+  selectControlReleaseAction,
   selectFailClosedFallEvent,
+  selectFallCheckInStartAction,
+  selectFallExitAction,
+  selectFallResolutionAction,
   selectFallReconnectAction,
   selectVoiceIntentAction,
 } from "./voiceIntent.js";
@@ -53,6 +64,7 @@ const FALL_REPLY_WINDOW_MS = 8_000;
 const CONTROLLER_READY_TIMEOUT_MS = 5_000;
 const FALL_PROMPT_FALLBACK_MS = 7_000;
 const FALL_PROMPT_WATCHDOG_MS = 9_000;
+const RELEASE_TIMEOUT_MS = 6_000;
 
 const VOICE_PHASE_COPY = Object.freeze({
   idle: ["语音回应", "进入跌倒场景后，系统会先申请麦克风权限。"],
@@ -119,6 +131,7 @@ function createFallState() {
     deadlineMs: null,
     trigger: null,
     message: "等待真实姿态流中的快速下移与横向转变。",
+    delivery: "none",
   };
 }
 
@@ -175,6 +188,24 @@ export function MonitorApp() {
   const [restoredControllerSession] = useState(() => readControllerSession({
     now: Date.now(),
   }));
+  const [restoredPendingFall] = useState(() => {
+    const pending = readPendingFallRecovery({ now: Date.now() });
+    if (
+      restoredControllerSession?.fall?.phase === "resolved"
+      && restoredControllerSession.fall.delivery === "accepted"
+    ) {
+      clearPendingFallRecovery();
+      return null;
+    }
+    return pending;
+  });
+  const authoritativeRestoredFall = restoredControllerSession?.fall?.phase === "resolved"
+    && restoredControllerSession.fall.delivery === "accepted"
+    ? restoredControllerSession.fall
+    : restoredPendingFall || restoredControllerSession?.fall || createFallState();
+  const authoritativeRestoredScene = authoritativeRestoredFall.phase === "idle"
+    ? restoredControllerSession?.sceneId || "living"
+    : "fall";
   const [ui, dispatch] = useReducer(
     reduceMonitorState,
     restoredControllerSession,
@@ -188,15 +219,14 @@ export function MonitorApp() {
   const [controlKey, setControlKey] = useState("");
   const [localFrame, setLocalFrame] = useState(null);
   const [stats, setStats] = useState({ inferenceMs: null, published: 0, quality: "—" });
-  const [sceneId, setSceneId] = useState(
-    () => restoredControllerSession?.sceneId || "living",
-  );
+  const [sceneId, setSceneId] = useState(authoritativeRestoredScene);
   const [activity, setActivity] = useState(createActivityState);
   const [heartCard, setHeartCard] = useState(null);
   const [moment, setMoment] = useState({ status: "idle", size: 0, mimeType: "" });
-  const [fall, setFall] = useState(createFallState);
+  const [fall, setFall] = useState(authoritativeRestoredFall);
   const [voice, setVoice] = useState(createVoiceState);
   const [mediaStatus, setMediaStatus] = useState({ state: "idle", detail: "" });
+  const [sessionPersistenceHealthy, setSessionPersistenceHealthy] = useState(true);
 
   const videoRef = useRef(null);
   const tokenRef = useRef(null);
@@ -217,10 +247,12 @@ export function MonitorApp() {
   const captureActiveRef = useRef(false);
   const sequenceRef = useRef(0);
   const eventSequenceRef = useRef(0);
-  const sceneIdRef = useRef("living");
+  const sceneIdRef = useRef(authoritativeRestoredScene);
   const fallDetectorRef = useRef(createFallTransitionDetector());
-  const fallRef = useRef(createFallState());
+  const fallRef = useRef(authoritativeRestoredFall);
   const fallTimerRef = useRef(0);
+  const pendingAlarmAckRef = useRef(null);
+  const sessionPersistenceHealthyRef = useRef(true);
   const cookingTrackerRef = useRef(createCookingConfirmationTracker());
   const recognitionUnavailableRef = useRef(false);
   const heartCardRef = useRef(null);
@@ -252,13 +284,119 @@ export function MonitorApp() {
       payload,
     });
     if (!event) return null;
-    socket.send(JSON.stringify(event));
+    try {
+      socket.send(JSON.stringify(event));
+    } catch {
+      return null;
+    }
     eventSequenceRef.current = advanceControllerEventSequence(
       eventSequenceRef.current,
       event.event_sequence,
     );
     return event;
   }, []);
+
+  const requestMediaGrant = useCallback((eventId, scope, expiresInMs) => {
+    const socket = controllerRef.current?.socket;
+    const command = createMediaGrantRequest({ eventId, scope, expiresInMs });
+    if (socket?.readyState !== WebSocket.OPEN || !command) return false;
+    try {
+      socket.send(JSON.stringify(command));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const setSessionPersistenceStatus = useCallback((healthy) => {
+    sessionPersistenceHealthyRef.current = healthy;
+    setSessionPersistenceHealthy(healthy);
+    if (!healthy) {
+      setMediaStatus({
+        state: "failed",
+        detail: "浏览器无法保存当前安全事件；控制权已保留，请保持页面开启并检查会话存储设置。",
+      });
+    }
+  }, []);
+
+  const persistControllerSessionPatch = useCallback((patch) => {
+    if (!tokenRef.current || !sessionIdRef.current) return true;
+    const persisted = Boolean(updateControllerSession(patch, { now: Date.now() }));
+    setSessionPersistenceStatus(persisted);
+    return persisted;
+  }, [setSessionPersistenceStatus]);
+
+  const persistFallRecoveryState = useCallback((next, {
+    confirmedInActiveSession = false,
+  } = {}) => {
+    if (
+      next.phase === "idle"
+      || (
+        confirmedInActiveSession
+        && next.phase === "resolved"
+        && next.delivery === "accepted"
+      )
+    ) {
+      return clearPendingFallRecovery();
+    }
+    return Boolean(writePendingFallRecovery(next, { now: Date.now() }));
+  }, []);
+
+  const commitFallState = useCallback((next) => {
+    const hasActiveSession = Boolean(tokenRef.current && sessionIdRef.current);
+    let sessionPersisted = true;
+    let recoveryPersisted;
+    const confirmedResolution = next.phase === "resolved"
+      && next.delivery === "accepted"
+      && hasActiveSession;
+
+    if (confirmedResolution) {
+      sessionPersisted = Boolean(updateControllerSession({ fall: next }, { now: Date.now() }));
+      recoveryPersisted = sessionPersisted
+        ? persistFallRecoveryState(next, { confirmedInActiveSession: true })
+        : persistFallRecoveryState(next);
+    } else {
+      recoveryPersisted = persistFallRecoveryState(next);
+      if (hasActiveSession) {
+        sessionPersisted = Boolean(updateControllerSession({ fall: next }, { now: Date.now() }));
+      }
+    }
+
+    const persisted = sessionPersisted && recoveryPersisted;
+    setSessionPersistenceStatus(persisted);
+    fallRef.current = next;
+    setFall(next);
+    return persisted;
+  }, [persistFallRecoveryState, setSessionPersistenceStatus]);
+
+  const publishAlarmState = useCallback((payload) => {
+    pendingAlarmAckRef.current = null;
+    const event = publishEvent("alarm_state", payload);
+    if (event) {
+      pendingAlarmAckRef.current = {
+        eventId: payload.event_id,
+        phase: payload.phase,
+        eventSequence: event.event_sequence,
+      };
+    }
+    return event;
+  }, [publishEvent]);
+
+  const acceptAlarmEvent = useCallback((eventSequence) => {
+    const pending = pendingAlarmAckRef.current;
+    const current = fallRef.current;
+    const accepted = applyAlarmDeliveryAck({ fall: current, pending, eventSequence });
+    if (!accepted) return false;
+    pendingAlarmAckRef.current = null;
+    if (accepted !== current) commitFallState(accepted);
+    if (current.phase === "escalated") {
+      setMediaStatus({
+        state: "authorizing",
+        detail: "告警已由 Relay 确认；事件视频授权按在场评委情况处理。",
+      });
+    }
+    return true;
+  }, [commitFallState]);
 
   const stopLocalMoment = useCallback(() => {
     momentRecorderRef.current?.cancel?.();
@@ -275,7 +413,11 @@ export function MonitorApp() {
       const socket = controllerRef.current?.socket;
       const command = createMediaGrantRevoke(grantId);
       if (socket?.readyState === WebSocket.OPEN && command) {
-        socket.send(JSON.stringify(command));
+        try {
+          socket.send(JSON.stringify(command));
+        } catch {
+          // 本地授权仍必须立即撤销；Relay 会在控制 socket 关闭时 fail closed。
+        }
       }
       mediaBridgeRef.current?.stopGrant(grantId, reason);
     }
@@ -489,6 +631,84 @@ export function MonitorApp() {
     }, delayMs);
   }, [clearReconnectTimer, invalidateControllerSession]);
 
+  const presentAuthoritativeFall = useCallback((next) => {
+    pendingAlarmAckRef.current = null;
+    clearFallTimer();
+    if (next.phase === "checking") {
+      if (!Number.isFinite(next.deadlineMs) || next.deadlineMs <= Date.now()) {
+        failClosedFallRef.current?.();
+        return;
+      }
+      fallTimerRef.current = window.setTimeout(
+        () => failClosedFallRef.current?.(),
+        Math.max(0, next.deadlineMs - Date.now()),
+      );
+      return;
+    }
+    if (next.phase === "escalated") {
+      cancelVoiceInteraction(createVoiceState({
+        phase: "fallback",
+        detail: "Relay 已按绝对截止时间确认升级；迟到的安全回应不会自动撤销告警。",
+      }));
+      const requested = requestMediaGrant(next.eventId, "fall_emergency", 30_000);
+      setMediaStatus({
+        state: requested ? "authorizing" : "waiting_viewer",
+        detail: requested
+          ? "Relay 已确认规则告警，正在签发 30 秒事件视频授权…"
+          : "Relay 已确认规则告警；当前控制链路无法签发视频，告警仍保持有效。",
+      });
+      return;
+    }
+    if (next.phase === "resolved") {
+      cancelVoiceInteraction(createVoiceState({
+        phase: "result",
+        intent: "safe",
+        detail: "Relay 已确认本次安全事件关闭。",
+      }));
+      revokeActiveGrant("resolved");
+    }
+  }, [cancelVoiceInteraction, clearFallTimer, requestMediaGrant, revokeActiveGrant]);
+
+  const acceptAuthoritativeAlarmEvent = useCallback((event) => {
+    const sessionId = sessionIdRef.current;
+    if (
+      !sessionId
+      || !isDemoEvent(event, { sessionId })
+      || event.event_type !== "alarm_state"
+    ) return "ignore";
+    eventSequenceRef.current = advanceControllerEventSequence(
+      eventSequenceRef.current,
+      event.event_sequence,
+    );
+    const current = fallRef.current;
+    const reconciliation = reconcileFallWithAuthoritativeAlarm(current, event.payload);
+    if (reconciliation.action !== "adopt") return reconciliation.action;
+    if (reconciliation.fall === current) return "adopt";
+
+    if (sceneIdRef.current !== "fall") {
+      sceneIdRef.current = "fall";
+      setSceneId("fall");
+      const sessionPersisted = persistControllerSessionPatch({
+        sceneId: "fall",
+        fall: reconciliation.fall,
+      });
+      const recoveryPersisted = persistFallRecoveryState(reconciliation.fall);
+      setSessionPersistenceStatus(sessionPersisted && recoveryPersisted);
+      fallRef.current = reconciliation.fall;
+      setFall(reconciliation.fall);
+    } else {
+      commitFallState(reconciliation.fall);
+    }
+    presentAuthoritativeFall(reconciliation.fall);
+    return "adopt";
+  }, [
+    commitFallState,
+    persistControllerSessionPatch,
+    persistFallRecoveryState,
+    presentAuthoritativeFall,
+    setSessionPersistenceStatus,
+  ]);
+
   const connectController = useCallback((token) => {
     clearReconnectTimer();
     intentionalCloseRef.current = true;
@@ -541,19 +761,35 @@ export function MonitorApp() {
           invalidateControllerSession("控制会话校验失败，请重新输入密钥。");
           return;
         }
+        const previousFall = fallRef.current;
+        const readyReconciliation = value.current_alarm
+          ? reconcileFallWithAuthoritativeAlarm(previousFall, value.current_alarm.payload)
+          : { action: "ignore", fall: previousFall };
+        const readyFall = readyReconciliation.action === "adopt"
+          ? readyReconciliation.fall
+          : previousFall;
+        const readySceneId = readyReconciliation.action === "adopt"
+          && readyFall.phase !== "idle"
+          ? "fall"
+          : sceneIdRef.current;
         const stored = writeControllerSession({
-          version: 1,
+          version: 2,
           token: tokenRef.current,
           sessionId: value.session_id,
           leaseExpiresAtMs: value.lease_expires_at_ms,
-          sceneId: sceneIdRef.current,
+          sceneId: readySceneId,
+          fall: readyFall,
         }, {
           now: Date.now(),
         });
         if (!stored) {
+          setSessionPersistenceStatus(false);
           invalidateControllerSession("短期控制会话已到期，请重新输入密钥。");
           return;
         }
+        setSessionPersistenceStatus(persistFallRecoveryState(readyFall, {
+          confirmedInActiveSession: true,
+        }));
         connection.ready = true;
         window.clearTimeout(connection.readyTimeout);
         leaseExpiresAtRef.current = value.lease_expires_at_ms;
@@ -564,6 +800,13 @@ export function MonitorApp() {
             value.last_event_sequence,
           );
         }
+        if (readyReconciliation.action === "adopt") {
+          pendingAlarmAckRef.current = null;
+          sceneIdRef.current = readySceneId;
+          setSceneId(readySceneId);
+          fallRef.current = readyFall;
+          setFall(readyFall);
+        }
         reconnectAttemptRef.current = 0;
         dispatch({ type: "controller_connected" });
         publishEvent("scene_state", {
@@ -572,30 +815,62 @@ export function MonitorApp() {
             ? "skeleton_only"
             : "abstract_environment",
         });
-        fallSyncRef.current?.();
+        if (readyReconciliation.action === "adopt") {
+          presentAuthoritativeFall(readyFall);
+        } else {
+          fallSyncRef.current?.();
+        }
         return;
       }
       if (!connection.ready) return;
+      if (isMediaGrantError(value)) {
+        if (value.error === "media_grant_already_active" && activeGrantRef.current) {
+          return;
+        }
+        const noViewer = value.error === "no_connected_viewers";
+        const waiting = noViewer || value.error === "media_grant_already_active";
+        setMediaStatus({
+          state: waiting ? "waiting_viewer" : "failed",
+          detail: noViewer
+            ? "当前没有家属端在线；告警仍有效，视频保持关闭。"
+            : value.error === "media_grant_already_active"
+              ? "本事件已有一份短时视频授权；告警仍有效，授权到期后自动回到骨架。"
+              : "当前事件不满足视频授权条件；告警仍有效，视频保持关闭。",
+        });
+        return;
+      }
       if (isHeartbeatAck(value)) {
         if (!tokenRef.current || !sessionIdRef.current) return;
         const stored = writeControllerSession({
-          version: 1,
+          version: 2,
           token: tokenRef.current,
           sessionId: sessionIdRef.current,
           leaseExpiresAtMs: value.lease_expires_at_ms,
           sceneId: sceneIdRef.current,
+          fall: fallRef.current,
         }, {
           now: Date.now(),
         });
         if (!stored) {
+          setSessionPersistenceStatus(false);
           invalidateControllerSession("短期控制会话已到期，请重新输入密钥。");
           return;
         }
+        setSessionPersistenceStatus(persistFallRecoveryState(fallRef.current, {
+          confirmedInActiveSession: true,
+        }));
         leaseExpiresAtRef.current = value.lease_expires_at_ms;
         return;
       }
       if (isForwardedMediaSignal(value)) {
         void mediaBridgeRef.current?.handleSignal(value);
+        return;
+      }
+      if (
+        isDemoEvent(value, { sessionId: sessionIdRef.current })
+        && value.event_type === "alarm_state"
+      ) {
+        acceptAuthoritativeAlarmEvent(value);
         return;
       }
       if (
@@ -607,6 +882,9 @@ export function MonitorApp() {
           eventSequenceRef.current,
           value.event_sequence,
         );
+        if (value.event_type === "alarm_state") {
+          acceptAlarmEvent(value.event_sequence);
+        }
         return;
       }
       if (value?.type === "media_grant_accepted" && isDemoEvent(value.grant)) {
@@ -660,11 +938,16 @@ export function MonitorApp() {
     };
     socket.onerror = () => socket.close();
   }, [
+    acceptAuthoritativeAlarmEvent,
+    acceptAlarmEvent,
     clearReconnectTimer,
     closeControllerSocket,
     invalidateControllerSession,
+    persistFallRecoveryState,
+    presentAuthoritativeFall,
     publishEvent,
     scheduleControllerReconnect,
+    setSessionPersistenceStatus,
   ]);
 
   useEffect(() => {
@@ -682,55 +965,12 @@ export function MonitorApp() {
     tokenRef.current = restored.token;
     sessionIdRef.current = restored.sessionId;
     leaseExpiresAtRef.current = restored.leaseExpiresAtMs;
-    sceneIdRef.current = restored.sceneId;
+    sceneIdRef.current = authoritativeRestoredScene;
     sequenceRef.current = 0;
     eventSequenceRef.current = 0;
     reconnectAttemptRef.current = 0;
     connectController(restored.token);
-  }, [connectController, restoredControllerSession]);
-
-  const requestMediaGrant = useCallback((eventId, scope, expiresInMs) => {
-    const socket = controllerRef.current?.socket;
-    const command = createMediaGrantRequest({ eventId, scope, expiresInMs });
-    if (socket?.readyState !== WebSocket.OPEN || !command) return false;
-    socket.send(JSON.stringify(command));
-    return true;
-  }, []);
-
-  const resolveFallSafe = useCallback((requestedEventId = null, {
-    trigger = null,
-    preserveVoice = false,
-  } = {}) => {
-    const current = fallRef.current;
-    const eventId = typeof requestedEventId === "string" ? requestedEventId : current.eventId;
-    if (!eventId || current.eventId !== eventId || current.phase === "resolved") return;
-    clearFallTimer();
-    cancelVoiceInteraction(preserveVoice ? null : createVoiceState({
-      phase: "result",
-      intent: "safe",
-      detail: "本人已通过按钮确认安全。",
-    }));
-    const resolvedTrigger = trigger || current.trigger || "fall_transition";
-    const next = {
-      phase: "resolved",
-      eventId,
-      deadlineMs: null,
-      trigger: resolvedTrigger,
-      message: "本人已确认安全，本次事件已关闭。",
-    };
-    fallRef.current = next;
-    setFall(next);
-    publishEvent("alarm_state", {
-      event_id: eventId,
-      phase: "resolved",
-      trigger: resolvedTrigger,
-      message: next.message,
-      response_deadline_ms: null,
-      media_scope: "none",
-    });
-    revokeActiveGrant("resolved");
-    fallDetectorRef.current.reset();
-  }, [cancelVoiceInteraction, clearFallTimer, publishEvent, revokeActiveGrant]);
+  }, [authoritativeRestoredScene, connectController, restoredControllerSession]);
 
   const escalateFall = useCallback((eventId, trigger = "check_in_timeout") => {
     if (!eventId || fallRef.current.eventId !== eventId) return;
@@ -751,14 +991,14 @@ export function MonitorApp() {
       deadlineMs: null,
       trigger,
       message: voiceTriggered
-        ? "语音回应表示需要帮助，已立即通知评委查看。"
+        ? "语音回应表示需要帮助，已进入告警状态。"
         : manuallyTriggered
-          ? "本人已表示需要帮助，已立即通知评委查看。"
-          : "完整问询窗口没有收到回应，规则已通知评委查看。",
+          ? "本人已表示需要帮助，已进入告警状态。"
+          : "完整问询窗口没有收到回应，规则已进入告警状态。",
+      delivery: "pending",
     };
-    fallRef.current = next;
-    setFall(next);
-    publishEvent("alarm_state", {
+    commitFallState(next);
+    const published = publishAlarmState({
       event_id: eventId,
       phase: "escalated",
       trigger,
@@ -766,14 +1006,67 @@ export function MonitorApp() {
       response_deadline_ms: null,
       media_scope: "fall_emergency",
     });
-    setMediaStatus({ state: "authorizing", detail: "告警已送达，正在签发 30 秒事件视频授权…" });
-    requestMediaGrant(eventId, "fall_emergency", 30_000);
+    setMediaStatus({
+      state: published ? "authorizing" : "waiting_viewer",
+      detail: published
+        ? "告警正在同步，Relay 确认后将签发 30 秒事件视频授权…"
+        : "控制链路离线，告警尚未送达；重连后会自动同步。",
+    });
+    if (published) requestMediaGrant(eventId, "fall_emergency", 30_000);
     try {
       navigator.vibrate?.([350, 120, 350, 120, 700]);
     } catch {
       // 振动不可用不影响规则告警。
     }
-  }, [cancelVoiceInteraction, clearFallTimer, publishEvent, requestMediaGrant]);
+  }, [cancelVoiceInteraction, clearFallTimer, commitFallState, publishAlarmState, requestMediaGrant]);
+
+  const resolveFallSafe = useCallback((requestedEventId = null, {
+    trigger = null,
+    preserveVoice = false,
+  } = {}) => {
+    const current = fallRef.current;
+    const eventId = typeof requestedEventId === "string" ? requestedEventId : current.eventId;
+    const action = selectFallResolutionAction(current, eventId, Date.now());
+    if (action === "escalate") {
+      escalateFall(eventId, "check_in_timeout");
+      return;
+    }
+    if (action === "block") {
+      setMediaStatus({
+        state: "waiting_viewer",
+        detail: "告警尚未获得 Relay 确认，不能用本地关闭覆盖待同步的升级。",
+      });
+      return;
+    }
+    if (action !== "resolve") return;
+
+    clearFallTimer();
+    cancelVoiceInteraction(preserveVoice ? null : createVoiceState({
+      phase: "result",
+      intent: "safe",
+      detail: "本人已通过按钮确认安全。",
+    }));
+    const resolvedTrigger = trigger || current.trigger || "fall_transition";
+    const next = {
+      phase: "resolved",
+      eventId,
+      deadlineMs: null,
+      trigger: resolvedTrigger,
+      message: "本人已确认安全，本次事件已关闭。",
+      delivery: "pending",
+    };
+    commitFallState(next);
+    publishAlarmState({
+      event_id: eventId,
+      phase: "resolved",
+      trigger: resolvedTrigger,
+      message: next.message,
+      response_deadline_ms: null,
+      media_scope: "none",
+    });
+    revokeActiveGrant("resolved");
+    fallDetectorRef.current.reset();
+  }, [cancelVoiceInteraction, clearFallTimer, commitFallState, escalateFall, publishAlarmState, revokeActiveGrant]);
 
   const failClosedFallCheckIn = useCallback(() => {
     const eventId = selectFailClosedFallEvent(fallRef.current);
@@ -794,6 +1087,28 @@ export function MonitorApp() {
     };
   }, [failClosedFallCheckIn]);
 
+  useEffect(() => {
+    const current = fallRef.current;
+    if (!restoredControllerSession || current.phase !== "checking" || !current.eventId) {
+      return undefined;
+    }
+    if (document.visibilityState === "hidden") {
+      escalateFall(current.eventId, "check_in_timeout");
+      return undefined;
+    }
+    const remainingMs = current.deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      escalateFall(current.eventId, "check_in_timeout");
+      return undefined;
+    }
+    clearFallTimer();
+    fallTimerRef.current = window.setTimeout(
+      () => escalateFall(current.eventId, "check_in_timeout"),
+      remainingMs,
+    );
+    return clearFallTimer;
+  }, [clearFallTimer, escalateFall, restoredControllerSession]);
+
   const synchronizeFallAfterReconnect = useCallback(() => {
     const current = fallRef.current;
     const action = selectFallReconnectAction(current, Date.now());
@@ -803,15 +1118,19 @@ export function MonitorApp() {
       return true;
     }
 
-    const published = publishEvent("alarm_state", {
-      event_id: current.eventId,
-      phase: current.phase,
-      trigger: current.trigger || "fall_transition",
-      message: current.message || (current.phase === "checking"
+    const syncing = current.delivery === "pending"
+      ? current
+      : { ...current, delivery: "pending" };
+    if (syncing !== current) commitFallState(syncing);
+    const published = publishAlarmState({
+      event_id: syncing.eventId,
+      phase: syncing.phase,
+      trigger: syncing.trigger || "fall_transition",
+      message: syncing.message || (syncing.phase === "checking"
         ? "刚才的动作有些突然，您还好吗？"
         : "本次安全事件状态已恢复。"),
-      response_deadline_ms: current.phase === "checking" ? current.deadlineMs : null,
-      media_scope: current.phase === "escalated" ? "fall_emergency" : "none",
+      response_deadline_ms: syncing.phase === "checking" ? syncing.deadlineMs : null,
+      media_scope: syncing.phase === "escalated" ? "fall_emergency" : "none",
     });
 
     if (action === "republish_checking") {
@@ -821,11 +1140,11 @@ export function MonitorApp() {
         Math.max(0, current.deadlineMs - Date.now()),
       );
     } else if (action === "republish_escalated" && published) {
-      setMediaStatus({ state: "authorizing", detail: "告警状态已恢复，正在重新签发 30 秒事件视频授权…" });
+      setMediaStatus({ state: "authorizing", detail: "告警正在重新同步，并重签 30 秒事件视频授权…" });
       requestMediaGrant(current.eventId, "fall_emergency", 30_000);
     }
     return Boolean(published);
-  }, [clearFallTimer, escalateFall, publishEvent, requestMediaGrant]);
+  }, [clearFallTimer, commitFallState, escalateFall, publishAlarmState, requestMediaGrant]);
 
   useEffect(() => {
     fallSyncRef.current = synchronizeFallAfterReconnect;
@@ -958,10 +1277,9 @@ export function MonitorApp() {
     const now = Date.now();
     const deadlineMs = Math.min(current.deadlineMs, now + FALL_REPLY_WINDOW_MS);
     if (deadlineMs !== current.deadlineMs) {
-      const next = { ...current, deadlineMs };
-      fallRef.current = next;
-      setFall(next);
-      publishEvent("alarm_state", {
+      const next = { ...current, deadlineMs, delivery: "pending" };
+      commitFallState(next);
+      publishAlarmState({
         event_id: eventId,
         phase: "checking",
         trigger: "fall_transition",
@@ -981,9 +1299,9 @@ export function MonitorApp() {
       return;
     }
     void runFallVoiceReply(eventId, generation, Math.min(FALL_REPLY_WINDOW_MS, remainingMs));
-  }, [clearFallTimer, escalateFall, publishEvent, runFallVoiceReply]);
+  }, [clearFallTimer, commitFallState, escalateFall, publishAlarmState, runFallVoiceReply]);
 
-  const startFallCheckIn = useCallback((transition) => {
+  const startFallCheckIn = useCallback(() => {
     if (sceneIdRef.current !== "fall" || fallRef.current.phase !== "idle") return;
     cancelVoiceInteraction(createVoiceState({
       phase: "prompt",
@@ -1000,11 +1318,10 @@ export function MonitorApp() {
       deadlineMs,
       trigger: "fall_transition",
       message: "检测到真实姿态快速下移并转为横向，正在询问：您还好吗？",
-      evidenceScore: transition.evidence_score,
+      delivery: "pending",
     };
-    fallRef.current = next;
-    setFall(next);
-    publishEvent("alarm_state", {
+    commitFallState(next);
+    publishAlarmState({
       event_id: eventId,
       phase: "checking",
       trigger: "fall_transition",
@@ -1012,6 +1329,10 @@ export function MonitorApp() {
       response_deadline_ms: deadlineMs,
       media_scope: "none",
     });
+    if (selectFallCheckInStartAction(document.visibilityState) === "escalate") {
+      escalateFall(eventId, "check_in_timeout");
+      return;
+    }
     clearFallTimer();
     fallTimerRef.current = window.setTimeout(
       () => escalateFall(eventId, "check_in_timeout"),
@@ -1073,7 +1394,7 @@ export function MonitorApp() {
     } catch {
       finish(true);
     }
-  }, [armFallResponseWindow, cancelVoiceInteraction, clearFallTimer, escalateFall, publishEvent]);
+  }, [armFallResponseWindow, cancelVoiceInteraction, clearFallTimer, commitFallState, escalateFall, publishAlarmState]);
 
   const updateHeartCard = useCallback((shareState) => {
     const current = heartCardRef.current;
@@ -1100,8 +1421,18 @@ export function MonitorApp() {
 
   const selectScene = useCallback((nextSceneId) => {
     if (!DEMO_SCENES.some((scene) => scene.id === nextSceneId)) return;
-    if (selectFailClosedFallEvent(fallRef.current)) {
+    const exitAction = selectFallExitAction(fallRef.current, {
+      persistenceHealthy: sessionPersistenceHealthyRef.current,
+    });
+    if (exitAction === "escalate") {
       failClosedFallCheckIn();
+      return;
+    }
+    if (exitAction === "block") {
+      setMediaStatus({
+        state: "waiting_viewer",
+        detail: "请先明确关闭安全事件，并等待 Relay 确认后再切换场景。",
+      });
       return;
     }
     if (heartCardRef.current && !["denied", "expired"].includes(heartCardRef.current.share_state)) {
@@ -1119,16 +1450,18 @@ export function MonitorApp() {
     recognitionUnavailableRef.current = false;
     fallDetectorRef.current.reset();
     const emptyFall = createFallState();
+    if (!clearPendingFallRecovery()) {
+      setSessionPersistenceStatus(false);
+      return;
+    }
+    if (!persistControllerSessionPatch({ fall: emptyFall, sceneId: nextSceneId })) return;
     fallRef.current = emptyFall;
+    setFall(emptyFall);
     heartCardRef.current = null;
     sceneIdRef.current = nextSceneId;
     setSceneId(nextSceneId);
-    updateControllerSession({ sceneId: nextSceneId }, {
-      now: Date.now(),
-    });
     setActivity(createActivityState());
     setHeartCard(null);
-    setFall(emptyFall);
     publishEvent("scene_state", {
       scene_id: nextSceneId,
       visual_mode: nextSceneId === "bathroom" ? "skeleton_only" : "abstract_environment",
@@ -1137,10 +1470,12 @@ export function MonitorApp() {
   }, [
     clearFallTimer,
     failClosedFallCheckIn,
+    persistControllerSessionPatch,
     preauthorizeMicrophone,
     publishEvent,
     releaseVoiceResources,
     revokeActiveGrant,
+    setSessionPersistenceStatus,
     stopLocalMoment,
     updateHeartCard,
   ]);
@@ -1202,21 +1537,51 @@ export function MonitorApp() {
         return;
       }
 
+      const unlockNow = Date.now();
+      const storedRecovery = readPendingFallRecovery({ now: unlockNow });
+      const currentFall = fallRef.current;
+      const inMemoryRecovery = currentFall.phase !== "idle"
+        && !(currentFall.phase === "resolved" && currentFall.delivery === "accepted")
+        ? currentFall
+        : null;
+      const currentIsConfirmedResolution = currentFall.phase === "resolved"
+        && currentFall.delivery === "accepted";
+      const recovery = currentIsConfirmedResolution
+        ? null
+        : inMemoryRecovery || storedRecovery;
+      const initialFall = prepareFallRecoveryForNewSession(recovery, unlockNow)
+        || createFallState();
+      const initialSceneId = initialFall.phase === "idle" ? sceneIdRef.current : "fall";
+      const recoveryStored = persistFallRecoveryState(initialFall);
       const stored = writeControllerSession({
-        version: 1,
+        version: 2,
         token: payload.token,
         sessionId: payload.session_id,
         leaseExpiresAtMs: payload.lease_expires_at_ms,
-        sceneId: sceneIdRef.current,
+        sceneId: initialSceneId,
+        fall: initialFall,
       }, {
         now: Date.now(),
       });
       setControlKey("");
-      if (!stored) {
-        await fetch(relayHttpUrl("/api/release"), {
-          method: "POST",
-          headers: { Authorization: `Bearer ${payload.token}` },
-        }).catch(() => null);
+      if (!recoveryStored || !stored) {
+        const rollbackAbort = new AbortController();
+        const rollbackTimeout = window.setTimeout(
+          () => rollbackAbort.abort(),
+          RELEASE_TIMEOUT_MS,
+        );
+        try {
+          await fetch(relayHttpUrl("/api/release"), {
+            method: "POST",
+            headers: { Authorization: `Bearer ${payload.token}` },
+            signal: rollbackAbort.signal,
+          });
+        } catch {
+          // The short lease expires independently; the UI must never remain
+          // stuck in unlocking while a failed rollback request hangs.
+        } finally {
+          window.clearTimeout(rollbackTimeout);
+        }
         dispatch({
           type: "degraded",
           error: "当前浏览器无法保存短期控制会话，请退出隐私模式或允许会话存储后重试。",
@@ -1230,12 +1595,30 @@ export function MonitorApp() {
       sequenceRef.current = 0;
       eventSequenceRef.current = 0;
       reconnectAttemptRef.current = 0;
+      pendingAlarmAckRef.current = null;
+      sceneIdRef.current = initialSceneId;
+      setSceneId(initialSceneId);
+      commitFallState(initialFall);
+      clearFallTimer();
+      if (initialFall.phase === "checking") {
+        fallTimerRef.current = window.setTimeout(
+          () => escalateFall(initialFall.eventId, "check_in_timeout"),
+          Math.max(0, initialFall.deadlineMs - Date.now()),
+        );
+      }
       dispatch({ type: "unlocked", sessionId: payload.session_id });
       connectController(payload.token);
     } catch {
       dispatch({ type: "degraded", error: "无法连接控制服务，请确认网络后重试。" });
     }
-  }, [connectController, controlKey]);
+  }, [
+    clearFallTimer,
+    commitFallState,
+    connectController,
+    controlKey,
+    escalateFall,
+    persistFallRecoveryState,
+  ]);
 
   const startCapture = useCallback(async () => {
     if (captureActiveRef.current || ui.connection !== "connected") return;
@@ -1382,28 +1765,85 @@ export function MonitorApp() {
   }, [revokeActiveGrant, stopCapture]);
 
   const releaseControl = useCallback(async () => {
+    const exitAction = selectFallExitAction(fallRef.current, {
+      persistenceHealthy: sessionPersistenceHealthyRef.current,
+    });
+    if (exitAction === "escalate") {
+      failClosedFallCheckIn();
+      return;
+    }
+    if (exitAction === "block") {
+      setMediaStatus({
+        state: "waiting_viewer",
+        detail: "安全事件尚未明确关闭并获 Relay 确认，控制权不会释放。",
+      });
+      return;
+    }
+
     const token = tokenRef.current;
+    await stopCapture();
+    if (selectFallExitAction(fallRef.current, {
+      persistenceHealthy: sessionPersistenceHealthyRef.current,
+    }) !== "allow") {
+      return;
+    }
+    if (!clearPendingFallRecovery()) {
+      setSessionPersistenceStatus(false);
+      return;
+    }
     intentionalCloseRef.current = true;
     clearReconnectTimer();
+    let releaseStatus = 204;
+    if (token) {
+      const releaseAbort = new AbortController();
+      const releaseTimeout = window.setTimeout(
+        () => releaseAbort.abort(),
+        RELEASE_TIMEOUT_MS,
+      );
+      try {
+        const response = await fetch(relayHttpUrl("/api/release"), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          signal: releaseAbort.signal,
+        });
+        releaseStatus = response.status;
+      } catch {
+        releaseStatus = null;
+      } finally {
+        window.clearTimeout(releaseTimeout);
+      }
+    }
+    if (selectControlReleaseAction(releaseStatus) === "retry") {
+      intentionalCloseRef.current = false;
+      setMediaStatus({
+        state: "failed",
+        detail: "Relay 尚未确认释放控制权；本地凭证已保留，可在网络恢复后重试。",
+      });
+      if (!controllerRef.current) scheduleControllerReconnect();
+      return;
+    }
+
+    closeControllerSocket();
     clearControllerSession();
     tokenRef.current = null;
     sessionIdRef.current = null;
     leaseExpiresAtRef.current = null;
-    const releaseRequest = token
-      ? fetch(relayHttpUrl("/api/release"), {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => null)
-      : Promise.resolve(null);
-    await stopCapture();
-    await releaseRequest;
-    closeControllerSocket();
     sequenceRef.current = 0;
     eventSequenceRef.current = 0;
     reconnectAttemptRef.current = 0;
+    pendingAlarmAckRef.current = null;
+    commitFallState(createFallState());
     intentionalCloseRef.current = false;
     dispatch({ type: "released" });
-  }, [clearReconnectTimer, closeControllerSocket, stopCapture]);
+  }, [
+    clearReconnectTimer,
+    closeControllerSocket,
+    commitFallState,
+    failClosedFallCheckIn,
+    scheduleControllerReconnect,
+    setSessionPersistenceStatus,
+    stopCapture,
+  ]);
 
   const retryConnection = useCallback(() => {
     const token = tokenRef.current;
@@ -1428,6 +1868,7 @@ export function MonitorApp() {
         || inFlight
         || recognitionUnavailableRef.current
         || heartCardRef.current
+        || document.visibilityState === "hidden"
       ) return;
       const imageB64 = captureJpegBase64(videoRef.current);
       if (!imageB64) return;
@@ -1450,7 +1891,11 @@ export function MonitorApp() {
           tokenRef.current,
           imageB64,
         );
-        if (cancelled || sceneIdRef.current !== "kitchen") return;
+        if (
+          cancelled
+          || sceneIdRef.current !== "kitchen"
+          || document.visibilityState === "hidden"
+        ) return;
         const tracked = cookingTrackerRef.current.push(verdict);
         const reason = verdict.reason.slice(0, 240);
         setActivity({
@@ -1507,7 +1952,7 @@ export function MonitorApp() {
           });
         }
       } catch (error) {
-        if (cancelled) return;
+        if (cancelled || document.visibilityState === "hidden") return;
         recognitionUnavailableRef.current = true;
         const reason = error instanceof Error ? error.message.slice(0, 240) : "活动识别不可用";
         setActivity({
@@ -1559,10 +2004,12 @@ export function MonitorApp() {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
         const checkingEventId = selectFailClosedFallEvent(fallRef.current);
+        if (checkingEventId) failClosedFallCheckIn();
+        if (sceneIdRef.current === "kitchen") stopLocalMoment();
         releaseVoiceResources(checkingEventId
           ? createVoiceState({
             phase: "fallback",
-            detail: "页面已隐藏，麦克风已停止；规则倒计时仍会继续。",
+            detail: "页面已隐藏，麦克风已停止；本次事件已按规则 fail-closed 升级。",
           })
           : createVoiceState());
         return;
@@ -1590,12 +2037,14 @@ export function MonitorApp() {
     closeControllerSocket,
     failClosedFallCheckIn,
     releaseVoiceResources,
+    stopLocalMoment,
     stopCapture,
   ]);
 
   const locked = ui.phase === "locked" || (ui.phase === "degraded" && !ui.sessionId);
   const canStart = ui.connection === "connected" && !ui.captureActive && ui.phase !== "starting";
   const activeScene = DEMO_SCENES.find((scene) => scene.id === sceneId) || DEMO_SCENES[0];
+  const fallExitAction = selectFallExitAction(fall, { persistenceHealthy: sessionPersistenceHealthy });
 
   return (
     <div className="demo-shell monitor-role">
@@ -1713,6 +2162,7 @@ export function MonitorApp() {
                     className={className}
                     aria-label={`${scene.label}场景：${scene.detail}`}
                     aria-pressed={sceneId === scene.id}
+                    disabled={fallExitAction === "block" && scene.id !== sceneId}
                     onClick={() => selectScene(scene.id)}
                   >
                     <SceneIcon className="scene-tab-icon" aria-hidden="true" />
@@ -1799,10 +2249,17 @@ export function MonitorApp() {
                   <b>真实姿态跌倒链路</b>
                   <span>{fall.phase === "idle" ? "规则待命"
                     : fall.phase === "checking" ? "正在问询"
-                      : fall.phase === "escalated" ? "已告警"
-                        : "已关闭"}</span>
+                      : fall.phase === "escalated"
+                        ? fall.delivery === "accepted" ? "已告警" : "告警待同步"
+                        : fall.delivery === "accepted" ? "已关闭" : "关闭待同步"}</span>
                 </div>
                 <p>{fall.message}</p>
+                {fall.eventId && fall.delivery !== "accepted" && (
+                  <small role="status">Relay 尚未确认当前安全事件；控制端会保留会话并在重连后自动补发。</small>
+                )}
+                {!sessionPersistenceHealthy && (
+                  <small role="alert">当前安全状态未能写入会话存储；在恢复前不能切换场景或释放控制权。</small>
+                )}
                 <div
                   className={`voice-status-card is-${voice.phase} is-${voice.intent || "none"}`}
                   role={voice.phase === "fallback" ? "alert" : "status"}
@@ -1834,7 +2291,12 @@ export function MonitorApp() {
                   </>
                 )}
                 {fall.phase === "escalated" && (
-                  <button type="button" className="secondary-action" onClick={resolveFallSafe}>本人已确认安全，关闭事件</button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={resolveFallSafe}
+                    disabled={fall.delivery !== "accepted"}
+                  >{fall.delivery === "accepted" ? "本人已确认安全，关闭事件" : "等待 Relay 确认告警后再关闭"}</button>
                 )}
               </div>
             )}
@@ -1855,7 +2317,12 @@ export function MonitorApp() {
               ) : (
                 <button type="button" className="secondary-action" onClick={stopOnly}>停止采集</button>
               )}
-              <button type="button" className="release-action" onClick={releaseControl}>释放控制权</button>
+              <button
+                type="button"
+                className="release-action"
+                onClick={releaseControl}
+                disabled={fallExitAction === "block"}
+              >释放控制权</button>
             </div>
             <small className="control-footnote">释放后会停止摄像头与麦克风、撤销事件视频，并允许下一台设备取得控制权。语音只在跌倒问询后短时上传。</small>
           </aside>

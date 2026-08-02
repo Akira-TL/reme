@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyAlarmDeliveryAck,
   estimatePromptLeadMs,
+  prepareFallRecoveryForNewSession,
+  reconcileFallWithAuthoritativeAlarm,
   recognizeDangerVoice,
+  selectControlReleaseAction,
   selectFailClosedFallEvent,
+  selectFallCheckInStartAction,
+  selectFallExitAction,
+  selectFallResolutionAction,
   selectFallReconnectAction,
   selectVoiceIntentAction,
 } from "./voiceIntent.js";
@@ -186,6 +193,103 @@ test("capture interruption fails closed only for an active fall check-in", () =>
   assert.equal(selectFailClosedFallEvent(null), null);
 });
 
+test("a fall detected after the page is already hidden skips the throttled check-in", () => {
+  assert.equal(selectFallCheckInStartAction("hidden"), "escalate");
+  assert.equal(selectFallCheckInStartAction("visible"), "prompt");
+  assert.equal(selectFallCheckInStartAction("prerender"), "prompt");
+});
+
+test("a recovered fall is pending in the new lease and expires before WebSocket readiness", () => {
+  const checking = {
+    phase: "checking",
+    eventId: "fall-123",
+    deadlineMs: 10_000,
+    trigger: "fall_transition",
+    message: "刚才的动作有些突然，您还好吗？",
+    delivery: "accepted",
+  };
+  assert.deepEqual(prepareFallRecoveryForNewSession(checking, 9_999), {
+    ...checking,
+    delivery: "pending",
+  });
+  assert.deepEqual(prepareFallRecoveryForNewSession(checking, 10_000), {
+    ...checking,
+    phase: "escalated",
+    deadlineMs: null,
+    trigger: "check_in_timeout",
+    message: "完整问询窗口没有收到回应，规则已进入告警状态。",
+    delivery: "pending",
+  });
+  assert.equal(prepareFallRecoveryForNewSession(null, 10_000), null);
+});
+
+test("Relay's unresolved alarm wins over stale local safe while newer local terminal state republishes", () => {
+  const authoritativeEscalation = {
+    event_id: "fall-123",
+    phase: "escalated",
+    trigger: "check_in_timeout",
+    message: "完整问询窗口没有收到回应，已按确定性规则进入告警状态。",
+    response_deadline_ms: null,
+    media_scope: "fall_emergency",
+  };
+  assert.deepEqual(reconcileFallWithAuthoritativeAlarm({
+    phase: "resolved",
+    eventId: "fall-123",
+    deadlineMs: null,
+    trigger: "fall_transition",
+    message: "本人已确认安全，本次事件已关闭。",
+    delivery: "pending",
+  }, authoritativeEscalation), {
+    action: "adopt",
+    fall: {
+      phase: "escalated",
+      eventId: "fall-123",
+      deadlineMs: null,
+      trigger: "check_in_timeout",
+      message: authoritativeEscalation.message,
+      delivery: "accepted",
+    },
+  });
+
+  const localEscalation = {
+    phase: "escalated",
+    eventId: "fall-123",
+    deadlineMs: null,
+    trigger: "elder_need_help",
+    message: "本人已表示需要帮助，已进入告警状态。",
+    delivery: "pending",
+  };
+  assert.deepEqual(reconcileFallWithAuthoritativeAlarm(localEscalation, {
+    ...authoritativeEscalation,
+    phase: "checking",
+    trigger: "fall_transition",
+    response_deadline_ms: 12_000,
+    media_scope: "none",
+  }), { action: "republish", fall: localEscalation });
+
+  const newerLocalEvent = { ...localEscalation, eventId: "fall-new" };
+  assert.deepEqual(reconcileFallWithAuthoritativeAlarm(newerLocalEvent, {
+    ...authoritativeEscalation,
+    phase: "resolved",
+    response_deadline_ms: null,
+    media_scope: "none",
+  }), { action: "republish", fall: newerLocalEvent });
+  const idle = {
+    phase: "idle",
+    eventId: null,
+    deadlineMs: null,
+    trigger: null,
+    message: "等待真实姿态流中的快速下移与横向转变。",
+    delivery: "none",
+  };
+  assert.deepEqual(reconcileFallWithAuthoritativeAlarm(idle, {
+    ...authoritativeEscalation,
+    phase: "resolved",
+    response_deadline_ms: null,
+    media_scope: "none",
+  }), { action: "ignore", fall: idle });
+});
+
 test("controller reconnect reconciles fall state against the absolute deadline", () => {
   assert.equal(selectFallReconnectAction({
     eventId: "fall-123",
@@ -214,4 +318,107 @@ test("controller reconnect reconciles fall state against the absolute deadline",
     eventId: null,
     phase: "idle",
   }, 8_000), "none");
+});
+
+test("scene and control exits cannot abandon an unclosed or unacknowledged fall", () => {
+  assert.equal(selectFallExitAction({
+    eventId: null,
+    phase: "idle",
+    delivery: "none",
+  }), "allow");
+  assert.equal(selectFallExitAction({
+    eventId: "fall-123",
+    phase: "checking",
+    delivery: "accepted",
+  }), "escalate");
+  assert.equal(selectFallExitAction({
+    eventId: "fall-123",
+    phase: "escalated",
+    delivery: "accepted",
+  }), "block");
+  assert.equal(selectFallExitAction({
+    eventId: "fall-123",
+    phase: "resolved",
+    delivery: "pending",
+  }), "block");
+  assert.equal(selectFallExitAction({
+    eventId: "fall-123",
+    phase: "resolved",
+    delivery: "accepted",
+  }), "allow");
+  assert.equal(selectFallExitAction({
+    eventId: null,
+    phase: "idle",
+    delivery: "none",
+  }, { persistenceHealthy: false }), "block");
+});
+
+test("manual safety confirmation respects the absolute deadline and alarm delivery", () => {
+  const checking = {
+    eventId: "fall-123",
+    phase: "checking",
+    deadlineMs: 10_000,
+    delivery: "accepted",
+  };
+  assert.equal(selectFallResolutionAction(checking, "fall-123", 9_999), "resolve");
+  assert.equal(selectFallResolutionAction(checking, "fall-123", 10_000), "escalate");
+  assert.equal(selectFallResolutionAction(checking, "fall-123", 10_001), "escalate");
+  assert.equal(selectFallResolutionAction({
+    ...checking,
+    phase: "escalated",
+    deadlineMs: null,
+    delivery: "pending",
+  }, "fall-123", 10_001), "block");
+  assert.equal(selectFallResolutionAction({
+    ...checking,
+    phase: "escalated",
+    deadlineMs: null,
+    delivery: "accepted",
+  }, "fall-123", 10_001), "resolve");
+  assert.equal(selectFallResolutionAction(checking, "fall-other", 9_999), "ignore");
+});
+
+test("control release only clears local authority after Relay confirms terminal state", () => {
+  assert.equal(selectControlReleaseAction(200), "complete");
+  assert.equal(selectControlReleaseAction(204), "complete");
+  assert.equal(selectControlReleaseAction(401), "complete");
+  assert.equal(selectControlReleaseAction(409), "retry");
+  assert.equal(selectControlReleaseAction(500), "retry");
+  assert.equal(selectControlReleaseAction(null), "retry");
+});
+
+test("only the matching Relay alarm acknowledgement marks delivery accepted", () => {
+  const fall = {
+    eventId: "fall-123",
+    phase: "escalated",
+    delivery: "pending",
+  };
+  const pending = {
+    eventId: "fall-123",
+    phase: "escalated",
+    eventSequence: 2_048,
+  };
+  assert.deepEqual(applyAlarmDeliveryAck({
+    fall,
+    pending,
+    eventSequence: 2_048,
+  }), {
+    ...fall,
+    delivery: "accepted",
+  });
+  assert.equal(applyAlarmDeliveryAck({
+    fall,
+    pending,
+    eventSequence: 1_024,
+  }), null);
+  assert.equal(applyAlarmDeliveryAck({
+    fall: { ...fall, phase: "resolved" },
+    pending,
+    eventSequence: 2_048,
+  }), null);
+  assert.equal(applyAlarmDeliveryAck({
+    fall: { ...fall, eventId: "fall-new" },
+    pending,
+    eventSequence: 2_048,
+  }), null);
 });
