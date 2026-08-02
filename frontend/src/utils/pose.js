@@ -46,7 +46,7 @@ export function resizeCanvas(canvas) {
   return { context, width: rect.width, height: rect.height };
 }
 
-export function drawSkeleton(context, points, width, height, video) {
+export function drawSkeleton(context, points, width, height, video, color = "#ff5a00") {
   if (points.length !== 17) return;
 
   const videoWidth = video?.videoWidth || 1280;
@@ -65,7 +65,7 @@ export function drawSkeleton(context, points, width, height, video) {
   context.save();
   context.lineCap = "round";
   context.lineJoin = "round";
-  context.shadowColor = "rgba(255, 92, 0, 0.28)";
+  context.shadowColor = color;
   context.shadowBlur = 10;
 
   CONNECTIONS.forEach(([aIndex, bIndex]) => {
@@ -75,7 +75,7 @@ export function drawSkeleton(context, points, width, height, video) {
     context.beginPath();
     context.moveTo(a.x, a.y);
     context.lineTo(b.x, b.y);
-    context.strokeStyle = "#ff5a00";
+    context.strokeStyle = color;
     context.lineWidth = Math.max(2.6, width / 115);
     context.stroke();
   });
@@ -84,7 +84,7 @@ export function drawSkeleton(context, points, width, height, video) {
   const headRadius = Math.max(11, Math.min(25, shoulderWidth * 0.25));
   context.beginPath();
   context.arc(mapped[0].x, mapped[0].y - headRadius * 0.18, headRadius, 0, Math.PI * 2);
-  context.strokeStyle = "#ff5a00";
+  context.strokeStyle = color;
   context.lineWidth = Math.max(2.6, width / 130);
   context.stroke();
 
@@ -93,7 +93,7 @@ export function drawSkeleton(context, points, width, height, video) {
     const radius = Math.max(3.3, width / 110);
     context.beginPath();
     context.arc(point.x, point.y, radius, 0, Math.PI * 2);
-    context.fillStyle = "#ff5a00";
+    context.fillStyle = color;
     context.fill();
     context.shadowBlur = 0;
     context.beginPath();
