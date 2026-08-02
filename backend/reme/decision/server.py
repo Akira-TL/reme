@@ -14,6 +14,7 @@ import os
 import re
 import ssl
 from collections.abc import Sequence
+from contextlib import suppress
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -407,7 +408,29 @@ def build_decision_handler(
                     "postures": len(streams.postures),
                     "transitions": len(streams.transitions),
                 }
-            self._send_json(HTTPStatus.OK, {"status": "ok", "scenes": scenes})
+            body: dict[str, Any] = {"status": "ok", "scenes": scenes}
+            if bridge is not None:
+                # A subscription that is attached but not connected means B is
+                # running on nothing: reporting "ok" there let a dead A look
+                # healthy while stale postures kept producing normal decisions
+                # (Codex R4).
+                body["perception"] = {
+                    "source": "pull",
+                    "url": bridge.safe_url,
+                    "attached": bridge.attached(),
+                    "connected": bridge.connected(),
+                }
+                if bridge.attached() and not bridge.connected():
+                    body["status"] = "degraded"
+                    body["degraded_reason"] = "perception stream from A is down"
+                    if registry is not None:
+                        # Make C's status view agree with health, not just this
+                        # endpoint: a degraded component must stop reading LIVE.
+                        with suppress(SessionRegistryError):
+                            status = registry.mark_degraded("perception stream from A is down")
+                            if hub is not None:
+                                hub.broadcast_json(status.to_payload())
+            self._send_json(HTTPStatus.OK, body)
 
         def _handle_scene_asset(self, path: str, *, send_body: bool = True) -> None:
             parts = path.split("/", 3)

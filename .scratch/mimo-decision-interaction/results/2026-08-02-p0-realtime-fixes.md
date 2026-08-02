@@ -55,6 +55,20 @@ A 让一帧派生的三个事件共用同一个 `frame.sequence`（`camera.py:24
 
 全量 **446 测试通过**（新增：P0-1 六项、P0-4 五项、P0-3 八项、P0-2 十五项、P0-5 四项、收口三项）、mypy strict 24 文件零 issue、ruff 清。
 
-## Codex 异构对抗复审
+## Codex 异构对抗复审（7 P1 / 2 P2）
 
-（复审进行中，findings 与处置结论待补。）
+复审结论是**"不建议接受这批 P0 修复"**，其中一条直接推翻了我方推导。全部 7 项 P1 已修，2 项 P2 记录如下。
+
+| Finding | 处置 |
+|---|---|
+| **P1-1 门限 0.59 仍在丢真跌倒** | **已修（推导被推翻）**：泳道假设可见比例 r ≥ 0.5，但 A 的 sample 存 `min(frame_ratio, posture_ratio)`，posture 侧只做 [0,1] 校验、无 0.5 下界。Codex 构造 r=0 的窗口，A 实际分类为 fall_like 且 conf **恰为 0.55**；静态模型默认 `min_visible_ratio=0.35` 时也可低到 0.578。门限改 **0.55**，耦合测试改为反算真实契约。遮挡恰是真跌倒最易产生低可见率的场合，此处宁可多问一句 |
+| **P1-2 per-type 水位反开新洞** | **已修**：未见过的类型没有水位，捕获的旧 transition 可在 posture 推进后重放进跌倒判定（Codex 实测 posture(100) → transition(50) 被接受并触发 check_in）。改双水位——per-type 拒同流重复/倒序，per-session 高水位拒任何比全局最新更旧的事件，同时仍允许跨类型相同 sequence |
+| **P1-3 断连不进降级、health 恒 ok** | **已修**：`bridge.connected()` 与 `mark_degraded()` 此前都没被接线，A 断连后 health 仍 200 ok、99 秒前的陈旧姿态仍产出 normal。现 health 报 `degraded` + 原因，并同步把会话标记为 DEGRADED 广播给 C |
+| **P1-4 停止顺序非原子** | **已修**：先拆桥后校验 session_id，导致错误的 stop 请求能切断真实活动会话的数据源。改为先验证归属，非活动会话交给 registry 出权威错误、不碰桥 |
+| **P1-5 URL 延迟校验楔死会话** | **已修**：改启动期校验（`wss://`、格式错在 boot 即拒），并给 attach 失败加事务式回滚 + 503 `perception_unavailable`，可重试而非 409 死锁 |
+| **P1-6 push/pull 互斥是 TOCTOU** | **已修**：`bridge.attached()` 探针与 `ingest.submit()` 跨两把锁。改为把来源归属做进 `EventIngest` 内部状态，claim/release 与 submit 同锁，push 由 ingest 自身拒绝 |
+| **P1-7 URL 原文入日志泄露密钥** | **已修**：`_redact_url` 只留 scheme/host/port/path，userinfo 去掉、query 整体遮蔽；health 响应同样走它 |
+| P2-1 scene reset 不清水位 | **记录**：水位是 session 域、buffer 是 scene 域，按 scene 裁剪需要先改键设计。当前 `/api/scene/reset` 的注释与行为不符，属预录回放路径的已知限制，实时链路不受影响 |
+| P2-2 close 帧校验不完整 | **记录**：1 字节 close payload 当作正常关闭、未校验保留码与 reason 的 UTF-8。宽松回显不影响我方状态机，与上一轮同类项一致处理 |
+
+新增回归 9 项（跨类型重放、同帧共存、误 stop 不动桥、attach 失败回滚、互斥归属、门限真实下界与边界、降级 health、URL 不泄露）。终态全量 **470 通过**、mypy strict 26 文件零 issue、ruff 清。

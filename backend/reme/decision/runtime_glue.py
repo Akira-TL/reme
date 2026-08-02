@@ -16,7 +16,7 @@ from reme.decision.records import CareDecision
 from reme.decision.session import RuntimeSessionRegistry, SessionRegistryError
 from reme.decision.stream import EventIngest, IngestError, LiveStreams
 from reme.decision.websocket import DecisionEventHub
-from reme.decision.ws_client import PerceptionEventClient
+from reme.decision.ws_client import PerceptionEventClient, _redact_url
 from reme.pose.runtime import RuntimeEvent, RuntimeEventType
 
 _EVALUATED_EVENT_TYPES = {
@@ -131,6 +131,12 @@ class PerceptionBridge:
     @property
     def events_url(self) -> str:
         return self._events_url
+
+    @property
+    def safe_url(self) -> str:
+        """Log/response-safe URL: no userinfo, query redacted."""
+
+        return _redact_url(self._events_url)
 
     def attached(self) -> bool:
         """True while a subscription is live (pushes are refused meanwhile)."""

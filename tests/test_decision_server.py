@@ -975,3 +975,69 @@ def test_bridge_start_replaces_the_previous_subscription(tmp_path: Path) -> None
     bridge.stop()
     assert _FakeClient.instances[1].stopped is True
     assert bridge.attached() is False
+
+
+def test_health_reports_degraded_when_the_perception_stream_is_down(tmp_path: Path) -> None:
+    """A dead A must not look healthy: stale postures would keep emitting normal."""
+
+    service = _service(tmp_path)
+    registry = RuntimeSessionRegistry()
+    ingest = EventIngest()
+    bridge = _bridge_with_fake_clients(service, registry, ingest)
+    handler = build_decision_handler(
+        service=service, static_dir=None, registry=registry, ingest=ingest, bridge=bridge
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert isinstance(port, int)
+        _post(port, "/api/session", _session_body())
+        status, body = _get(port, "/api/health")
+        assert status == 200
+        assert body["status"] == "ok"
+        assert body["perception"]["connected"] is True
+
+        # A drops the socket; the client stays attached and keeps retrying.
+        _FakeClient.instances[0].connected = False
+        status, body = _get(port, "/api/health")
+        assert body["status"] == "degraded"
+        assert body["perception"]["attached"] is True
+        assert body["perception"]["connected"] is False
+        assert registry.current_status() is not None
+        assert registry.current_status().state is RuntimeSessionState.DEGRADED
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_health_never_leaks_the_stream_url_query(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    registry = RuntimeSessionRegistry()
+    ingest = EventIngest()
+    _FakeClient.instances = []
+    bridge = PerceptionBridge(
+        events_url="ws://127.0.0.1:9/ws/events?token=SECRET",
+        ingest=ingest,
+        registry=registry,
+        service=service,
+        client_factory=_FakeClient,  # type: ignore[arg-type]
+    )
+    handler = build_decision_handler(
+        service=service, static_dir=None, registry=registry, ingest=ingest, bridge=bridge
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert isinstance(port, int)
+        _, body = _get(port, "/api/health")
+        assert "SECRET" not in json.dumps(body)
+        assert body["perception"]["url"].endswith("?<redacted>")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
