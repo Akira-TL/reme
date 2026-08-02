@@ -198,8 +198,9 @@ export function usePoseLandmarker(externalFrame = null, onLandmarks = null) {
         const result = landmarker.detectForVideo(video, now);
         const mapped = result?.landmarks?.[0] ? mapLandmarks(result.landmarks[0]) : [];
         landmarksRef.current = mapped;
-        // 只回调真实推理的 17 点结果；fallback 演示数据不回调
-        if (mapped.length === 17) onLandmarksRef.current?.(mapped, performance.now());
+        // 只回调真实推理结果；fallback 演示数据不回调。空结果也要回调：
+        // 人从画面消失是半身机位跌倒判据的关键证据。
+        onLandmarksRef.current?.(mapped, performance.now());
       } catch {
         landmarksRef.current = [];
       }

@@ -104,6 +104,147 @@ LIVE_TRANSITION_CONFIG = TransitionDetectorConfig(
 # segment carries lying attachments by the time the detector judges.
 LIVE_POSTURE_CONFIG = PostureRuntimeConfig(output_hz=10.0, smoothing_window=2)
 
+TRANSITION_SCHEMA_VERSION = "reme-transition/v0-experiment"
+
+
+@dataclass(frozen=True, slots=True)
+class VanishFallConfig:
+    """Half-frame camera fall proxy: rapid drop, then gone, then stays gone.
+
+    Desk and shelf cameras often frame only the upper body — after a real
+    fall the person does not land as a visible "lying" pose, they drop *out
+    of the frame*.  The standing→lying detector is physically blind there,
+    so this complementary rule emits a fall candidate when a properly
+    visible person moves down fast and then stays invisible.  Walking out
+    of frame sideways produces no downward drop and never qualifies.
+    """
+
+    lookback_ms: float = 1400.0
+    min_pre_visible_ms: float = 400.0
+    min_pre_ratio: float = 0.5
+    lost_ratio: float = 0.35
+    min_center_drop: float = 0.13
+    min_down_velocity: float = 0.30
+    lost_hold_ms: float = 800.0
+    cooldown_ms: float = 4000.0
+    confidence: float = 0.6
+
+
+@dataclass(slots=True)
+class _VanishSample:
+    timestamp_ms: float
+    center_y: float | None
+    ratio: float
+    lost: bool
+
+
+class VanishFallDetector:
+    """Emit one fall_like payload when a visible person drops and vanishes."""
+
+    def __init__(self, *, scene_id: str, config: VanishFallConfig | None = None) -> None:
+        self.scene_id = scene_id
+        self.config = config or VanishFallConfig()
+        self._trail: list[_VanishSample] = []
+        self._lost_since: float | None = None
+        self._cooldown_until: float = float("-inf")
+        self._fired_this_loss = False
+        self._counter = 0
+
+    def reset(self, *, scene_id: str | None = None) -> None:
+        if scene_id is not None:
+            self.scene_id = scene_id
+        self._trail.clear()
+        self._lost_since = None
+        self._fired_this_loss = False
+
+    def update(self, record: dict[str, Any]) -> dict[str, Any] | None:
+        timestamp_ms = float(record["timestamp_ms"])
+        visible = [
+            (float(item["x_norm"]), float(item["y_norm"]))
+            for item in record.get("keypoints", [])
+            if float(item.get("score", 0.0)) >= 0.2
+        ]
+        ratio = len(visible) / len(KEYPOINT_NAMES)
+        center_y = (
+            sum(point[1] for point in visible) / len(visible) if visible else None
+        )
+        lost = not bool(record.get("person_detected")) or ratio < self.config.lost_ratio
+        self._trail.append(
+            _VanishSample(timestamp_ms=timestamp_ms, center_y=center_y, ratio=ratio, lost=lost)
+        )
+        cutoff = timestamp_ms - (self.config.lookback_ms + self.config.lost_hold_ms + 400.0)
+        while len(self._trail) > 1 and self._trail[0].timestamp_ms < cutoff:
+            self._trail.pop(0)
+
+        if not lost:
+            self._lost_since = None
+            self._fired_this_loss = False
+            return None
+        if self._lost_since is None:
+            self._lost_since = timestamp_ms
+        if self._fired_this_loss or timestamp_ms < self._cooldown_until:
+            return None
+        if timestamp_ms - self._lost_since < self.config.lost_hold_ms:
+            return None
+        payload = self._judge_drop(self._lost_since, timestamp_ms)
+        if payload is not None:
+            self._fired_this_loss = True
+            self._cooldown_until = timestamp_ms + self.config.cooldown_ms
+        return payload
+
+    def _judge_drop(self, lost_since: float, now_ms: float) -> dict[str, Any] | None:
+        window_start = lost_since - self.config.lookback_ms
+        pre = [
+            sample
+            for sample in self._trail
+            if not sample.lost
+            and sample.center_y is not None
+            and window_start <= sample.timestamp_ms < lost_since
+            and sample.ratio >= self.config.min_pre_ratio
+        ]
+        if len(pre) < 3:
+            return None
+        span_ms = pre[-1].timestamp_ms - pre[0].timestamp_ms
+        if span_ms < self.config.min_pre_visible_ms:
+            return None
+        head = pre[: max(2, len(pre) // 3)]
+        tail = pre[-2:]
+        start_center = sum(s.center_y for s in head if s.center_y is not None) / len(head)
+        end_center = sum(s.center_y for s in tail if s.center_y is not None) / len(tail)
+        drop = end_center - start_center
+        # Peak inter-sample descent, not window-average: the pre trail is
+        # mostly quiet standing and would dilute the true fall velocity.
+        peak_velocity = 0.0
+        for previous, current in zip(pre, pre[1:], strict=False):
+            if previous.center_y is None or current.center_y is None:
+                continue
+            elapsed_s = (current.timestamp_ms - previous.timestamp_ms) / 1000.0
+            if elapsed_s <= 0:
+                continue
+            peak_velocity = max(
+                peak_velocity, (current.center_y - previous.center_y) / elapsed_s
+            )
+        if drop < self.config.min_center_drop or peak_velocity < self.config.min_down_velocity:
+            return None
+        self._counter += 1
+        return {
+            "schema_version": TRANSITION_SCHEMA_VERSION,
+            "scene_id": self.scene_id,
+            "event_id": f"vanish-transition-{self._counter:04d}",
+            "start_ms": round(head[0].timestamp_ms, 3),
+            "end_ms": round(now_ms, 3),
+            "transition": "fall_like_transition",
+            "transition_confidence": self.config.confidence,
+            "evidence": {
+                "vanish_fall": True,
+                "center_drop": round(drop, 6),
+                "down_velocity": round(peak_velocity, 6),
+                "lost_hold_ms": round(now_ms - lost_since, 3),
+                "pre_visible_span_ms": round(span_ms, 3),
+            },
+            "landmark_quality": "degraded",
+        }
+
 
 class BrowserInputError(ValueError):
     """Raised when a pushed input message violates the wire contract."""
@@ -279,6 +420,7 @@ class LandmarkFrameEngine:
         self._detector = TransitionDetector(
             session_id=session_id, config=transition_config or LIVE_TRANSITION_CONFIG
         )
+        self._vanish = VanishFallDetector(scene_id=scene_id)
         self._lock = threading.Lock()
         self._sequence = 0
         self.stats = IngestStats()
@@ -313,6 +455,7 @@ class LandmarkFrameEngine:
             self.scene_id = scene_id
             self._tracker.reset()
             self._detector.reset(session_id=self.session_id)
+            self._vanish.reset(scene_id=scene_id)
 
     def _ingest_landmarks(self, message: dict[str, Any]) -> None:
         record = self._frame_record(message)
@@ -333,12 +476,29 @@ class LandmarkFrameEngine:
         posture_event = self._tracker.process_frame_event(frame_event)
         if posture_event is not None:
             self._detector.process_runtime_event(posture_event)
-        transition_event = self._detector.process_runtime_event(frame_event)
+        # The conservative detector hard-rejects empty keypoint arrays; a
+        # person-lost frame is still evidence for the vanish lane below.
+        transition_event = (
+            self._detector.process_runtime_event(frame_event) if record["keypoints"] else None
+        )
+        vanish_payload = self._vanish.update(record)
         self._publish(frame_event)
         if posture_event is not None:
             self._publish(posture_event)
         if transition_event is not None:
             self._publish(transition_event)
+        if vanish_payload is not None:
+            with self._lock:
+                vanish_sequence = self._sequence
+                self._sequence += 1
+            self._publish(
+                RuntimeEvent(
+                    session_id=self.session_id,
+                    sequence=vanish_sequence,
+                    event_type=RuntimeEventType.TRANSITION_EVENT,
+                    payload=vanish_payload,
+                )
+            )
 
     def _frame_record(self, message: dict[str, Any]) -> dict[str, Any] | None:
         timestamp_ms = message.get("timestamp_ms")

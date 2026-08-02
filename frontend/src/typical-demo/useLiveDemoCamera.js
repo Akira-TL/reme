@@ -234,10 +234,9 @@ export function useLiveDemoCamera({ viewMode, skeletonColor, onLandmarks = null 
         const mask = result?.segmentationMasks?.[0];
         if (mask) updateMask(mask);
         // Real inference only: scripted fallback skeletons must never feed
-        // the live perception link.
-        if (landmarksRef.current.length === 17) {
-          onLandmarksRef.current?.(landmarksRef.current, now);
-        }
+        // the live perception link. Empty results are sent too — the person
+        // vanishing from frame is evidence (half-body fall detection).
+        onLandmarksRef.current?.(landmarksRef.current, now);
       } catch {
         landmarksRef.current = [];
       }

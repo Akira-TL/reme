@@ -63,7 +63,9 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
   // 关键点直传：A 声明 jpeg_inference=false 且接受 landmarks_frame 时，由浏览器本地
   // MediaPipe 推理结果直接上送，替代 JPEG 帧。节流到 ≤10fps，非直传模式下为空操作。
   const sendLandmarks = useCallback((points, timestampMs) => {
-    if (!landmarksModeRef.current || !Array.isArray(points) || points.length === 0) return;
+    // 空数组也要上传：人从画面消失本身是关键证据（半身机位下的
+    // "下坠后消失"跌倒判据依赖它），只有非法输入才丢弃。
+    if (!landmarksModeRef.current || !Array.isArray(points)) return;
     const socket = inputSocketRef.current;
     const sessionId = sessionRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || !sessionId) return;
@@ -84,7 +86,9 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
         y_norm: point.y,
         score: point.score,
       })),
-      landmark_quality: visibleCount / points.length >= 0.5 ? "usable" : "degraded",
+      landmark_quality: points.length > 0 && visibleCount / points.length >= 0.5
+        ? "usable"
+        : "degraded",
     }));
   }, []);
 

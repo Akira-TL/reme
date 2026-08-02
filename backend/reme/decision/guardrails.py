@@ -99,6 +99,13 @@ def detect_fall_trigger(context: DecisionContext, *, config: TriggerConfig) -> b
         return False
     if posture.person_detected and posture.posture not in DOWN_POSTURES:
         return False
+    if not posture.person_detected:
+        # Half-frame cameras: a real fall often drops the person *out of
+        # view* (the "vanish fall" candidate), so absence after a fall-like
+        # transition is corroboration, not missing data. Sensitivity-first
+        # per the danger-link product call — the check-in question, not this
+        # gate, is what filters false positives.
+        return True
     return posture.motion_level in LOW_MOTION_LEVELS
 
 

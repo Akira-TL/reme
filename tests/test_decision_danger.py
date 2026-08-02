@@ -257,6 +257,53 @@ def test_voice_source_cross_whitelist() -> None:
         )
 
 
+# -- guardrails: vanish-fall corroboration ------------------------------------
+
+
+def test_fall_trigger_accepts_person_gone_after_transition() -> None:
+    """Half-frame cameras: absence after a fall-like transition corroborates."""
+
+    from reme.decision.context import (
+        DecisionContext,
+        LandmarkQuality,
+        MotionLevel,
+        Posture,
+        PostureObservation,
+        Transition,
+        TransitionEvent,
+    )
+    from reme.decision.guardrails import detect_fall_trigger
+
+    transition = TransitionEvent(
+        scene_id="fall_demo_01",
+        event_id="vanish-transition-0001",
+        start_ms=11100.0,
+        end_ms=12700.0,
+        transition=Transition.FALL_LIKE,
+        transition_confidence=0.6,
+        evidence={"vanish_fall": True},
+        landmark_quality=LandmarkQuality.DEGRADED,
+    )
+    gone = PostureObservation(
+        scene_id="fall_demo_01",
+        timestamp_ms=12800.0,
+        person_detected=False,
+        posture=Posture.UNKNOWN,
+        posture_confidence=0.3,
+        posture_duration_ms=400.0,
+        motion_level=MotionLevel.UNKNOWN,
+        landmark_quality=LandmarkQuality.DEGRADED,
+    )
+    context = DecisionContext(
+        scene_id="fall_demo_01",
+        timestamp_ms=13000.0,
+        latest_posture=gone,
+        active_transition=transition,
+        input_quality=LandmarkQuality.DEGRADED,
+    )
+    assert detect_fall_trigger(context, config=TriggerConfig())
+
+
 # -- state machine -----------------------------------------------------------
 
 

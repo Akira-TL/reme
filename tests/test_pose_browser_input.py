@@ -329,6 +329,127 @@ class TestLandmarkFrameEngine:
         assert scenes == {SCENE, "bedroom"}
 
 
+def _half_body(center_x: float = 0.5, drop: float = 0.0) -> dict[str, tuple[float, float]]:
+    """Upper-body-only framing: legs exist in the schema but score 0."""
+
+    coords = _standing(center_x=center_x, drop=drop)
+    for name in ("left_knee", "right_knee", "left_ankle", "right_ankle"):
+        coords.pop(name)
+    return coords
+
+
+def _empty_message(*, frame_index: int, timestamp_ms: float) -> dict[str, Any]:
+    return {
+        "type": "landmarks_frame",
+        "session_id": SESSION,
+        "scene_id": SCENE,
+        "frame_index": frame_index,
+        "timestamp_ms": timestamp_ms,
+        "person_detected": False,
+        "keypoints": [],
+    }
+
+
+class TestVanishFall:
+    def _engine(self) -> tuple[LandmarkFrameEngine, list[RuntimeEvent]]:
+        published: list[RuntimeEvent] = []
+        engine = LandmarkFrameEngine(
+            session_id=SESSION, scene_id=SCENE, publish=published.append
+        )
+        return engine, published
+
+    def _vanish_events(self, published: list[RuntimeEvent]) -> list[dict[str, Any]]:
+        return [
+            event.payload
+            for event in published
+            if event.event_type is RuntimeEventType.TRANSITION_EVENT
+            and event.payload.get("evidence", {}).get("vanish_fall")
+        ]
+
+    def test_half_body_drop_then_vanish_fires(self) -> None:
+        engine, published = self._engine()
+        index, timestamp = 0, 0.0
+        for _ in range(30):
+            engine.handle_text(
+                _landmark_message(_half_body(), frame_index=index, timestamp_ms=timestamp)
+            )
+            index += 1
+            timestamp += 100.0
+        for step in range(1, 5):
+            engine.handle_text(
+                _landmark_message(
+                    _half_body(drop=0.09 * step), frame_index=index, timestamp_ms=timestamp
+                )
+            )
+            index += 1
+            timestamp += 100.0
+        for _ in range(12):
+            engine.handle_text(_empty_message(frame_index=index, timestamp_ms=timestamp))
+            index += 1
+            timestamp += 100.0
+        falls = self._vanish_events(published)
+        assert falls, "drop-then-vanish must emit a fall candidate on half-body framing"
+        payload = falls[0]
+        assert payload["transition"] == "fall_like_transition"
+        assert payload["transition_confidence"] >= 0.55
+        assert payload["evidence"]["center_drop"] >= 0.13
+        assert len(falls) == 1, "one loss episode must emit exactly one candidate"
+
+    def test_sideways_walk_out_does_not_fire(self) -> None:
+        engine, published = self._engine()
+        index, timestamp = 0, 0.0
+        for _ in range(30):
+            engine.handle_text(
+                _landmark_message(_half_body(), frame_index=index, timestamp_ms=timestamp)
+            )
+            index += 1
+            timestamp += 100.0
+        for step in range(1, 5):
+            engine.handle_text(
+                _landmark_message(
+                    _half_body(center_x=0.5 + 0.11 * step),
+                    frame_index=index,
+                    timestamp_ms=timestamp,
+                )
+            )
+            index += 1
+            timestamp += 100.0
+        for _ in range(12):
+            engine.handle_text(_empty_message(frame_index=index, timestamp_ms=timestamp))
+            index += 1
+            timestamp += 100.0
+        assert not self._vanish_events(published)
+
+    def test_brief_occlusion_does_not_fire(self) -> None:
+        engine, published = self._engine()
+        index, timestamp = 0, 0.0
+        for _ in range(20):
+            engine.handle_text(
+                _landmark_message(_half_body(), frame_index=index, timestamp_ms=timestamp)
+            )
+            index += 1
+            timestamp += 100.0
+        for step in range(1, 4):
+            engine.handle_text(
+                _landmark_message(
+                    _half_body(drop=0.1 * step), frame_index=index, timestamp_ms=timestamp
+                )
+            )
+            index += 1
+            timestamp += 100.0
+        for _ in range(5):
+            engine.handle_text(_empty_message(frame_index=index, timestamp_ms=timestamp))
+            index += 1
+            timestamp += 100.0
+        for _ in range(10):
+            engine.handle_text(
+                _landmark_message(_half_body(), frame_index=index, timestamp_ms=timestamp)
+            )
+            index += 1
+            timestamp += 100.0
+        assert not self._vanish_events(published)
+
+
 class TestBrowserGatewayWorker:
     def test_run_registers_and_unregisters(self) -> None:
         worker = BrowserGatewayPerceptionWorker(poll_interval_s=0.01)
