@@ -1,0 +1,361 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --mi-orange: #ff5a00;
+  --mi-green: #239a34;
+  --ease: cubic-bezier(0.22, 0.9, 0.3, 1);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+html,
+body {
+  overflow: hidden;
+  background: #ecebea;
+}
+
+body,
+#root {
+  display: grid;
+  place-items: center;
+}
+
+button {
+  font: inherit;
+}
+
+.prototype {
+  width: min(100vw, calc(100dvh * 0.4615), 460px);
+  aspect-ratio: 852 / 1846;
+  max-height: 100dvh;
+  box-shadow: 0 30px 90px rgba(44, 34, 26, 0.22);
+}
+
+.screen {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(4%);
+  transition: opacity 220ms ease, transform 280ms var(--ease), visibility 220ms;
+  pointer-events: none;
+}
+
+.screen.is-active {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.screen-art,
+.emergency-layer > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+  pointer-events: none;
+}
+
+.hotspot {
+  position: absolute !important;
+  z-index: 5;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0;
+  border-radius: 18px !important;
+  background: transparent !important;
+}
+
+.hotspot:focus-visible {
+  outline: 3px solid rgba(255, 105, 0, 0.72);
+  outline-offset: -3px;
+}
+
+.home-title-hotspot { left: 4.4%; top: 6.8%; width: 31%; height: 6.3%; }
+.device-hotspot { right: 4.2%; top: 7.1%; width: 11%; height: 5.7%; }
+.home-card-hotspot { left: 4.8%; top: 44.4%; width: 90%; height: 12.3%; }
+
+.camera-stage {
+  position: absolute;
+  z-index: 4;
+  left: 4.05%;
+  top: 14.73%;
+  width: 91.9%;
+  height: 28.15%;
+  overflow: hidden;
+  border-radius: 4.25% / 6.5%;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.94), rgba(249, 246, 241, 0.96) 54%, #eee9e0),
+    #f5f1eb;
+  box-shadow: inset 0 0 0 1px rgba(104, 81, 59, 0.06);
+  transition: opacity 180ms ease, transform 240ms var(--ease);
+}
+
+.camera-stage.is-hidden {
+  opacity: 0;
+  transform: scale(0.985);
+  pointer-events: none;
+}
+
+.camera-stage::before,
+.camera-stage::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.camera-stage::before {
+  left: 7%;
+  right: 7%;
+  bottom: 8%;
+  height: 28%;
+  border: 1px solid rgba(160, 140, 118, 0.18);
+  border-bottom: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0), rgba(213,200,183,0.14));
+}
+
+.camera-stage::after {
+  left: 0;
+  right: 0;
+  top: 68%;
+  bottom: 0;
+  background: repeating-linear-gradient(90deg, rgba(149, 126, 99, 0.08) 0 1px, transparent 1px 14%);
+  transform: perspective(100px) rotateX(12deg);
+  transform-origin: bottom;
+}
+
+.camera-stage video { display: none; }
+
+.camera-stage canvas {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.stage-pill {
+  position: absolute;
+  z-index: 4;
+  top: 5.8%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 11%;
+  padding: 0 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 2px 14px rgba(70, 62, 54, 0.05);
+  font-size: clamp(8px, 2.55vw, 13px);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.stage-pill-live { left: 3.5%; color: var(--mi-green); }
+.stage-pill-local { right: 3.5%; color: #171717; }
+
+.stage-pill-live i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mi-green);
+  box-shadow: 0 0 0 0 rgba(35,154,52,0.4);
+  animation: live-pulse 1.8s infinite;
+}
+
+.stage-privacy.MuiIconButton-root {
+  position: absolute;
+  z-index: 5;
+  left: 3.5%;
+  bottom: 5%;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.94);
+  color: #232323;
+  box-shadow: 0 2px 14px rgba(44,44,44,0.08);
+}
+
+.camera-message {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #6f655c;
+  text-align: center;
+  background: rgba(248, 245, 240, 0.84);
+}
+
+.camera-message strong { font-size: clamp(13px, 3.6vw, 17px); }
+.camera-message small { max-width: 76%; font-size: clamp(9px, 2.6vw, 12px); }
+
+.person-badge {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: 5%;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border: 1px solid rgba(255,105,0,0.22);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.88);
+  color: var(--mi-orange);
+  font-size: clamp(8px, 2.3vw, 11px);
+  white-space: nowrap;
+}
+
+.runtime-badge {
+  position: absolute;
+  z-index: 5;
+  right: 3.5%;
+  bottom: 5%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 42%;
+  padding: 6px 9px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 105, 0, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--mi-orange);
+  font-size: clamp(8px, 2.25vw, 11px);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.runtime-badge:disabled { cursor: default; }
+
+.runtime-badge:focus-visible {
+  outline: 2px solid rgba(255, 105, 0, 0.62);
+  outline-offset: 2px;
+}
+
+.runtime-badge span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.runtime-badge i {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.runtime-running {
+  border-color: rgba(35, 154, 52, 0.22);
+  color: var(--mi-green);
+}
+
+@keyframes live-pulse {
+  70% { box-shadow: 0 0 0 8px rgba(35,154,52,0); }
+  100% { box-shadow: 0 0 0 0 rgba(35,154,52,0); }
+}
+
+.dashboard-range { left: 76%; top: 7%; width: 20%; height: 5%; }
+.dashboard-summary { left: 4%; top: 13.7%; width: 92%; height: 16.8%; }
+.dashboard-cooking { left: 4.2%; top: 34.6%; width: 45%; height: 18.8%; }
+.dashboard-dialogue { left: 50.5%; top: 34.6%; width: 45%; height: 18.8%; }
+.dashboard-emotion { left: 4%; top: 55.7%; width: 92%; height: 20.6%; }
+.dashboard-journey { left: 4%; top: 78.5%; width: 92%; height: 11.6%; }
+
+.settings-family { left: 4.5%; top: 13.7%; width: 91%; height: 12.2%; }
+.settings-local { left: 4.5%; top: 37.7%; width: 91%; height: 6.8%; }
+.settings-sharing { left: 4.5%; top: 44.5%; width: 91%; height: 6.7%; }
+.settings-risk { left: 4.5%; top: 54.2%; width: 91%; height: 6.2%; }
+.settings-pin { left: 4.5%; top: 66.5%; width: 91%; height: 6.1%; }
+.settings-members { left: 4.5%; top: 75.3%; width: 91%; height: 3.7%; }
+.settings-devices { left: 4.5%; top: 79%; width: 91%; height: 3.5%; }
+.settings-time { left: 4.5%; top: 82.5%; width: 91%; height: 3.5%; }
+.settings-security { left: 4.5%; top: 85.8%; width: 91%; height: 5.3%; }
+
+.mui-switch {
+  position: absolute;
+  z-index: 8;
+  width: 9.8%;
+  aspect-ratio: 1.67;
+  padding: 2px;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.settings-privacy-switch { right: 7.9%; top: 32.35%; }
+.settings-mimo-switch { right: 7.9%; top: 61.9%; }
+
+.tabbar.MuiBottomNavigation-root {
+  left: 2.8%;
+  right: 2.8%;
+  bottom: 0;
+  width: auto;
+  height: 11.8%;
+  pointer-events: auto;
+}
+
+.tabbar .MuiBottomNavigationAction-root {
+  min-width: 0;
+  max-width: none;
+  opacity: 0;
+}
+
+.emergency-layer {
+  position: absolute;
+  z-index: 30;
+  inset: 0;
+  background: #fff;
+  animation: emergency-in 260ms var(--ease) both;
+}
+
+.emergency-close { left: 75.5%; top: 28.7%; width: 10%; height: 5.2%; }
+.emergency-call { left: 18.7%; top: 57.3%; width: 62.2%; height: 5.2%; }
+.emergency-live { left: 18.7%; top: 62.7%; width: 62.2%; height: 5%; }
+.emergency-contact { left: 25%; top: 67.8%; width: 50%; height: 4.6%; }
+
+@keyframes emergency-in {
+  from { opacity: 0; transform: scale(1.025); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (max-width: 500px) {
+  html,
+  body { background: #fff; }
+
+  .prototype {
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    aspect-ratio: auto;
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
