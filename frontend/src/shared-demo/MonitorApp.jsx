@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
 import CameraAltRoundedIcon from "@mui/icons-material/CameraAltRounded";
 import HomeRoundedIcon from "@mui/icons-material/HomeRounded";
 import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
@@ -13,6 +14,11 @@ import {
   recognizeCooking,
   recordLocalMoment,
 } from "./activityRecognition.js";
+import {
+  recognizeScene,
+  recordAutomaticSceneSample,
+  selectAutomaticSceneAction,
+} from "./automaticSceneRecognition.js";
 import { getRelayBase, relayHttpUrl, relayWebSocketUrl } from "./config.js";
 import { createControllerMediaBridge } from "./controllerMedia.js";
 import {
@@ -65,6 +71,10 @@ const CONTROLLER_READY_TIMEOUT_MS = 5_000;
 const FALL_PROMPT_FALLBACK_MS = 7_000;
 const FALL_PROMPT_WATCHDOG_MS = 9_000;
 const RELEASE_TIMEOUT_MS = 6_000;
+const AUTOMATIC_SCENE_SAMPLE_MS = 2_000;
+const AUTOMATIC_SCENE_REQUEST_TIMEOUT_MS = 10_000;
+// Feasibility-only starting guardrail. This is not a calibrated probability or accepted product threshold.
+const PROVISIONAL_AUTO_SCENE_CONFIDENCE = 0.65;
 
 const VOICE_PHASE_COPY = Object.freeze({
   idle: ["语音回应", "进入跌倒场景后，系统会先申请麦克风权限。"],
@@ -147,6 +157,57 @@ function createVoiceState(overrides = {}) {
   };
 }
 
+function createAutomaticSceneState(reason = "点击后仅上传一次最小视觉样本，由 MiMo 选择四种展示模式之一。") {
+  return {
+    phase: "idle",
+    accepted: null,
+    decision: null,
+    classification: null,
+    confidence: null,
+    reason,
+    latencyMs: null,
+    visualKind: null,
+    durationMs: null,
+    temporalEvidence: null,
+  };
+}
+
+function waitForDisclosurePaint(signal) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let firstFrame = 0;
+    let secondFrame = 0;
+    let fallbackTimer = 0;
+    const cleanup = () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(fallbackTimer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new DOMException("自动场景识别已取消", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(finish);
+    });
+    fallbackTimer = window.setTimeout(finish, 180);
+  });
+}
+
 function randomId(prefix) {
   const suffix = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${performance.now().toFixed(0)}`;
   return `${prefix}-${suffix}`;
@@ -220,6 +281,10 @@ export function MonitorApp() {
   const [localFrame, setLocalFrame] = useState(null);
   const [stats, setStats] = useState({ inferenceMs: null, published: 0, quality: "—" });
   const [sceneId, setSceneId] = useState(authoritativeRestoredScene);
+  const [sceneSelectionSource, setSceneSelectionSource] = useState(
+    () => restoredControllerSession ? "restored" : "manual",
+  );
+  const [fallDetectionArmed, setFallDetectionArmed] = useState(false);
   const [activity, setActivity] = useState(createActivityState);
   const [heartCard, setHeartCard] = useState(null);
   const [moment, setMoment] = useState({ status: "idle", size: 0, mimeType: "" });
@@ -227,6 +292,7 @@ export function MonitorApp() {
   const [voice, setVoice] = useState(createVoiceState);
   const [mediaStatus, setMediaStatus] = useState({ state: "idle", detail: "" });
   const [sessionPersistenceHealthy, setSessionPersistenceHealthy] = useState(true);
+  const [automaticScene, setAutomaticScene] = useState(createAutomaticSceneState);
 
   const videoRef = useRef(null);
   const tokenRef = useRef(null);
@@ -271,6 +337,9 @@ export function MonitorApp() {
   const voiceRecorderRef = useRef(null);
   const voiceRequestAbortRef = useRef(null);
   const intentionalCloseRef = useRef(false);
+  const automaticSceneGenerationRef = useRef(0);
+  const automaticSceneAbortRef = useRef(null);
+  const fallDetectionArmedRef = useRef(false);
 
   const publishEvent = useCallback((eventType, payload) => {
     const socket = controllerRef.current?.socket;
@@ -935,6 +1004,15 @@ export function MonitorApp() {
       window.clearInterval(connection.heartbeat);
       window.clearTimeout(connection.readyTimeout);
       controllerRef.current = null;
+      const automaticRequest = automaticSceneAbortRef.current;
+      if (automaticRequest) {
+        automaticSceneGenerationRef.current += 1;
+        automaticSceneAbortRef.current = null;
+        automaticRequest.abort("控制链路中断，本次 MiMo 请求已取消；连接恢复后可再次识别。");
+        setAutomaticScene(createAutomaticSceneState(
+          "控制链路中断，本次 MiMo 请求已取消；连接恢复后可再次识别。",
+        ));
+      }
       mediaBridgeRef.current?.stopGrant(null, "socket_closed");
       activeGrantRef.current = null;
       window.clearTimeout(grantExpiryRef.current);
@@ -1425,7 +1503,33 @@ export function MonitorApp() {
     stopLocalMoment();
   }, [revokeActiveGrant, stopLocalMoment, updateHeartCard]);
 
-  const selectScene = useCallback((nextSceneId) => {
+  const cancelAutomaticSceneRecognition = useCallback((reason) => {
+    automaticSceneGenerationRef.current += 1;
+    automaticSceneAbortRef.current?.abort();
+    automaticSceneAbortRef.current = null;
+    if (reason) setAutomaticScene(createAutomaticSceneState(reason));
+  }, []);
+
+  const commitSceneDisplay = useCallback((nextSceneId, source) => {
+    if (!DEMO_SCENES.some((scene) => scene.id === nextSceneId)) return false;
+    if (!persistControllerSessionPatch({ sceneId: nextSceneId })) return false;
+    sceneIdRef.current = nextSceneId;
+    setSceneId(nextSceneId);
+    setSceneSelectionSource(source);
+    setActivity(source === "automatic" && nextSceneId === "kitchen"
+      ? {
+        ...createActivityState(),
+        reason: "MiMo 只切换到做饭展示；为兑现单次样本承诺，本次不会级联第二次 cooking 视觉请求。手动点击“做饭”可启动独立活动识别。",
+      }
+      : createActivityState());
+    publishEvent("scene_state", {
+      scene_id: nextSceneId,
+      visual_mode: nextSceneId === "bathroom" ? "skeleton_only" : "abstract_environment",
+    });
+    return true;
+  }, [persistControllerSessionPatch, publishEvent]);
+
+  const applyManualScene = useCallback((nextSceneId) => {
     if (!DEMO_SCENES.some((scene) => scene.id === nextSceneId)) return;
     const exitAction = selectFallExitAction(fallRef.current, {
       persistenceHealthy: sessionPersistenceHealthyRef.current,
@@ -1464,6 +1568,9 @@ export function MonitorApp() {
     fallRef.current = emptyFall;
     setFall(emptyFall);
     heartCardRef.current = null;
+    fallDetectionArmedRef.current = nextSceneId === "fall";
+    setFallDetectionArmed(nextSceneId === "fall");
+    setSceneSelectionSource("manual");
     sceneIdRef.current = nextSceneId;
     setSceneId(nextSceneId);
     setActivity(createActivityState());
@@ -1486,7 +1593,203 @@ export function MonitorApp() {
     updateHeartCard,
   ]);
 
+  const selectScene = useCallback((nextSceneId) => {
+    cancelAutomaticSceneRecognition("已使用手动场景；此前的 MiMo 结果已取消。可再次点击真实识别。");
+    applyManualScene(nextSceneId);
+  }, [applyManualScene, cancelAutomaticSceneRecognition]);
+
+  const runAutomaticSceneRecognition = useCallback(async () => {
+    const stream = streamRef.current;
+    const video = videoRef.current;
+    const token = tokenRef.current;
+    const sessionId = sessionIdRef.current;
+    if (!captureActiveRef.current || !stream || !video) {
+      setAutomaticScene(createAutomaticSceneState("请先开启后置摄像头，再进行真实识别。"));
+      return;
+    }
+    if (ui.connection !== "connected" || !token || !sessionId) {
+      setAutomaticScene(createAutomaticSceneState("控制链路恢复后才能请求 MiMo 识别。"));
+      return;
+    }
+    if (
+      !sessionPersistenceHealthyRef.current
+      || fallDetectionArmedRef.current
+      || fallRef.current.phase !== "idle"
+    ) {
+      setAutomaticScene(createAutomaticSceneState(
+        "当前安全状态尚未关闭或无法持久化，禁止自动切换展示模式。",
+      ));
+      return;
+    }
+    if (
+      heartCardRef.current
+      && !["denied", "expired"].includes(heartCardRef.current.share_state)
+    ) {
+      setAutomaticScene(createAutomaticSceneState("请先处理当前厨房时刻与授权，再进行真实识别。"));
+      return;
+    }
+
+    cancelAutomaticSceneRecognition();
+    const generation = automaticSceneGenerationRef.current + 1;
+    automaticSceneGenerationRef.current = generation;
+    const captureGeneration = captureGenerationRef.current;
+    const controller = new AbortController();
+    automaticSceneAbortRef.current = controller;
+    setAutomaticScene({
+      ...createAutomaticSceneState("仅本次点击：正在截取最小样本，不会持续上传。"),
+      phase: "capturing",
+    });
+
+    const isCurrent = () => (
+      automaticSceneGenerationRef.current === generation
+      && captureGenerationRef.current === captureGeneration
+      && captureActiveRef.current
+      && tokenRef.current === token
+      && sessionIdRef.current === sessionId
+      && controllerRef.current?.ready === true
+      && controllerRef.current.socket.readyState === WebSocket.OPEN
+      && !controller.signal.aborted
+    );
+
+    let sample = null;
+    let requestTimeout = 0;
+    try {
+      sample = await recordAutomaticSceneSample(stream, video, {
+        signal: controller.signal,
+        durationMs: AUTOMATIC_SCENE_SAMPLE_MS,
+      });
+      if (!isCurrent()) return;
+      setAutomaticScene({
+        ...createAutomaticSceneState(
+          sample.visual_kind === "video_clip"
+            ? "已截取约 2 秒视频，MiMo 正在判断场景。"
+            : "浏览器无法录制 MP4，已透明回退为单张关键帧。",
+        ),
+        phase: "analyzing",
+        visualKind: sample.visual_kind,
+        durationMs: sample.duration_ms,
+      });
+
+      await waitForDisclosurePaint(controller.signal);
+      if (!isCurrent()) return;
+
+      requestTimeout = window.setTimeout(() => {
+        if (isCurrent()) {
+          controller.abort("MiMo 场景识别超过 10 秒，本次请求已取消，当前模式保持不变。");
+        }
+      }, AUTOMATIC_SCENE_REQUEST_TIMEOUT_MS);
+      const verdict = await recognizeScene(getRelayBase(), token, sample, {
+        signal: controller.signal,
+      });
+      if (!isCurrent()) return;
+      if (
+        !sessionPersistenceHealthyRef.current
+        || fallRef.current.phase !== "idle"
+        || fallDetectionArmedRef.current
+        || (heartCardRef.current && !["denied", "expired"].includes(heartCardRef.current.share_state))
+      ) {
+        setAutomaticScene({
+          ...createAutomaticSceneState("识别期间出现安全事件或待处理授权，结果已丢弃，当前模式保持不变。"),
+          phase: "uncertain",
+          accepted: false,
+          decision: "blocked_by_local_state",
+          classification: verdict.classification,
+          confidence: verdict.confidence,
+          latencyMs: verdict.latencyMs,
+          visualKind: sample.visual_kind,
+          durationMs: sample.duration_ms,
+          temporalEvidence: verdict.temporalEvidence,
+        });
+        return;
+      }
+
+      const action = selectAutomaticSceneAction(sceneIdRef.current, verdict, {
+        minConfidence: PROVISIONAL_AUTO_SCENE_CONFIDENCE,
+      });
+      const proposedAcceptance = action.type === "switch" || action.reason === "already_active";
+      const displayCommitted = proposedAcceptance
+        ? commitSceneDisplay(action.sceneId, "automatic")
+        : false;
+      const accepted = proposedAcceptance && displayCommitted;
+      const decision = proposedAcceptance && !displayCommitted
+        ? "persistence_unavailable"
+        : action.reason;
+      const decisionReason = proposedAcceptance && !displayCommitted
+        ? "浏览器无法保存当前安全状态，本次提议未切换；请检查会话存储设置。"
+        : action.reason === "low_confidence"
+          ? `模型分值低于未校准的 65% 实验门槛，未切换。${verdict.reason}`
+          : action.reason === "uncertain"
+            ? `MiMo 表示证据不足，未切换。${verdict.reason}`
+            : action.reason === "already_active"
+              ? `MiMo 提议与当前模式一致，无需切换。${verdict.reason}`
+              : `已采纳 MiMo 提议并切换展示。${verdict.reason}`;
+      setAutomaticScene({
+        phase: proposedAcceptance && !displayCommitted
+          ? "unavailable"
+          : accepted ? "result" : "uncertain",
+        accepted,
+        decision,
+        classification: verdict.classification,
+        confidence: verdict.confidence,
+        reason: decisionReason,
+        latencyMs: verdict.latencyMs,
+        visualKind: sample.visual_kind,
+        durationMs: sample.duration_ms,
+        temporalEvidence: verdict.temporalEvidence,
+      });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        if (
+          automaticSceneGenerationRef.current === generation
+          && captureGenerationRef.current === captureGeneration
+          && sessionIdRef.current === sessionId
+        ) {
+          setAutomaticScene(createAutomaticSceneState(
+            typeof controller.signal.reason === "string"
+              ? controller.signal.reason
+              : "本次 MiMo 请求已取消，当前模式保持不变。",
+          ));
+        }
+        return;
+      }
+      if (!isCurrent()) return;
+      setAutomaticScene({
+        ...createAutomaticSceneState(
+          error instanceof Error ? error.message : "MiMo 场景识别暂时不可用，当前模式保持不变。",
+        ),
+        phase: "unavailable",
+        visualKind: sample?.visual_kind || null,
+        durationMs: sample?.duration_ms ?? null,
+      });
+    } finally {
+      window.clearTimeout(requestTimeout);
+      if (automaticSceneAbortRef.current === controller) {
+        automaticSceneAbortRef.current = null;
+      }
+    }
+  }, [cancelAutomaticSceneRecognition, commitSceneDisplay, ui.connection]);
+
+  useEffect(() => {
+    if (!automaticSceneAbortRef.current) return;
+    if (!sessionPersistenceHealthy || fallDetectionArmed || fall.phase !== "idle") {
+      automaticSceneAbortRef.current.abort(
+        "安全状态未关闭或无法持久化，本次 MiMo 请求已取消，当前模式保持不变。",
+      );
+      return;
+    }
+    if (heartCard && !["denied", "expired"].includes(heartCard.share_state)) {
+      automaticSceneAbortRef.current.abort("厨房时刻或授权处理中，本次 MiMo 请求已取消。");
+      return;
+    }
+    if (ui.connection !== "connected") {
+      automaticSceneAbortRef.current.abort(
+        "控制链路中断，本次 MiMo 请求已取消；连接恢复后可再次识别。",
+      );
+    }
+  }, [fall.phase, fallDetectionArmed, heartCard, sessionPersistenceHealthy, ui.connection]);
+
   const stopCapture = useCallback(async () => {
+    cancelAutomaticSceneRecognition("摄像头已停止；自动识别样本与待返回结果均已取消。");
     captureGenerationRef.current += 1;
     captureActiveRef.current = false;
     window.cancelAnimationFrame(animationRef.current);
@@ -1511,7 +1814,12 @@ export function MonitorApp() {
       }
     }
     setLocalFrame(null);
-  }, [failClosedFallCheckIn, releaseVoiceResources, stopLocalMoment]);
+  }, [
+    cancelAutomaticSceneRecognition,
+    failClosedFallCheckIn,
+    releaseVoiceResources,
+    stopLocalMoment,
+  ]);
 
   useEffect(() => {
     stopCaptureRef.current = stopCapture;
@@ -1634,7 +1942,7 @@ export function MonitorApp() {
     }
 
     dispatch({ type: "starting" });
-    if (sceneIdRef.current === "fall") void preauthorizeMicrophone();
+    if (fallDetectionArmedRef.current) void preauthorizeMicrophone();
     const checkInAudio = new Audio("/voice/fall_check_in.m4a");
     checkInAudio.preload = "auto";
     checkInAudioRef.current = checkInAudio;
@@ -1709,7 +2017,7 @@ export function MonitorApp() {
             throw new Error("姿态结果不符合 17 点发布合同");
           }
           setLocalFrame(frame);
-          if (sceneIdRef.current === "fall") {
+          if (fallDetectionArmedRef.current) {
             const fallResult = fallDetectorRef.current.push(frame);
             if (fallResult.event) startFallCheckIn(fallResult.event);
           }
@@ -1861,6 +2169,8 @@ export function MonitorApp() {
   useEffect(() => {
     if (
       sceneId !== "kitchen"
+      || sceneSelectionSource !== "manual"
+      || ["capturing", "analyzing"].includes(automaticScene.phase)
       || !ui.captureActive
       || ui.connection !== "connected"
       || !tokenRef.current
@@ -1868,6 +2178,7 @@ export function MonitorApp() {
     let cancelled = false;
     let inFlight = false;
     let interval = 0;
+    let recognitionController = null;
     const run = async () => {
       if (
         cancelled
@@ -1879,6 +2190,8 @@ export function MonitorApp() {
       const imageB64 = captureJpegBase64(videoRef.current);
       if (!imageB64) return;
       inFlight = true;
+      const controller = new AbortController();
+      recognitionController = controller;
       setActivity((current) => ({
         ...current,
         phase: "sampling",
@@ -1896,9 +2209,12 @@ export function MonitorApp() {
           getRelayBase(),
           tokenRef.current,
           imageB64,
+          globalThis.fetch,
+          { signal: controller.signal },
         );
         if (
           cancelled
+          || controller.signal.aborted
           || sceneIdRef.current !== "kitchen"
           || document.visibilityState === "hidden"
         ) return;
@@ -1958,7 +2274,7 @@ export function MonitorApp() {
           });
         }
       } catch (error) {
-        if (cancelled || document.visibilityState === "hidden") return;
+        if (cancelled || controller.signal.aborted || document.visibilityState === "hidden") return;
         recognitionUnavailableRef.current = true;
         const reason = error instanceof Error ? error.message.slice(0, 240) : "活动识别不可用";
         setActivity({
@@ -1978,6 +2294,7 @@ export function MonitorApp() {
           reason,
         });
       } finally {
+        if (recognitionController === controller) recognitionController = null;
         inFlight = false;
       }
     };
@@ -1985,10 +2302,20 @@ export function MonitorApp() {
     interval = window.setInterval(() => void run(), COOKING_SAMPLE_INTERVAL_MS);
     return () => {
       cancelled = true;
+      recognitionController?.abort();
       window.clearTimeout(first);
       window.clearInterval(interval);
     };
-  }, [publishEvent, sceneId, stopLocalMoment, ui.captureActive, ui.connection, updateHeartCard]);
+  }, [
+    automaticScene.phase,
+    publishEvent,
+    sceneId,
+    sceneSelectionSource,
+    stopLocalMoment,
+    ui.captureActive,
+    ui.connection,
+    updateHeartCard,
+  ]);
 
   useEffect(() => {
     const suspendController = () => {
@@ -2009,6 +2336,9 @@ export function MonitorApp() {
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
+        cancelAutomaticSceneRecognition(
+          "页面已隐藏；自动识别样本与待返回结果均已取消。",
+        );
         const checkingEventId = selectFailClosedFallEvent(fallRef.current);
         if (checkingEventId) failClosedFallCheckIn();
         if (sceneIdRef.current === "kitchen") stopLocalMoment();
@@ -2039,6 +2369,7 @@ export function MonitorApp() {
       suspendController();
     };
   }, [
+    cancelAutomaticSceneRecognition,
     clearReconnectTimer,
     closeControllerSocket,
     failClosedFallCheckIn,
@@ -2051,6 +2382,36 @@ export function MonitorApp() {
   const canStart = ui.connection === "connected" && !ui.captureActive && ui.phase !== "starting";
   const activeScene = DEMO_SCENES.find((scene) => scene.id === sceneId) || DEMO_SCENES[0];
   const fallExitAction = selectFallExitAction(fall, { persistenceHealthy: sessionPersistenceHealthy });
+  const automaticSceneBusy = ["capturing", "analyzing"].includes(automaticScene.phase);
+  const automaticSceneSafetyBlocked = !sessionPersistenceHealthy
+    || fallDetectionArmed
+    || fall.phase !== "idle"
+    || (heartCard && !["denied", "expired"].includes(heartCard.share_state));
+  const canRecognizeScene = ui.captureActive
+    && ui.connection === "connected"
+    && !automaticSceneBusy
+    && !automaticSceneSafetyBlocked;
+  const automaticSceneLabel = automaticScene.phase === "capturing"
+    ? "正在采集 2 秒片段…"
+    : automaticScene.phase === "analyzing"
+      ? "MiMo 正在判断…"
+      : ["result", "uncertain", "unavailable"].includes(automaticScene.phase)
+        ? "再次真实识别"
+        : "真实识别 · MiMo";
+  const automaticSceneHint = !sessionPersistenceHealthy
+    ? "会话存储不可用 · 恢复后可识别"
+    : fall.phase !== "idle"
+      ? "安全事件尚未关闭 · 先完成确认"
+      : fallDetectionArmed
+        ? "本地跌倒规则已启用 · 先手动切换其他场景"
+        : heartCard && !["denied", "expired"].includes(heartCard.share_state)
+          ? "厨房时刻处理中 · 完成后可识别"
+          : sceneId === "bathroom"
+            ? "完全隐私例外 · 向 MiMo 上传一次真实画面"
+            : "向 MiMo 上传一次真实画面 · 约 2 秒 / 必要时单帧";
+  const recognizedScene = DEMO_SCENES.find(
+    (scene) => scene.id === automaticScene.classification,
+  );
 
   return (
     <div className="demo-shell monitor-role">
@@ -2126,7 +2487,7 @@ export function MonitorApp() {
                 <div className="stage-placeholder compact">
                   <span className="camera-glyph" aria-hidden="true"><CameraAltRoundedIcon /></span>
                   <b>{ui.phase === "starting" ? "正在加载摄像头与模型…" : "摄像头尚未开启"}</b>
-                  <p>只有点击下方按钮后才申请摄像头；跌倒场景会同时准备麦克风权限，但事件前不监听。</p>
+                  <p>只有点击下方按钮后才申请摄像头；手动启用跌倒规则时才准备麦克风权限，事件前不监听。</p>
                 </div>
               )}
               <div className="stage-topline">
@@ -2154,6 +2515,23 @@ export function MonitorApp() {
               <p className="intro-copy">后置摄像头在本机运行自训练 MoveNet。骨架、事件、授权视频与事件语音保持独立通道。</p>
             </div>
 
+            <button
+              type="button"
+              className={`auto-scene-action is-${automaticScene.phase}`}
+              onClick={runAutomaticSceneRecognition}
+              disabled={!canRecognizeScene}
+              aria-busy={automaticSceneBusy}
+              aria-describedby="automatic-scene-detail"
+            >
+              <span className="auto-scene-action-icon" aria-hidden="true">
+                <AutoAwesomeRoundedIcon />
+              </span>
+              <span>
+                <b>{automaticSceneLabel}</b>
+                <small>{automaticSceneHint}</small>
+              </span>
+            </button>
+
             <nav className="monitor-scene-tabs" aria-label="选择演示场景">
               {DEMO_SCENES.map((scene) => {
                 const SceneIcon = scene.Icon;
@@ -2178,6 +2556,40 @@ export function MonitorApp() {
                 );
               })}
             </nav>
+
+            <div
+              id="automatic-scene-detail"
+              className={`automatic-scene-card is-${automaticScene.phase}`}
+              role="status"
+              aria-live="polite"
+            >
+              <div className="automatic-scene-card-head">
+                <b>MiMo 自动场景</b>
+                <span>{automaticSceneBusy
+                  ? "处理中"
+                  : recognizedScene
+                    ? automaticScene.accepted
+                      ? `已采纳：${recognizedScene.label}`
+                      : `未采纳：${recognizedScene.label}`
+                    : "显式单次"}</span>
+              </div>
+              <p>{automaticScene.reason}</p>
+              {(automaticScene.visualKind || Number.isFinite(automaticScene.confidence)) && (
+                <small>
+                  {automaticScene.visualKind === "video_clip" ? "约 2 秒 MP4" : "JPEG 关键帧"}
+                  {Number.isFinite(automaticScene.confidence)
+                    ? ` · 模型分值 ${Math.round(automaticScene.confidence * 100)}%（实验门槛 65%）`
+                    : ""}
+                  {Number.isFinite(automaticScene.latencyMs)
+                    ? ` · ${Math.round(automaticScene.latencyMs)} ms`
+                    : ""}
+                  {automaticScene.temporalEvidence === false ? " · 无时序证据" : ""}
+                </small>
+              )}
+              <small className="automatic-scene-boundary">
+                即使在完全隐私模式，本按钮也只授权本次最小样本；MiMo 的“跌倒”只切换展示，不直接触发或解除报警。
+              </small>
+            </div>
 
             {ui.error && (
               <div className="degraded-card" role="alert">
@@ -2252,41 +2664,48 @@ export function MonitorApp() {
             {sceneId === "fall" && (
               <div className={`scenario-card fall-card is-${fall.phase}`}>
                 <div className="scenario-card-head">
-                  <b>真实姿态跌倒链路</b>
-                  <span>{fall.phase === "idle" ? "规则待命"
+                  <b>{fall.phase === "idle" && !fallDetectionArmed
+                    ? sceneSelectionSource === "automatic" ? "MiMo 跌倒展示候选" : "跌倒展示已恢复"
+                    : "真实姿态跌倒链路"}</b>
+                  <span>{fall.phase === "idle" && !fallDetectionArmed ? "仅展示"
+                    : fall.phase === "idle" ? "规则待命"
                     : fall.phase === "checking" ? "正在问询"
                       : fall.phase === "escalated"
                         ? fall.delivery === "accepted" ? "已告警" : "告警待同步"
                         : fall.delivery === "accepted" ? "已关闭" : "关闭待同步"}</span>
                 </div>
-                <p>{fall.message}</p>
+                <p>{fall.phase === "idle" && !fallDetectionArmed
+                  ? "自动提议不会启动报警链；手动点击下方“跌倒”按钮后，才启用本地 MoveNet 时序规则。"
+                  : fall.message}</p>
                 {fall.eventId && fall.delivery !== "accepted" && (
                   <small role="status">Relay 尚未确认当前安全事件；控制端会保留会话并在重连后自动补发。</small>
                 )}
                 {!sessionPersistenceHealthy && (
                   <small role="alert">当前安全状态未能写入会话存储；在恢复前不能切换场景或释放控制权。</small>
                 )}
-                <div
-                  className={`voice-status-card is-${voice.phase} is-${voice.intent || "none"}`}
-                  role={voice.phase === "fallback" ? "alert" : "status"}
-                  aria-live="polite"
-                >
-                  <div className="voice-status-head">
-                    <b>{VOICE_PHASE_COPY[voice.phase]?.[0] || "语音回应"}</b>
-                    <span>{voice.phase === "listening" ? "MIC ON"
-                      : voice.phase === "transcribing" ? "MIMO"
-                        : "EVENT ONLY"}</span>
+                {(fallDetectionArmed || fall.phase !== "idle") && (
+                  <div
+                    className={`voice-status-card is-${voice.phase} is-${voice.intent || "none"}`}
+                    role={voice.phase === "fallback" ? "alert" : "status"}
+                    aria-live="polite"
+                  >
+                    <div className="voice-status-head">
+                      <b>{VOICE_PHASE_COPY[voice.phase]?.[0] || "语音回应"}</b>
+                      <span>{voice.phase === "listening" ? "MIC ON"
+                        : voice.phase === "transcribing" ? "MIMO"
+                          : "EVENT ONLY"}</span>
+                    </div>
+                    <p>{voice.detail}</p>
+                    {voice.transcript && fall.phase === "checking" && (
+                      <q>{voice.transcript}</q>
+                    )}
+                    {(voice.model || Number.isFinite(voice.latencyMs)) && (
+                      <small>{voice.model || "MiMo"}{Number.isFinite(voice.latencyMs)
+                        ? ` · ${Math.round(voice.latencyMs)} ms`
+                        : ""}</small>
+                    )}
                   </div>
-                  <p>{voice.detail}</p>
-                  {voice.transcript && fall.phase === "checking" && (
-                    <q>{voice.transcript}</q>
-                  )}
-                  {(voice.model || Number.isFinite(voice.latencyMs)) && (
-                    <small>{voice.model || "MiMo"}{Number.isFinite(voice.latencyMs)
-                      ? ` · ${Math.round(voice.latencyMs)} ms`
-                      : ""}</small>
-                  )}
-                </div>
+                )}
                 {fall.phase === "checking" && (
                   <>
                     <small>问询播放完成后，在冻结的回应截止时间内短时收音；此阶段评委仍只看骨架。</small>
@@ -2318,7 +2737,7 @@ export function MonitorApp() {
               {!ui.captureActive ? (
                 <button type="button" className="primary-action" onClick={startCapture} disabled={!canStart}>
                   {ui.phase === "starting" ? "正在启动…"
-                    : sceneId === "fall" ? "开启摄像头并准备语音" : "开启后置摄像头"}
+                    : fallDetectionArmed ? "开启摄像头并准备语音" : "开启后置摄像头"}
                 </button>
               ) : (
                 <button type="button" className="secondary-action" onClick={stopOnly}>停止采集</button>

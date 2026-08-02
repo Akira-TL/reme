@@ -100,6 +100,10 @@ test("keyframe recognition requires temporal evidence to remain false", async ()
 
 test("scene recognition rejects invalid authorization and non-exact samples before fetch", async () => {
   let calls = 0;
+  const oneBytePastKeyframeLimit = `${"A".repeat(
+    MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS - 1,
+  )}=`;
+  assert.ok(oneBytePastKeyframeLimit.length <= MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS);
   const fetchImpl = async () => {
     calls += 1;
     return jsonResponse(successPayload());
@@ -123,6 +127,13 @@ test("scene recognition rejects invalid authorization and non-exact samples befo
     recognizeScene("https://relay.example", TOKEN, {
       ...KEYFRAME_SAMPLE,
       media_b64: "A".repeat(MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS + 4),
+    }, { fetchImpl }),
+    (error) => error.code === "invalid_scene_sample",
+  );
+  await assert.rejects(
+    recognizeScene("https://relay.example", TOKEN, {
+      ...KEYFRAME_SAMPLE,
+      media_b64: oneBytePastKeyframeLimit,
     }, { fetchImpl }),
     (error) => error.code === "invalid_scene_sample",
   );

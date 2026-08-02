@@ -165,6 +165,7 @@ export async function handleSceneRecognition(
       return sceneJson({ ok: false, error: "mimo_timeout" }, 504);
     }
     const timeoutSignal = AbortSignal.timeout(fetchTimeoutMs);
+    const upstreamSignal = AbortSignal.any([request.signal, timeoutSignal]);
     let upstream: Response;
     try {
       upstream = await fetch(endpoint, {
@@ -176,13 +177,16 @@ export async function handleSceneRecognition(
           "User-Agent": "reme-demo-relay/0.3",
         },
         body: JSON.stringify(buildMimoRequest(model, sample)),
-        signal: timeoutSignal,
+        signal: upstreamSignal,
       });
     } catch (error) {
+      const requestCancelled = request.signal.aborted && !timeoutSignal.aborted;
       const timedOut = timeoutSignal.aborted
         || performance.now() >= deadlineAt
         || (error instanceof DOMException && error.name === "TimeoutError");
-      const outcome = timedOut ? "mimo_timeout" : "mimo_unavailable";
+      const outcome = requestCancelled
+        ? "request_cancelled"
+        : timedOut ? "mimo_timeout" : "mimo_unavailable";
       logSceneCall({
         requestId,
         model,
@@ -191,10 +195,25 @@ export async function handleSceneRecognition(
         outcome,
         sample,
       });
-      return sceneJson({ ok: false, error: outcome }, timedOut ? 504 : 502);
+      return sceneJson(
+        { ok: false, error: outcome },
+        requestCancelled ? 499 : timedOut ? 504 : 502,
+      );
     }
 
     upstreamStatus = upstream.status;
+    if (request.signal.aborted) {
+      if (upstream.body !== null) await upstream.body.cancel().catch(() => undefined);
+      logSceneCall({
+        requestId,
+        model,
+        upstreamStatus,
+        latencyMs: elapsedMs(requestStartedAt),
+        outcome: "request_cancelled",
+        sample,
+      });
+      return sceneJson({ ok: false, error: "request_cancelled" }, 499);
+    }
     if (timeoutSignal.aborted || performance.now() >= deadlineAt) {
       if (upstream.body !== null) await upstream.body.cancel().catch(() => undefined);
       logSceneCall({
@@ -246,6 +265,17 @@ export async function handleSceneRecognition(
       MAX_MIMO_RESPONSE_BYTES,
       responseTimeoutMs,
     );
+    if (request.signal.aborted) {
+      logSceneCall({
+        requestId,
+        model,
+        upstreamStatus,
+        latencyMs: elapsedMs(requestStartedAt),
+        outcome: "request_cancelled",
+        sample,
+      });
+      return sceneJson({ ok: false, error: "request_cancelled" }, 499);
+    }
     if (
       timeoutSignal.aborted
       || performance.now() >= deadlineAt

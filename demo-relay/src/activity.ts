@@ -80,6 +80,8 @@ export async function handleActivityRecognition(
   }
 
   const startedAt = performance.now();
+  const timeoutSignal = AbortSignal.timeout(MIMO_TIMEOUT_MS);
+  const upstreamSignal = AbortSignal.any([request.signal, timeoutSignal]);
   let upstream: Response;
   try {
     upstream = await fetch(endpoint, {
@@ -119,16 +121,31 @@ export async function handleActivityRecognition(
         thinking: { type: "disabled" },
         response_format: { type: "json_object" },
       }),
-      signal: AbortSignal.timeout(MIMO_TIMEOUT_MS),
+      signal: upstreamSignal,
     });
   } catch (error) {
-    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+    const requestCancelled = request.signal.aborted && !timeoutSignal.aborted;
+    const timedOut = timeoutSignal.aborted
+      || (error instanceof DOMException && error.name === "TimeoutError");
     return activityJson(
-      { ok: false, error: timedOut ? "mimo_timeout" : "mimo_unavailable" },
-      timedOut ? 504 : 502,
+      {
+        ok: false,
+        error: requestCancelled
+          ? "request_cancelled"
+          : timedOut ? "mimo_timeout" : "mimo_unavailable",
+      },
+      requestCancelled ? 499 : timedOut ? 504 : 502,
     );
   }
 
+  if (request.signal.aborted) {
+    if (upstream.body !== null) await upstream.body.cancel().catch(() => undefined);
+    return activityJson({ ok: false, error: "request_cancelled" }, 499);
+  }
+  if (timeoutSignal.aborted) {
+    if (upstream.body !== null) await upstream.body.cancel().catch(() => undefined);
+    return activityJson({ ok: false, error: "mimo_timeout" }, 504);
+  }
   if (!upstream.ok) {
     return activityJson(
       { ok: false, error: "mimo_unavailable", upstream_status: upstream.status },
@@ -136,6 +153,12 @@ export async function handleActivityRecognition(
     );
   }
   const responseBody = await readBoundedText(upstream.body, MAX_MIMO_RESPONSE_BYTES);
+  if (request.signal.aborted) {
+    return activityJson({ ok: false, error: "request_cancelled" }, 499);
+  }
+  if (timeoutSignal.aborted) {
+    return activityJson({ ok: false, error: "mimo_timeout" }, 504);
+  }
   if (!responseBody.ok) {
     return activityJson({ ok: false, error: "invalid_mimo_response" }, 502);
   }
@@ -221,6 +244,7 @@ function resolveMimoEndpoint(baseUrl: string): string | null {
     if (parsed.protocol !== "https:" || parsed.username.length > 0 || parsed.password.length > 0) {
       return null;
     }
+    if (parsed.hostname !== "api.xiaomimimo.com" || parsed.port.length > 0) return null;
     parsed.hash = "";
     parsed.search = "";
     parsed.pathname = `${parsed.pathname.replace(/\/+$/, "")}/chat/completions`;

@@ -11,7 +11,9 @@ import {
   type FrameLandmarks,
   type MediaSignal,
 } from "../src/index";
+import { handleActivityRecognition } from "../src/activity";
 import { validateDemoEvent } from "../src/protocol";
+import { handleSceneRecognition } from "../src/scene";
 
 const ORIGIN = "https://reme.maniforld.com";
 const MONITOR_ORIGIN = "https://monitor.reme.maniforld.com";
@@ -2115,6 +2117,51 @@ describe("single-room demo relay", () => {
     expect(validateDemoEvent(event, event.session_id)).toBe(true);
   });
 
+  it("aborts an in-flight cooking request when automatic scene recognition takes over", async () => {
+    const token = "b".repeat(64);
+    const requestController = new AbortController();
+    const outbound = vi.fn(async (...args: Parameters<typeof fetch>): Promise<Response> => {
+      const upstreamSignal = args[1]?.signal;
+      return new Promise((_resolve, reject) => {
+        const rejectCancelled = () => reject(new DOMException("cancelled", "AbortError"));
+        if (upstreamSignal?.aborted) {
+          rejectCancelled();
+          return;
+        }
+        upstreamSignal?.addEventListener("abort", rejectCancelled, { once: true });
+      });
+    });
+    vi.stubGlobal("fetch", outbound);
+
+    const pending = handleActivityRecognition(new Request(
+      "https://relay.example/api/activity/recognize",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ image_b64: MINIMAL_JPEG_B64 }),
+        signal: requestController.signal,
+      },
+    ), {
+      MIMO_API_KEY: "test-key",
+      MIMO_BASE_URL: "https://api.xiaomimimo.com/v1",
+      MIMO_MODEL: "mimo-v2.5",
+    } as unknown as Env, async () => true);
+    await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
+    requestController.abort();
+
+    const cancelled = await pending;
+    expect(cancelled.status).toBe(499);
+    await expect(cancelled.json()).resolves.toEqual({
+      ok: false,
+      error: "request_cancelled",
+    });
+    const observedSignal = outbound.mock.calls[0]?.[1]?.signal;
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
   it("classifies one explicit short MP4 and emits metadata-only logs", async () => {
     const lease = await unlock();
     const outbound = vi.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => (
@@ -2355,6 +2402,59 @@ describe("single-room demo relay", () => {
       )));
       const recovered = await recognizeScene(lease.token, sceneKeyframeBody());
       expect(recovered.status).toBe(200);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("aborts the paid MiMo request when the incoming controller request is cancelled", async () => {
+    const token = "a".repeat(64);
+    const requestController = new AbortController();
+    const outbound = vi.fn(async (...args: Parameters<typeof fetch>): Promise<Response> => {
+      const upstreamSignal = args[1]?.signal;
+      return new Promise((_resolve, reject) => {
+        const rejectCancelled = () => reject(new DOMException("cancelled", "AbortError"));
+        if (upstreamSignal?.aborted) {
+          rejectCancelled();
+          return;
+        }
+        upstreamSignal?.addEventListener("abort", rejectCancelled, { once: true });
+      });
+    });
+    vi.stubGlobal("fetch", outbound);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const finishAttempt = vi.fn(async () => ({ ok: true as const }));
+
+    try {
+      const pending = handleSceneRecognition(new Request("https://relay.example/api/scene/recognize", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(sceneKeyframeBody()),
+        signal: requestController.signal,
+      }), {
+        MIMO_API_KEY: "test-key",
+        MIMO_BASE_URL: "https://api.xiaomimimo.com/v1",
+        MIMO_MODEL: "mimo-v2.5",
+      } as unknown as Env, {
+        authorizeTokenHash: async () => true,
+        beginAttempt: async () => ({ ok: true, session_id: "session-cancelled" }),
+        finishAttempt,
+      });
+      await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
+      requestController.abort();
+
+      const cancelled = await pending;
+      expect(cancelled.status).toBe(499);
+      await expect(cancelled.json()).resolves.toEqual({
+        ok: false,
+        error: "request_cancelled",
+      });
+      const observedSignal = outbound.mock.calls[0]?.[1]?.signal;
+      expect(observedSignal?.aborted).toBe(true);
+      expect(finishAttempt).toHaveBeenCalledTimes(1);
     } finally {
       log.mockRestore();
     }

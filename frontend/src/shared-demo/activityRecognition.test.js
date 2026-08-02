@@ -71,3 +71,21 @@ test("activity recognition exposes relay errors and rejects malformed successes"
     /不符合合同/,
   );
 });
+
+test("activity recognition forwards cancellation to the visual request", async () => {
+  const controller = new AbortController();
+  const request = recognizeCooking(
+    "https://relay.example",
+    "token",
+    "jpeg",
+    async (_url, init) => new Promise((_resolve, reject) => {
+      assert.equal(init.signal, controller.signal);
+      init.signal.addEventListener("abort", () => {
+        reject(new DOMException("cancelled", "AbortError"));
+      }, { once: true });
+    }),
+    { signal: controller.signal },
+  );
+  controller.abort();
+  await assert.rejects(request, (error) => error.name === "AbortError");
+});

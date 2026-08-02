@@ -60,7 +60,13 @@ export function captureJpegBase64(video, { maxWidth = 640, quality = 0.7 } = {})
   }
 }
 
-export async function recognizeCooking(httpUrl, token, imageB64, fetchImpl = fetch) {
+export async function recognizeCooking(
+  httpUrl,
+  token,
+  imageB64,
+  fetchImpl = fetch,
+  { signal } = {},
+) {
   if (!token || !imageB64) throw new Error("缺少活动识别授权或画面样本");
   const startedAt = performance.now();
   const response = await fetchImpl(`${httpUrl}/api/activity/recognize`, {
@@ -70,6 +76,7 @@ export async function recognizeCooking(httpUrl, token, imageB64, fetchImpl = fet
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ image_b64: imageB64 }),
+    signal,
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload?.ok) {

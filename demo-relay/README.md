@@ -157,7 +157,8 @@ The media exists only in the current MiMo request. It is never placed in Durable
 Object storage, WebSockets, or logs. Custom logs contain only a random request ID,
 provider/model, upstream status, latency, outcome, visual kind, media format,
 declared duration, and decoded byte count; they omit media, Base64, model reason,
-and credentials.
+and credentials. Controller cancellation is propagated through both scene and
+activity handlers to the corresponding upstream MiMo request.
 
 ## Local verification
 

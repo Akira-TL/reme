@@ -1,8 +1,14 @@
 import { captureJpegBase64 } from "./activityRecognition.js";
 
 export const AUTOMATIC_SCENE_SAMPLE_DURATION_MS = 2_000;
-export const MAX_AUTOMATIC_SCENE_CLIP_BASE64_CHARS = Math.ceil((2 * 1_024 * 1_024) / 3) * 4;
-export const MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS = Math.ceil((640 * 1_024) / 3) * 4;
+const MAX_AUTOMATIC_SCENE_CLIP_BYTES = 2 * 1_024 * 1_024;
+const MAX_AUTOMATIC_SCENE_KEYFRAME_BYTES = 640 * 1_024;
+export const MAX_AUTOMATIC_SCENE_CLIP_BASE64_CHARS = Math.ceil(
+  MAX_AUTOMATIC_SCENE_CLIP_BYTES / 3,
+) * 4;
+export const MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS = Math.ceil(
+  MAX_AUTOMATIC_SCENE_KEYFRAME_BYTES / 3,
+) * 4;
 
 const MIN_CLIP_DURATION_MS = 250;
 const MAX_CLIP_DURATION_MS = 4_000;
@@ -63,12 +69,16 @@ function isBoundedString(value, maxLength, allowEmpty = false) {
     && (allowEmpty || value.length > 0);
 }
 
-function isStrictBase64(value, maxChars) {
+function isStrictBase64(value, maxChars, maxBytes) {
+  const padding = typeof value === "string" && value.endsWith("==")
+    ? 2
+    : typeof value === "string" && value.endsWith("=") ? 1 : 0;
   return typeof value === "string"
     && value.length >= 4
     && value.length <= maxChars
     && value.length % 4 === 0
-    && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value);
+    && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+    && ((value.length / 4) * 3) - padding <= maxBytes;
 }
 
 function isAutomaticSceneSample(value) {
@@ -78,12 +88,20 @@ function isAutomaticSceneSample(value) {
       && Number.isSafeInteger(value.duration_ms)
       && value.duration_ms >= MIN_CLIP_DURATION_MS
       && value.duration_ms <= MAX_CLIP_DURATION_MS
-      && isStrictBase64(value.media_b64, MAX_AUTOMATIC_SCENE_CLIP_BASE64_CHARS);
+      && isStrictBase64(
+        value.media_b64,
+        MAX_AUTOMATIC_SCENE_CLIP_BASE64_CHARS,
+        MAX_AUTOMATIC_SCENE_CLIP_BYTES,
+      );
   }
   return value.visual_kind === "keyframe"
     && value.media_format === "jpeg"
     && value.duration_ms === 0
-    && isStrictBase64(value.media_b64, MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS);
+    && isStrictBase64(
+      value.media_b64,
+      MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS,
+      MAX_AUTOMATIC_SCENE_KEYFRAME_BYTES,
+    );
 }
 
 function recognitionUrl(baseUrl) {
@@ -209,7 +227,11 @@ async function blobToBase64(blob) {
 
 function captureKeyframe(video, captureJpegImpl) {
   const mediaB64 = safelyCaptureJpeg(video, captureJpegImpl);
-  if (!isStrictBase64(mediaB64, MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS)) {
+  if (!isStrictBase64(
+    mediaB64,
+    MAX_AUTOMATIC_SCENE_KEYFRAME_BASE64_CHARS,
+    MAX_AUTOMATIC_SCENE_KEYFRAME_BYTES,
+  )) {
     throw codedError("无法取得自动场景视觉样本", "automatic_scene_sample_unavailable");
   }
   return {
@@ -345,15 +367,18 @@ export function recordAutomaticSceneSample(
         return;
       }
       const blob = new Blob(chunks, { type: mimeType });
-      const maxRawBytes = Math.floor(MAX_AUTOMATIC_SCENE_CLIP_BASE64_CHARS / 4) * 3;
-      if (blob.size > maxRawBytes) {
+      if (blob.size > MAX_AUTOMATIC_SCENE_CLIP_BYTES) {
         fallback();
         return;
       }
       try {
         const mediaB64 = await blobToBase64(blob);
         throwIfAborted(signal);
-        if (!isStrictBase64(mediaB64, MAX_AUTOMATIC_SCENE_CLIP_BASE64_CHARS)) {
+        if (!isStrictBase64(
+          mediaB64,
+          MAX_AUTOMATIC_SCENE_CLIP_BASE64_CHARS,
+          MAX_AUTOMATIC_SCENE_CLIP_BYTES,
+        )) {
           fallback();
           return;
         }
