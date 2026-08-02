@@ -503,11 +503,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         config = server_config_from_args(argv)
-        scenes = discover_scenes(config.scenes_dir)
+        scenes = {} if config.scenes_dir is None else discover_scenes(config.scenes_dir)
     except (ServerConfigError, SceneStreamError) as exc:
         print(f"error: {exc}")
         return 2
-    if not scenes:
+    if not scenes and config.demo_mode is DemoMode.RECORD:
+        # Only replay genuinely needs bundles; a live_camera run gets its
+        # perception from the session's event stream, not from disk (P0-5).
         print(f"error: no scene bundles found under {config.scenes_dir}")
         return 2
     audit = None if config.audit_path is None else AuditLog(config.audit_path)

@@ -43,7 +43,9 @@ class ServerConfigError(ValueError):
 class ServerConfig:
     """Everything main() needs to bind, serve, and shut down."""
 
-    scenes_dir: Path
+    # None = pure live_camera run: no prerecorded bundles at all.  Only the
+    # record mode genuinely needs them (it replays captured decisions).
+    scenes_dir: Path | None = None
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
     static_dir: Path | None = None
@@ -67,7 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Reme B decision service (contract reme-care-decision/v0-experiment)"
     )
-    parser.add_argument("scenes_dir", type=Path, help="directory containing scene bundles")
+    parser.add_argument(
+        "scenes_dir",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="directory containing scene bundles; omit for a pure live_camera run",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--static", type=Path, default=None, help="C's built static page dir")
@@ -131,6 +139,8 @@ def server_config_from_args(argv: Sequence[str] | None = None) -> ServerConfig:
         raise ServerConfigError("--home-script excludes --home-room/--local-hour")
     if args.local_hour is not None and not 0 <= args.local_hour <= 23:
         raise ServerConfigError("--local-hour must be within 0..23")
+    if args.scenes_dir is None and DemoMode(args.mode) is DemoMode.RECORD:
+        raise ServerConfigError("record mode needs a scenes_dir to replay from")
     if (
         args.home_script is not None
         and args.memory_file is not None
