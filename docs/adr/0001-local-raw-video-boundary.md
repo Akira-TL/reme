@@ -1,6 +1,6 @@
 # ADR-0001: Keep raw video local and ephemeral in the MVP
 
-- Status: Accepted
+- Status: Superseded by ADR-0003
 - Date: 2026-08-01
 
 ## Context
@@ -11,13 +11,15 @@ The hackathon demo does not need forensic evidence retention. It needs a credibl
 
 ## Decision
 
-For the MVP:
+This decision applied to the initial MVP boundary and has been superseded by ADR-0003.
 
-- Raw camera frames are processed in memory on the local device.
-- Raw frames are not written to disk.
-- Raw frames are not uploaded to a cloud service or sent to the decision agent.
-- Only derived pose observations, event candidates, and privacy-view output may leave the perception component.
-- Any future evidence-retention mode requires a separate ADR covering consent, encryption, access control, retention, and auditability.
+The original MVP required:
+
+- Raw camera frames to be processed in memory on the local device.
+- Raw frames not to be written to disk.
+- Raw frames not to be uploaded to a cloud service or sent to the decision agent.
+- Only derived pose observations, event candidates, and privacy-view output to leave the perception component.
+- Any future evidence-retention mode to require a separate ADR covering consent, encryption, access control, retention, and auditability.
 
 ## Consequences
 

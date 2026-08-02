@@ -10,10 +10,18 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Reme Team" }]
-dependencies = []
+dependencies = [
+  "numpy>=2.0",
+]
 
 [project.scripts]
 reme-demo = "reme.demo:entrypoint"
+reme-local-demo = "reme.local_demo:main"
+reme-decision-server = "reme.decision.server:main"
+reme-decision-smoke = "reme.decision.mimo.adapter:main"
+reme-mimo-experiment = "reme.decision.mimo.experiment:main"
+reme-visual-precut = "reme.decision.visual:main"
+reme-voice-preset = "reme.decision.voice_preset:main"
 
 [project.optional-dependencies]
 dev = [
@@ -21,23 +29,33 @@ dev = [
   "pytest>=8.3",
   "ruff>=0.9",
 ]
+pose = [
+  "ai-edge-litert>=2.1",
+  "opencv-python-headless>=5.0",
+]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/reme"]
+packages = ["backend/reme"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-pythonpath = ["src"]
+pythonpath = ["backend"]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = [".scratch"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
+mypy_path = "backend"
 packages = ["reme"]
+
+[[tool.mypy.overrides]]
+module = ["cv2", "cv2.*", "ai_edge_litert", "ai_edge_litert.*"]
+ignore_missing_imports = true

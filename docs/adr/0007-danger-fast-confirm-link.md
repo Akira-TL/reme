@@ -1,0 +1,44 @@
+# ADR-0007: 危险时期快速确认链路（预置语音 + 双路竞速 + 家属端告警通道）
+
+- Status: Accepted
+- Date: 2026-08-02
+- Owner: B（决策层）
+- Depends on: ADR-0005（询问先行·规则升级·不可取消）、ADR-0003（最小视觉上下文）
+
+## 背景与定调
+
+B 有两条主线：生活线与危险时期线。用户定调**先做危险时期链路，核心指标是快——生命的价值优先于它的误报**（宁可多打扰，不可漏告警）。既有 ADR-0005 已把跌倒事件做成"询问先行 → 倒计时超时 → 规则升级家属"，但它有两处慢：
+
+1. 询问以文字下发，老人端若运行时合成语音（TTS 网络跳）会把延迟放进最危险的一段；
+2. 升级只有一条时钟路——老人不回应要等满倒计时（8s）才告警，而"确认真摔"的证据（画面、语音）其实几秒内就能拿到。
+
+## 决议
+
+跌倒 check-in 起开一个**确认窗口**，三件事并行，互不阻塞：
+
+1. **预置语音即刻可播**：跌倒相关的固定台词（问询/澄清/求助回执/确认安抚）离线预生成（macOS `say`，Tingting 音色，AAC/m4a），B 静态伺服 `GET /voice/<file>`，决策带 `voice_asset` 可空字段。**只在决策最终文字与录音逐字一致时才下发**（policy 装配时比对；persona 或模板改动后由 manifest 校验静默摘牌）——宁可回退浏览器 TTS，不放错音。
+2. **视觉确认路**：老人端（或 A 经 `TransitionEvent.evidence.frame_jpeg_b64` 休眠通道）上传跌倒瞬间原始帧 → B 一次 MiMo 视觉调用判"是否倒地" → `fallen && confidence ≥ 0.5` 即走**纯规则转移** `on_danger_confirmed`：仅在 `AWAITING_ELDER × FALL` 生效，产出 `DANGER_CONFIRMED_ALERT` 家属告警（risk 3、带 alarm、带家属确认倒计时）；其余任何相位一律丢弃并审计。
+3. **语音意图路**：老人端上传语音回应 → B 一次 omni 调用**同跳完成转写+意图**（实测 webm 不被接受，wav/mp3/m4a/ogg/flac 可用）→ 合成 `InteractionResponse(source=voice)` 走**既有回应机器**：求助→`FALL_HELP_ALERT`（立即）、安全→关闭、听不清→一次澄清。文本上传（浏览器自转写）先过确定性关键词规则（零延迟），歧义才问 MiMo。
+
+**任一路判定危险即刻升级**——竞速在服务锁内自然裁决：后到的确认发现事件已升级/已关闭，丢弃并审计，绝不二次告警、绝不撤销。
+
+**家属端告警通道**：源于跌倒的家属告警决策带 `alarm` 可空字段 `{channels: [vibrate, ring, flash], trigger}`，C 家属端按能力渲染（震动循环/响铃/爆闪）。`trigger` 枚举记录触发路（elder_report/voice_intent/visual_confirm/check_in_timeout/unclear_response/family_unresponsive），审计与叙事同源。
+
+## 边界（继承 ADR-0005，一条不破）
+
+- 确认路**不是承重墙**：MiMo 慢/挂/胡说，最坏结果只是"没有更早的告警"，倒计时规则升级始终垫底；确认调用单次尝试、6s 短超时。
+- **老人的明确回答是权威**：明确"安全"关闭事件后，迟到的视觉确认一律丢弃——机器证据不推翻人的自述（跌倒预警的既有 preempt 规则不变：新跌倒事件可重开）。
+- MiMo 依旧不能取消/降低/延迟任何规则告警（risk_floor 钳制原样生效）。
+- 每决策确认预算有限（2 帧、3 次语音、1 次 unclear 消耗），媒体 ≤2MB 且过魔数校验——确认窗口不成为放大器。
+- 隐私口径走 ADR-0003："按需最少地看"——只在跌倒确认窗口内、只传单帧/短语音、`alarm`/审计可见，无后台连续上传。
+
+## 实测依据（2026-08-01/02，真实 key，记录见 .scratch/mimo-decision-interaction/results/）
+
+- 单帧 JPEG `image_url` 判摔 2.1s（合成测试图 fallen=true conf=0.95）；`input_audio` omni 转写+意图一跳 0.9-2.0s，转写逐字准确，危险/安全语料区分正确。
+- 独立 ASR/TTS 端点（/audio/transcriptions、/audio/speech）404——语音路走 omni 单跳（更快），预置语音走本机离线合成（运行时零 TTS 依赖、零 key 依赖）。
+- 端到端（服务起好后）：文本规则路 0.0s、语音路 1.86s、视觉路 2.46s 出家属告警，全部远小于 8s 倒计时兜底。
+
+## 后果
+
+- 合同层新增三个可空字段（alarm/voice_asset/confirm_channels）、ResponseSource 新增 voice、两个上传端点、一个静态语音路由——全部零破坏增补，C 不识别即忽略，按"代码先行、统一调优时回写 abc-interface"协作规则推进。
+- 生活线（concern/授权/行动卡）不受影响：concern 事件不带确认通道、不带 alarm。
