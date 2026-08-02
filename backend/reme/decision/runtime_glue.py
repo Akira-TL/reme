@@ -149,6 +149,9 @@ class PerceptionBridge:
         """Subscribe for one session; replaces any previous subscription."""
 
         self.stop()
+        # Claim before the socket exists: the push entry must already be
+        # closed when the first pulled event arrives (Codex R4).
+        self._ingest.claim_pull(session_id)
         client = self._client_factory(
             url=self._events_url,
             session_id=session_id,
@@ -164,6 +167,7 @@ class PerceptionBridge:
         with self._lock:
             client = self._client
             self._client = None
+        self._ingest.release_pull()
         if client is not None:
             client.stop()
 
@@ -172,7 +176,9 @@ class PerceptionBridge:
 
         try:
             self._ingest.submit(
-                event.to_payload(), active_session_id=self._registry.active_session_id()
+                event.to_payload(),
+                active_session_id=self._registry.active_session_id(),
+                source="pull",
             )
         except IngestError as exc:
             # Stale or malformed events are A's to fix; dropping one must not

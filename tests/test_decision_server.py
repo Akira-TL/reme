@@ -422,6 +422,9 @@ class _FakeRegistry:
         self._status = status
         self._active_session_id = active_session_id
 
+    def is_active(self, session_id: str) -> bool:
+        return self._active_session_id == session_id
+
     def start(self, request: RuntimeSessionRequest) -> RuntimeSessionStatus:
         self.calls.append("registry.start")
         self.started.append(request)
@@ -858,7 +861,7 @@ def test_session_start_subscribes_and_stop_unsubscribes(tmp_path: Path) -> None:
         thread.join(timeout=5)
 
 
-def test_push_ingest_is_refused_while_the_bridge_is_attached(tmp_path: Path) -> None:
+def test_push_ingest_is_refused_while_the_bridge_owns_the_stream(tmp_path: Path) -> None:
     service = _service(tmp_path)
     registry = RuntimeSessionRegistry()
     ingest = EventIngest()
@@ -873,16 +876,86 @@ def test_push_ingest_is_refused_while_the_bridge_is_attached(tmp_path: Path) -> 
         port = server.server_address[1]
         assert isinstance(port, int)
         _post(port, "/api/session", _session_body())
-        # Both entries share one sequence watermark, so the push side must
-        # fail loudly rather than double-write.
+        # The refusal comes from inside the ingest lock, not from a probe in
+        # the route, so an attach racing a push cannot double-write (Codex R4).
+        assert ingest.pull_owner() == "session-0001"
         status, body = _post(port, "/api/events", {"anything": True})
         assert status == 409
         assert body["error"]["code"] == "push_ingest_disabled"
 
         _post(port, "/api/session/stop", {"session_id": "session-0001"})
-        # With the subscription gone the push entry works again (replays).
+        assert ingest.pull_owner() is None
         status, body = _post(port, "/api/events", {"anything": True})
-        assert status != 409 or body["error"]["code"] != "push_ingest_disabled"
+        assert body["error"]["code"] != "push_ingest_disabled"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_stopping_a_foreign_session_leaves_the_live_bridge_alone(tmp_path: Path) -> None:
+    """A wrong session_id must not cut the running session's data feed (Codex R4)."""
+
+    service = _service(tmp_path)
+    registry = RuntimeSessionRegistry()
+    ingest = EventIngest()
+    bridge = _bridge_with_fake_clients(service, registry, ingest)
+    handler = build_decision_handler(
+        service=service, static_dir=None, registry=registry, ingest=ingest, bridge=bridge
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert isinstance(port, int)
+        _post(port, "/api/session", _session_body())
+        status, _ = _post(port, "/api/session/stop", {"session_id": "someone-elses-session"})
+        assert status == 404
+        assert bridge.attached() is True
+        assert _FakeClient.instances[0].stopped is False
+        assert registry.active_session_id() == "session-0001"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class _ExplodingClient(_FakeClient):
+    def start(self) -> None:
+        raise OSError("A refused the connection")
+
+
+def test_failed_subscription_rolls_the_session_back(tmp_path: Path) -> None:
+    """Attach failure must not wedge the registry in RUNNING with no feed."""
+
+    service = _service(tmp_path)
+    registry = RuntimeSessionRegistry()
+    ingest = EventIngest()
+    _FakeClient.instances = []
+    bridge = PerceptionBridge(
+        events_url="ws://127.0.0.1:9/ws/events",
+        ingest=ingest,
+        registry=registry,
+        service=service,
+        client_factory=_ExplodingClient,  # type: ignore[arg-type]
+    )
+    handler = build_decision_handler(
+        service=service, static_dir=None, registry=registry, ingest=ingest, bridge=bridge
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert isinstance(port, int)
+        status, body = _post(port, "/api/session", _session_body())
+        assert status == 503
+        assert body["error"]["code"] == "perception_unavailable"
+        assert registry.active_session_id() is None
+        assert ingest.pull_owner() is None
+        # Rolled back cleanly, so a retry is possible instead of a 409 wedge.
+        assert _post(port, "/api/session", _session_body("session-0002"))[0] == 503
     finally:
         server.shutdown()
         server.server_close()

@@ -40,7 +40,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from io import BufferedIOBase
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
 from reme.decision.websocket import (
     MAX_MESSAGE_BYTES,
@@ -230,6 +230,24 @@ def _has_connection_token(value: str, token: str) -> bool:
     return any(part.strip().lower() == token for part in value.split(","))
 
 
+def _redact_url(url: str) -> str:
+    """Log-safe rendering: keep scheme/host/port/path, drop userinfo and query.
+
+    A deployment may authenticate to A with ``?token=…`` or userinfo; neither
+    may ever reach a log line (Codex R4).
+    """
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return "<unparseable url>"
+    host = parsed.hostname or ""
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    shown = urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+    return f"{shown}?<redacted>" if parsed.query else shown
+
+
 def _split_ws_url(url: str, session_id: str) -> tuple[str, int, str, str]:
     """Split ``ws://host:port/path`` into (host, port, Host header, resource).
 
@@ -289,6 +307,7 @@ class PerceptionEventClient:
         if max_backoff_s < initial_backoff_s:
             raise WebSocketClientError("max_backoff_s must be at least initial_backoff_s")
         self._url = url
+        self._safe_url = _redact_url(url)
         self._session_id = session_id.strip()
         self._on_event = on_event
         self._connect_timeout_s = connect_timeout_s
@@ -369,7 +388,9 @@ class PerceptionEventClient:
             try:
                 sock, reader = self._connect()
             except (OSError, WebSocketClientError) as exc:
-                self._warn(f"connect to {self._url} failed: {exc}")
+                # Never the raw URL: it may carry userinfo or a token query
+                # that would then sit in the logs forever (Codex R4).
+                self._warn(f"connect to {self._safe_url} failed: {exc}")
                 if stop_event.wait(backoff):
                     return
                 backoff = min(backoff * 2.0, self._max_backoff_s)

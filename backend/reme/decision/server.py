@@ -70,6 +70,7 @@ _INGEST_STATUS: dict[str, HTTPStatus] = {
     "stale_session": HTTPStatus.CONFLICT,
     "no_active_session": HTTPStatus.CONFLICT,
     "bad_event": HTTPStatus.UNPROCESSABLE_ENTITY,
+    "push_ingest_disabled": HTTPStatus.CONFLICT,
 }
 
 
@@ -267,7 +268,19 @@ def build_decision_handler(
             if bridge is not None:
                 # Subscribe to A only after the buffers are clean, so no event
                 # from the previous session can slip into this one.
-                bridge.start_for(request.session_id)
+                try:
+                    bridge.start_for(request.session_id)
+                except Exception as exc:  # noqa: BLE001 - roll back, never wedge
+                    # Without this the registry would stay RUNNING with no feed
+                    # and every retry would 409 on the active session (Codex R4).
+                    bridge.stop()
+                    registry.stop(request.session_id)
+                    self._send_error_json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        "perception_unavailable",
+                        f"could not subscribe to {bridge.events_url}: {exc}",
+                    )
+                    return
             self._send_json(HTTPStatus.OK, status.to_payload())
 
         def _handle_session_stop(self, payload: dict[str, Any]) -> None:
@@ -280,9 +293,19 @@ def build_decision_handler(
                     HTTPStatus.BAD_REQUEST, "bad_request", "session_id must be a non-empty string"
                 )
                 return
-            # Drop the subscription before the registry forgets the session:
-            # the reverse order would let in-flight events from A land while
-            # the buffers are being reset.
+            # Validate the target BEFORE touching the bridge (Codex R4): the
+            # old order let a wrong or stale session_id cut the live session's
+            # data feed while the registry still reported it running.
+            if not registry.is_active(session_id):
+                # Not the running session: let the registry produce the
+                # authoritative error (unknown_session / already stopped)
+                # without disturbing anything that is actually live.
+                status = registry.stop(session_id)
+                self._announce_session(status)
+                self._send_json(HTTPStatus.OK, status.to_payload())
+                return
+            # Genuine stop of the active session: drop the subscription first,
+            # or in-flight events from A land while the buffers are resetting.
             if bridge is not None:
                 bridge.stop()
             status = registry.stop(session_id)
@@ -307,17 +330,11 @@ def build_decision_handler(
             if registry is None or ingest is None:
                 self._send_runtime_disabled("event ingest")
                 return
-            if bridge is not None and bridge.attached():
-                # Both paths share one sequence watermark; letting them run
-                # together makes each reject the other's batch. Fail loudly
-                # instead of silently double-writing.
-                self._send_error_json(
-                    HTTPStatus.CONFLICT,
-                    "push_ingest_disabled",
-                    f"this server pulls perception from {bridge.events_url}; "
-                    "POST /api/events is disabled while that subscription is active",
-                )
-                return
+            # Mutual exclusion lives inside the ingest lock, not here: an
+            # attached() probe followed by submit() was a TOCTOU check across
+            # two unrelated locks, so a push arriving mid-attach could still
+            # double-write the watermark (Codex R4). submit() now refuses the
+            # push itself with push_ingest_disabled.
             event = ingest.submit(payload, active_session_id=registry.active_session_id())
             # Evaluate off-thread so A's event POST never waits on a MiMo
             # round trip; the resulting decision reaches C over /ws.

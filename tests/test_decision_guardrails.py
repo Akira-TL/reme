@@ -130,21 +130,22 @@ def _a_side_fall_confidence(
 
 
 def test_fall_confidence_floor_tracks_a_side_formula() -> None:
-    """0.59 is A's arithmetic, not a round number, and must move when A's config moves."""
+    """0.55 is A's arithmetic, not a round number, and must move when A's config moves."""
 
-    pose = TransitionDetectorConfig()
-    # Floor: both fall gates met exactly, so both min() bonus terms are 0, and the window
-    # sits on A's own frame-admission floor min_visible_keypoint_ratio (0.5).
+    # Floor: both fall gates met exactly, so both min() bonus terms are 0, and the
+    # visible-keypoint ratio contributes nothing.  Crucially the ratio has NO enforced
+    # lower bound: A admits frames at min_visible_keypoint_ratio, but each sample keeps
+    # min(frame_ratio, posture_ratio) and the posture side is only range-checked to
+    # [0, 1].  An earlier revision assumed a 0.5 floor here and set the threshold to
+    # 0.59, which silently discarded every real fall observed under occlusion.
     floor = _a_side_fall_confidence(
-        drop_multiple=1.0,
-        speed_multiple=1.0,
-        visible_keypoint_ratio=pose.min_visible_keypoint_ratio,
+        drop_multiple=1.0, speed_multiple=1.0, visible_keypoint_ratio=0.0
     )
     # Ceiling: both bonus terms saturated at their min(..., 1.0) cap, every keypoint visible.
     ceiling = _a_side_fall_confidence(
         drop_multiple=2.0, speed_multiple=2.0, visible_keypoint_ratio=1.0
     )
-    assert round(floor, 6) == FALL_LIKE_CONFIDENCE_FLOOR == 0.59
+    assert round(floor, 6) == FALL_LIKE_CONFIDENCE_FLOOR == 0.55
     assert round(ceiling, 6) == 0.87  # A's 0.95 clamp is unreachable
     assert TriggerConfig().fall_confidence_min == FALL_LIKE_CONFIDENCE_FLOOR
 
@@ -157,22 +158,22 @@ def test_fall_trigger_fires_at_a_side_confidence_floor() -> None:
 
 
 def test_fall_trigger_covers_the_whole_a_side_confidence_band() -> None:
-    """[0.59, 0.87] is A's entire fall_like range; the former 0.7 discarded its lower band."""
+    """[0.55, 0.87] is A's entire fall_like range; 0.7 and 0.59 both cut into its low band."""
 
     config = TriggerConfig()
-    # 0.592353 = 0.55 + 0.08 * 9/17, the weakest MoveNet-17 frame that still clears A's
-    # min_visible_keypoint_ratio; 0.712 is a measured hard fall; 0.818511 is the
-    # rapid high-to-low trajectory in tests/test_pose_transitions.py.
-    for confidence in (0.59, 0.592353, 0.65, 0.699999, 0.712, 0.818511, 0.87):
+    # 0.55 is A's true floor (occluded window, ratio 0); 0.578 = 0.55 + 0.08*0.35 is the
+    # static posture model's own default admission floor; 0.712 is a measured hard fall;
+    # 0.818511 is the rapid high-to-low trajectory in tests/test_pose_transitions.py.
+    for confidence in (0.55, 0.578, 0.59, 0.65, 0.699999, 0.712, 0.818511, 0.87):
         context = _context(active_transition=_transition(transition_confidence=confidence))
         assert detect_fall_trigger(context, config=config), confidence
 
 
 def test_fall_trigger_rejects_confidence_below_a_side_floor() -> None:
-    """Below 0.59 nothing A labels fall_like can exist, so the floor stays a real gate."""
+    """Below 0.55 nothing A labels fall_like can exist, so the floor stays a real gate."""
 
     config = TriggerConfig()
-    for confidence in (0.0, 0.35, 0.55, 0.58):
+    for confidence in (0.0, 0.2, 0.35, 0.54):
         context = _context(active_transition=_transition(transition_confidence=confidence))
         assert not detect_fall_trigger(context, config=config), confidence
 

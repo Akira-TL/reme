@@ -29,6 +29,7 @@ from reme.decision.policy import (
     PolicyConfig,
 )
 from reme.decision.records import DemoMode
+from reme.decision.ws_client import WebSocketClientError, _split_ws_url
 
 DEFAULT_PORT = 8100
 DEFAULT_MOCK_SCRIPT_DIR = Path("examples/decision/mimo_mock")
@@ -153,6 +154,14 @@ def server_config_from_args(argv: Sequence[str] | None = None) -> ServerConfig:
         raise ServerConfigError("--local-hour must be within 0..23")
     if args.scenes_dir is None and DemoMode(args.mode) is DemoMode.RECORD:
         raise ServerConfigError("record mode needs a scenes_dir to replay from")
+    if args.a_events_url is not None:
+        # Validate at boot, not at the first session start (Codex R4): a bad
+        # URL discovered mid-start leaves the registry running with no bridge
+        # and every retry then 409s on the already-active session.
+        try:
+            _split_ws_url(args.a_events_url, "probe")
+        except WebSocketClientError as exc:
+            raise ServerConfigError(f"--a-events-url is unusable: {exc}") from exc
     if (
         args.home_script is not None
         and args.memory_file is not None

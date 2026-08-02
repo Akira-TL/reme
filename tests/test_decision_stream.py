@@ -468,3 +468,28 @@ def test_watermarks_are_tracked_per_session() -> None:
     )
 
     assert len(ingest.snapshot("scene-b").postures) == 1
+
+
+# --- Codex R4：跨类型序列回退（per-type 水位单独使用时的漏洞） ---------------
+
+
+def test_stale_transition_cannot_ride_in_behind_a_newer_posture() -> None:
+    """A captured old transition must not slip past on an unseen type's empty watermark."""
+
+    ingest = EventIngest()
+    ingest.submit(_posture_event(sequence=100), active_session_id=SESSION_ID)
+    # Same session, structurally valid, but from long before the current frame:
+    # per-type alone would accept it because transitions had no watermark yet.
+    with pytest.raises(IngestError) as excinfo:
+        ingest.submit(_transition_event(sequence=50), active_session_id=SESSION_ID)
+    assert excinfo.value.code == "bad_event"
+    assert "high-water" in str(excinfo.value)
+
+
+def test_same_frame_events_still_share_one_sequence() -> None:
+    """The whole point of per-type watermarks: same-frame derivations coexist."""
+
+    ingest = EventIngest()
+    ingest.submit(_posture_event(sequence=7), active_session_id=SESSION_ID)
+    event = ingest.submit(_transition_event(sequence=7), active_session_id=SESSION_ID)
+    assert event.sequence == 7

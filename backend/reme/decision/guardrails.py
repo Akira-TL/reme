@@ -13,11 +13,18 @@ DOWN_POSTURES = frozenset({Posture.LYING, Posture.UNKNOWN})
 # Derivation of A's fall_like confidence range (reme/pose/transitions.py::_classify):
 # conf = clamp(0.55 + 0.12*min(drop/0.20 - 1, 1) + 0.12*min(speed/0.65 - 1, 1) + 0.08*r, 0, 0.95),
 # emitted only when all(fall_signals) holds, which already forces drop >= 0.20 and speed >= 0.65,
-# so both min() terms live in [0, 1]; r is the window's smallest visible-keypoint ratio, and A
-# drops every frame under TransitionDetectorConfig.min_visible_keypoint_ratio = 0.5, so r in
-# [0.5, 1.0].  Hence conf in [0.55 + 0.08*0.5, 0.55 + 0.12 + 0.12 + 0.08] = [0.59, 0.87]; the 0.95
-# clamp is unreachable.  Verified by sweeping the admissible region through A's own _classify.
-FALL_LIKE_CONFIDENCE_FLOOR = 0.59
+# so both min() terms live in [0, 1].
+#
+# r is the window's smallest visible-keypoint ratio, and it has NO enforced floor: A drops frames
+# under TransitionDetectorConfig.min_visible_keypoint_ratio = 0.5, but each sample stores
+# min(frame_ratio, posture.visible_keypoint_ratio) (transitions.py) and the posture side is only
+# range-checked to [0, 1].  So r in [0, 1] and conf in [0.55, 0.87]; the 0.95 clamp is unreachable.
+# An earlier 0.59 floor assumed a 0.5 lower bound on r that the code does not enforce — Codex
+# built an r=0 window and A classified it fall_like at exactly 0.55.
+#
+# We therefore sit at A's true floor.  Occlusion is precisely when a real fall is most likely to
+# produce a low visible ratio, so trading a false check-in for a missed fall is the wrong trade.
+FALL_LIKE_CONFIDENCE_FLOOR = 0.55
 
 _STATE_SEVERITY: dict[DecisionState, int] = {
     DecisionState.NORMAL: 0,

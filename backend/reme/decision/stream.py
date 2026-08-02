@@ -116,8 +116,39 @@ class EventIngest:
         self._postures: dict[str, deque[PostureObservation]] = {}
         self._transitions: dict[str, deque[TransitionEvent]] = {}
         self._sequence_watermarks: dict[tuple[str, RuntimeEventType], int] = {}
+        # Newest sequence seen on any stream of a session (anti-replay floor).
+        self._session_high_water: dict[str, int] = {}
+        # Which entry owns this ingest. Checked and acted on under the same
+        # lock as submit(), so an attach racing a push cannot double-write
+        # one watermark (Codex R4: the old bridge.attached() probe was a
+        # TOCTOU check across two unrelated locks).
+        self._pull_owner: str | None = None
 
-    def submit(self, payload: object, *, active_session_id: str | None) -> RuntimeEvent:
+    def claim_pull(self, session_id: str) -> None:
+        """Mark this ingest as fed by a pull subscription for one session."""
+
+        with self._lock:
+            self._pull_owner = session_id
+
+    def release_pull(self) -> None:
+        """Hand the ingest back to the push entry (idempotent)."""
+
+        with self._lock:
+            self._pull_owner = None
+
+    def pull_owner(self) -> str | None:
+        """The session whose pull subscription owns this ingest, if any."""
+
+        with self._lock:
+            return self._pull_owner
+
+    def submit(
+        self,
+        payload: object,
+        *,
+        active_session_id: str | None,
+        source: str = "push",
+    ) -> RuntimeEvent:
         """Validate and buffer one inbound RuntimeEvent envelope.
 
         Rejects stale/mismatched sessions (``stale_session``), malformed
@@ -133,6 +164,12 @@ class EventIngest:
         if active_session_id is None:
             raise IngestError("no_active_session", "no runtime session is active")
         with self._lock:
+            if source == "push" and self._pull_owner is not None:
+                raise IngestError(
+                    "push_ingest_disabled",
+                    f"perception is pulled for session {self._pull_owner!r}; "
+                    "the push entry is closed while that subscription owns the stream",
+                )
             event = _parse_envelope(payload)
             try:
                 event.require_session(active_session_id)
@@ -152,6 +189,14 @@ class EventIngest:
             # watermark on (session, event_type) accepts one event per type per
             # sequence while still rejecting replays (same type, same sequence)
             # and true reordering within a type's own stream.
+            # Two watermarks, because per-type alone reopened a hole (Codex R4):
+            # a type that had not been seen yet had no watermark, so a captured
+            # old TransitionEvent could be replayed long after posture had moved
+            # on and would sail straight into the deterministic fall rule.
+            #   * per-type rejects replays and reordering inside one stream;
+            #   * per-session rejects anything older than the newest event of
+            #     any type, while still allowing equal sequences across types
+            #     (which is exactly the same-frame case we must accept).
             watermark_key = (event.session_id, event.event_type)
             last_sequence = self._sequence_watermarks.get(watermark_key)
             if last_sequence is not None and event.sequence <= last_sequence:
@@ -160,6 +205,13 @@ class EventIngest:
                     f"sequence must be strictly increasing per session and event type "
                     f"({event.sequence} <= {last_sequence} for {event.event_type.value})",
                 )
+            session_high = self._session_high_water.get(event.session_id)
+            if session_high is not None and event.sequence < session_high:
+                raise IngestError(
+                    "bad_event",
+                    f"sequence {event.sequence} is older than the session high-water "
+                    f"mark {session_high}",
+                )
             if event.event_type in _BUFFERED_EVENT_TYPES:
                 label = f"runtime event {event.sequence}"
                 if event.event_type is RuntimeEventType.POSTURE_OBSERVATION:
@@ -167,6 +219,9 @@ class EventIngest:
                 else:
                     self._buffer_transition(event.payload, label=label)
             self._sequence_watermarks[watermark_key] = event.sequence
+            self._session_high_water[event.session_id] = max(
+                event.sequence, self._session_high_water.get(event.session_id, event.sequence)
+            )
             return event
 
     def snapshot(self, scene_id: str) -> LiveStreams:
@@ -191,6 +246,7 @@ class EventIngest:
             self._postures.clear()
             self._transitions.clear()
             self._sequence_watermarks.clear()
+            self._session_high_water.clear()
 
     def _buffer_posture(self, payload: dict[str, Any], *, label: str) -> None:
         """Append one posture observation; caller holds the lock."""
