@@ -60,6 +60,7 @@ import {
   selectControlReleaseAction,
   selectFailClosedFallEvent,
   selectFallCheckInStartAction,
+  selectFallInterruptionAction,
   selectFallExitAction,
   selectFallResolutionAction,
   selectFallReconnectAction,
@@ -2479,7 +2480,11 @@ export function MonitorApp() {
     const suspendController = () => {
       intentionalCloseRef.current = true;
       clearReconnectTimer();
-      failClosedFallCheckIn();
+      if (selectFallInterruptionAction({
+        kind: "pagehide",
+        fall: fallRef.current,
+        nowMs: Date.now(),
+      }) === "escalate") failClosedFallCheckIn();
       closeControllerSocket();
       void stopCapture();
       intentionalCloseRef.current = false;
@@ -2497,8 +2502,15 @@ export function MonitorApp() {
         cancelAutomaticSceneRecognition(
           "页面已隐藏；自动识别样本与待返回结果均已取消。",
         );
-        const checkingEventId = selectFailClosedFallEvent(fallRef.current);
-        if (checkingEventId) failClosedFallCheckIn();
+        const currentFall = fallRef.current;
+        const checkingEventId = selectFailClosedFallEvent(currentFall);
+        const interruptionAction = selectFallInterruptionAction({
+          kind: "visibility",
+          fall: currentFall,
+          nowMs: Date.now(),
+          visibilityState: document.visibilityState,
+        });
+        if (interruptionAction === "escalate") failClosedFallCheckIn();
         clearKitchenCaptureEvidence("页面已隐藏，旧做饭确认和实景授权已失效。", {
           publishUnavailable: sceneIdRef.current === "kitchen",
         });
@@ -2507,17 +2519,20 @@ export function MonitorApp() {
         releaseVoiceResources(checkingEventId
           ? createVoiceState({
             phase: "fallback",
-            detail: "页面已隐藏，麦克风已停止；本次事件已按规则 fail-closed 升级。",
+            detail: interruptionAction === "escalate"
+              ? "页面已隐藏且响应期限已到，麦克风已停止；本次事件已按规则升级。"
+              : "页面已隐藏，麦克风已停止；本次安全问询保留原有绝对响应期限。",
           })
           : createVoiceState());
         return;
       }
       const current = fallRef.current;
-      if (
-        selectFailClosedFallEvent(current)
-        && Number.isFinite(current.deadlineMs)
-        && current.deadlineMs <= Date.now()
-      ) failClosedFallCheckIn();
+      if (selectFallInterruptionAction({
+        kind: "visibility",
+        fall: current,
+        nowMs: Date.now(),
+        visibilityState: document.visibilityState,
+      }) === "escalate") failClosedFallCheckIn();
     };
     window.addEventListener("pagehide", suspendController);
     window.addEventListener("pageshow", resumeController);

@@ -63,6 +63,23 @@ export function selectFailClosedFallEvent(fall) {
     : null;
 }
 
+export function selectFallInterruptionAction({
+  kind,
+  fall,
+  nowMs = Date.now(),
+  visibilityState,
+} = {}) {
+  if (!selectFailClosedFallEvent(fall)) return "none";
+  if (kind === "pagehide") return "escalate";
+  if (
+    kind !== "visibility"
+    || !["hidden", "visible", "prerender"].includes(visibilityState)
+  ) return "none";
+  return !Number.isFinite(fall.deadlineMs) || fall.deadlineMs <= nowMs
+    ? "escalate"
+    : "preserve";
+}
+
 export function selectFallCheckInStartAction(visibilityState) {
   return visibilityState === "hidden" ? "escalate" : "prompt";
 }

@@ -8,6 +8,7 @@ import {
   recognizeDangerVoice,
   selectControlReleaseAction,
   selectFailClosedFallEvent,
+  selectFallInterruptionAction,
   selectFallCheckInStartAction,
   selectFallExitAction,
   selectFallResolutionAction,
@@ -197,6 +198,57 @@ test("a fall detected after the page is already hidden skips the throttled check
   assert.equal(selectFallCheckInStartAction("hidden"), "escalate");
   assert.equal(selectFallCheckInStartAction("visible"), "prompt");
   assert.equal(selectFallCheckInStartAction("prerender"), "prompt");
+});
+
+test("visibility preserves a future checking deadline and escalates only after expiry", () => {
+  const checking = {
+    phase: "checking",
+    eventId: "fall-123",
+    deadlineMs: 10_000,
+  };
+  assert.equal(selectFallInterruptionAction({
+    kind: "visibility",
+    fall: checking,
+    nowMs: 9_999,
+    visibilityState: "hidden",
+  }), "preserve");
+  assert.equal(selectFallInterruptionAction({
+    kind: "visibility",
+    fall: checking,
+    nowMs: 10_000,
+    visibilityState: "hidden",
+  }), "escalate");
+  assert.equal(selectFallInterruptionAction({
+    kind: "visibility",
+    fall: checking,
+    nowMs: 10_001,
+    visibilityState: "hidden",
+  }), "escalate");
+});
+
+test("visible reconciliation escalates an expired check-in and pagehide always fails closed", () => {
+  const checking = {
+    phase: "checking",
+    eventId: "fall-123",
+    deadlineMs: 10_000,
+  };
+  assert.equal(selectFallInterruptionAction({
+    kind: "visibility",
+    fall: checking,
+    nowMs: 10_000,
+    visibilityState: "visible",
+  }), "escalate");
+  assert.equal(selectFallInterruptionAction({
+    kind: "pagehide",
+    fall: checking,
+    nowMs: 9_000,
+  }), "escalate");
+  assert.equal(selectFallInterruptionAction({
+    kind: "visibility",
+    fall: { ...checking, phase: "resolved" },
+    nowMs: 11_000,
+    visibilityState: "visible",
+  }), "none");
 });
 
 test("a recovered fall is pending in the new lease and expires before WebSocket readiness", () => {
