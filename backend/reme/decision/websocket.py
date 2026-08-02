@@ -15,6 +15,11 @@ Frozen decisions:
 - Reads go through ``handler.rfile`` exclusively (bytes may already sit in
   its buffer after the upgrade request); writes go through ``handler.wfile``
   under a per-connection lock.
+- A hub may carry a replay provider (``set_replay_provider``): its snapshot
+  frame is sent to every new connection inside the registration critical
+  section, so a late joiner can neither miss a decision nor receive an older
+  frame after a newer one. Duplicate delivery stays possible and remains the
+  consumer's documented dedup case (decision_id).
 """
 
 from __future__ import annotations
@@ -380,6 +385,19 @@ class DecisionEventHub:
         self._lock = threading.Lock()
         self._connections: list[ServerConnection] = []
         self._closing = False
+        self._replay_provider: Callable[[], dict[str, Any] | None] | None = None
+
+    def set_replay_provider(self, provider: Callable[[], dict[str, Any] | None]) -> None:
+        """Install the snapshot source replayed to every new connection.
+
+        The provider returns one JSON-serializable frame (or None for "nothing
+        to replay") and must be safe to call while the hub lock is held — in
+        particular it must not acquire a lock that is ever held around
+        ``broadcast_json`` (ABBA).
+        """
+
+        with self._lock:
+            self._replay_provider = provider
 
     def accept(self, handler: HandlerLike) -> None:
         """Full WS lifecycle on an upgrade request; blocks until disconnect."""
@@ -392,11 +410,34 @@ class DecisionEventHub:
             if self._closing:
                 connection.send_close()
                 return
+            # Replay and registration share one critical section on purpose:
+            # a concurrent broadcast either copied its targets before this
+            # block (its frame is then already visible to the provider) or
+            # copies them after (this connection is registered and gets it
+            # live). Either way the joiner misses nothing and can never see
+            # an older frame after a newer one — only duplicates, which the
+            # consumer dedups by decision_id. The snapshot send does block
+            # broadcasts' target-copy briefly; fine at this fan-out.
+            self._replay_latest(connection)
             self._connections.append(connection)
         try:
             connection.serve()
         finally:
             self._unregister([connection])
+
+    def _replay_latest(self, connection: ServerConnection) -> None:
+        """Send the provider's snapshot frame to one fresh connection."""
+
+        if self._replay_provider is None:
+            return
+        try:
+            snapshot = self._replay_provider()
+        except Exception as exc:  # noqa: BLE001 - replay must never kill accept
+            print(f"warning: decision replay provider failed: {exc}")
+            return
+        if snapshot is None:
+            return
+        connection.send_text(json.dumps(snapshot, ensure_ascii=False))
 
     def _unregister(self, dead: list[ServerConnection]) -> None:
         with self._lock:

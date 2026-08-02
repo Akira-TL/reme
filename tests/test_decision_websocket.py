@@ -543,6 +543,59 @@ def test_handshake_rejects_short_decoded_key_without_writing() -> None:
     assert handler.wfile.getvalue() == b""
 
 
+def test_accept_replays_the_provider_snapshot_to_a_new_connection() -> None:
+    # Late-joiner reconciliation: the snapshot frame must arrive first, so a
+    # viewer opened after the alarm still renders it (P1: missed decisions
+    # were gone forever — the terminal states get no follow-up broadcast).
+    hub = DecisionEventHub()
+    snapshot = {"event_type": "care_decision", "sequence": 7, "note": "补发"}
+    hub.set_replay_provider(lambda: snapshot)
+    link = _Link(hub=hub)
+    try:
+        _await_connections(hub, 1)
+        fin, opcode, body = link.peer.read_frame()
+        assert (fin, opcode) == (True, OPCODE_TEXT)
+        assert json.loads(body.decode("utf-8")) == snapshot
+
+        # Replay happens once per accept; live broadcasts follow untouched.
+        assert hub.broadcast_json({"sequence": 8}) == 1
+        assert json.loads(link.peer.read_frame()[2].decode("utf-8")) == {"sequence": 8}
+    finally:
+        link.close()
+
+
+def test_accept_sends_no_snapshot_when_the_provider_has_nothing() -> None:
+    hub = DecisionEventHub()
+    hub.set_replay_provider(lambda: None)
+    link = _Link(hub=hub)
+    try:
+        _await_connections(hub, 1)
+        # The first frame on the wire must be the live broadcast, proving no
+        # snapshot frame was inserted ahead of it.
+        assert hub.broadcast_json({"sequence": 1}) == 1
+        assert json.loads(link.peer.read_frame()[2].decode("utf-8")) == {"sequence": 1}
+    finally:
+        link.close()
+
+
+def test_accept_survives_a_crashing_replay_provider(capsys: pytest.CaptureFixture[str]) -> None:
+    hub = DecisionEventHub()
+
+    def explode() -> dict[str, Any] | None:
+        raise RuntimeError("provider boom")
+
+    hub.set_replay_provider(explode)
+    link = _Link(hub=hub)
+    try:
+        _await_connections(hub, 1)
+        # The connection must still register and serve despite the failure.
+        assert hub.broadcast_json({"sequence": 1}) == 1
+        assert json.loads(link.peer.read_frame()[2].decode("utf-8")) == {"sequence": 1}
+        assert "provider boom" in capsys.readouterr().out
+    finally:
+        link.close()
+
+
 def test_close_all_wakes_a_blocked_recv_loop_and_blocks_new_accepts() -> None:
     hub = DecisionEventHub()
     link = _Link(hub=hub)

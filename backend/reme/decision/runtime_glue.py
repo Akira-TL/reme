@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 import threading
 from collections.abc import Callable
+from typing import Any
 
 from reme.decision.danger import DangerConfirmController, DangerRejectedError
 from reme.decision.policy import DecisionPublisher, DecisionService
@@ -38,7 +39,13 @@ EVIDENCE_FRAME_KEY = "frame_jpeg_b64"
 
 
 class RuntimeDecisionPublisher:
-    """Envelope newly emitted decisions and fan them out over the hub."""
+    """Envelope newly emitted decisions and fan them out over the hub.
+
+    Also keeps the latest broadcast envelope for the hub to replay to late
+    joiners: without it, a viewer page opened after the fall (or reconnecting
+    inside its retry window) misses the alarm-bearing decision forever — the
+    terminal states get no follow-up broadcast to catch up on.
+    """
 
     def __init__(self, *, registry: RuntimeSessionRegistry, hub: DecisionEventHub) -> None:
         self._registry = registry
@@ -46,6 +53,10 @@ class RuntimeDecisionPublisher:
         # Sequence allocation and the broadcast must be one ordered step, or
         # concurrent publishers can put n+1 on the wire before n (Codex P1).
         self._order_lock = threading.Lock()
+        self._latest_event: dict[str, Any] | None = None
+        # Self-registration so every composition (server main, tests, demo
+        # CLI) gets late-joiner replay without extra wiring.
+        hub.set_replay_provider(self.latest_decision_event)
 
     def publish_decision(self, decision: CareDecision) -> None:
         with self._order_lock:
@@ -63,7 +74,34 @@ class RuntimeDecisionPublisher:
                 event_type=RuntimeEventType.CARE_DECISION,
                 payload=decision.to_payload(),
             )
-            self._hub.broadcast_json(event.to_payload())
+            payload = event.to_payload()
+            # Store BEFORE broadcasting: hub.accept reads the snapshot under
+            # the hub lock, so any broadcast whose target-copy predates a
+            # registration has already made its store visible there — the
+            # reverse order would let a late joiner miss exactly that frame.
+            self._latest_event = payload
+            self._hub.broadcast_json(payload)
+
+    def latest_decision_event(self) -> dict[str, Any] | None:
+        """The active session's newest care_decision envelope, or None.
+
+        Deliberately lock-free: the hub calls this while holding its own
+        lock, and taking ``_order_lock`` here would ABBA-deadlock against
+        ``publish_decision`` (which holds it around ``broadcast_json``). The
+        plain attribute read is atomic, and any momentary staleness is
+        resolved by the hub's replay-then-register ordering (worst case a
+        duplicate frame, which C dedups by decision_id).
+        """
+
+        event = self._latest_event
+        if event is None:
+            return None
+        if event.get("session_id") != self._registry.active_session_id():
+            # Session switched or stopped: the old episode's decision must
+            # not leak into the new session (C would drop it by session_id,
+            # but B does not get to rely on that).
+            return None
+        return event
 
 
 # States whose countdown gets the server-side safety net.

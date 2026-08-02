@@ -174,9 +174,9 @@ def test_live_session_streams_decisions_over_websocket() -> None:
 
         client = _WsClient(port)
         try:
-            status, body = _post(port, "/api/events", _posture_envelope(
-                sequence=1, timestamp_ms=41000.0
-            ))
+            status, body = _post(
+                port, "/api/events", _posture_envelope(sequence=1, timestamp_ms=41000.0)
+            )
             assert status == 200
             assert body == {"accepted": "posture_observation"}
 
@@ -201,6 +201,97 @@ def test_live_session_streams_decisions_over_websocket() -> None:
         status, body = _post(port, "/api/session/stop", {"session_id": SESSION_ID})
         assert status == 200
         assert body["state"] == "stopped"
+    finally:
+        _stop(server, thread, hub)
+
+
+def test_late_ws_joiner_receives_the_current_decision_as_a_snapshot() -> None:
+    # P1 regression: the alarm-bearing decision fired before the family
+    # viewer connected (or while it was inside its reconnect window) and was
+    # gone forever — /ws replayed nothing and terminal states get no
+    # follow-up broadcast. A new connection must now receive the current
+    # episode's latest decision envelope on accept.
+    os.environ["REME_DEMO_QUIET"] = "1"
+    server, thread, hub = _build_runtime_server()
+    try:
+        port = server.server_address[1]
+        _post(port, "/api/session", _session_request_payload())
+
+        live = _WsClient(port)
+        try:
+            _post(port, "/api/events", _posture_envelope(sequence=1, timestamp_ms=41000.0))
+            broadcast = live.recv_json()
+            assert broadcast["event_type"] == "care_decision"
+        finally:
+            live.close()
+
+        late = _WsClient(port)
+        try:
+            snapshot = late.recv_json()
+        finally:
+            late.close()
+        # Byte-identical replay (same decision_id, same sequence): a viewer
+        # that DID see the live broadcast dedups the snapshot by decision_id,
+        # so reconnects inside the retry window converge instead of doubling.
+        assert snapshot == broadcast
+    finally:
+        _stop(server, thread, hub)
+
+
+def test_ws_joiner_before_any_decision_gets_no_snapshot_frame() -> None:
+    os.environ["REME_DEMO_QUIET"] = "1"
+    server, thread, hub = _build_runtime_server()
+    try:
+        port = server.server_address[1]
+        _post(port, "/api/session", _session_request_payload())
+
+        client = _WsClient(port)
+        try:
+            # No decision exists yet, so nothing may be replayed: the first
+            # frame on the wire must be the live decision itself (sequence 1).
+            _post(port, "/api/events", _posture_envelope(sequence=1, timestamp_ms=41000.0))
+            first = client.recv_json()
+            assert first["event_type"] == "care_decision"
+            assert first["sequence"] == 1
+        finally:
+            client.close()
+    finally:
+        _stop(server, thread, hub)
+
+
+def test_snapshot_from_a_stopped_session_is_not_replayed_into_the_next() -> None:
+    os.environ["REME_DEMO_QUIET"] = "1"
+    server, thread, hub = _build_runtime_server()
+    try:
+        port = server.server_address[1]
+        _post(port, "/api/session", _session_request_payload())
+        witness = _WsClient(port)
+        try:
+            _post(port, "/api/events", _posture_envelope(sequence=1, timestamp_ms=41000.0))
+            old_decision = witness.recv_json()
+            assert old_decision["session_id"] == SESSION_ID
+        finally:
+            witness.close()
+        _post(port, "/api/session/stop", {"session_id": SESSION_ID})
+
+        next_session = "session-live-002"
+        _post(port, "/api/session", _session_request_payload(session_id=next_session))
+        client = _WsClient(port)
+        try:
+            # The stale envelope still sits in the publisher, but it belongs
+            # to the stopped session: the joiner's first frame must be the new
+            # session's own decision, not a cross-session replay.
+            _post(
+                port,
+                "/api/events",
+                _posture_envelope(sequence=1, timestamp_ms=41000.0, session_id=next_session),
+            )
+            first = client.recv_json()
+            assert first["session_id"] == next_session
+            assert first["sequence"] == 1
+            assert first["payload"]["decision_id"] != old_decision["payload"]["decision_id"]
+        finally:
+            client.close()
     finally:
         _stop(server, thread, hub)
 
