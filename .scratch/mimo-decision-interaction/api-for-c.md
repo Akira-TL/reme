@@ -6,11 +6,17 @@
 
 ```bash
 source ~/.config/reme/mimo.env
-uv run reme-decision-server <scenes目录> --static <C构建产物目录> \
+uv run reme-decision-server --static <C构建产物目录> \
   --cert certs/lan.pem --key certs/lan-key.pem
 ```
 
-`<scenes目录>` 下每个子目录是一个 SceneBundle（含 manifest.json）。`--mode mock|record` 切模式；`--record-output` 在 live 上捕获 `recorded_decisions.jsonl`；`--visual` 启用 ADR-0003 V 路径（bundle 需有 `derived/visual_context.mp4`，用 `uv run reme-visual-precut <manifest> --start-ms … --end-ms …` 预剪）。
+**纯 live_camera 不需要任何预录素材**——感知来自会话事件流而非磁盘，`scenes目录` 可整个省略。要跑预录场景时再把它作为第一个位置参数传入，下面每个子目录是一个 SceneBundle（含 manifest.json）：
+
+```bash
+uv run reme-decision-server <scenes目录> --mode record --static <C构建产物目录>
+```
+
+`--mode mock|record` 切模式（**record 模式必须给 scenes目录**，否则启动即报错）；`--record-output` 在 live 上捕获 `recorded_decisions.jsonl`；`--visual` 启用 ADR-0003 V 路径（bundle 需有 `derived/visual_context.mp4`，用 `uv run reme-visual-precut <manifest> --start-ms … --end-ms …` 预剪）；`--home-script`／`--home-room`＋`--local-hour`／`--memory-file` 开认知三层，`--no-cognition` 一键回退。
 
 ## 端点
 
