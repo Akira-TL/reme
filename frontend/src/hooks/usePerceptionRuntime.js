@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createEventParser,
+  createFrameMeta,
+  createSceneSignal,
   createSessionRequest,
   mapFrameLandmarks,
   parseRuntimeStatus,
@@ -45,23 +47,22 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
   const [landmarkFrame, setLandmarkFrame] = useState(null);
   const [posture, setPosture] = useState(null);
   const [transition, setTransition] = useState(null);
+  const [retryGeneration, setRetryGeneration] = useState(0);
   const inputSocketRef = useRef(null);
   const sessionRef = useRef(null);
   const sceneRef = useRef(sceneId);
   const frameIndexRef = useRef(0);
+  const retry = useCallback(() => {
+    setRuntime({ state: "offline", reason: "正在重新连接 A 感知服务" });
+    setRetryGeneration((value) => value + 1);
+  }, []);
 
   useEffect(() => {
     sceneRef.current = sceneId;
     const socket = inputSocketRef.current;
     const sessionId = sessionRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || !sessionId) return;
-    socket.send(JSON.stringify({
-      type: "scene_signal",
-      session_id: sessionId,
-      scene_id: sceneId,
-      timestamp_ms: performance.now(),
-      signal: "switch",
-    }));
+    socket.send(JSON.stringify(createSceneSignal(sessionId, sceneId, "switch", performance.now())));
   }, [sceneId]);
 
   useEffect(() => {
@@ -92,13 +93,12 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
 
     function sendScene(signal = "activate") {
       if (!inputSocket || inputSocket.readyState !== WebSocket.OPEN) return;
-      inputSocket.send(JSON.stringify({
-        type: "scene_signal",
-        session_id: sessionId,
-        scene_id: sceneRef.current,
-        timestamp_ms: performance.now(),
+      inputSocket.send(JSON.stringify(createSceneSignal(
+        sessionId,
+        sceneRef.current,
         signal,
-      }));
+        performance.now(),
+      )));
     }
 
     function captureFrame() {
@@ -117,13 +117,12 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
         encoding = false;
         if (!blob || disposed || inputSocket.readyState !== WebSocket.OPEN) return;
         const frameIndex = frameIndexRef.current++;
-        inputSocket.send(JSON.stringify({
-          type: "frame_meta",
-          session_id: sessionId,
-          scene_id: sceneRef.current,
-          frame_index: frameIndex,
-          timestamp_ms: performance.now(),
-        }));
+        inputSocket.send(JSON.stringify(createFrameMeta(
+          sessionId,
+          sceneRef.current,
+          frameIndex,
+          performance.now(),
+        )));
         inputSocket.send(blob);
       }, "image/jpeg", 0.72);
     }
@@ -205,7 +204,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
       inputSocketRef.current = null;
       stopRuntime(urls.httpBase, sessionId).catch(() => {});
     };
-  }, [enabled, videoElement]);
+  }, [enabled, retryGeneration, videoElement]);
 
-  return { runtime, landmarkFrame, posture, transition };
+  return { runtime, landmarkFrame, posture, transition, retry };
 }

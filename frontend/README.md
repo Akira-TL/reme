@@ -36,7 +36,7 @@ VITE_REME_PERCEPTION_INPUT_WS_URL=ws://127.0.0.1:8770/ws/camera-input
 
 前端使用 A 已公布的 HTTP 控制接口启动/停止会话，通过 `/ws/events` 接收 `frame_landmarks`、`posture_observation` 和 `transition_event`。摄像头输入采用浏览器直连 A 的设计：先发送 `scene_signal`，再以 `frame_meta + binary JPEG` 发送 10 FPS、最长边 640px 的帧。
 
-截至 `develop/akira@dfcd312`，A 尚未提供 `/ws/camera-input`，其现有正式实现仍要求 A 反向连接 C 的 Camera WebSocket。页面会将这种情况显示为“A输入待接入”，并继续使用浏览器本地 MediaPipe 作为明确的后备，不会把本地结果伪装成 A 输出。
+截至 `develop/akira@8ef0df8`，A 尚未提供 `/ws/camera-input`，其现有正式实现仍要求 A 反向连接 C 的 Camera WebSocket。页面会将这种情况显示为“A输入待接入”，并继续使用浏览器本地 MediaPipe 作为明确的后备，不会把本地结果伪装成 A 输出。点击状态标签可在 A 服务部署或恢复后重新创建会话。
 
 ## 目录
 
@@ -71,6 +71,7 @@ frontend/
 
 ```bash
 npm run lint
+npm test
 npm run build
 npm run preview
 ```

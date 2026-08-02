@@ -241,6 +241,14 @@ button {
   color: var(--mi-orange);
   font-size: clamp(8px, 2.25vw, 11px);
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.runtime-badge:disabled { cursor: default; }
+
+.runtime-badge:focus-visible {
+  outline: 2px solid rgba(255, 105, 0, 0.62);
+  outline-offset: 2px;
 }
 
 .runtime-badge span {

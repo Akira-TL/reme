@@ -108,6 +108,7 @@ export function App() {
         externalFrame={perception.landmarkFrame}
         posture={perception.posture}
         onVideoElement={handleVideoElement}
+        onRetryRuntime={perception.retry}
       />
       <DashboardScreen active={tab === "dashboard"} onOpenDetail={(key) => setDetail({ kind: "dashboard", key })} />
       <SettingsScreen

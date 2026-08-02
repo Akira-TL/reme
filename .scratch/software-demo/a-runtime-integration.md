@@ -2,7 +2,7 @@
 
 - 日期：2026-08-02
 - 前端分支：`develop/jiang`
-- A 接口基线：`origin/develop/akira@dfcd312`
+- A 接口基线：`origin/develop/akira@8ef0df8`
 - A 交接文档：`.scratch/handoff/2026-08-02-a-runtime-frontend-interface.md`
 
 ## 已确认的 A 接口
@@ -52,7 +52,7 @@ WS /ws/camera-input
 
 ## 当前接口缺口
 
-`develop/akira@dfcd312` 尚未实现浏览器可连接的输入 WS。当前 A 的 `c_ws` 适配器是 A 作为客户端反向连接 C Camera WebSocket，这与已确认的产品拓扑不一致。
+`develop/akira@8ef0df8` 尚未实现浏览器可连接的输入 WS。该版本新增的是跌倒候选模型训练，未改变运行时媒体接口。当前 A 的 `c_ws` 适配器仍是 A 作为客户端反向连接 C Camera WebSocket，这与已确认的产品拓扑不一致。
 
 因此当前联调状态是：
 
@@ -63,6 +63,8 @@ WS /ws/camera-input
 | 前端 -> A 摄像头输入 WS | 前端已实现客户端，等待 A 提供服务端路由 |
 | A landmarks 覆盖本地绘制 | 已实现 |
 | A 不可用时本地降级 | 已实现并显式显示 |
+| A 恢复后的前端手动重连 | 已实现，点击状态标签创建新会话 |
+| schema 与消息顺序合同测试 | 已实现 |
 | B 风险决策 | 未接入 |
 
 ## 风险语义边界

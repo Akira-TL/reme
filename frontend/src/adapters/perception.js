@@ -11,6 +11,28 @@ const KEYPOINT_NAMES = [
   "left_wrist", "right_wrist", "left_hip", "right_hip",
   "left_knee", "right_knee", "left_ankle", "right_ankle",
 ];
+const EVENT_TYPES = new Set(["frame_landmarks", "posture_observation", "transition_event"]);
+
+export function createSceneSignal(sessionId, sceneId, signal, timestampMs) {
+  if (!["activate", "switch", "reuse"].includes(signal)) throw new Error(`无效场景信号: ${signal}`);
+  return {
+    type: "scene_signal",
+    session_id: sessionId,
+    scene_id: sceneId,
+    timestamp_ms: timestampMs,
+    signal,
+  };
+}
+
+export function createFrameMeta(sessionId, sceneId, frameIndex, timestampMs) {
+  return {
+    type: "frame_meta",
+    session_id: sessionId,
+    scene_id: sceneId,
+    frame_index: frameIndex,
+    timestamp_ms: timestampMs,
+  };
+}
 
 export function createSessionRequest(sessionId, sceneId) {
   return {
@@ -41,6 +63,7 @@ export function createEventParser(sessionId) {
     const event = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (!event || event.schema_version !== RUNTIME_EVENT_SCHEMA) return null;
     if (event.session_id !== sessionId || !Number.isInteger(event.sequence) || event.sequence < 0) return null;
+    if (!EVENT_TYPES.has(event.event_type) || !event.payload || typeof event.payload !== "object") return null;
     if (event.sequence < lastSequence) return null;
     if (event.sequence > lastSequence) {
       lastSequence = event.sequence;
@@ -59,11 +82,16 @@ export function mapFrameLandmarks(payload) {
   const byName = new Map(payload.keypoints.map((point) => [point.name, point]));
   const points = KEYPOINT_NAMES.map((name) => byName.get(name));
   if (points.some((point) => !point)) return null;
-  return points.map((point) => ({
+  const mapped = points.map((point) => ({
     x: Number(point.x_norm),
     y: Number(point.y_norm),
     score: Number(point.score),
   }));
+  if (mapped.some((point) => (
+    !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.score)
+    || point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1 || point.score < 0 || point.score > 1
+  ))) return null;
+  return mapped;
 }
 
 export function describePosture(posture) {

@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { describePosture } from "../adapters/perception";
 import { usePoseLandmarker } from "../hooks/usePoseLandmarker";
 
-export function CameraStage({ visible, onHide, runtime, externalFrame, posture, onVideoElement }) {
+export function CameraStage({ visible, onHide, runtime, externalFrame, posture, onVideoElement, onRetryRuntime }) {
   const { videoRef, canvasRef, personDetected, status, retry } = usePoseLandmarker(externalFrame);
   const runtimeLabel = runtime.state === "running"
     ? `A已接入${posture?.posture ? ` · ${describePosture(posture.posture)}` : ""}`
@@ -39,10 +39,17 @@ export function CameraStage({ visible, onHide, runtime, externalFrame, posture, 
         <b>本地处理</b>
       </div>
 
-      <div className={`runtime-badge runtime-${runtime.state}`} title={runtime.reason || runtimeLabel}>
+      <button
+        type="button"
+        className={`runtime-badge runtime-${runtime.state}`}
+        title={runtime.reason || runtimeLabel}
+        aria-label={`${runtimeLabel}。${runtime.state === "running" ? "" : "点击重试"}`}
+        onClick={onRetryRuntime}
+        disabled={["running", "starting"].includes(runtime.state)}
+      >
         <i aria-hidden="true" />
         <span>{runtimeLabel}</span>
-      </div>
+      </button>
 
       <IconButton className="stage-privacy" onClick={onHide} aria-label="隐藏实时摄像头画面">
         <VisibilityOffRoundedIcon fontSize="small" />
