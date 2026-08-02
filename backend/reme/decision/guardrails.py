@@ -24,7 +24,25 @@ _STATE_SEVERITY: dict[DecisionState, int] = {
 
 @dataclass(frozen=True, slots=True)
 class TriggerConfig:
-    """Per-scene deterministic thresholds, expressed in real video milliseconds."""
+    """Per-scene deterministic thresholds, expressed in real video milliseconds.
+
+    Provenance (PRD requirement "阈值参考公开学术论文并经实测标定"; full ledger
+    in docs/references/cognition-evidence.md):
+
+    - The *shape* of the long-stillness rule (low motion sustained over time,
+      rather than a posture snapshot) follows the operationalisation used by
+      validated accelerometer systems — R9 Skotte et al. 2014 — and the
+      geriatric finding that what matters after a fall is time spent immobile:
+      R3 Fleming & Brayne 2008 (BMJ 337:a2227), R4 Schwickert et al. 2017.
+    - The *numbers* below are ours.  ``long_still_min_ms`` is a demo-scale
+      value, not R4's 24.5 s marker; ``fall_confidence_min`` and both timeouts
+      are tuned for a live demo's pacing.  No paper states them, and none may
+      be cited as their source.
+    - Detection rates from the literature must never become Reme's promises:
+      published fall-detection algorithms drop to 57.0% +/- 27.3% sensitivity
+      on real-world falls (R6 Bagalà et al. 2012), which is exactly why the
+      product asks a question first instead of asserting a fall.
+    """
 
     fall_confidence_min: float = 0.7
     long_still_min_ms: float = 30000.0

@@ -23,12 +23,20 @@ from reme.decision.context import (
     Transition,
 )
 
+# No literature backing: both are demo-legibility choices registered in
+# docs/references/cognition-evidence.md ("无文献支撑的工程约定").
 DEFAULT_WINDOW_MS = 120000.0
 STILL_EPISODE_MIN_MS = 10000.0
 
-# Physics guardband for a genuine fall's descent (ADR-0006 §physics): an
-# uncontrolled centre-of-mass drop completes well inside two seconds, while
-# a controlled lie-down takes longer; sub-150ms "descents" are jitter.
+# Physics guardband for a genuine fall's descent.  Evidence: real (non-simulated)
+# falls take 583 +/- 255 ms from the start of descent to pelvis impact, while a
+# self-paced sit-to-stand cycle runs ~1.9 s — a 3-5x separation in *duration*,
+# the one physical quantity monocular 2D does not distort.
+#   R1 Choi et al. 2015, J Biomech 48(6):911-920, doi 10.1016/j.jbiomech.2015.02.025
+#   R7 Kerr et al. 1997, Clin Biomech 12(4):236-245, doi 10.1016/S0268-0033(96)00077-0
+# The two constants themselves are OUR engineering values inside that order of
+# magnitude (generous upper bound, jitter floor), not figures from either paper.
+# Full ledger: docs/references/cognition-evidence.md
 FALL_DESCENT_MIN_MS = 150.0
 FALL_DESCENT_MAX_MS = 2000.0
 
@@ -130,7 +138,10 @@ def plausible_fall_dynamics(hints: SpatialHints) -> bool | None:
     if not FALL_DESCENT_MIN_MS <= hints.descent_duration_ms <= FALL_DESCENT_MAX_MS:
         return False
     # A drop shallower than 30% of the body's vertical extent reads as a lean
-    # or a crouch, not a fall (ADR-0006 §physics).
+    # or a crouch, not a fall.  The centre-of-mass concept comes from the
+    # segment-parameter literature (R10 de Leva 1996 / R11 Dempster 1955), but
+    # 0.3 is our own dimensionless cut — no paper states it, and B never
+    # computes the ratio itself (the producer supplies it via evidence).
     return hints.com_drop_ratio is None or hints.com_drop_ratio >= 0.3
 
 

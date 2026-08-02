@@ -24,6 +24,11 @@ from pathlib import Path
 from reme.decision.behavior import BehaviorFeatures
 
 MEMORY_SCHEMA_VERSION = "reme-behavior-memory/v0-experiment"
+# None of these four have literature backing — they are demo-scale choices
+# registered in docs/references/cognition-evidence.md.  What the literature
+# does support is the *reason* a per-hour baseline exists at all: in older
+# adults, deviation from one's own routine carries more signal than any
+# absolute threshold (see the geriatric entries in that ledger).
 DEFAULT_EWMA_ALPHA = 0.3
 MAX_EVENTS = 200
 MIN_BASELINE_SAMPLES = 3

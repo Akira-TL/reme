@@ -26,6 +26,12 @@ HOME_SCHEMA_VERSION = "reme-home-context/v0-experiment"
 NIGHT_HOURS = frozenset({22, 23, 0, 1, 2, 3, 4, 5})
 
 # adjust_trigger_config clamp band for long_still_min_ms scaling.
+# The *direction* of each adjustment is defensible (a bathroom floor is where
+# "long lie" harm concentrates — R3 Fleming & Brayne 2008; a bed at night is
+# where stillness is expected), but the multipliers themselves have NO
+# literature backing: they are demo-tuned values, deliberately clamped so no
+# context can loosen a rule beyond this band.  See
+# docs/references/cognition-evidence.md.
 MIN_STILL_SCALE = 0.5
 MAX_STILL_SCALE = 3.0
 
