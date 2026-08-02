@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
+from reme.pose.c_stream import (
+    CCameraMessageSource,
+    CCameraWebSocketSource,
+    CSceneSignal,
+)
 from reme.pose.camera import CameraConfig, LiveMoveNetStream, OpenCVCameraSource
 from reme.pose.movenet import MoveNetEstimator
 from reme.pose.posture import StaticPostureModel
@@ -24,12 +29,14 @@ from reme.pose.runtime import (
     Component,
     ModeProfile,
     RuntimeEvent,
+    RuntimeEventType,
     RuntimeSessionError,
     RuntimeSessionRequest,
     RuntimeSessionState,
     RuntimeSessionStatus,
     ensure_new_session,
 )
+from reme.pose.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
 from reme.pose.transitions import TransitionDetector
 
 DEFAULT_MOVENET_MODEL = Path("models/movenet/movenet_lightning_f16_v4.tflite")
@@ -38,6 +45,8 @@ DEFAULT_POSTURE_MODEL = Path(
     "seed-42-lr-0.04/model.json"
 )
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+FRONTEND_API_SCHEMA_VERSION = "reme-perception-frontend/v0-experiment"
+API_ERROR_SCHEMA_VERSION = "reme-api-error/v0-experiment"
 
 
 class RuntimeServerError(RuntimeError):
@@ -135,6 +144,115 @@ def derive_live_perception_events(
     if transition_event is not None:
         events.append(transition_event)
     return tuple(events)
+
+
+class CCameraWebSocketPerceptionWorker:
+    """Run perception on C-owned camera frames and reusable scene signals."""
+
+    def __init__(
+        self,
+        *,
+        source: CCameraMessageSource,
+        movenet_model: Path,
+        posture_model: Path,
+        posture_hz: float = 7.5,
+        score_threshold: float = 0.2,
+        num_threads: int = 4,
+    ) -> None:
+        self.source = source
+        self.movenet_model = movenet_model
+        self.posture_model = posture_model
+        self.posture_hz = posture_hz
+        self.score_threshold = score_threshold
+        self.num_threads = num_threads
+
+    def run(
+        self,
+        request: RuntimeSessionRequest,
+        *,
+        publish: Callable[[RuntimeEvent], None],
+        mark_running: Callable[[], None],
+        is_active: Callable[[], bool],
+    ) -> None:
+        if request.profile is not ModeProfile.LIVE_CAMERA:
+            raise RuntimeServerError("C camera WebSocket worker supports live_camera only")
+        try:
+            import cv2
+            import numpy as np
+        except ImportError as exc:
+            raise RuntimeServerError(
+                "C camera WebSocket input requires opencv-python and numpy"
+            ) from exc
+
+        cv2_module: Any = cv2
+        estimator = MoveNetEstimator(
+            self.movenet_model,
+            score_threshold=self.score_threshold,
+            num_threads=self.num_threads,
+        )
+        estimator.reset()
+        predictor = StaticPostureModel.load(self.posture_model)
+        tracker = RealtimePostureTracker(
+            session_id=request.session_id,
+            predictor=predictor,
+            config=PostureRuntimeConfig(
+                output_hz=self.posture_hz,
+                score_threshold=self.score_threshold,
+            ),
+        )
+        transition_detector = TransitionDetector(session_id=request.session_id)
+        current_scene_id = request.scene_id
+        announced = False
+        sequence = 0
+
+        for message in self.source.iter_messages(request, is_active=is_active):
+            if not is_active():
+                return
+            if message.session_id != request.session_id:
+                continue
+            if isinstance(message, CSceneSignal):
+                if message.signal not in {"activate", "reuse", "switch"}:
+                    continue
+                current_scene_id = message.scene_id
+                tracker.reset()
+                transition_detector.reset(session_id=request.session_id)
+                continue
+            if message.scene_id != current_scene_id:
+                continue
+
+            encoded = np.frombuffer(message.jpeg, dtype=np.uint8)
+            frame = cv2_module.imdecode(encoded, cv2_module.IMREAD_COLOR)
+            if frame is None:
+                continue
+            result = estimator.infer(frame)
+            frame_event = RuntimeEvent(
+                session_id=request.session_id,
+                sequence=sequence,
+                event_type=RuntimeEventType.FRAME_LANDMARKS,
+                payload={
+                    "schema_version": FRAME_LANDMARKS_SCHEMA_VERSION,
+                    "scene_id": current_scene_id,
+                    "frame_index": message.frame_index,
+                    "timestamp_ms": round(message.timestamp_ms, 3),
+                    "person_detected": result.person_detected,
+                    "landmark_quality": result.landmark_quality,
+                    "coordinate_space": "normalized_image_top_left",
+                    "smoothed": False,
+                    "keypoints": [
+                        keypoint.to_payload() for keypoint in result.keypoints
+                    ],
+                },
+            )
+            sequence += 1
+            if not announced:
+                mark_running()
+                announced = True
+            for event in derive_live_perception_events(
+                frame_event,
+                posture_tracker=tracker,
+                transition_detector=transition_detector,
+            ):
+                publish(event)
 
 
 class LiveCameraPerceptionWorker:
@@ -347,6 +465,48 @@ class RuntimeHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+def frontend_capabilities() -> dict[str, object]:
+    """Describe the stable A-side interface consumed by B and C."""
+
+    return {
+        "schema_version": FRONTEND_API_SCHEMA_VERSION,
+        "service": "reme-perception",
+        "profiles": [ModeProfile.LIVE_CAMERA.value],
+        "events": [
+            "frame_landmarks",
+            "posture_observation",
+            "transition_event",
+        ],
+        "states": [state.value for state in RuntimeSessionState],
+        "endpoints": {
+            "health": "/api/health",
+            "capabilities": "/api/runtime/capabilities",
+            "start": "/api/runtime/start",
+            "stop": "/api/runtime/stop",
+            "status": "/api/runtime/status",
+            "events": "/ws/events?session_id=<session_id>",
+        },
+        "schemas": {
+            "session_request": "reme-runtime-session-request/v0-experiment",
+            "session_status": "reme-runtime-session-status/v0-experiment",
+            "runtime_event": "reme-runtime-event/v0-experiment",
+            "frame_landmarks": "movenet-17/v0-experiment",
+            "posture_observation": "reme-posture/v0-experiment",
+            "transition_event": "reme-transition/v0-experiment",
+            "error": API_ERROR_SCHEMA_VERSION,
+        },
+        "session_controller": "C",
+        "formal_input_adapter": "c_ws",
+        "local_test_input_adapter": "local_camera",
+        "frame_source_owner": "C",
+        "scene_signal_supported": True,
+        "camera_websocket_reused_across_scenes": True,
+        "audio_processed_by_a": False,
+        "raw_video_persisted": False,
+        "cors": "any_origin_local_network_demo",
+    }
+
+
 def build_runtime_handler(
     controller: RuntimePerceptionController,
 ) -> type[BaseHTTPRequestHandler]:
@@ -374,6 +534,9 @@ def build_runtime_handler(
                     },
                 )
                 return
+            if parsed.path == "/api/runtime/capabilities":
+                self._json(HTTPStatus.OK, frontend_capabilities())
+                return
             if parsed.path == "/api/runtime/status":
                 status = controller.status()
                 self._json(HTTPStatus.OK, status.to_payload() if status else None)
@@ -382,7 +545,12 @@ def build_runtime_handler(
                 session_id = parse_qs(parsed.query).get("session_id", [""])[0]
                 self._websocket_events(session_id)
                 return
-            self._json(HTTPStatus.NOT_FOUND, {"error": f"unknown path {parsed.path}"})
+            self._error(
+                HTTPStatus.NOT_FOUND,
+                code="not_found",
+                message=f"unknown path {parsed.path}",
+                path=parsed.path,
+            )
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -406,9 +574,19 @@ def build_runtime_handler(
                 ValueError,
                 json.JSONDecodeError,
             ) as exc:
-                self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(exc)})
+                self._error(
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                    code="invalid_request",
+                    message=str(exc),
+                    path=parsed.path,
+                )
                 return
-            self._json(HTTPStatus.NOT_FOUND, {"error": f"unknown path {parsed.path}"})
+            self._error(
+                HTTPStatus.NOT_FOUND,
+                code="not_found",
+                message=f"unknown path {parsed.path}",
+                path=parsed.path,
+            )
 
         def _read_json(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length") or 0)
@@ -431,21 +609,58 @@ def build_runtime_handler(
             except (BrokenPipeError, ConnectionResetError):
                 return
 
+        def _error(
+            self,
+            status: HTTPStatus,
+            *,
+            code: str,
+            message: str,
+            path: str,
+        ) -> None:
+            self._json(
+                status,
+                {
+                    "schema_version": API_ERROR_SCHEMA_VERSION,
+                    "code": code,
+                    "message": message,
+                    "path": path,
+                },
+            )
+
         def _cors(self) -> None:
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                "Content-Type, X-Reme-Session-Id",
+            )
+            self.send_header("Access-Control-Allow-Private-Network", "true")
 
         def _websocket_events(self, session_id: str) -> None:
             if not session_id.strip():
-                self._json(HTTPStatus.BAD_REQUEST, {"error": "session_id is required"})
+                self._error(
+                    HTTPStatus.BAD_REQUEST,
+                    code="missing_session_id",
+                    message="session_id is required",
+                    path="/ws/events",
+                )
                 return
             if self.headers.get("Upgrade", "").lower() != "websocket":
-                self._json(HTTPStatus.UPGRADE_REQUIRED, {"error": "websocket upgrade required"})
+                self._error(
+                    HTTPStatus.UPGRADE_REQUIRED,
+                    code="websocket_required",
+                    message="websocket upgrade required",
+                    path="/ws/events",
+                )
                 return
             key = self.headers.get("Sec-WebSocket-Key")
             if not key:
-                self._json(HTTPStatus.BAD_REQUEST, {"error": "Sec-WebSocket-Key is required"})
+                self._error(
+                    HTTPStatus.BAD_REQUEST,
+                    code="missing_websocket_key",
+                    message="Sec-WebSocket-Key is required",
+                    path="/ws/events",
+                )
                 return
             accept = base64.b64encode(
                 hashlib.sha1((key + _WEBSOCKET_GUID).encode("ascii")).digest()
@@ -513,8 +728,19 @@ def _put_latest(subscription: EventSubscription, event: RuntimeEvent | None) -> 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Listen address; 0.0.0.0 allows B/C access on the local network",
+    )
     parser.add_argument("--port", type=int, default=8770)
+    parser.add_argument(
+        "--input-adapter",
+        choices=("c_ws", "local_camera"),
+        default="c_ws",
+        help="c_ws is the formal C-owned media path; local_camera is test-only",
+    )
+    parser.add_argument("--c-camera-ws-url")
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
@@ -531,22 +757,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the local A-side live perception control server."""
 
     args = _build_parser().parse_args(argv)
-    worker = LiveCameraPerceptionWorker(
-        camera_config=CameraConfig(
-            device_index=args.camera,
-            width=args.width,
-            height=args.height,
-            fps=args.fps,
-        ),
-        movenet_model=args.movenet_model,
-        posture_model=args.posture_model,
-        posture_hz=args.posture_hz,
-        score_threshold=args.score_threshold,
-        num_threads=args.num_threads,
-    )
+    if args.input_adapter == "c_ws":
+        if not isinstance(args.c_camera_ws_url, str) or not args.c_camera_ws_url.strip():
+            raise RuntimeServerError("--c-camera-ws-url is required for c_ws input")
+        worker: PerceptionWorker = CCameraWebSocketPerceptionWorker(
+            source=CCameraWebSocketSource(args.c_camera_ws_url.strip()),
+            movenet_model=args.movenet_model,
+            posture_model=args.posture_model,
+            posture_hz=args.posture_hz,
+            score_threshold=args.score_threshold,
+            num_threads=args.num_threads,
+        )
+    else:
+        worker = LiveCameraPerceptionWorker(
+            camera_config=CameraConfig(
+                device_index=args.camera,
+                width=args.width,
+                height=args.height,
+                fps=args.fps,
+            ),
+            movenet_model=args.movenet_model,
+            posture_model=args.posture_model,
+            posture_hz=args.posture_hz,
+            score_threshold=args.score_threshold,
+            num_threads=args.num_threads,
+        )
     controller = RuntimePerceptionController(worker=worker)
     server = RuntimeHTTPServer((args.host, args.port), build_runtime_handler(controller))
     print(f"Reme perception control: http://{args.host}:{args.port}")
+    print(f"Input adapter: {args.input_adapter}")
     print(f"WebSocket events: ws://{args.host}:{args.port}/ws/events?session_id=<id>")
     try:
         server.serve_forever()

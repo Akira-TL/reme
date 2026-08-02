@@ -5,14 +5,19 @@ import hashlib
 import json
 import queue
 import socket
+import sys
 import threading
 import time
+import types
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer
 from typing import Protocol
 
 import pytest
+import reme.pose.runtime_server as runtime_server_module
+from reme.pose.c_stream import CSceneSignal, CVideoFrame
 from reme.pose.runtime import (
     ModeProfile,
     RuntimeEvent,
@@ -21,6 +26,7 @@ from reme.pose.runtime import (
     RuntimeSessionState,
 )
 from reme.pose.runtime_server import (
+    CCameraWebSocketPerceptionWorker,
     EventBroker,
     PerceptionWorker,
     RuntimePerceptionController,
@@ -28,6 +34,7 @@ from reme.pose.runtime_server import (
     derive_live_perception_events,
     encode_websocket_frame,
 )
+from reme.pose.scene_bundle import MOVENET_KEYPOINT_NAMES
 
 
 class Publish(Protocol):
@@ -205,6 +212,184 @@ def test_websocket_frame_encodes_short_and_extended_text() -> None:
     assert extended[:2] == b"\x81\x7e"
     assert int.from_bytes(extended[2:4], "big") == 200
     assert extended[4:] == payload
+
+
+def test_frontend_capabilities_and_cors_headers() -> None:
+    worker = FakeWorker()
+    controller = RuntimePerceptionController(worker=worker)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), build_runtime_handler(controller))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{httpd.server_port}"
+    try:
+        request = urllib.request.Request(
+            f"{base}/api/runtime/capabilities",
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.headers["Access-Control-Allow-Origin"] == "*"
+            assert response.headers["Access-Control-Allow-Private-Network"] == "true"
+        assert payload["schema_version"] == "reme-perception-frontend/v0-experiment"
+        assert payload["service"] == "reme-perception"
+        assert payload["profiles"] == ["live_camera"]
+        assert payload["events"] == [
+            "frame_landmarks",
+            "posture_observation",
+            "transition_event",
+        ]
+        assert payload["formal_input_adapter"] == "c_ws"
+        assert payload["local_test_input_adapter"] == "local_camera"
+        assert payload["frame_source_owner"] == "C"
+        assert payload["scene_signal_supported"] is True
+        assert payload["camera_websocket_reused_across_scenes"] is True
+        assert payload["audio_processed_by_a"] is False
+        assert payload["raw_video_persisted"] is False
+        assert payload["endpoints"]["events"] == "/ws/events?session_id=<session_id>"
+
+        options = urllib.request.Request(
+            f"{base}/api/runtime/start",
+            method="OPTIONS",
+            headers={"Access-Control-Request-Private-Network": "true"},
+        )
+        with urllib.request.urlopen(options, timeout=2) as response:
+            assert response.status == 204
+            assert response.headers["Access-Control-Allow-Private-Network"] == "true"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2.0)
+
+
+def test_c_camera_worker_resets_scene_state_and_keeps_runtime_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSource:
+        def iter_messages(
+            self,
+            request: RuntimeSessionRequest,
+            *,
+            is_active: Callable[[], bool],
+        ):
+            assert request.session_id == "session-live-001"
+            assert is_active()
+            yield CSceneSignal("session-live-001", "kitchen", 0.0, "activate")
+            yield CVideoFrame("session-live-001", "kitchen", 7, 0.0, b"\xff\xd8a")
+            yield CSceneSignal("session-live-001", "living-room", 100.0, "switch")
+            yield CVideoFrame("session-live-001", "living-room", 0, 0.0, b"\xff\xd8b")
+            yield CSceneSignal("session-live-001", "kitchen", 200.0, "reuse")
+            yield CVideoFrame("session-live-001", "kitchen", 0, 0.0, b"\xff\xd8c")
+
+    class FakeKeypoint:
+        def __init__(self, index: int) -> None:
+            self.index = index
+
+        def to_payload(self) -> dict[str, object]:
+            return {
+                "name": MOVENET_KEYPOINT_NAMES[self.index],
+                "x_norm": 0.5,
+                "y_norm": 0.5,
+                "score": 0.0,
+            }
+
+    class FakeEstimator:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def reset(self) -> None:
+            pass
+
+        def infer(self, frame: object) -> object:
+            return types.SimpleNamespace(
+                person_detected=False,
+                landmark_quality="unavailable",
+                keypoints=tuple(FakeKeypoint(index) for index in range(17)),
+            )
+
+    class FakePredictor:
+        def predict_record(self, record: dict[str, object]) -> object:
+            return types.SimpleNamespace(
+                posture="unknown",
+                confidence=1.0,
+                visible_keypoint_ratio=0.0,
+            )
+
+    class FakeStaticPostureModel:
+        @staticmethod
+        def load(path: object) -> FakePredictor:
+            return FakePredictor()
+
+    fake_cv2 = types.ModuleType("cv2")
+    fake_cv2.IMREAD_COLOR = 1
+    fake_cv2.imdecode = lambda encoded, mode: object()
+    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+    monkeypatch.setattr(runtime_server_module, "MoveNetEstimator", FakeEstimator)
+    monkeypatch.setattr(runtime_server_module, "StaticPostureModel", FakeStaticPostureModel)
+
+    published: list[RuntimeEvent] = []
+    running = 0
+
+    def mark_running() -> None:
+        nonlocal running
+        running += 1
+
+    worker = CCameraWebSocketPerceptionWorker(
+        source=FakeSource(),
+        movenet_model=runtime_server_module.DEFAULT_MOVENET_MODEL,
+        posture_model=runtime_server_module.DEFAULT_POSTURE_MODEL,
+    )
+    worker.run(
+        _live_request(),
+        publish=published.append,
+        mark_running=mark_running,
+        is_active=lambda: True,
+    )
+
+    frame_events = [
+        event for event in published if event.event_type is RuntimeEventType.FRAME_LANDMARKS
+    ]
+    posture_events = [
+        event
+        for event in published
+        if event.event_type is RuntimeEventType.POSTURE_OBSERVATION
+    ]
+    assert running == 1
+    assert [event.sequence for event in frame_events] == [0, 1, 2]
+    assert [event.payload["frame_index"] for event in frame_events] == [7, 0, 0]
+    assert [event.payload["scene_id"] for event in frame_events] == [
+        "kitchen",
+        "living-room",
+        "kitchen",
+    ]
+    assert [event.payload["posture_duration_ms"] for event in posture_events] == [
+        0.0,
+        0.0,
+        0.0,
+    ]
+
+
+def test_frontend_error_payload_has_stable_shape() -> None:
+    worker = FakeWorker()
+    controller = RuntimePerceptionController(worker=worker)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), build_runtime_handler(controller))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{httpd.server_port}"
+    try:
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(f"{base}/api/missing", timeout=2)
+        payload = json.loads(excinfo.value.read().decode("utf-8"))
+        assert excinfo.value.code == 404
+        assert payload == {
+            "schema_version": "reme-api-error/v0-experiment",
+            "code": "not_found",
+            "message": "unknown path /api/missing",
+            "path": "/api/missing",
+        }
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2.0)
 
 
 def test_runtime_http_start_status_stop_and_websocket() -> None:

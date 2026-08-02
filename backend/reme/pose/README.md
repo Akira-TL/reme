@@ -182,15 +182,26 @@ http://127.0.0.1:8765/live
 
 ## C控制的实时事件服务
 
-启动A侧HTTP控制与WebSocket事件流：
+正式链路由C采集视频和音频。A复用C已有的摄像头WebSocket，只处理视频帧与场景信号；音频由C/B链路处理：
+
+```bash
+.venv/bin/python -m reme.pose.runtime_server \
+  --host 0.0.0.0 \
+  --port 8770 \
+  --input-adapter c_ws \
+  --c-camera-ws-url ws://<C_HOST>:<C_PORT>/<CAMERA_PATH> \
+  --movenet-model models/movenet/movenet_lightning_f16_v4.tflite \
+  --posture-model artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json
+```
+
+A本地摄像头只用于开发测试：
 
 ```bash
 .venv/bin/python -m reme.pose.runtime_server \
   --host 127.0.0.1 \
   --port 8770 \
-  --camera 0 \
-  --movenet-model models/movenet/movenet_lightning_f16_v4.tflite \
-  --posture-model artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json
+  --input-adapter local_camera \
+  --camera 0
 ```
 
 控制入口：
@@ -199,11 +210,14 @@ http://127.0.0.1:8765/live
 POST /api/runtime/start
 POST /api/runtime/stop
 GET  /api/runtime/status
+GET  /api/runtime/capabilities
 GET  /api/health
 WS   /ws/events?session_id=<session_id>
 ```
 
-`POST /api/runtime/start`只接受共享合同中的`live_camera`请求。HTTP响应先返回`starting`；摄像头成功打开并完成首帧推理后，`GET /api/runtime/status`才返回`running`。WebSocket发送同一`session_id`下的`FrameLandmarks`、`PostureObservation`和确定性`TransitionEvent`候选。每帧先更新姿态上下文，再分析转变，最后按关键点、姿态、转变的顺序发布。`fall_like_transition`只是待验证候选，不代表已证明的跌倒识别。替换session时旧连接收到关闭帧，旧事件不会进入新会话。
+`POST /api/runtime/start`只接受共享合同中的`live_camera`请求。HTTP响应先返回`starting`；正式`c_ws`模式连接C摄像头WS并收到首个有效帧后，`GET /api/runtime/status`才返回`running`。WebSocket发送同一`session_id`下的`FrameLandmarks`、`PostureObservation`和确定性`TransitionEvent`候选。每帧先更新姿态上下文，再分析转变，最后按关键点、姿态、转变的顺序发布。`fall_like_transition`只是待验证候选，不代表已证明的跌倒识别。替换session时旧连接收到关闭帧，旧事件不会进入新会话。
+
+C摄像头WS在一个session内保持连接并复用多个场景。`scene_signal`的`activate`、`switch`或`reuse`会切换当前`scene_id`，同时清空A的姿态平滑、持续时间和转变窗口；不会重启session或重连摄像头WS。A的事件`sequence`在整个session内单调递增，即使C按场景重置自己的`frame_index`。默认监听`0.0.0.0:8770`，允许同一局域网内的B/C访问；CORS和Private Network预检已开放。`GET /api/runtime/capabilities`返回当前输入所有权、事件类型、schema与端点。
 
 ## MotionBERT 可重复重建
 
