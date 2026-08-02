@@ -16,6 +16,12 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
+from reme.pose.browser_input import (
+    BrowserPushPerceptionWorker,
+    parse_input_text,
+    read_ws_messages,
+    websocket_accept_value,
+)
 from reme.pose.camera import CameraConfig, LiveMoveNetStream, OpenCVCameraSource
 from reme.pose.movenet import MoveNetEstimator
 from reme.pose.posture import StaticPostureModel
@@ -347,10 +353,28 @@ class RuntimeHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+RUNTIME_SCHEMAS = {
+    "runtime_event": "reme-runtime-event/v0-experiment",
+    "session_request": "reme-runtime-session-request/v0-experiment",
+    "session_status": "reme-runtime-session-status/v0-experiment",
+    "frame_landmarks": "movenet-17/v0-experiment",
+    "posture": "reme-posture/v0-experiment",
+    "transition": "reme-transition/v0-experiment",
+}
+
+
 def build_runtime_handler(
     controller: RuntimePerceptionController,
+    *,
+    input_worker: BrowserPushPerceptionWorker | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    """Build HTTP control and send-only WebSocket event routes."""
+    """Build HTTP control and WebSocket routes (events out, camera input in).
+
+    ``input_worker`` enables the browser input lane: C probes
+    ``GET /api/runtime/capabilities`` and, when ``input`` is present, pushes
+    ``landmarks_frame``/JPEG messages over ``/ws/camera-input`` instead of
+    expecting A to own a local camera.
+    """
 
     class RuntimeHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -378,9 +402,21 @@ def build_runtime_handler(
                 status = controller.status()
                 self._json(HTTPStatus.OK, status.to_payload() if status else None)
                 return
+            if parsed.path == "/api/runtime/capabilities":
+                payload: dict[str, Any] = {
+                    "component": "perception",
+                    "schemas": dict(RUNTIME_SCHEMAS),
+                }
+                if input_worker is not None:
+                    payload["input"] = input_worker.capabilities()
+                self._json(HTTPStatus.OK, payload)
+                return
             if parsed.path == "/ws/events":
                 session_id = parse_qs(parsed.query).get("session_id", [""])[0]
                 self._websocket_events(session_id)
+                return
+            if parsed.path == "/ws/camera-input":
+                self._websocket_camera_input()
                 return
             self._json(HTTPStatus.NOT_FOUND, {"error": f"unknown path {parsed.path}"})
 
@@ -478,6 +514,57 @@ def build_runtime_handler(
             finally:
                 controller.broker.unsubscribe(session_id, subscription)
 
+        def _websocket_camera_input(self) -> None:
+            # Receiving lane for C's browser: JSON text messages routed by
+            # their embedded session_id to the active browser-input session;
+            # binary frames pair with the preceding frame_meta.
+            if input_worker is None:
+                self._json(
+                    HTTPStatus.CONFLICT,
+                    {"error": "this server runs a local camera; camera input is disabled"},
+                )
+                return
+            if self.headers.get("Upgrade", "").lower() != "websocket":
+                self._json(HTTPStatus.UPGRADE_REQUIRED, {"error": "websocket upgrade required"})
+                return
+            key = self.headers.get("Sec-WebSocket-Key")
+            if not key:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "Sec-WebSocket-Key is required"})
+                return
+            self.close_connection = True
+            self.send_response(HTTPStatus.SWITCHING_PROTOCOLS)
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", websocket_accept_value(key))
+            self.end_headers()
+            write_lock = threading.Lock()
+
+            def send_control(opcode: int, payload: bytes) -> None:
+                frame = encode_websocket_frame(payload, opcode=opcode)
+                with write_lock, suppress(BrokenPipeError, ConnectionResetError, OSError):
+                    self.wfile.write(frame)
+                    self.wfile.flush()
+
+            last_engine = None
+            try:
+                for opcode, payload in read_ws_messages(self.rfile, send_control):
+                    if opcode == 0x1:
+                        message = parse_input_text(payload)
+                        if message is None:
+                            continue
+                        session_id = message.get("session_id")
+                        if not isinstance(session_id, str):
+                            continue
+                        engine = input_worker.get_session(session_id)
+                        if engine is None:
+                            continue
+                        last_engine = engine
+                        engine.handle_text(message)
+                    elif opcode == 0x2 and last_engine is not None:
+                        last_engine.handle_binary(payload)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+
         def log_message(self, format_string: str, *args: object) -> None:
             return
 
@@ -515,6 +602,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8770)
+    parser.add_argument(
+        "--input",
+        choices=("auto", "camera", "browser"),
+        default="auto",
+        help=(
+            "perception input lane: 'camera' runs the local OpenCV+MoveNet "
+            "pipeline, 'browser' accepts C's pushed frames/landmarks over "
+            "/ws/camera-input, 'auto' picks camera only when its model and "
+            "dependencies are actually present"
+        ),
+    )
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
@@ -527,27 +625,53 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _camera_lane_available(args: argparse.Namespace) -> bool:
+    from importlib.util import find_spec
+
+    if not (args.movenet_model.is_file() and args.posture_model.is_file()):
+        return False
+    return find_spec("cv2") is not None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the local A-side live perception control server."""
 
     args = _build_parser().parse_args(argv)
-    worker = LiveCameraPerceptionWorker(
-        camera_config=CameraConfig(
-            device_index=args.camera,
-            width=args.width,
-            height=args.height,
-            fps=args.fps,
-        ),
-        movenet_model=args.movenet_model,
-        posture_model=args.posture_model,
-        posture_hz=args.posture_hz,
-        score_threshold=args.score_threshold,
-        num_threads=args.num_threads,
-    )
+    input_lane = args.input
+    if input_lane == "auto":
+        input_lane = "camera" if _camera_lane_available(args) else "browser"
+    input_worker: BrowserPushPerceptionWorker | None = None
+    worker: PerceptionWorker
+    if input_lane == "browser":
+        input_worker = BrowserPushPerceptionWorker(
+            posture_config=PostureRuntimeConfig(
+                output_hz=args.posture_hz, score_threshold=args.score_threshold
+            ),
+        )
+        worker = input_worker
+    else:
+        worker = LiveCameraPerceptionWorker(
+            camera_config=CameraConfig(
+                device_index=args.camera,
+                width=args.width,
+                height=args.height,
+                fps=args.fps,
+            ),
+            movenet_model=args.movenet_model,
+            posture_model=args.posture_model,
+            posture_hz=args.posture_hz,
+            score_threshold=args.score_threshold,
+            num_threads=args.num_threads,
+        )
     controller = RuntimePerceptionController(worker=worker)
-    server = RuntimeHTTPServer((args.host, args.port), build_runtime_handler(controller))
-    print(f"Reme perception control: http://{args.host}:{args.port}")
+    server = RuntimeHTTPServer(
+        (args.host, args.port),
+        build_runtime_handler(controller, input_worker=input_worker),
+    )
+    print(f"Reme perception control: http://{args.host}:{args.port}  input={input_lane}")
     print(f"WebSocket events: ws://{args.host}:{args.port}/ws/events?session_id=<id>")
+    if input_worker is not None:
+        print(f"WebSocket camera input: ws://{args.host}:{args.port}/ws/camera-input")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
