@@ -36,6 +36,7 @@ from reme.decision.policy import (
 )
 from reme.decision.records import DecisionRecordError, DemoMode, parse_interaction_response
 from reme.decision.runtime_glue import (
+    PerceptionBridge,
     RuntimeDecisionPublisher,
     live_streams_resolver,
     spawn_post_ingest_evaluation,
@@ -79,6 +80,7 @@ def build_decision_handler(
     registry: RuntimeSessionRegistry | None = None,
     hub: DecisionEventHub | None = None,
     ingest: EventIngest | None = None,
+    bridge: PerceptionBridge | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Create the request handler bound to one DecisionService.
 
@@ -262,6 +264,10 @@ def build_decision_handler(
                 return
             status = registry.start(request)
             self._announce_session(status)
+            if bridge is not None:
+                # Subscribe to A only after the buffers are clean, so no event
+                # from the previous session can slip into this one.
+                bridge.start_for(request.session_id)
             self._send_json(HTTPStatus.OK, status.to_payload())
 
         def _handle_session_stop(self, payload: dict[str, Any]) -> None:
@@ -274,6 +280,11 @@ def build_decision_handler(
                     HTTPStatus.BAD_REQUEST, "bad_request", "session_id must be a non-empty string"
                 )
                 return
+            # Drop the subscription before the registry forgets the session:
+            # the reverse order would let in-flight events from A land while
+            # the buffers are being reset.
+            if bridge is not None:
+                bridge.stop()
             status = registry.stop(session_id)
             self._announce_session(status)
             self._send_json(HTTPStatus.OK, status.to_payload())
@@ -295,6 +306,17 @@ def build_decision_handler(
             # there is nothing to check inbound envelopes against.
             if registry is None or ingest is None:
                 self._send_runtime_disabled("event ingest")
+                return
+            if bridge is not None and bridge.attached():
+                # Both paths share one sequence watermark; letting them run
+                # together makes each reject the other's batch. Fail loudly
+                # instead of silently double-writing.
+                self._send_error_json(
+                    HTTPStatus.CONFLICT,
+                    "push_ingest_disabled",
+                    f"this server pulls perception from {bridge.events_url}; "
+                    "POST /api/events is disabled while that subscription is active",
+                )
                 return
             event = ingest.submit(payload, active_session_id=registry.active_session_id())
             # Evaluate off-thread so A's event POST never waits on a MiMo
@@ -524,12 +546,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         publisher=RuntimeDecisionPublisher(registry=registry, hub=hub),
         live_streams=live_streams_resolver(registry, ingest),
     )
+    bridge = (
+        None
+        if config.a_events_url is None
+        else PerceptionBridge(
+            events_url=config.a_events_url,
+            ingest=ingest,
+            registry=registry,
+            service=service,
+        )
+    )
     handler = build_decision_handler(
         service=service,
         static_dir=config.static_dir,
         registry=registry,
         hub=hub,
         ingest=ingest,
+        bridge=bridge,
     )
     server = build_server(config, handler)
     scheme = "https" if config.certfile is not None else "http"
@@ -542,6 +575,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         # Close the streaming sockets first: server_close() only drops the
         # listening socket, and blocked WS threads would keep the process up.
+        # The bridge goes too, or its reconnect loop outlives the server.
+        if bridge is not None:
+            bridge.stop()
         hub.close_all()
         server.server_close()
     return 0

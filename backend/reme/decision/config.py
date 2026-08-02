@@ -63,6 +63,9 @@ class ServerConfig:
     home_room: str | None = None
     local_hour: int | None = None
     memory_file: Path | None = None
+    # Set = pull mode: B subscribes to A's event stream itself.  Unset = push
+    # mode: something else POSTs to /api/events (replays, fixtures).
+    a_events_url: str | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,6 +131,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="behavior-memory JSON path; omit to run without longitudinal memory",
     )
+    parser.add_argument(
+        "--a-events-url",
+        default=None,
+        help=(
+            "A's perception stream, e.g. ws://127.0.0.1:8200/ws/events. "
+            "Given it, B subscribes itself and POST /api/events is refused; "
+            "omit it to keep the push entry open for replays and fixtures."
+        ),
+    )
     return parser
 
 
@@ -167,6 +179,7 @@ def server_config_from_args(argv: Sequence[str] | None = None) -> ServerConfig:
         home_room=args.home_room,
         local_hour=args.local_hour,
         memory_file=args.memory_file,
+        a_events_url=args.a_events_url,
     )
 
 

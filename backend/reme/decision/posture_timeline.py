@@ -120,8 +120,7 @@ class PostureTimeline:
 
         if observation.scene_id != self.scene_id:
             raise PostureTimelineError(
-                f"observation belongs to scene {observation.scene_id!r}, "
-                f"not {self.scene_id!r}"
+                f"observation belongs to scene {observation.scene_id!r}, not {self.scene_id!r}"
             )
         if self._observations and observation.timestamp_ms < self._observations[-1].timestamp_ms:
             self._sorted = False
@@ -251,9 +250,7 @@ def build_intervals(
         following = runs[position + 1][0].timestamp_ms if position + 1 < len(runs) else None
         # Clamping to the run's own start keeps a timestamp regression from
         # producing a negative duration; the run still appears, with zero width.
-        end_ms = max(
-            following if following is not None else last.timestamp_ms, first.timestamp_ms
-        )
+        end_ms = max(following if following is not None else last.timestamp_ms, first.timestamp_ms)
         interval = PostureInterval(
             posture=first.posture,
             start_ms=first.timestamp_ms,

@@ -17,6 +17,7 @@ from reme.decision.config import ServerConfig
 from reme.decision.context import load_scene_streams
 from reme.decision.policy import DecisionService, PolicyConfig
 from reme.decision.records import parse_care_decision
+from reme.decision.runtime_glue import PerceptionBridge
 from reme.decision.server import build_decision_handler, build_server
 from reme.decision.session import RuntimeSessionRegistry, SessionRegistryError
 from reme.decision.stream import EventIngest, IngestError
@@ -140,9 +141,7 @@ def _post(port: int, path: str, payload: dict[str, Any]) -> tuple[int, dict[str,
 def test_health_reports_loaded_scene_streams(tmp_path: Path) -> None:
     server, thread = _start_server(_service(tmp_path))
     try:
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", server.server_address[1], timeout=5
-        )
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
         connection.request("GET", "/api/health")
         response = connection.getresponse()
         body = json.loads(response.read().decode("utf-8"))
@@ -262,9 +261,7 @@ def test_unknown_scene_returns_404(tmp_path: Path) -> None:
 def test_scene_media_supports_byte_ranges(tmp_path: Path) -> None:
     server, thread = _start_server(_service(tmp_path))
     try:
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", server.server_address[1], timeout=5
-        )
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
         connection.request(
             "GET",
             "/scenes/fall_demo_01/media/source.mp4",
@@ -300,9 +297,7 @@ def test_scene_reset_endpoint_restarts_episode(tmp_path: Path) -> None:
 def test_options_preflight_allows_dev_cors(tmp_path: Path) -> None:
     server, thread = _start_server(_service(tmp_path))
     try:
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", server.server_address[1], timeout=5
-        )
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
         connection.request("OPTIONS", "/api/decision")
         response = connection.getresponse()
         response.read()
@@ -526,9 +521,7 @@ def _start_runtime_server(
     return server, thread
 
 
-def _get(
-    port: int, path: str, headers: dict[str, str] | None = None
-) -> tuple[int, dict[str, Any]]:
+def _get(port: int, path: str, headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     try:
         connection.request("GET", path, headers=headers or {})
@@ -792,3 +785,120 @@ def test_session_start_rejects_profile_mismatched_with_demo_mode(tmp_path: Path)
         assert body["error"]["code"] == "profile_mismatch"
     finally:
         _stop_server(server, thread)
+
+
+# --- P0-2 收口：A→B 事件桥的会话生命周期与 push 互斥 -------------------------
+
+
+class _FakeClient:
+    """Stand-in for PerceptionEventClient: records start/stop, never sockets."""
+
+    instances: list[_FakeClient] = []
+
+    def __init__(self, *, url: str, session_id: str, on_event: object) -> None:
+        self.url = url
+        self.session_id = session_id
+        self.on_event = on_event
+        self.started = False
+        self.stopped = False
+        self.connected = False
+        _FakeClient.instances.append(self)
+
+    def start(self) -> None:
+        self.started = True
+        self.connected = True
+
+    def stop(self) -> None:
+        self.stopped = True
+        self.connected = False
+
+
+def _bridge_with_fake_clients(
+    service: DecisionService, registry: object, ingest: object
+) -> PerceptionBridge:
+    _FakeClient.instances = []
+    return PerceptionBridge(
+        events_url="ws://127.0.0.1:9/ws/events",
+        ingest=cast("EventIngest", ingest),
+        registry=cast("RuntimeSessionRegistry", registry),
+        service=service,
+        client_factory=_FakeClient,  # type: ignore[arg-type]
+    )
+
+
+def test_session_start_subscribes_and_stop_unsubscribes(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    registry = RuntimeSessionRegistry()
+    ingest = EventIngest()
+    bridge = _bridge_with_fake_clients(service, registry, ingest)
+    handler = build_decision_handler(
+        service=service, static_dir=None, registry=registry, ingest=ingest, bridge=bridge
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert isinstance(port, int)
+        status, _ = _post(port, "/api/session", _session_body())
+        assert status == 200
+        assert len(_FakeClient.instances) == 1
+        client = _FakeClient.instances[0]
+        assert client.started is True
+        assert client.session_id == "session-0001"
+        assert bridge.attached() is True
+
+        status, _ = _post(port, "/api/session/stop", {"session_id": "session-0001"})
+        assert status == 200
+        assert client.stopped is True
+        assert bridge.attached() is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_push_ingest_is_refused_while_the_bridge_is_attached(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    registry = RuntimeSessionRegistry()
+    ingest = EventIngest()
+    bridge = _bridge_with_fake_clients(service, registry, ingest)
+    handler = build_decision_handler(
+        service=service, static_dir=None, registry=registry, ingest=ingest, bridge=bridge
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert isinstance(port, int)
+        _post(port, "/api/session", _session_body())
+        # Both entries share one sequence watermark, so the push side must
+        # fail loudly rather than double-write.
+        status, body = _post(port, "/api/events", {"anything": True})
+        assert status == 409
+        assert body["error"]["code"] == "push_ingest_disabled"
+
+        _post(port, "/api/session/stop", {"session_id": "session-0001"})
+        # With the subscription gone the push entry works again (replays).
+        status, body = _post(port, "/api/events", {"anything": True})
+        assert status != 409 or body["error"]["code"] != "push_ingest_disabled"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_bridge_start_replaces_the_previous_subscription(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    registry = RuntimeSessionRegistry()
+    ingest = EventIngest()
+    bridge = _bridge_with_fake_clients(service, registry, ingest)
+    bridge.start_for("session-a")
+    bridge.start_for("session-b")
+    assert len(_FakeClient.instances) == 2
+    assert _FakeClient.instances[0].stopped is True
+    assert _FakeClient.instances[1].started is True
+    bridge.stop()
+    assert _FakeClient.instances[1].stopped is True
+    assert bridge.attached() is False
