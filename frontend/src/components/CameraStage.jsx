@@ -2,10 +2,26 @@ import { Button, CircularProgress, IconButton } from "@mui/material";
 import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import WifiRoundedIcon from "@mui/icons-material/WifiRounded";
 import ShieldOutlinedIcon from "@mui/icons-material/ShieldOutlined";
+import { useEffect } from "react";
+import { describePosture } from "../adapters/perception";
 import { usePoseLandmarker } from "../hooks/usePoseLandmarker";
 
-export function CameraStage({ visible, onHide }) {
-  const { videoRef, canvasRef, personDetected, status, retry } = usePoseLandmarker();
+export function CameraStage({ visible, onHide, runtime, externalFrame, posture, onVideoElement }) {
+  const { videoRef, canvasRef, personDetected, status, retry } = usePoseLandmarker(externalFrame);
+  const runtimeLabel = runtime.state === "running"
+    ? `A已接入${posture?.posture ? ` · ${describePosture(posture.posture)}` : ""}`
+    : ({
+        starting: "A启动中",
+        input_unavailable: "A输入待接入",
+        degraded: "A服务降级",
+        stopped: "A已停止",
+        offline: "本地后备",
+      })[runtime.state] || "本地后备";
+
+  useEffect(() => {
+    onVideoElement?.(videoRef.current);
+    return () => onVideoElement?.(null);
+  }, [onVideoElement, videoRef]);
 
   return (
     <section className={`camera-stage ${visible ? "" : "is-hidden"}`} aria-label="本地实时姿态画面">
@@ -21,6 +37,11 @@ export function CameraStage({ visible, onHide }) {
       <div className="stage-pill stage-pill-local">
         <ShieldOutlinedIcon sx={{ fontSize: 17 }} />
         <b>本地处理</b>
+      </div>
+
+      <div className={`runtime-badge runtime-${runtime.state}`} title={runtime.reason || runtimeLabel}>
+        <i aria-hidden="true" />
+        <span>{runtimeLabel}</span>
       </div>
 
       <IconButton className="stage-privacy" onClick={onHide} aria-label="隐藏实时摄像头画面">
@@ -40,7 +61,7 @@ export function CameraStage({ visible, onHide }) {
         </div>
       )}
 
-      {personDetected && <div className="person-badge">已转换为 17 节点火柴人</div>}
+      {personDetected && <div className="person-badge">{runtime.state === "running" ? "A · 17 节点火柴人" : "本地 · 17 节点火柴人"}</div>}
     </section>
   );
 }

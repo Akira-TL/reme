@@ -1,5 +1,5 @@
 import { Alert, Snackbar } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CallDialog } from "./components/CallDialog";
 import { ContactDrawer } from "./components/ContactDrawer";
 import { DashboardScreen } from "./components/DashboardScreen";
@@ -10,6 +10,7 @@ import { Navigation } from "./components/Navigation";
 import { SceneDrawer } from "./components/SceneDrawer";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { DASHBOARD_DETAILS, SCENES, SETTINGS_DETAILS } from "./data/content";
+import { usePerceptionRuntime } from "./hooks/usePerceptionRuntime";
 
 export function App() {
   const [tab, setTab] = useState("home");
@@ -23,8 +24,12 @@ export function App() {
   const [privacyOn, setPrivacyOn] = useState(true);
   const [mimoOn, setMimoOn] = useState(true);
   const [toast, setToast] = useState("");
+  const [videoElement, setVideoElement] = useState(null);
+  const lastTransitionRef = useRef(null);
 
   const scene = SCENES[sceneKey];
+  const perception = usePerceptionRuntime({ videoElement, sceneId: sceneKey, enabled: Boolean(videoElement) });
+  const handleVideoElement = useCallback((element) => setVideoElement(element), []);
 
   useEffect(() => {
     if (sceneKey !== "risk") return undefined;
@@ -34,6 +39,20 @@ export function App() {
     }, 900);
     return () => window.clearTimeout(timer);
   }, [sceneKey]);
+
+  useEffect(() => {
+    const transition = perception.transition;
+    if (!transition || transition.sequence === lastTransitionRef.current) return;
+    lastTransitionRef.current = transition.sequence;
+    const message = transition.transition === "fall_like_transition"
+      ? "A 检测到跌倒式动作候选，等待 B 决策确认"
+      : transition.transition === "uncertain_transition"
+        ? "A 检测到不确定动作变化，继续观察中"
+        : "";
+    if (!message) return;
+    const timer = window.setTimeout(() => setToast(message), 0);
+    return () => window.clearTimeout(timer);
+  }, [perception.transition]);
 
   const activeDetail = useMemo(() => {
     if (!detail) return null;
@@ -85,6 +104,10 @@ export function App() {
         onToggleCamera={toggleCamera}
         onHideCamera={() => { setCameraVisible(false); showToast("实时画面已隐藏，摄像头继续在本地运行"); }}
         onOpenStatus={() => setDetail({ kind: "status" })}
+        runtime={perception.runtime}
+        externalFrame={perception.landmarkFrame}
+        posture={perception.posture}
+        onVideoElement={handleVideoElement}
       />
       <DashboardScreen active={tab === "dashboard"} onOpenDetail={(key) => setDetail({ kind: "dashboard", key })} />
       <SettingsScreen

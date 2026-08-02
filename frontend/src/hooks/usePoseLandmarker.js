@@ -4,7 +4,7 @@ import { createDemoLandmarks, drawSkeleton, mapLandmarks, resizeCanvas } from ".
 const MP_WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
-export function usePoseLandmarker() {
+export function usePoseLandmarker(externalFrame = null) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -15,6 +15,7 @@ export function usePoseLandmarker() {
   const landmarksRef = useRef([]);
   const fallbackRef = useRef(false);
   const personDetectedRef = useRef(false);
+  const externalFrameRef = useRef(externalFrame);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [modelReady, setModelReady] = useState(false);
@@ -26,6 +27,10 @@ export function usePoseLandmarker() {
     retryable: false,
     visible: true,
   });
+
+  useEffect(() => {
+    externalFrameRef.current = externalFrame;
+  }, [externalFrame]);
 
   const enableFallback = useCallback((message = "姿态模型暂不可用，已使用动态演示数据") => {
     fallbackRef.current = true;
@@ -143,6 +148,12 @@ export function usePoseLandmarker() {
     }
 
     function detect(now) {
+      const backendFrame = externalFrameRef.current;
+      if (backendFrame && now - backendFrame.receivedAt < 1500) {
+        landmarksRef.current = backendFrame.landmarks;
+        return;
+      }
+
       if (fallbackRef.current) {
         landmarksRef.current = createDemoLandmarks(now);
         return;
@@ -189,10 +200,11 @@ export function usePoseLandmarker() {
     return () => cancelAnimationFrame(frameRef.current);
   }, [cameraReady, modelReady]);
 
-  const resolvedStatus = cameraReady && modelReady
+  const backendActive = Boolean(externalFrame);
+  const resolvedStatus = backendActive || (cameraReady && modelReady)
     ? {
         connection: "已连接",
-        title: "本地姿态模型已就绪",
+        title: backendActive ? "A 感知结果已接入" : "本地姿态模型已就绪",
         hint: "检测到人物后只显示 17 节点火柴人",
         retryable: false,
         visible: false,
