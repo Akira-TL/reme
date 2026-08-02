@@ -227,6 +227,60 @@ def test_rapid_high_to_low_motion_is_fall_like() -> None:
     assert evidence["peak_keypoint_speed"] > 0.5
 
 
+def test_fall_after_long_standing_prelude_is_fall_like() -> None:
+    """Field repro (2026-08-02-a-to-b-local-link 发现2): 站2s→摔0.4s→躺 must be a fall.
+
+    The resident buffer spans the whole prelude, so the full-window pass alone
+    can never satisfy short_window; the motion-anchored rescue must catch it.
+    """
+
+    detector = TransitionDetector(session_id="session-1")
+    centers = [0.35] * 20 + _linear(0.35, 0.66, 5)[1:] + [0.66] * 6
+    angles = [0.0] * 20 + _linear(0.0, 86.0, 5)[1:] + [86.0] * 6
+    postures = ["standing"] * 20 + ["bending_or_crouching"] * 2 + ["lying"] * 8
+
+    events = _run_trajectory(
+        detector,
+        centers=centers,
+        angles=angles,
+        postures=postures,
+        interval_ms=100.0,
+    )
+
+    assert [event.payload["transition"] for event in events] == ["fall_like_transition"]
+    payload = events[0].payload
+    assert payload["transition_confidence"] >= 0.55
+    evidence = payload["evidence"]
+    assert evidence["posture_before"] == "standing"
+    assert evidence["posture_after"] == "lying"
+    assert "motion_anchored_window" in evidence["reasons"]
+    assert "short_window" in evidence["reasons"]
+    # Window is anchored at the settle break (last standing sample at 1900ms)
+    # minus one settle_ms of stable context, not at the buffer head.
+    assert payload["start_ms"] == 1700.0
+    assert evidence["motion_duration_ms"] == 400.0
+
+
+def test_slow_lying_down_after_long_prelude_is_not_fall() -> None:
+    """Long prelude + genuinely slow descent must not be rescued into a fall."""
+
+    detector = TransitionDetector(session_id="session-1")
+    centers = [0.35] * 20 + _linear(0.35, 0.66, 26)[1:] + [0.66] * 6
+    angles = [0.0] * 20 + _linear(0.0, 86.0, 26)[1:] + [86.0] * 6
+    postures = ["standing"] * 20 + ["bending_or_crouching"] * 12 + ["lying"] * 19
+
+    events = _run_trajectory(
+        detector,
+        centers=centers,
+        angles=angles,
+        postures=postures,
+        interval_ms=100.0,
+    )
+
+    assert events
+    assert all(event.payload["transition"] != "fall_like_transition" for event in events)
+
+
 def test_single_lying_frame_does_not_emit_fall() -> None:
     detector = TransitionDetector(session_id="session-1")
     detector.process_runtime_event(

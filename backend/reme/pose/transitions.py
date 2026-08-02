@@ -195,6 +195,22 @@ class _WindowEvidence:
         return self.end_ms - self.start_ms
 
 
+@dataclass(frozen=True, slots=True)
+class _MotionWindow:
+    """Trailing samples re-anchored at the settle break preceding the last motion burst."""
+
+    samples: tuple[_Sample, ...]
+    motion_duration_ms: float
+
+
+@dataclass(frozen=True, slots=True)
+class _FallRescue:
+    evidence: _WindowEvidence
+    confidence: float
+    reasons: list[str]
+    motion_duration_ms: float
+
+
 class TransitionDetector:
     """Stateful, deterministic transition detector scoped to one runtime session."""
 
@@ -407,6 +423,15 @@ class TransitionDetector:
 
         evidence = _window_evidence(tuple(self._samples))
         transition, confidence, reasons = self._classify(evidence)
+        extra_evidence: dict[str, object] = {}
+        if transition != "fall_like_transition":
+            rescue = self._rescue_fall(tuple(self._samples))
+            if rescue is not None:
+                evidence = rescue.evidence
+                transition = "fall_like_transition"
+                confidence = rescue.confidence
+                reasons = rescue.reasons
+                extra_evidence["motion_duration_ms"] = round(rescue.motion_duration_ms, 3)
         if transition is None:
             return None
         self._event_counter += 1
@@ -429,6 +454,7 @@ class TransitionDetector:
                 "visible_keypoint_ratio": round(evidence.visible_keypoint_ratio, 6),
                 "window_duration_ms": round(evidence.duration_ms, 3),
                 "reasons": reasons,
+                **extra_evidence,
             },
             landmark_quality=evidence.landmark_quality,
         )
@@ -456,33 +482,9 @@ class TransitionDetector:
         if not geometry_changed and not posture_changed and not transient_posture:
             return None, 0.0, []
 
-        fall_signals = {
-            "rapid_center_drop": evidence.center_height_change >= self.config.fall_center_drop,
-            "high_keypoint_speed": evidence.peak_keypoint_speed >= self.config.fall_peak_speed,
-            "large_torso_change": evidence.torso_direction_change_deg
-            >= self.config.fall_torso_change_deg,
-            "short_window": evidence.duration_ms <= self.config.fall_max_duration_ms,
-            "high_to_low_posture": evidence.posture_before in {"standing", "sitting"}
-            and evidence.posture_after == "lying",
-        }
+        fall_signals = self._fall_signals(evidence, duration_ms=evidence.duration_ms)
         if all(fall_signals.values()):
-            confidence = _clamp(
-                0.55
-                + 0.12
-                * min(
-                    evidence.center_height_change / self.config.fall_center_drop - 1.0,
-                    1.0,
-                )
-                + 0.12
-                * min(
-                    evidence.peak_keypoint_speed / self.config.fall_peak_speed - 1.0,
-                    1.0,
-                )
-                + 0.08 * evidence.visible_keypoint_ratio,
-                0.0,
-                0.95,
-            )
-            return "fall_like_transition", confidence, sorted(fall_signals)
+            return "fall_like_transition", self._fall_confidence(evidence), sorted(fall_signals)
 
         rapid_drop_conflict = (
             fall_signals["rapid_center_drop"]
@@ -516,6 +518,61 @@ class TransitionDetector:
             0.85,
         )
         return "normal_transition", confidence, sorted(set(normal_reasons))
+
+    def _fall_signals(self, evidence: _WindowEvidence, *, duration_ms: float) -> dict[str, bool]:
+        return {
+            "rapid_center_drop": evidence.center_height_change >= self.config.fall_center_drop,
+            "high_keypoint_speed": evidence.peak_keypoint_speed >= self.config.fall_peak_speed,
+            "large_torso_change": evidence.torso_direction_change_deg
+            >= self.config.fall_torso_change_deg,
+            "short_window": duration_ms <= self.config.fall_max_duration_ms,
+            "high_to_low_posture": evidence.posture_before in {"standing", "sitting"}
+            and evidence.posture_after == "lying",
+        }
+
+    def _fall_confidence(self, evidence: _WindowEvidence) -> float:
+        # B's fall_confidence_min is pinned to this formula's analytic floor
+        # (reme/decision/guardrails.py::FALL_LIKE_CONFIDENCE_FLOOR); changing the
+        # constants or the input thresholds requires re-deriving that anchor.
+        return _clamp(
+            0.55
+            + 0.12
+            * min(
+                evidence.center_height_change / self.config.fall_center_drop - 1.0,
+                1.0,
+            )
+            + 0.12
+            * min(
+                evidence.peak_keypoint_speed / self.config.fall_peak_speed - 1.0,
+                1.0,
+            )
+            + 0.08 * evidence.visible_keypoint_ratio,
+            0.0,
+            0.95,
+        )
+
+    def _rescue_fall(self, samples: tuple[_Sample, ...]) -> _FallRescue | None:
+        """Re-test the fall hypothesis on a window anchored at the settle break.
+
+        The resident buffer spans up to window_ms once the scene has been running,
+        so the full-window duration can never satisfy short_window when a quiet
+        prelude longer than fall_max_duration_ms precedes the motion.  Anchoring
+        at the last quiet stretch measures the motion burst itself instead.
+        """
+
+        anchored = _motion_anchored_window(samples, self.config)
+        if anchored is None:
+            return None
+        evidence = _window_evidence(anchored.samples)
+        signals = self._fall_signals(evidence, duration_ms=anchored.motion_duration_ms)
+        if not all(signals.values()):
+            return None
+        return _FallRescue(
+            evidence=evidence,
+            confidence=self._fall_confidence(evidence),
+            reasons=sorted([*signals, "motion_anchored_window"]),
+            motion_duration_ms=anchored.motion_duration_ms,
+        )
 
     def _posture_for_frame(self, *, scene_id: str, timestamp_ms: float) -> _PostureState | None:
         posture = self._latest_posture
@@ -586,6 +643,62 @@ def _window_evidence(samples: tuple[_Sample, ...]) -> _WindowEvidence:
         intermediate_postures=tuple(dict.fromkeys(postures)),
         visible_keypoint_ratio=min(sample.visible_keypoint_ratio for sample in samples),
         landmark_quality=_worst_quality(tuple(sample.landmark_quality for sample in samples)),
+    )
+
+
+def _motion_anchored_window(
+    samples: tuple[_Sample, ...],
+    config: TransitionDetectorConfig,
+) -> _MotionWindow | None:
+    """Locate the last motion burst and re-anchor the evaluation window at its onset.
+
+    Walking backwards over pair speeds: the burst ends at the last pair at or above
+    half of min_motion_speed (the same quiet threshold _is_settled falls back to)
+    and extends backwards until a quiet stretch of at least settle_ms — the settle
+    break.  The returned window keeps up to settle_ms of quiet context before the
+    anchor so the start segment still describes the pre-motion state, while
+    motion_duration_ms measures the burst alone (excluding context and the settled
+    tail, whose length is posture-cadence noise, not transition time).
+    """
+
+    if len(samples) < 3:
+        return None
+    quiet_speed = config.min_motion_speed * 0.5
+    moving = [
+        _pair_speed(samples[index], samples[index + 1]) >= quiet_speed
+        for index in range(len(samples) - 1)
+    ]
+    last_moving = next((index for index in range(len(moving) - 1, -1, -1) if moving[index]), None)
+    if last_moving is None:
+        return None
+    anchor_index = 0
+    pair = last_moving
+    while pair >= 0:
+        if moving[pair]:
+            pair -= 1
+            continue
+        quiet_start = pair
+        while quiet_start >= 0 and not moving[quiet_start]:
+            quiet_start -= 1
+        quiet_start += 1
+        quiet_ms = samples[pair + 1].timestamp_ms - samples[quiet_start].timestamp_ms
+        if quiet_ms >= config.settle_ms:
+            anchor_index = pair + 1
+            break
+        pair = quiet_start - 1
+    anchor_ms = samples[anchor_index].timestamp_ms
+    context_index = anchor_index
+    while (
+        context_index > 0
+        and anchor_ms - samples[context_index - 1].timestamp_ms <= config.settle_ms
+    ):
+        context_index -= 1
+    window = samples[context_index:]
+    if len(window) < 3:
+        return None
+    return _MotionWindow(
+        samples=window,
+        motion_duration_ms=samples[last_moving + 1].timestamp_ms - anchor_ms,
     )
 
 

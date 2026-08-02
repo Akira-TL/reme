@@ -20,7 +20,7 @@ MiMo 实际输出示例（source=mimo，live API）：问询「王奶奶，坐�
 
 修复（`backend/reme/decision/policy.py`）：`_SceneRuntime` 增加 `mimo_inflight` 门闩，`get_decision`/`submit_response` 在指令需要 MiMo 时先占坑；已有在途调用时幂等复用当前 pending 决策（不重复起调、不重复广播），调用结束 `finally` 在同一 runtime 对象上释放（session 重置换新对象，旧调用无法误释放）。回归测试 `test_tick_during_inflight_mimo_reuses_instead_of_stacking`（重入钩子模拟在途 tick，断言恰 1 次调用、发布序列无重复）。修复后复测：3 条 MiMo 决策各恰 1 次调用，`mimo_discarded` 为 0。
 
-## 发现 2（未修，A 侧已知限制，先记录）：规则跌倒候选依赖「缓冲重置后 1.4s 内」
+## 发现 2（已修复，见 `2026-08-02-fall-window-anchor-fix.md`）：规则跌倒候选依赖「缓冲重置后 1.4s 内」
 
 `TransitionDetector` 的 `short_window` 信号要求评估窗口 ≤1400ms，但滑窗按 `window_ms=3200` 修剪、从场景开始/上一事件清空后累积。实测：站立前奏 2s 时同一跌倒序列只能产出 `uncertain_transition`(0.35)（窗口 0→2800ms 撑破 1400ms）；前奏 0.6s（与 e2e 同节奏）则正常产出 `fall_like_transition`(0.808)。推论（代码阅读，未逐一实测）：连续运行状态下缓冲常驻 ~3.2s，画面里站几秒再摔的真实跌倒无法满足 short_window，规则候选会漏报为 uncertain/normal。这正是 fall-transition-training（MIL 时序模型）要补的能力；演示编排时也需注意（利用 scene_signal 重置或紧凑动作起点）。B 侧 `fall_confidence_min` 锚定 A 的产出分布，A 重调阈值时联动。
 
