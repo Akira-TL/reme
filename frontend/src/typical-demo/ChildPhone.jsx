@@ -17,10 +17,21 @@ function PhoneStatusIcon({ sceneId, danger }) {
   return <ShieldRoundedIcon />;
 }
 
-export function ChildPhone({ scene, fallPhase, kitchenShared, canvasRef, camera, viewMode, onContact, onSafe }) {
+export function ChildPhone({
+  scene,
+  fallPhase,
+  fallStateOverride = null,
+  emergencyNote = null,
+  kitchenShared,
+  canvasRef,
+  camera,
+  viewMode,
+  onContact,
+  onSafe,
+}) {
   const danger = scene.id === "fall" && fallPhase !== "idle";
   const emergency = scene.id === "fall" && ["emergency", "contacting", "resolved"].includes(fallPhase);
-  const fallState = FALL_PHASES[fallPhase];
+  const fallState = fallStateOverride || FALL_PHASES[fallPhase];
   const title = scene.id === "fall" && danger ? fallState.status : scene.phoneTitle;
   const body = scene.id === "fall" && danger ? fallState.message : scene.phoneBody;
 
@@ -77,15 +88,23 @@ export function ChildPhone({ scene, fallPhase, kitchenShared, canvasRef, camera,
             <small>紧急风险提醒</small>
             <h3>{fallState.status}</h3>
             <p>{fallState.message}</p>
-            <div className="emergency-video-note"><LockRoundedIcon /> 预授权紧急画面已临时开放</div>
+            <div className="emergency-video-note">
+              <LockRoundedIcon /> {emergencyNote || "预授权紧急画面已临时开放"}
+            </div>
             {fallPhase === "emergency" && (
               <>
                 <Button variant="contained" color="error" startIcon={<CallRoundedIcon />} onClick={onContact}>联系紧急联系人</Button>
                 <Button variant="text" onClick={onSafe}>老人已确认安全</Button>
               </>
             )}
-            {fallPhase === "contacting" && <div className="calling-state"><i /> 正在呼叫王阿姨…</div>}
-            {fallPhase === "resolved" && <div className="resolved-state"><CheckCircleRoundedIcon /> 王阿姨已确认前往</div>}
+            {fallPhase === "contacting" && (
+              <div className="calling-state"><i /> {fallStateOverride ? fallState.message : "正在呼叫王阿姨…"}</div>
+            )}
+            {fallPhase === "resolved" && (
+              <div className="resolved-state">
+                <CheckCircleRoundedIcon /> {fallStateOverride ? fallState.message : "王阿姨已确认前往"}
+              </div>
+            )}
           </div>
         )}
       </div>

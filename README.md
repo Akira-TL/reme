@@ -31,10 +31,13 @@ Feasibility analysis. The current priority is to validate the source video, comp
 
 ```bash
 uv sync --extra dev
+scripts/setup-mimo-env.sh   # 一次性：粘贴 MiMo key，写入 ~/.config/reme/mimo.env 并真实冒烟验证
 uv run pytest
 uv run ruff check .
-uv run mypy src
+uv run mypy
 ```
+
+启动 B（决策服务）前加载 key：`source ~/.config/reme/mimo.env`。key 文件在仓库外、每台机器各自生成，不进 git。
 
 The existing `reme-demo` command and motion-data files came from an early exploratory spike. They are not an accepted architecture and should not be used to constrain the feasibility experiments.
 
