@@ -207,15 +207,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       }
     }
 
-    function playAlarmAnnouncement(payload) {
-      const text = payload?.family_notification
-        || payload?.elder_message
-        || "Reme 检测到异常，请立即查看。";
-      if (!text || payload?.elder_message) return Promise.resolve();
-      return speakElderMessage(text).catch(() => {});
-    }
-
-    function startAlarmLocal(payload) {
+    function startAlarmLocal() {
       stopAlarmLocal();
       try {
         navigator.vibrate?.([400, 120, 400]);
@@ -255,7 +247,6 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       } catch {
         ring = null;
       }
-      playAlarmAnnouncement(payload);
     }
 
     function clearAlarmState() {
@@ -302,6 +293,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     }
 
     async function playDecisionVoice(payload, { force = false, autoReply = true } = {}) {
+      if (payload?.alarm) return false;
       if (!payload?.elder_message) return false;
       if (!force && spokenDecisionIds.has(payload.decision_id)) return false;
       spokenDecisionIds.add(payload.decision_id);
@@ -510,7 +502,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       // 任何新 decision 到达都清掉旧倒计时
       clearCountdown();
 
-      if (!suppressVoice && voiceTurnDecisionId === null) {
+      if (!payload.alarm && !suppressVoice && voiceTurnDecisionId === null) {
         playDecisionVoice(payload).then((voiceHandled) => {
           if (
             !voiceHandled
@@ -544,7 +536,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           trigger: payload.alarm.trigger || "",
           decision: payload,
         });
-        startAlarmLocal(payload);
+        startAlarmLocal();
       }
     }
 
