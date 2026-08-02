@@ -8,9 +8,9 @@ from typing import Any
 
 from reme.pose.browser_input import (
     KEYPOINT_NAMES,
-    BrowserFrameSession,
-    BrowserPushPerceptionWorker,
+    BrowserGatewayPerceptionWorker,
     GeometricPostureModel,
+    LandmarkFrameEngine,
     parse_input_text,
     read_ws_messages,
 )
@@ -20,7 +20,9 @@ SESSION = "live-camera-test"
 SCENE = "living_room"
 
 
-def _skeleton(coords: dict[str, tuple[float, float]], *, score: float = 0.9) -> list[dict[str, Any]]:
+def _skeleton(
+    coords: dict[str, tuple[float, float]], *, score: float = 0.9
+) -> list[dict[str, Any]]:
     return [
         {
             "name": name,
@@ -143,12 +145,16 @@ class TestGeometricPostureModel:
 
 
 def _landmark_message(
-    coords: dict[str, tuple[float, float]], *, frame_index: int, timestamp_ms: float
+    coords: dict[str, tuple[float, float]],
+    *,
+    frame_index: int,
+    timestamp_ms: float,
+    scene_id: str = SCENE,
 ) -> dict[str, Any]:
     return {
         "type": "landmarks_frame",
         "session_id": SESSION,
-        "scene_id": SCENE,
+        "scene_id": scene_id,
         "frame_index": frame_index,
         "timestamp_ms": timestamp_ms,
         "person_detected": True,
@@ -157,12 +163,18 @@ def _landmark_message(
 
 
 def _fall_stream() -> list[dict[str, Any]]:
-    """Synthetic 10fps stream: stand ~2s, fast drop 0.4s, lie still 6s."""
+    """Synthetic 10fps stream: brief stand, fast 0.4s drop, lie still 6s.
+
+    The standing prefix is deliberately short: the transition detector's
+    evidence window spans the whole sample buffer, and fall_max_duration_ms
+    caps that window — a live camera reaches the same shape because the
+    detector clears its buffer after every emitted transition.
+    """
 
     frames: list[dict[str, Any]] = []
     index = 0
     timestamp = 0.0
-    for _ in range(20):
+    for _ in range(6):
         frames.append(_landmark_message(_standing(), frame_index=index, timestamp_ms=timestamp))
         index += 1
         timestamp += 100.0
@@ -172,8 +184,10 @@ def _fall_stream() -> list[dict[str, Any]]:
         blend = step / steps
         coords = {
             name: (
-                standing[name][0] + (lying.get(name, standing[name])[0] - standing[name][0]) * blend,
-                standing[name][1] + (lying.get(name, standing[name])[1] - standing[name][1]) * blend,
+                standing[name][0]
+                + (lying.get(name, standing[name])[0] - standing[name][0]) * blend,
+                standing[name][1]
+                + (lying.get(name, standing[name])[1] - standing[name][1]) * blend,
             )
             for name in standing
         }
@@ -187,12 +201,10 @@ def _fall_stream() -> list[dict[str, Any]]:
     return frames
 
 
-class TestBrowserFrameSession:
-    def _session(self) -> tuple[BrowserFrameSession, list[RuntimeEvent]]:
+class TestLandmarkFrameEngine:
+    def _session(self) -> tuple[LandmarkFrameEngine, list[RuntimeEvent]]:
         published: list[RuntimeEvent] = []
-        engine = BrowserFrameSession(
-            session_id=SESSION, scene_id=SCENE, publish=published.append
-        )
+        engine = LandmarkFrameEngine(session_id=SESSION, scene_id=SCENE, publish=published.append)
         return engine, published
 
     def test_fall_stream_emits_posture_and_fall_transition(self) -> None:
@@ -216,21 +228,23 @@ class TestBrowserFrameSession:
         falls = [t for t in transitions if t["transition"] == "fall_like_transition"]
         assert falls, f"no fall transition, got {[t['transition'] for t in transitions]}"
         assert falls[0]["transition_confidence"] >= 0.55
-        # Sequences must be strictly increasing on the wire.
+        # Wire contract: derived events share their source frame's sequence,
+        # so ordering is non-decreasing overall and unique per event type
+        # (B's ingest watermark and C's dedupe both key on (sequence, type)).
         sequences = [event.sequence for event in published]
         assert sequences == sorted(sequences)
-        assert len(set(sequences)) == len(sequences)
+        for event_type in types:
+            typed = [e.sequence for e in published if e.event_type is event_type]
+            assert len(set(typed)) == len(typed)
         assert engine.stats.landmark_frames == len(_fall_stream())
 
     def test_wrong_session_and_bad_payloads_counted(self) -> None:
         engine, published = self._session()
         engine.handle_text({"type": "landmarks_frame", "session_id": "other"})
-        engine.handle_text(
-            {"type": "landmarks_frame", "session_id": SESSION, "timestamp_ms": -5}
-        )
+        engine.handle_text({"type": "landmarks_frame", "session_id": SESSION, "timestamp_ms": -5})
         engine.handle_text({"type": "mystery", "session_id": SESSION})
         assert not published
-        assert engine.stats.rejected_messages == 3
+        assert engine.stats.dropped_messages == 3
 
     def test_jpeg_without_estimator_counts_drop(self) -> None:
         engine, published = self._session()
@@ -245,7 +259,7 @@ class TestBrowserFrameSession:
         )
         engine.handle_binary(b"\xff\xd8\xffjpeg")
         assert not published
-        assert engine.stats.jpeg_frames_dropped == 1
+        assert engine.stats.dropped_messages == 2
 
     def test_scene_switch_resets_pipeline(self) -> None:
         engine, published = self._session()
@@ -259,7 +273,9 @@ class TestBrowserFrameSession:
                 "signal": "switch",
             }
         )
-        engine.handle_text(_landmark_message(_standing(), frame_index=1, timestamp_ms=200.0))
+        engine.handle_text(
+            _landmark_message(_standing(), frame_index=1, timestamp_ms=200.0, scene_id="bedroom")
+        )
         scenes = {
             event.payload["scene_id"]
             for event in published
@@ -268,9 +284,9 @@ class TestBrowserFrameSession:
         assert scenes == {SCENE, "bedroom"}
 
 
-class TestBrowserPushWorker:
+class TestBrowserGatewayWorker:
     def test_run_registers_and_unregisters(self) -> None:
-        worker = BrowserPushPerceptionWorker(poll_interval_s=0.01)
+        worker = BrowserGatewayPerceptionWorker(poll_interval_s=0.01)
         request = RuntimeSessionRequest(
             session_id=SESSION,
             profile=ModeProfile.LIVE_CAMERA,
@@ -292,17 +308,17 @@ class TestBrowserPushWorker:
         )
         thread.start()
         for _ in range(100):
-            if worker.get_session(SESSION) is not None:
+            if worker.get_intake(SESSION) is not None:
                 break
             import time
 
             time.sleep(0.01)
         assert running == [True]
-        assert worker.get_session(SESSION) is not None
+        assert worker.get_intake(SESSION) is not None
         assert worker.capabilities()["landmarks_inference"] is True
         active["value"] = False
         thread.join(timeout=2)
-        assert worker.get_session(SESSION) is None
+        assert worker.get_intake(SESSION) is None
 
 
 def _client_frame(opcode: int, payload: bytes, *, mask: bytes = b"\x01\x02\x03\x04") -> bytes:
@@ -337,6 +353,6 @@ class TestWsReader:
         assert controls == [(0xA, b"hb"), (0x8, b"")]
 
     def test_parse_input_text(self) -> None:
-        assert parse_input_text(b'{"a":1}') == {"a": 1}
+        assert parse_input_text(b'{"a":1}') == ('{"a":1}', {"a": 1})
         assert parse_input_text(b"[1]") is None
         assert parse_input_text(b"\xff\xfe") is None

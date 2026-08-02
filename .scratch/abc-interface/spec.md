@@ -14,11 +14,11 @@
 当前优先完成基本功能，而不是先固定比赛故事：
 
 ```text
-实时摄像头
-→ MoveNet 2D 关键点
-→ 静态姿态分类与质量判断
-→ B 的完整实时决策链路
-→ C 的实时视频、2D/3D 展示与交互
+C 采集实时摄像头与音频
+→ A 复用 C 摄像头 WebSocket 做 MoveNet 2D 感知
+→ A 输出静态姿态、质量与动作转变事实
+→ B 接收感知事实和 C 的交互/音频信息完成实时决策
+→ C 展示原视频、2D/3D 骨架与交互
 ```
 
 同时保留稳定的预录回放模式：
@@ -38,7 +38,8 @@
 C Demo Module
   ├─ RuntimeSessionRequest ───────────→ A Perception Module
   ├─ RuntimeSessionRequest ───────────→ B Decision Module
-  └─ InteractionResponse ─────────────→ B Decision Module
+  ├─ Camera WebSocket + scene signal ─→ A Perception Module
+  └─ InteractionResponse / audio ─────→ B Decision Module
 
 A Perception Module
   ├─ RuntimeSessionStatus ────────────→ C Demo Module
@@ -53,11 +54,11 @@ B Decision Module
 
 边界：
 
-- C 是运行模式的唯一发起者，负责开始、停止、切换和重置；
+- C 是运行模式和媒体源的唯一发起者，负责摄像头/音频采集、开始、停止、场景切换和重置；
 - A/B 必须回报实际生效状态，C 不得只根据自己的选择显示 `LIVE`；
 - A 输出人体动作事实，不输出风险等级或是否通知家属；
 - B 维护规则、MiMo调用和交互状态机；
-- C 只渲染结果并提交回应，不复制 A/B 的分类和决策逻辑；
+- C 渲染结果、提供原视频/音频和提交回应，不复制 A/B 的姿态分类和决策逻辑；
 - 每次启动或切换模式必须创建新的 `session_id`；
 - A/B/C 使用同一个 `session_id`，旧会话的迟到事件必须丢弃。
 
@@ -83,7 +84,7 @@ B Decision Module
   "input_source": "camera",
   "perception_mode": "live",
   "decision_mode": "live",
-  "camera_id": "default",
+  "camera_id": "c-primary-camera",
   "manifest_path": null
 }
 ```
@@ -106,11 +107,12 @@ B Decision Module
 
 约束：
 
-- `live_camera` 必须提供 `camera_id`，不得提供 `manifest_path`；
+- `live_camera` 必须提供 `camera_id`，它标识 C 侧摄像头流，不表示 A 机器上的摄像头设备；不得提供 `manifest_path`；
 - `recorded_video` 必须提供 `manifest_path`，不得提供 `camera_id`；
 - 每次启动、重启或切换 profile 都必须使用新的 `session_id`；
-- 当前实时设备是团队现有 CUDA 开发电脑；
-- 当前只支持单摄像头、单人主体和固定室内区域；
+- A 的推理当前运行在团队现有 CUDA 开发电脑，正式媒体由 C 采集并通过 C 摄像头 WebSocket 提供；
+- A 的本地摄像头适配器只用于开发测试，不属于最终 ABC 媒体链路；
+- 当前只支持 C 提供的单摄像头、单人主体；同一 session 可以通过场景信号复用不同场景；
 - 多人出现时应输出降级或主体不确定，不得声称支持多人看护。
 
 ### 3.3 RuntimeSessionStatus：A / B → C
@@ -527,13 +529,43 @@ MoveNet 2D
 
 协议类型冻结为：
 
-- C → A/B 启动、停止、切换：HTTP 请求；
+- C → A/B 启动、停止：HTTP 请求；
+- A → C 摄像头订阅：A 作为客户端连接 C 已有的 camera WebSocket，并发送一次 subscribe 消息；
+- C → A 实时媒体：同一 camera WebSocket 发送 JPEG 视频帧和 `scene_signal`，场景切换不重连；
+- C → B 音频与用户回应：由 C/B 链路处理，音频不进入 A 姿态模块；
 - A → B/C 关键点、姿态和事件：WebSocket 事件流；
 - B → C 决策和状态：WebSocket 事件流；
 - C → B 用户回应：HTTP 请求并返回明确成功或失败；
 - 预录模式通过 Playback Adapter 读取 manifest 和记录流，但页面组件消费同一种 payload。
 
-具体 URL、Web框架和进程部署拓扑暂不冻结。
+C camera WebSocket 的最小消息合同：
+
+```json
+{
+  "type": "scene_signal",
+  "session_id": "session-live-001",
+  "scene_id": "kitchen",
+  "timestamp_ms": 0,
+  "signal": "activate"
+}
+```
+
+帧可以采用 JSON 内嵌 JPEG：
+
+```json
+{
+  "type": "frame",
+  "session_id": "session-live-001",
+  "scene_id": "kitchen",
+  "frame_index": 12,
+  "timestamp_ms": 400.0,
+  "jpeg_base64": "..."
+}
+```
+
+也可以先发送 `frame_meta` JSON，再发送一个二进制 JPEG WebSocket 消息。A 在 `activate`、`switch` 或 `reuse` 场景信号后清空姿态持续时间和平滑/转变窗口，但保持同一 `session_id` 和同一 C camera WebSocket 连接。A 的 `RuntimeEvent.sequence` 在整个 session 内单调递增，不依赖 C 是否按场景重置 `frame_index`。
+
+A侧当前实验URL已在`2026-08-02-a-runtime-frontend-interface.md`中冻结用于本轮联调；B/C内部框架、其余URL和最终部署拓扑仍不冻结。
 
 ## 15. 实时性能目标
 
@@ -599,7 +631,7 @@ MoveNet 2D
 - 最终姿态模型类型和准确率；
 - Conv1D窗口和阈值；
 - Structured或Visual哪条是MiMo主路径；
-- 精确HTTP URL、框架和部署拓扑；
+- B/C内部HTTP URL、框架和最终部署拓扑；A侧v0联调URL已临时冻结；
 - 树莓派和涂鸦屏角色；
 - 多人姿态；
 - 医疗级判断或真实急救服务接入。

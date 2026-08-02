@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from reme.motion_io import MotionDataError, load_motion_jsonl
 
 

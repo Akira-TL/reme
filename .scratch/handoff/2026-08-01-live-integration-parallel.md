@@ -6,14 +6,16 @@
 POST /api/runtime/start
 POST /api/runtime/stop
 GET  /api/runtime/status
+GET  /api/runtime/capabilities
 GET  /api/health
 WS   /ws/events?session_id=<session_id>
 ```
 
-A仅在摄像头成功打开并完成首帧推理后回报`running`。WebSocket当前发送：
+正式链路中A作为客户端复用C已有的camera WebSocket；C在同一连接发送JPEG帧和`scene_signal`。A收到并完成首帧推理后才回报`running`。A服务默认监听`0.0.0.0:8770`，CORS与Private Network预检已开放。WebSocket当前发送：
 
 - `FrameLandmarks`
 - `PostureObservation`
+- `TransitionEvent`
 
 切换session时旧连接关闭，旧事件不会进入新会话。
 
@@ -42,11 +44,14 @@ A仅在摄像头成功打开并完成首帧推理后回报`running`。WebSocket�
 
 1. 生成新`session_id`并同时启动A/B；
 2. 分别展示A和B回报的实际状态，不根据按钮点击假显示`LIVE`；
-3. 连接A WebSocket，渲染实时视频、骨架、姿态和质量；
+3. 原视频由C自己的摄像头链路渲染；连接A WebSocket渲染骨架、姿态、质量和转变候选；
 4. 连接B决策流，渲染`CareDecision`；
 5. C→B回应继续使用HTTP；
 6. 切换模式时关闭旧连接并丢弃旧session事件；
-7. Three.js展示层隐藏双眼和双耳，可用鼻子或面部点平均值显示单一头节点，不修改MoveNet 17点合同。
+7. 保持C camera WebSocket可被A订阅，并在同一连接发送JPEG帧和场景信号；
+8. Three.js展示层隐藏双眼和双耳，可用鼻子或面部点平均值显示单一头节点，不修改MoveNet 17点合同。
+
+C音频和用户输入直接进入C/B链路，不发送给A姿态模块。场景切换不重启A session，也不重连camera WebSocket；A收到`activate`、`switch`或`reuse`后清空时序状态。
 
 ## A后续可并行修改
 

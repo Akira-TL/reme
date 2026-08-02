@@ -8,14 +8,14 @@
 
 **Status:** claimed
 
-- [ ] C启动live_camera后A/B分别回报真实running状态。A侧HTTP控制已完成：请求先返回starting，摄像头首帧后才回报running；B侧状态仍待联调。
+- [ ] C启动live_camera后A/B分别回报真实running状态。A侧HTTP控制已完成：请求先返回starting；正式模式连接C camera WebSocket并处理首帧后才回报running。B侧状态仍待联调。
 - [ ] A关键点、姿态和转变候选事件通过WebSocket到达B/C。A侧已按`FrameLandmarks → PostureObservation → TransitionEvent`顺序接入send-only WebSocket；2026-08-01 正常客户端 P95 为关键点 9.694 ms、姿态 45.596 ms；B/C实际消费者仍待接入并验证转变候选展示。
-- [ ] C显示实时视频、2D骨架和“2D关键点三维可视化”。
+- [ ] C使用自己采集的原视频显示实时画面，并将A关键点叠加为2D骨架和“2D关键点三维可视化”。A不回传原视频。
 - [ ] B正常稳定时不持续调用MiMo，事件触发时返回CareDecision。
 - [ ] C可以提交safe、need_help、unclear和timeout回应。
-- [ ] response_timeout_ms按现实交互时间运行。
+- [ ] C音频和用户回应进入C/B链路，不经过A；response_timeout_ms按现实交互时间运行。
 - [ ] A或B失败时分别显示degraded，不自动切换预录模式。
-- [ ] profile切换使用新session_id，旧事件不会污染新会话。
+- [ ] profile切换使用新session_id，旧事件不会污染新会话；同一session内的场景`activate/switch/reuse`复用C camera WebSocket，并清空A姿态/转变时序状态。
   - [x] A侧已停止旧 session、以新 session_id 重启，旧 WebSocket 关闭，双向 stale-session 注入均未污染。
   - [ ] B/C 实际消费者仍需在联合链路中确认丢弃旧 session 事件。
 - [ ] 完整链路连续运行10分钟无阻断错误。
