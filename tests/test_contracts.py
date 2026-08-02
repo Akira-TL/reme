@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
+
 from reme.contracts import EventCandidate, EventType
 
 
