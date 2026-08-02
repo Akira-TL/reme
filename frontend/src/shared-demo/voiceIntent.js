@@ -80,6 +80,27 @@ export function selectFallInterruptionAction({
     : "preserve";
 }
 
+export function planRestoredFallCheckIn({
+  fall,
+  nowMs = Date.now(),
+  visibilityState,
+} = {}) {
+  const eventId = selectFailClosedFallEvent(fall);
+  if (!eventId) return { action: "none", delayMs: null };
+  const interruptionAction = selectFallInterruptionAction({
+    kind: "visibility",
+    fall,
+    nowMs,
+    visibilityState,
+  });
+  if (
+    interruptionAction === "escalate"
+    || !Number.isFinite(fall.deadlineMs)
+    || fall.deadlineMs <= nowMs
+  ) return { action: "escalate", delayMs: null };
+  return { action: "schedule", delayMs: fall.deadlineMs - nowMs };
+}
+
 export function selectFallCheckInStartAction(visibilityState) {
   return visibilityState === "hidden" ? "escalate" : "prompt";
 }

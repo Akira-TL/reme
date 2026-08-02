@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyAlarmDeliveryAck,
   estimatePromptLeadMs,
+  planRestoredFallCheckIn,
   prepareFallRecoveryForNewSession,
   reconcileFallWithAuthoritativeAlarm,
   recognizeDangerVoice,
@@ -224,6 +225,36 @@ test("visibility preserves a future checking deadline and escalates only after e
     nowMs: 10_001,
     visibilityState: "hidden",
   }), "escalate");
+});
+
+test("initially hidden restored check-ins keep their absolute deadline", () => {
+  const checking = {
+    phase: "checking",
+    eventId: "fall-restored",
+    deadlineMs: 10_000,
+  };
+  for (const visibilityState of ["hidden", "visible", "prerender"]) {
+    assert.deepEqual(planRestoredFallCheckIn({
+      fall: checking,
+      nowMs: 9_250,
+      visibilityState,
+    }), { action: "schedule", delayMs: 750 });
+  }
+  assert.deepEqual(planRestoredFallCheckIn({
+    fall: checking,
+    nowMs: 10_000,
+    visibilityState: "hidden",
+  }), { action: "escalate", delayMs: null });
+  assert.deepEqual(planRestoredFallCheckIn({
+    fall: { ...checking, deadlineMs: null },
+    nowMs: 9_250,
+    visibilityState: "hidden",
+  }), { action: "escalate", delayMs: null });
+  assert.deepEqual(planRestoredFallCheckIn({
+    fall: { ...checking, phase: "resolved" },
+    nowMs: 9_250,
+    visibilityState: "hidden",
+  }), { action: "none", delayMs: null });
 });
 
 test("visible reconciliation escalates an expired check-in and pagehide always fails closed", () => {

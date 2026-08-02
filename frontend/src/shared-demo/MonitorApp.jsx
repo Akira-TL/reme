@@ -56,6 +56,7 @@ import { createMonitorState, reduceMonitorState } from "./state.js";
 import {
   applyAlarmDeliveryAck,
   estimatePromptLeadMs,
+  planRestoredFallCheckIn,
   prepareFallRecoveryForNewSession,
   reconcileFallWithAuthoritativeAlarm,
   recognizeDangerVoice,
@@ -1380,22 +1381,19 @@ export function MonitorApp() {
     if (!restoredControllerSession || current.phase !== "checking" || !current.eventId) {
       return undefined;
     }
-    const nowMs = Date.now();
-    const remainingMs = current.deadlineMs - nowMs;
-    const interruptionAction = selectFallInterruptionAction({
-      kind: "visibility",
+    const plan = planRestoredFallCheckIn({
       fall: current,
-      nowMs,
       visibilityState: document.visibilityState,
     });
-    if (interruptionAction === "escalate") {
+    if (plan.action === "escalate") {
       escalateFall(current.eventId, "check_in_timeout");
       return undefined;
     }
+    if (plan.action !== "schedule") return undefined;
     clearFallTimer();
     fallTimerRef.current = window.setTimeout(
       () => escalateFall(current.eventId, "check_in_timeout"),
-      remainingMs,
+      plan.delayMs,
     );
     return clearFallTimer;
   }, [clearFallTimer, escalateFall, restoredControllerSession]);
