@@ -4,115 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
     <meta name="theme-color" content="#ffffff" />
-    <meta
-      name="description"
-      content="Reme 手机端交互原型：本地摄像头姿态隐私、关怀看板、风险提醒与设置。"
-    />
+    <meta name="description" content="Reme 手机端交互原型：本地摄像头姿态隐私、关怀看板、风险提醒与设置。" />
     <title>Reme · 手机端演示</title>
-    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="prototype" id="prototype" aria-label="Reme 手机端原型">
-      <section class="screen is-active" id="homeScreen" aria-label="首页">
-        <img
-          class="screen-art"
-          id="homeArt"
-          src="./assets/home-normal.png"
-          alt="Reme 外婆家首页"
-          draggable="false"
-        />
-
-        <section class="camera-stage" id="cameraStage" aria-label="本地实时姿态画面">
-          <video id="cameraVideo" autoplay muted playsinline aria-hidden="true"></video>
-          <canvas id="poseCanvas" aria-label="实时 17 节点火柴人"></canvas>
-          <div class="stage-pill stage-pill-live"><i></i><b>LIVE</b><span>⌁</span><b id="cameraConnection">连接中</b></div>
-          <div class="stage-pill stage-pill-local"><span>♢</span><b>本地处理</b></div>
-          <button class="stage-privacy" id="cameraPrivacyButton" type="button" aria-label="关闭实时摄像头显示">⊘</button>
-          <div class="camera-message" id="cameraMessage" role="status" aria-live="polite">
-            <span class="camera-loader" aria-hidden="true"></span>
-            <strong id="cameraMessageTitle">正在请求摄像头</strong>
-            <small id="cameraMessageHint">原画只在本机参与姿态计算</small>
-            <button class="mini-button is-hidden" id="cameraRetryButton" type="button">允许并重试</button>
-          </div>
-          <div class="person-badge is-hidden" id="personBadge">已转换为 17 节点火柴人</div>
-        </section>
-
-        <button class="hotspot home-title-hotspot" id="sceneMenuButton" type="button" aria-label="切换演示场景"></button>
-        <button class="hotspot device-hotspot" id="deviceButton" type="button" aria-label="切换实时摄像头"></button>
-        <button class="hotspot home-card-hotspot" id="homeCardButton" type="button" aria-label="查看当前状态详情"></button>
-      </section>
-
-      <section class="screen" id="dashboardScreen" aria-label="关怀看板">
-        <img class="screen-art" src="./assets/dashboard.png" alt="Reme 关怀看板" draggable="false" />
-        <button class="hotspot dashboard-range" data-sheet="range" type="button" aria-label="切换统计周期"></button>
-        <button class="hotspot dashboard-summary" data-sheet="summary" type="button" aria-label="查看本周陪伴摘要"></button>
-        <button class="hotspot dashboard-cooking" data-sheet="cooking" type="button" aria-label="查看做饭生活片段"></button>
-        <button class="hotspot dashboard-dialogue" data-sheet="dialogue" type="button" aria-label="播放对话摘要"></button>
-        <button class="hotspot dashboard-emotion" data-sheet="emotion" type="button" aria-label="查看情绪变化详情"></button>
-        <button class="hotspot dashboard-journey" data-sheet="journey" type="button" aria-label="查看心路历程"></button>
-      </section>
-
-      <section class="screen" id="settingsScreen" aria-label="设置">
-        <img class="screen-art" src="./assets/settings.png" alt="Reme 设置" draggable="false" />
-        <button class="hotspot settings-family" data-settings="family" type="button" aria-label="管理外婆家"></button>
-        <button class="hotspot settings-privacy" data-settings="privacy" type="button" aria-label="切换自动隐私保护">
-          <span class="switch-off" id="privacySwitchOff"></span>
-        </button>
-        <button class="hotspot settings-local" data-settings="local" type="button" aria-label="查看本地处理说明"></button>
-        <button class="hotspot settings-sharing" data-settings="sharing" type="button" aria-label="设置分享授权"></button>
-        <button class="hotspot settings-risk" data-settings="risk" type="button" aria-label="设置风险提醒"></button>
-        <button class="hotspot settings-mimo" data-settings="mimo" type="button" aria-label="切换 MiMo 主动关怀">
-          <span class="switch-off" id="mimoSwitchOff"></span>
-        </button>
-        <button class="hotspot settings-pin" data-settings="pin" type="button" aria-label="查看 Reme Pin"></button>
-        <button class="hotspot settings-members" data-settings="members" type="button" aria-label="查看家庭成员"></button>
-        <button class="hotspot settings-devices" data-settings="devices" type="button" aria-label="查看米家设备"></button>
-        <button class="hotspot settings-time" data-settings="time" type="button" aria-label="设置关怀时间"></button>
-        <button class="hotspot settings-security" data-settings="security" type="button" aria-label="查看数据与安全"></button>
-      </section>
-
-      <nav class="tabbar" aria-label="主导航">
-        <button class="tab-hit tab-home" data-tab="home" type="button" aria-label="首页"></button>
-        <button class="tab-hit tab-dashboard" data-tab="dashboard" type="button" aria-label="看板"></button>
-        <button class="tab-hit tab-settings" data-tab="settings" type="button" aria-label="设置"></button>
-      </nav>
-
-      <section class="emergency-layer is-hidden" id="emergencyLayer" aria-label="紧急提醒">
-        <img src="./assets/home-emergency.png" alt="检测到异常姿态紧急提醒" draggable="false" />
-        <button class="hotspot emergency-close" id="emergencyClose" type="button" aria-label="关闭提醒"></button>
-        <button class="hotspot emergency-call" id="emergencyCall" type="button" aria-label="立即呼叫外婆"></button>
-        <button class="hotspot emergency-live" id="emergencyLive" type="button" aria-label="查看实时状态"></button>
-        <button class="hotspot emergency-contact" id="emergencyContact" type="button" aria-label="联系紧急联系人"></button>
-      </section>
-
-      <section class="sheet-backdrop is-hidden" id="sheetBackdrop" aria-hidden="true">
-        <button class="backdrop-dismiss" id="sheetDismiss" type="button" aria-label="关闭弹层"></button>
-        <article class="bottom-sheet" id="bottomSheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
-          <div class="sheet-grabber" aria-hidden="true"></div>
-          <div class="sheet-head">
-            <div>
-              <small id="sheetEyebrow">REME</small>
-              <h2 id="sheetTitle">场景切换</h2>
-            </div>
-            <button id="sheetClose" type="button" aria-label="关闭">×</button>
-          </div>
-          <div class="sheet-body" id="sheetBody"></div>
-        </article>
-      </section>
-
-      <section class="call-layer is-hidden" id="callLayer" aria-label="正在呼叫外婆">
-        <div class="call-card">
-          <div class="call-avatar">外</div>
-          <small>正在呼叫</small>
-          <h2>外婆</h2>
-          <p id="callStatus">等待接听…</p>
-          <button id="hangupButton" type="button" aria-label="挂断电话">⌕</button>
-        </div>
-      </section>
-
-      <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    </main>
-
-    <script type="module" src="./app.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
