@@ -1,6 +1,6 @@
 # P0 修复批 · 实时联调阻塞项处置记录
 
-- 范围：`257046d..b33b86b`
+- 范围：`257046d..fe2c810`（含 Codex 复审后的 triage）
 - 来源：A/B 对接四维分析（`wf_80d2319d-e28`）挖出的 5 个 P0——它们的共同特征是**单测全绿但联调必炸**，因为每一个都发生在 A 与 B 的接缝上，而接缝此前从未被真实事件驱动过。
 - 编排：4 条 Opus 泳道（worktree 隔离、文件零交集）+ 主线程收口 + Codex 异构对抗复审。
 
@@ -10,11 +10,13 @@
 
 A 的 fall 分支置信度为
 `clamp(0.55 + 0.12·min(drop/0.20−1,1) + 0.12·min(speed/0.65−1,1) + 0.08·r, 0, 0.95)`。
-其 fall 门限强制两个 min 项 ∈ [0,1]，帧准入门限强制可见比例 r ∈ [0.5,1.0]，故**输出恒在 [0.59, 0.87]**（0.95 的上钳不可达）。用 A 自己的 `_classify` 扫描实测复核得 `[0.5900000000000001, 0.87]`，与解析一致。
+其 fall 门限强制两个 min 项 ∈ [0,1]。可见比例 `r` 则**没有强制下界**——A 虽在 `min_visible_keypoint_ratio = 0.5` 处丢帧，但每个 sample 存的是 `min(frame_ratio, posture_ratio)`，而 posture 侧只做 [0,1] 校验。故 r ∈ [0,1]，**输出恒在 [0.55, 0.87]**（0.95 的上钳不可达）。
 
-原 `fall_confidence_min = 0.7` 落在该区间**内部**，静默丢弃 [0.59, 0.70) 的真跌倒——约占该置信度区间 39%。改为 `FALL_LIKE_CONFIDENCE_FLOOR = 0.59`（解析下界，不再低一步）。`detect_fall_trigger` 其余三条判据、`violates_risk_floor`、`_STATE_SEVERITY` 均未触碰。
+> ⚠️ 本节曾写作 [0.59, 0.87] 并据此把门限定为 0.59，那是**错的**：泳道假设了 r ≥ 0.5 这个代码并不强制的前提。Codex 构造 r=0 的窗口喂给 A 的 `_classify`，实际得到 `('fall_like_transition', 0.55)`。修正过程见文末复审表 P1-1。
 
-新增测试里有一条**有意的耦合**：直接从 `TransitionDetectorConfig` 反算上下界，A 一旦重调 `fall_center_drop` / `fall_peak_speed` / `min_visible_keypoint_ratio`，该测试立即变红——门限漂移不会再无声发生。
+原 `fall_confidence_min = 0.7` 落在该区间**内部**，静默丢弃 [0.55, 0.70) 的真跌倒。改为 `FALL_LIKE_CONFIDENCE_FLOOR = 0.55`（A 的真实下界）。`detect_fall_trigger` 其余三条判据、`violates_risk_floor`、`_STATE_SEVERITY` 均未触碰。
+
+新增测试里有一条**有意的耦合**：直接从 A 的公式反算上下界，A 一旦重调 `fall_center_drop` / `fall_peak_speed`，该测试立即变红——门限漂移不会再无声发生。
 
 依据已登记进 [证据台账](../../../docs/references/cognition-evidence.md) 末表；ADR-0006 的"不得放松跌倒规则"不变量加了脚注说明二者不冲突（上下文调制中该字段仍原样拷贝，本次改的是基线，且修的是静默丢弃而非降低判据强度）。
 
@@ -24,16 +26,18 @@ A 的 fall 分支置信度为
 
 - `PerceptionEventClient`：纯 stdlib RFC6455 **客户端**（角色掩码规则与仓库既有服务端实现相反：客户端发出必须掩码、服务端来的不带掩码，故不可复用 `websocket.py` 的 `read_frame`），含握手 Accept 校验、分片重组、ping→pong、close 握手、1MiB 上限、带上限的退避重连、可从回调线程安全调用的 `stop()`。
 - `PerceptionBridge`：把订阅绑到会话生命周期——`/api/session` 成功且 buffers 清空**之后**订阅，`/api/session/stop` 在 registry 忘记会话**之前**拆订阅，进程退出一并拆。
-- **互斥**：两条入口写同一条 sequence 水位，同开必然互相把对方整批判成乱序。桥附着期间 `POST /api/events` 返回 409 `push_ingest_disabled`，把误配置暴露出来而不是变成"链路时通时不通"。
+- **互斥**：两条入口写同一条 sequence 水位，同开必然互相把对方整批判成乱序。来源归属做在 `EventIngest` 内部（claim/release 与 submit 同锁），push 由 ingest 自身以 409 `push_ingest_disabled` 拒绝——最初写成路由里的 `attached()` 探针，被复审指出是跨两把锁的 TOCTOU，见 P1-6。
 - CLI：`--a-events-url` 给了即 pull 模式，不给保持 push（回放、离线夹具、A 将来长出出站 HTTP）。
 
 ### P0-3 同帧派生事件共用 sequence（`stream.py`）
 
 A 让一帧派生的三个事件共用同一个 `frame.sequence`（`camera.py:247` 源头，`posture_runtime.py:135` 与 `transitions.py:254` 原样透传）。B 的 per-session 严格递增水位因此在 posture 占掉 seq N 后，把同帧的 `TransitionEvent` 判 `bad_event` 丢弃——**丢的正是跌倒信号**。
 
-水位键细化为 `(session_id, event_type)`。不选"同 sequence 内按 event_type 去重"的方案，因为后者只在同帧事件严格相邻到达时成立：一旦出现 `posture(5) → posture(6) → transition(5)` 这类交错（A 的两条派生流之间本无互序保证），transition 会被再次丢弃，故障只是被推后一帧。
+最终实现是**双水位**：`(session_id, event_type)` 拒同流重复与倒序，`session_id` 高水位拒任何比全局最新更旧的事件，两者共同允许跨类型相同 sequence（正是同帧派生要保住的情形）。
 
-保持不变：跨 session 仍拒、同类型内重复与倒序仍拒、时间戳非递减、缓冲上限、`reset_all` 清空全部 per-type 水位、`IngestError` 错误码语义。
+单用 per-type 曾在复审中被证明反开新洞（未见过的类型没有水位，旧 transition 可重放进跌倒判定），见复审表 P1-2。也不选"同 sequence 内按 event_type 去重"：那只在同帧事件严格相邻到达时成立，一旦出现 `posture(5) → posture(6) → transition(5)` 这类交错就会再次丢弃 transition。
+
+保持不变：跨 session 仍拒、时间戳非递减、缓冲上限、`reset_all` 清空全部水位、`IngestError` 错误码语义。
 
 ### P0-4 超时升级在实时主路径从未执行（`state_machine.py`）
 
@@ -53,7 +57,7 @@ A 让一帧派生的三个事件共用同一个 `frame.sequence`（`camera.py:24
 
 ## 验证
 
-全量 **446 测试通过**（新增：P0-1 六项、P0-4 五项、P0-3 八项、P0-2 十五项、P0-5 四项、收口三项）、mypy strict 24 文件零 issue、ruff 清。
+五项修复本身：全量 446 通过。复审 triage 后终态见文末。
 
 ## Codex 异构对抗复审（7 P1 / 2 P2）
 
