@@ -6,6 +6,8 @@ import LockRoundedIcon from "@mui/icons-material/LockRounded";
 import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
+import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
+import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
 import { Button } from "@mui/material";
 import { FALL_PHASES } from "./scenes";
 import { SceneViewport } from "./SceneViewport";
@@ -23,56 +25,92 @@ export function ChildPhone({
   fallStateOverride = null,
   emergencyNote = null,
   kitchenShared,
+  kitchenNotification,
   canvasRef,
   camera,
   viewMode,
+  familyViewOpen,
+  familyVideoAllowed,
+  onToggleFamilyView,
   onContact,
   onSafe,
 }) {
   const danger = scene.id === "fall" && fallPhase !== "idle";
   const emergency = scene.id === "fall" && ["emergency", "contacting", "resolved"].includes(fallPhase);
   const fallState = fallStateOverride || FALL_PHASES[fallPhase];
-  const title = scene.id === "fall" && danger ? fallState.status : scene.phoneTitle;
-  const body = scene.id === "fall" && danger ? fallState.message : scene.phoneBody;
+  const title = scene.id === "fall" && danger
+    ? fallState.status
+    : scene.id === "kitchen"
+      ? kitchenShared ? "收到奶奶分享" : "外婆家一切正常"
+      : scene.phoneTitle;
+  const body = scene.id === "fall" && danger
+    ? fallState.message
+    : scene.id === "kitchen"
+      ? kitchenShared ? kitchenNotification : "暂无新的家庭动态"
+      : scene.phoneBody;
 
   return (
-    <section className="phone-column" aria-label="子女设备端">
+    <section className="phone-column" aria-label="家属端">
       <div className={`phone-shell ${emergency ? "has-emergency" : ""}`}>
         <div className="phone-statusbar"><b>9:41</b><span className="dynamic-island" /><span>▮▮ ᯤ ▰</span></div>
         <div className="phone-header"><b>外婆家</b><span>⌄</span><i /></div>
 
         <SceneViewport
           sceneId={scene.id}
+          backgroundImage={scene.backgroundImage}
+          aspectRatio={camera.aspectRatio}
           canvasRef={canvasRef}
           cameraReady={camera.cameraReady}
           viewMode={viewMode}
           segmentationReady={camera.segmentationReady}
+          skeletonSource={camera.skeletonSource}
           compact
         />
+
+        <div className="family-view-control">
+          <Button
+            size="small"
+            variant={familyViewOpen && familyVideoAllowed ? "contained" : "outlined"}
+            startIcon={familyViewOpen && familyVideoAllowed
+              ? <VisibilityOffRoundedIcon />
+              : <VisibilityRoundedIcon />}
+            disabled={!familyVideoAllowed || !camera.cameraReady}
+            onClick={onToggleFamilyView}
+          >
+            {scene.id === "bathroom"
+              ? "浴室始终保护隐私"
+              : !familyVideoAllowed
+                ? "等待家中设备连接"
+                : familyViewOpen
+                  ? "收起现场画面"
+                  : "查看现场画面"}
+          </Button>
+          <small>{viewMode === "video_skeleton" ? "现场画面已叠加姿态识别" : "默认只显示姿态画面"}</small>
+        </div>
 
         <div className={`phone-care-card ${danger ? "is-danger" : `is-${scene.tone}`}`}>
           <span><PhoneStatusIcon sceneId={scene.id} danger={danger} /></span>
           <div><strong>{title}</strong><p>{body}</p></div>
         </div>
 
-        {scene.id === "kitchen" && (
-          <div className={`phone-moment ${kitchenShared ? "is-shared" : ""}`}>
+        {scene.id === "kitchen" && kitchenShared && (
+          <div className="phone-moment is-shared">
             <div className="moment-visual"><RestaurantRoundedIcon /></div>
             <div>
-              <small>{kitchenShared ? "刚刚收到" : "等待长辈确认"}</small>
-              <b>{kitchenShared ? "奶奶的包饺子记忆" : "发现一个生活片段"}</b>
-              <p>{kitchenShared ? "已整理关键步骤与现场片段" : "确认前不会向你展示或保存"}</p>
+              <small>刚刚收到</small>
+              <b>奶奶分享了包包子的生活片段</b>
+              <p>{kitchenNotification}</p>
             </div>
-            {kitchenShared && <CheckCircleRoundedIcon className="shared-check" />}
+            <CheckCircleRoundedIcon className="shared-check" />
           </div>
         )}
 
         {scene.id !== "kitchen" && (
           <div className="phone-timeline">
             <h3>家庭时间线</h3>
-            <div><i /><time>刚刚</time><span>{scene.id === "bathroom" ? "进入隐私保护" : danger ? "收到异常动作候选" : "检测到正常活动"}</span></div>
-            <div><i /><time>13:10</time><span>检测到睡醒</span></div>
-            <div><i /><time>12:00</time><span>检测到吃饭</span></div>
+            <div><i /><time>刚刚</time><span>{scene.id === "bathroom" ? "已切换为浴室隐私模式" : danger ? "发现一次较大的动作变化" : "家中有正常活动"}</span></div>
+            <div><i /><time>13:10</time><span>外婆起身活动</span></div>
+            <div><i /><time>12:00</time><span>外婆按时吃了午饭</span></div>
           </div>
         )}
 
@@ -89,7 +127,7 @@ export function ChildPhone({
             <h3>{fallState.status}</h3>
             <p>{fallState.message}</p>
             <div className="emergency-video-note">
-              <LockRoundedIcon /> {emergencyNote || "预授权紧急画面已临时开放"}
+              <LockRoundedIcon /> {emergencyNote || "已按预授权临时开放现场画面"}
             </div>
             {fallPhase === "emergency" && (
               <>
@@ -108,7 +146,7 @@ export function ChildPhone({
           </div>
         )}
       </div>
-      <strong className="column-label">子女设备端 · 实时同步</strong>
+      <strong className="column-label">家属端 · 与家中设备同步</strong>
     </section>
   );
 }

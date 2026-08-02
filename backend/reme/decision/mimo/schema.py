@@ -31,6 +31,7 @@ class MimoSchemaError(ValueError):
 
 TASK_STATE_ALLOWLIST: dict[MimoTask, frozenset[DecisionState]] = {
     MimoTask.COMPOSE_CHECK_IN: frozenset({DecisionState.CHECK_IN_REQUIRED}),
+    MimoTask.COMPOSE_KITCHEN_SHARE: frozenset({DecisionState.CONSENT_REQUIRED}),
     MimoTask.INTERPRET_RESPONSE: frozenset(
         {
             DecisionState.CHECK_IN_REQUIRED,
@@ -165,8 +166,16 @@ def parse_mimo_proposal(raw_text: str, *, task: MimoTask) -> MimoProposal:
 
     elder_message = _optional_text(payload, "elder_message")
     family_notification = _optional_text(payload, "family_notification")
+    consent_required = _optional_bool(payload, "consent_required")
     if task is MimoTask.COMPOSE_CHECK_IN and elder_message is None:
         raise MimoSchemaError("compose_check_in requires elder_message")
+    if task is MimoTask.COMPOSE_KITCHEN_SHARE:
+        if elder_message is None:
+            raise MimoSchemaError("compose_kitchen_share requires elder_message")
+        if consent_required is not True:
+            raise MimoSchemaError("compose_kitchen_share requires consent_required=true")
+        if family_notification is not None or action_card is not None:
+            raise MimoSchemaError("compose_kitchen_share cannot notify family before consent")
     if task is MimoTask.COMPOSE_CARD:
         if action_card is None:
             raise MimoSchemaError("compose_card requires a complete action_card")
@@ -182,7 +191,7 @@ def parse_mimo_proposal(raw_text: str, *, task: MimoTask) -> MimoProposal:
         dialogue_goal=_optional_text(payload, "dialogue_goal"),
         elder_message=elder_message,
         family_notification=family_notification,
-        consent_required=_optional_bool(payload, "consent_required"),
+        consent_required=consent_required,
         privacy_mode=_optional_enum(payload, "privacy_mode", PrivacyMode),
         action_card=action_card,
     )

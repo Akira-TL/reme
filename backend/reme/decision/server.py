@@ -28,6 +28,7 @@ from reme.decision.config import (
     build_danger_controller,
     build_mimo_client,
     build_policy_config,
+    build_speech_client,
     server_config_from_args,
 )
 from reme.decision.context import SceneStreamError, discover_scenes
@@ -50,7 +51,9 @@ from reme.decision.session import (
     SessionRegistryError,
     parse_session_request,
 )
+from reme.decision.state_machine import DemoConversationKind
 from reme.decision.stream import EventIngest, IngestError
+from reme.decision.voice_dialogue import VoiceDialogueController, VoiceDialogueError
 from reme.decision.websocket import DecisionEventHub, WebSocketError
 from reme.pose.runtime import ModeProfile, RuntimeSessionStatus
 
@@ -77,6 +80,16 @@ _INGEST_STATUS: dict[str, HTTPStatus] = {
     "push_ingest_disabled": HTTPStatus.CONFLICT,
 }
 
+_VOICE_STATUS: dict[str, HTTPStatus] = {
+    "speech_unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+    "asr_failed": HTTPStatus.BAD_GATEWAY,
+    "tts_failed": HTTPStatus.BAD_GATEWAY,
+    "bad_audio": HTTPStatus.UNPROCESSABLE_ENTITY,
+    "no_pending_decision": HTTPStatus.CONFLICT,
+    "stale_decision": HTTPStatus.CONFLICT,
+    "no_elder_message": HTTPStatus.UNPROCESSABLE_ENTITY,
+}
+
 _DANGER_STATUS: dict[str, HTTPStatus] = {
     "no_confirm_pending": HTTPStatus.CONFLICT,
     "channel_not_offered": HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -95,6 +108,7 @@ def build_decision_handler(
     ingest: EventIngest | None = None,
     bridge: PerceptionBridge | None = None,
     danger: DangerConfirmController | None = None,
+    voice_dialogue: VoiceDialogueController | None = None,
     voice_dir: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Create the request handler bound to one DecisionService.
@@ -178,12 +192,20 @@ def build_decision_handler(
                     self._handle_response(payload)
                 elif path == "/api/scene/reset":
                     self._handle_reset(payload)
+                elif path == "/api/demo/conversation":
+                    self._handle_demo_conversation(payload)
                 elif path == "/api/session":
                     self._handle_session_start(payload)
+                elif path == "/api/session/scene":
+                    self._handle_session_scene(payload)
                 elif path == "/api/session/stop":
                     self._handle_session_stop(payload)
                 elif path == "/api/events":
                     self._handle_events(payload)
+                elif path == "/api/voice/tts":
+                    self._handle_voice_tts(payload)
+                elif path == "/api/voice/dialogue":
+                    self._handle_voice_dialogue(payload)
                 elif path == "/api/danger/frame":
                     self._handle_danger_frame(payload)
                 elif path == "/api/danger/voice":
@@ -200,6 +222,9 @@ def build_decision_handler(
             except DangerRejectedError as exc:
                 status = _DANGER_STATUS.get(exc.code, HTTPStatus.UNPROCESSABLE_ENTITY)
                 self._send_error_json(status, exc.code, exc.code)
+            except VoiceDialogueError as exc:
+                status = _VOICE_STATUS.get(exc.code, HTTPStatus.UNPROCESSABLE_ENTITY)
+                self._send_error_json(status, exc.code, str(exc))
             except DecisionRecordError as exc:
                 self._send_error_json(
                     HTTPStatus.UNPROCESSABLE_ENTITY, "contract_violation", str(exc)
@@ -231,6 +256,126 @@ def build_decision_handler(
             response = parse_interaction_response(payload)
             decision = service.submit_response(response)
             self._send_json(HTTPStatus.OK, decision.to_payload())
+
+        def _handle_demo_conversation(self, payload: dict[str, Any]) -> None:
+            scene_id = payload.get("scene_id")
+            scenario = payload.get("scenario")
+            timestamp_ms = payload.get("timestamp_ms")
+            if not isinstance(scene_id, str) or not scene_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "scene_id must be a non-empty string"
+                )
+                return
+            if not isinstance(scenario, str):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "bad_request",
+                    f"scenario must be one of {[item.value for item in DemoConversationKind]}",
+                )
+                return
+            try:
+                kind = DemoConversationKind(scenario)
+            except ValueError:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "bad_request",
+                    f"scenario must be one of {[item.value for item in DemoConversationKind]}",
+                )
+                return
+            if (
+                isinstance(timestamp_ms, bool)
+                or not isinstance(timestamp_ms, int | float)
+                or timestamp_ms < 0
+            ):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "timestamp_ms must be a number >= 0"
+                )
+                return
+            decision = service.start_demo_conversation(
+                scene_id=scene_id,
+                kind=kind,
+                timestamp_ms=float(timestamp_ms),
+            )
+            self._send_json(HTTPStatus.OK, decision.to_payload())
+
+        # -- MiMo voice dialogue (ASR -> decision -> TTS) ------------------
+
+        def _handle_voice_tts(self, payload: dict[str, Any]) -> None:
+            if voice_dialogue is None:
+                raise VoiceDialogueError("speech_unavailable")
+            scene_id = payload.get("scene_id")
+            decision_id = payload.get("decision_id")
+            if not isinstance(scene_id, str) or not scene_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "scene_id must be a non-empty string"
+                )
+                return
+            if not isinstance(decision_id, str) or not decision_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "bad_request",
+                    "decision_id must be a non-empty string",
+                )
+                return
+            decision, audio = voice_dialogue.synthesize_decision(
+                scene_id=scene_id,
+                decision_id=decision_id,
+            )
+            response: dict[str, Any] = {
+                "scene_id": scene_id,
+                "decision_id": decision.decision_id,
+                "text": decision.elder_message,
+            }
+            response.update(audio.to_payload())
+            self._send_json(HTTPStatus.OK, response)
+
+        def _handle_voice_dialogue(self, payload: dict[str, Any]) -> None:
+            if voice_dialogue is None:
+                raise VoiceDialogueError("speech_unavailable")
+            scene_id = payload.get("scene_id")
+            decision_id = payload.get("decision_id")
+            timestamp_ms = payload.get("timestamp_ms")
+            audio_b64 = payload.get("audio_b64")
+            audio_format = payload.get("audio_format", "wav")
+            if not isinstance(scene_id, str) or not scene_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "scene_id must be a non-empty string"
+                )
+                return
+            if not isinstance(decision_id, str) or not decision_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "bad_request",
+                    "decision_id must be a non-empty string",
+                )
+                return
+            if (
+                isinstance(timestamp_ms, bool)
+                or not isinstance(timestamp_ms, int | float)
+                or timestamp_ms < 0
+            ):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "timestamp_ms must be a number >= 0"
+                )
+                return
+            if not isinstance(audio_b64, str) or not audio_b64:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "audio_b64 must be a non-empty string"
+                )
+                return
+            if not isinstance(audio_format, str):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "audio_format must be a string"
+                )
+                return
+            result = voice_dialogue.submit_audio_reply(
+                scene_id=scene_id,
+                decision_id=decision_id,
+                timestamp_ms=float(timestamp_ms),
+                audio_b64=audio_b64,
+                audio_format=audio_format,
+            )
+            self._send_json(HTTPStatus.OK, result.to_payload())
 
         # -- danger link (fall fast-confirm) --------------------------------
 
@@ -375,7 +520,17 @@ def build_decision_handler(
             if registry is None:
                 self._send_runtime_disabled("session control")
                 return
-            request = parse_session_request(payload)
+            replace_active = payload.get("replace_active", False)
+            if not isinstance(replace_active, bool):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "bad_request",
+                    "replace_active must be a boolean",
+                )
+                return
+            request_payload = dict(payload)
+            request_payload.pop("replace_active", None)
+            request = parse_session_request(request_payload)
             # The requested profile must match how this server actually runs,
             # or a RUNNING status would claim a mode nobody is executing
             # (Codex review P1): record replay serves recorded_video only,
@@ -393,7 +548,10 @@ def build_decision_handler(
                     f"profile={expected.value}",
                 )
                 return
-            status = registry.start(request)
+            if replace_active:
+                _, status = registry.replace_active(request)
+            else:
+                status = registry.start(request)
             self._announce_session(status)
             if bridge is not None:
                 # Subscribe to A only after the buffers are clean, so no event
@@ -412,6 +570,35 @@ def build_decision_handler(
                     )
                     return
             self._send_json(HTTPStatus.OK, status.to_payload())
+
+        def _handle_session_scene(self, payload: dict[str, Any]) -> None:
+            if registry is None:
+                self._send_runtime_disabled("session scene control")
+                return
+            session_id = payload.get("session_id")
+            scene_id = payload.get("scene_id")
+            if not isinstance(session_id, str) or not session_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "session_id must be a non-empty string"
+                )
+                return
+            if not isinstance(scene_id, str) or not scene_id:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "bad_request", "scene_id must be a non-empty string"
+                )
+                return
+            status = registry.switch_scene(session_id, scene_id)
+            if ingest is not None:
+                ingest.reset_scene(scene_id)
+            service.reset_scene(scene_id)
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "session_id": session_id,
+                    "scene_id": scene_id,
+                    "state": status.state.value,
+                },
+            )
 
         def _handle_session_stop(self, payload: dict[str, Any]) -> None:
             if registry is None:
@@ -743,6 +930,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         # when the browser throttles C's timers).
         publisher.bind(service)
     danger = build_danger_controller(config, service, audit)
+    voice_dialogue = VoiceDialogueController(
+        service=service,
+        speech=build_speech_client(config),
+    )
     bridge = (
         None
         if config.a_events_url is None
@@ -762,6 +953,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ingest=ingest,
         bridge=bridge,
         danger=danger,
+        voice_dialogue=voice_dialogue,
         voice_dir=config.voice_dir if config.voice_dir.is_dir() else None,
     )
     server = build_server(config, handler)

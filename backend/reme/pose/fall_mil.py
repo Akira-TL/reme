@@ -443,6 +443,59 @@ def save_fall_mil_model(path: str | Path, model: FallMILModel) -> None:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class FallMILScore:
+    """Best quality-gated runtime window score for one recent sample buffer."""
+
+    probability: float
+    threshold: float
+    candidate_eligible: bool
+    start_ms: float | None
+    end_ms: float | None
+
+    @property
+    def confirmed(self) -> bool:
+        return self.candidate_eligible and self.probability >= self.threshold
+
+
+def score_fall_samples(
+    model: FallMILModel,
+    samples: Sequence[FallPoseSample],
+    *,
+    bag_id: str = "runtime",
+) -> FallMILScore:
+    """Score recent runtime samples without claiming a validated fall label.
+
+    The same frozen window bank and conservative candidate gate used during
+    MIL training are reused here.  A non-eligible buffer returns probability
+    zero rather than bypassing the structural gate.
+    """
+
+    if len(samples) < model.window_config.min_samples:
+        return FallMILScore(0.0, model.threshold, False, None, None)
+    bag = FallBag(
+        bag_id=bag_id,
+        split="test",
+        label="normal",
+        category="runtime",
+        samples=tuple(samples),
+    )
+    windows = build_fall_windows(bag, config=model.window_config)
+    if not windows:
+        return FallMILScore(0.0, model.threshold, False, None, None)
+    candidates = _candidate_windows(windows, config=model.window_config)
+    if not candidates:
+        return FallMILScore(0.0, model.threshold, False, None, None)
+    best = max(candidates, key=lambda window: model.predict_probability(window.features))
+    return FallMILScore(
+        probability=model.predict_probability(best.features),
+        threshold=model.threshold,
+        candidate_eligible=True,
+        start_ms=best.start_ms,
+        end_ms=best.end_ms,
+    )
+
+
 def build_fall_windows(
     bag: FallBag,
     *,

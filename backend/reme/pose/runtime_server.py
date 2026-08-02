@@ -10,6 +10,7 @@ import queue
 import threading
 from collections.abc import Callable, Sequence
 from contextlib import suppress
+from dataclasses import replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 from reme.pose.browser_input import (
     BrowserGatewayPerceptionWorker,
+    GeometricPostureModel,
     parse_input_text,
     read_ws_messages,
     websocket_accept_value,
@@ -25,11 +27,14 @@ from reme.pose.browser_input import (
 from reme.pose.c_stream import (
     CCameraMessageSource,
     CCameraWebSocketSource,
+    CDebugScenario,
     CSceneSignal,
 )
 from reme.pose.camera import CameraConfig, LiveMoveNetStream, OpenCVCameraSource
+from reme.pose.demo_scenarios import build_demo_runtime_events
+from reme.pose.fall_runtime import DEFAULT_FALL_MIL_MODEL, FallMILTransitionEnhancer
 from reme.pose.movenet import MoveNetEstimator
-from reme.pose.posture import StaticPostureModel
+from reme.pose.posture import PosturePrediction, StaticPostureModel
 from reme.pose.posture_runtime import PostureRuntimeConfig, RealtimePostureTracker
 from reme.pose.runtime import (
     Component,
@@ -116,6 +121,8 @@ class TransitionEventDetector(Protocol):
 
     def process_runtime_event(self, event: RuntimeEvent) -> RuntimeEvent | None: ...
 
+    def reset(self, *, session_id: str) -> None: ...
+
 
 class PerceptionWorker(Protocol):
     """Adapter seam for one live perception implementation."""
@@ -128,6 +135,64 @@ class PerceptionWorker(Protocol):
         mark_running: Callable[[], None],
         is_active: Callable[[], bool],
     ) -> None: ...
+
+
+class HybridPostureModel:
+    """Use the learned classifier first, then a conservative geometry fallback.
+
+    The learned model keeps its calibrated rejection gate.  Only records it
+    rejects as ``unknown`` are offered to the geometry model; low-visibility
+    or collapsed poses may still remain unknown.  This avoids solving a
+    real-video domain shift by globally lowering confidence thresholds.
+    """
+
+    def __init__(
+        self,
+        *,
+        primary: StaticPostureModel,
+        fallback: GeometricPostureModel,
+    ) -> None:
+        self.primary = primary
+        self.fallback = fallback
+
+    def predict_record(self, record: dict[str, Any]) -> PosturePrediction:
+        primary = self.primary.predict_record(record)
+        if primary.posture != "unknown":
+            return primary
+        fallback = self.fallback.predict_record(record)
+        if fallback.posture == "unknown":
+            return primary
+        return replace(fallback, classification_source="geometry_fallback")
+
+
+def build_runtime_posture_model(
+    posture_model: Path,
+    *,
+    score_threshold: float,
+) -> HybridPostureModel:
+    """Load the runtime static model with a safe real-domain fallback."""
+
+    return HybridPostureModel(
+        primary=StaticPostureModel.load(posture_model),
+        fallback=GeometricPostureModel(score_threshold=score_threshold),
+    )
+
+
+def build_runtime_transition_detector(
+    session_id: str,
+    *,
+    fall_mil_model: Path | None,
+    score_threshold: float,
+) -> TransitionEventDetector:
+    """Load MIL v3 as a candidate enhancer when its artifact is available."""
+
+    if fall_mil_model is None or not fall_mil_model.is_file():
+        return TransitionDetector(session_id=session_id)
+    return FallMILTransitionEnhancer.load(
+        session_id=session_id,
+        model_path=fall_mil_model,
+        score_threshold=score_threshold,
+    )
 
 
 def derive_live_perception_events(
@@ -163,6 +228,7 @@ class CCameraWebSocketPerceptionWorker:
         posture_hz: float = 7.5,
         score_threshold: float = 0.2,
         num_threads: int = 4,
+        fall_mil_model: Path | None = DEFAULT_FALL_MIL_MODEL,
     ) -> None:
         self.source = source
         self.movenet_model = movenet_model
@@ -170,6 +236,7 @@ class CCameraWebSocketPerceptionWorker:
         self.posture_hz = posture_hz
         self.score_threshold = score_threshold
         self.num_threads = num_threads
+        self.fall_mil_model = fall_mil_model
 
     def run(
         self,
@@ -196,7 +263,10 @@ class CCameraWebSocketPerceptionWorker:
             num_threads=self.num_threads,
         )
         estimator.reset()
-        predictor = StaticPostureModel.load(self.posture_model)
+        predictor = build_runtime_posture_model(
+            self.posture_model,
+            score_threshold=self.score_threshold,
+        )
         tracker = RealtimePostureTracker(
             session_id=request.session_id,
             predictor=predictor,
@@ -205,7 +275,11 @@ class CCameraWebSocketPerceptionWorker:
                 score_threshold=self.score_threshold,
             ),
         )
-        transition_detector = TransitionDetector(session_id=request.session_id)
+        transition_detector = build_runtime_transition_detector(
+            request.session_id,
+            fall_mil_model=self.fall_mil_model,
+            score_threshold=self.score_threshold,
+        )
         current_scene_id = request.scene_id
         announced = False
         sequence = 0
@@ -221,6 +295,21 @@ class CCameraWebSocketPerceptionWorker:
                 current_scene_id = message.scene_id
                 tracker.reset()
                 transition_detector.reset(session_id=request.session_id)
+                continue
+            if isinstance(message, CDebugScenario):
+                current_scene_id = message.scene_id
+                tracker.reset()
+                transition_detector.reset(session_id=request.session_id)
+                events = build_demo_runtime_events(
+                    message.to_command(),
+                    start_sequence=sequence,
+                )
+                sequence += len(events)
+                if not announced:
+                    mark_running()
+                    announced = True
+                for event in events:
+                    publish(event)
                 continue
             if message.scene_id != current_scene_id:
                 continue
@@ -270,6 +359,7 @@ class LiveCameraPerceptionWorker:
         posture_hz: float = 7.5,
         score_threshold: float = 0.2,
         num_threads: int = 4,
+        fall_mil_model: Path | None = DEFAULT_FALL_MIL_MODEL,
     ) -> None:
         self.camera_config = camera_config
         self.movenet_model = movenet_model
@@ -277,6 +367,7 @@ class LiveCameraPerceptionWorker:
         self.posture_hz = posture_hz
         self.score_threshold = score_threshold
         self.num_threads = num_threads
+        self.fall_mil_model = fall_mil_model
 
     def run(
         self,
@@ -294,7 +385,10 @@ class LiveCameraPerceptionWorker:
             score_threshold=self.score_threshold,
             num_threads=self.num_threads,
         )
-        predictor = StaticPostureModel.load(self.posture_model)
+        predictor = build_runtime_posture_model(
+            self.posture_model,
+            score_threshold=self.score_threshold,
+        )
         tracker = RealtimePostureTracker(
             session_id=request.session_id,
             predictor=predictor,
@@ -303,7 +397,11 @@ class LiveCameraPerceptionWorker:
                 score_threshold=self.score_threshold,
             ),
         )
-        transition_detector = TransitionDetector(session_id=request.session_id)
+        transition_detector = build_runtime_transition_detector(
+            request.session_id,
+            fall_mil_model=self.fall_mil_model,
+            score_threshold=self.score_threshold,
+        )
         stream = LiveMoveNetStream(
             session_id=request.session_id,
             scene_id=request.scene_id,
@@ -527,6 +625,12 @@ def build_runtime_handler(
         protocol_version = "HTTP/1.1"
         server_version = "RemePerception/0.1"
 
+        def handle(self) -> None:
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
         def do_OPTIONS(self) -> None:  # noqa: N802
             self.send_response(HTTPStatus.NO_CONTENT)
             self._cors()
@@ -685,6 +789,7 @@ def build_runtime_handler(
             accept = base64.b64encode(
                 hashlib.sha1((key + _WEBSOCKET_GUID).encode("ascii")).digest()
             ).decode("ascii")
+            self.close_connection = True
             subscription = controller.broker.subscribe(session_id)
             self.send_response(HTTPStatus.SWITCHING_PROTOCOLS)
             self.send_header("Upgrade", "websocket")
@@ -828,6 +933,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "socket, local_camera is test-only"
         ),
     )
+    parser.add_argument(
+        "--browser-input-mode",
+        choices=("auto", "jpeg", "landmarks"),
+        default="auto",
+        help=(
+            "Input lane for c_ws_server: auto prefers JPEG inference when its dependencies "
+            "and model artifacts exist; landmarks forces the model-free keypoint lane; jpeg "
+            "requires the full local inference stack"
+        ),
+    )
     parser.add_argument("--c-camera-ws-url")
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--width", type=int, default=1280)
@@ -835,6 +950,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=float, default=30.0)
     parser.add_argument("--movenet-model", type=Path, default=DEFAULT_MOVENET_MODEL)
     parser.add_argument("--posture-model", type=Path, default=DEFAULT_POSTURE_MODEL)
+    parser.add_argument(
+        "--fall-mil-model",
+        type=Path,
+        default=DEFAULT_FALL_MIL_MODEL,
+        help="weakly supervised MIL model used to enhance transition candidates",
+    )
     parser.add_argument("--posture-hz", type=float, default=7.5)
     parser.add_argument("--score-threshold", type=float, default=0.2)
     parser.add_argument("--num-threads", type=int, default=4)
@@ -842,7 +963,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionWorker:
-    """Hosted-input gateway; JPEG inference only when its stack is present."""
+    """Build the hosted browser input gateway in auto or explicitly selected mode."""
 
     from importlib.util import find_spec
 
@@ -855,8 +976,24 @@ def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionW
     posture_config = PostureRuntimeConfig(
         output_hz=args.posture_hz, score_threshold=args.score_threshold
     )
+    requested_mode = args.browser_input_mode
+
+    def transition_factory(session_id: str) -> TransitionEventDetector:
+        return build_runtime_transition_detector(
+            session_id,
+            fall_mil_model=args.fall_mil_model,
+            score_threshold=args.score_threshold,
+        )
+
+    if requested_mode == "landmarks" or (requested_mode == "auto" and not jpeg_ready):
+        return BrowserGatewayPerceptionWorker(
+            posture_config=posture_config,
+            transition_detector_factory=transition_factory,
+        )
     if not jpeg_ready:
-        return BrowserGatewayPerceptionWorker(posture_config=posture_config)
+        raise RuntimeServerError(
+            "--browser-input-mode jpeg requires cv2, numpy, and readable MoveNet/posture models"
+        )
 
     def jpeg_pipeline(source: object) -> CCameraWebSocketPerceptionWorker:
         return CCameraWebSocketPerceptionWorker(
@@ -866,9 +1003,13 @@ def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionW
             posture_hz=args.posture_hz,
             score_threshold=args.score_threshold,
             num_threads=args.num_threads,
+            fall_mil_model=args.fall_mil_model,
         )
 
-    return BrowserGatewayPerceptionWorker(jpeg_pipeline_factory=jpeg_pipeline)
+    return BrowserGatewayPerceptionWorker(
+        jpeg_pipeline_factory=jpeg_pipeline,
+        transition_detector_factory=transition_factory,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -889,6 +1030,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             posture_hz=args.posture_hz,
             score_threshold=args.score_threshold,
             num_threads=args.num_threads,
+            fall_mil_model=args.fall_mil_model,
         )
     else:
         worker = LiveCameraPerceptionWorker(
@@ -903,6 +1045,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             posture_hz=args.posture_hz,
             score_threshold=args.score_threshold,
             num_threads=args.num_threads,
+            fall_mil_model=args.fall_mil_model,
         )
     controller = RuntimePerceptionController(worker=worker)
     server = RuntimeHTTPServer(
@@ -911,6 +1054,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(f"Reme perception control: http://{args.host}:{args.port}")
     print(f"Input adapter: {args.input_adapter}")
+    print(
+        "Fall transition model: "
+        + (str(args.fall_mil_model) if args.fall_mil_model.is_file() else "deterministic only")
+    )
     if input_gateway is not None:
         print(
             "Camera input lane: "

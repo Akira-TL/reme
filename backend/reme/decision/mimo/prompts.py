@@ -26,6 +26,10 @@ class PersonaConfig:
 
 _TASK_DUTY = {
     MimoTask.COMPOSE_CHECK_IN: "根据感知摘要，为一次不惊扰的主动问候拟一句开场白。",
+    MimoTask.COMPOSE_KITCHEN_SHARE: (
+        "当前已确认看到奶奶在厨房包包子。用自然口语询问她是否愿意把这个生活片段分享给孩子；"
+        "必须等待老人明确回复，不能声称已经分享，也不能替老人做决定。"
+    ),
     MimoTask.INTERPRET_RESPONSE: (
         "根据感知摘要和老人的回话，理解老人的需求，判断下一步是澄清、征求授权，还是需要家人协助。"
     ),
@@ -34,6 +38,7 @@ _TASK_DUTY = {
 
 _TASK_STATES = {
     MimoTask.COMPOSE_CHECK_IN: '"check_in_required"',
+    MimoTask.COMPOSE_KITCHEN_SHARE: '"consent_required"',
     MimoTask.INTERPRET_RESPONSE: (
         '"check_in_required" | "consent_required" | "family_notification_required"'
     ),
@@ -46,6 +51,13 @@ _TASK_EXAMPLE = {
         '"dialogue_goal":"understand_need","elder_message":"{name}，坐了挺久啦，今天午饭吃得还顺口吗？",'
         '"family_notification":null,"consent_required":false,'
         '"reason_summary":"长时间静坐，例行轻量问候","uncertainty":"medium",'
+        '"privacy_mode":null,"action_card":null}'
+    ),
+    MimoTask.COMPOSE_KITCHEN_SHARE: (
+        '{"state":"consent_required","risk_level":2,"need_dialogue":true,'
+        '"dialogue_goal":"request_consent","elder_message":"{name}，我看到您在包包子。要不要把这个生活片段分享给{relation}看看？",'
+        '"family_notification":null,"consent_required":true,'
+        '"reason_summary":"看到厨房包包子场景，先征求老人分享授权","uncertainty":"low",'
         '"privacy_mode":null,"action_card":null}'
     ),
     MimoTask.INTERPRET_RESPONSE: (

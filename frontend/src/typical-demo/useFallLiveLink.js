@@ -3,11 +3,8 @@ import { useDecisionRuntime } from "../hooks/useDecisionRuntime";
 import { usePerceptionRuntime } from "../hooks/usePerceptionRuntime";
 import { FALL_PHASES } from "./scenes";
 
-// 场景 4 的真实链路：把主应用的 A 感知接线与 B 决策接线组合起来，
-// 并把 B 的 CareDecision 映射回演示壳自己的 fallPhase 词表。
-// 链路不可用（A 或 B 未起）时返回 active=false，演示壳退回键盘剧本。
-
-const LIVE_SCENE_ID = "fall";
+// 单机真实链路：A 在全部场景持续产出骨架/姿态/转变，B 按同一会话做决策。
+// 深夜跌倒场景额外把 CareDecision 映射回演示壳的 fallPhase 词表。
 
 const TRIGGER_LABELS = {
   elder_report: "老人求助",
@@ -18,29 +15,22 @@ const TRIGGER_LABELS = {
   family_unresponsive: "家属未确认",
 };
 
-const PRIVACY_LABELS = {
-  visible: "原画可见",
-  blurred: "模糊处理",
-  skeleton_only: "仅骨架",
-  hidden: "画面隐藏",
-};
-
-export function useFallLiveLink({ enabled, videoElement }) {
+export function useFallLiveLink({ enabled, videoElement, sceneId }) {
   const perception = usePerceptionRuntime({
     videoElement,
-    sceneId: LIVE_SCENE_ID,
+    sceneId,
     enabled: Boolean(enabled && videoElement),
   });
   const decision = useDecisionRuntime({
     sessionId: perception.runtime.sessionId,
-    sceneId: LIVE_SCENE_ID,
+    sceneId,
     videoElement,
     enabled: Boolean(enabled && videoElement),
   });
   // 已在子女端确认过的告警决策 id：新告警事件天然拿到新 id，无需清理副作用。
   const [confirmedDecisionId, setConfirmedDecisionId] = useState(null);
 
-  const current = decision.decision;
+  const current = decision.decision?.scene_id === sceneId ? decision.decision : null;
   // 本轮会话里是否出现过告警（history 由决策钩子维护，纯派生）。
   const wasAlarmed = useMemo(
     () => decision.history.some((item) => item?.alarm),
@@ -54,7 +44,7 @@ export function useFallLiveLink({ enabled, videoElement }) {
   );
 
   const phase = useMemo(() => {
-    if (!enabled || !active) return "idle";
+    if (!enabled || !active || sceneId !== "fall") return "idle";
     if (current) {
       if (current.state === "check_in_required") return "checking";
       if (["family_notification_required", "urgent_attention"].includes(current.state)) {
@@ -73,7 +63,7 @@ export function useFallLiveLink({ enabled, videoElement }) {
       return "candidate";
     }
     return "idle";
-  }, [active, confirmedDecisionId, current, enabled, perception.transition, wasAlarmed]);
+  }, [active, confirmedDecisionId, current, enabled, perception.transition, sceneId, wasAlarmed]);
 
   const fallState = useMemo(() => {
     if (!active) return null;
@@ -114,34 +104,43 @@ export function useFallLiveLink({ enabled, videoElement }) {
     decision.respondNeedHelp();
   }, [decision]);
 
+  const triggerDebugScenario = perception.triggerDebugScenario;
   const confirmAlarm = useCallback(() => {
     if (current) setConfirmedDecisionId(current.decision_id);
     decision.confirmAlarm();
   }, [current, decision]);
 
-  const privacyLabel = PRIVACY_LABELS[current?.privacy_mode] || "仅骨架";
-  const emergencyNote = current?.privacy_mode === "visible"
-    ? "画面已按隐私档位开放"
-    : `隐私档位：${privacyLabel}，未开放原画`;
-  const showEmergencyVideo = Boolean(
-    active
-      && ["emergency", "contacting", "resolved"].includes(phase)
-      && current?.privacy_mode === "visible"
-  );
+  const emergencyNote = sceneId === "bathroom"
+    ? "浴室场景不可查看原视频"
+    : "家属可主动查看原视频与 A 骨架叠加";
+  const familyVideoAllowed = Boolean(active && sceneId !== "bathroom");
 
   return {
     active,
     phase,
     fallState,
     emergencyNote,
-    showEmergencyVideo,
+    showEmergencyVideo: familyVideoAllowed,
+    familyVideoAllowed,
     connection: decision.connection,
     perceptionState: perception.runtime.state,
+    runtime: perception.runtime,
+    landmarkFrame: perception.landmarkFrame,
+    posture: perception.posture,
+    transition: perception.transition,
     sendLandmarks: perception.sendLandmarks,
     deadline: decision.deadline,
+    triggerDebugScenario,
     respondSafe,
     respondNeedHelp,
+    respondConsentGranted: decision.respondConsentGranted,
+    respondConsentDenied: decision.respondConsentDenied,
+    startDemoConversation: decision.startDemoConversation,
     confirmAlarm,
-    decision,
+    resetSceneState: decision.resetSceneState,
+    replayVoice: decision.replayVoice,
+    startVoiceReply: decision.startVoiceReply,
+    voice: decision.voice,
+    decision: { ...decision, decision: current },
   };
 }

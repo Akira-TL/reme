@@ -10,6 +10,7 @@ import threading
 import pytest
 from reme.pose.c_stream import (
     CCameraWebSocketSource,
+    CDebugScenario,
     CSceneSignal,
     CStreamDecoder,
     CStreamError,
@@ -86,6 +87,41 @@ def test_c_stream_decoder_handles_scene_reuse_and_binary_frames() -> None:
     assert isinstance(reused[0], CSceneSignal)
     assert reused[0].scene_id == "kitchen"
     assert reused[0].signal == "reuse"
+
+
+def test_c_stream_decoder_accepts_manual_debug_scenario() -> None:
+    decoded = CStreamDecoder().feed(
+        json.dumps(
+            {
+                "type": "debug_scenario",
+                "session_id": "session-live-001",
+                "scene_id": "fall",
+                "timestamp_ms": 1234.5,
+                "scenario": "fall",
+            }
+        )
+    )
+
+    assert decoded == (
+        CDebugScenario(
+            session_id="session-live-001",
+            scene_id="fall",
+            timestamp_ms=1234.5,
+            scenario="fall",
+        ),
+    )
+    with pytest.raises(CStreamError, match="scenario must be one of"):
+        CStreamDecoder().feed(
+            json.dumps(
+                {
+                    "type": "debug_scenario",
+                    "session_id": "session-live-001",
+                    "scene_id": "fall",
+                    "timestamp_ms": 1234.5,
+                    "scenario": "unsupported",
+                }
+            )
+        )
 
 
 def test_c_stream_decoder_accepts_base64_frames_and_rejects_bare_binary() -> None:

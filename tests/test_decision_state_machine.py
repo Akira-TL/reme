@@ -31,11 +31,13 @@ from reme.decision.state_machine import (
     REJECT_NO_PENDING,
     REJECT_STALE_DECISION,
     REJECT_TIMELINE_REWIND,
+    DemoConversationKind,
     EscalationKind,
     MimoTask,
     SessionPhase,
     SessionState,
     TemplateId,
+    on_demo_conversation,
     on_response,
     on_tick,
 )
@@ -377,6 +379,75 @@ def _awaiting_consent(**overrides: Any) -> SessionState:
     }
     fields.update(overrides)
     return _state(**fields)
+
+
+def test_kitchen_share_starts_directly_at_consent_with_mimo_wording() -> None:
+    directive = on_demo_conversation(
+        _state(),
+        kind=DemoConversationKind.KITCHEN_SHARE,
+        timestamp_ms=15000.0,
+        config=_CONFIG,
+    )
+    assert directive.skeleton is not None
+    assert directive.skeleton.state is DecisionState.CONSENT_REQUIRED
+    assert directive.skeleton.template is TemplateId.KITCHEN_SHARE_REQUEST
+    assert directive.skeleton.consent_required is True
+    assert directive.mimo_task is MimoTask.COMPOSE_KITCHEN_SHARE
+    assert directive.next_state.phase is SessionPhase.AWAITING_CONSENT
+    assert directive.next_state.conversation_kind is DemoConversationKind.KITCHEN_SHARE
+    assert "包包子" in (directive.next_state.complaint_text or "")
+
+
+def test_kitchen_share_only_notifies_after_explicit_consent() -> None:
+    started = on_demo_conversation(
+        _state(),
+        kind=DemoConversationKind.KITCHEN_SHARE,
+        timestamp_ms=15000.0,
+        config=_CONFIG,
+    )
+    awaiting = replace(started.next_state, pending_decision_id="decision-0002")
+    granted = on_response(
+        awaiting,
+        _response(
+            ResponseValue.CONSENT_GRANTED,
+            ResponseSource.USER_INPUT,
+            decision_id="decision-0002",
+        ),
+        config=_CONFIG,
+    )
+    assert granted.skeleton is not None
+    assert granted.skeleton.state is DecisionState.RESOLVED
+    assert granted.skeleton.action is DecisionAction.NOTIFY_FAMILY
+    assert granted.skeleton.template is TemplateId.KITCHEN_SHARE_GRANTED
+    assert granted.skeleton.risk_level == 0
+    assert granted.mimo_task is None
+
+    denied = on_response(
+        awaiting,
+        _response(
+            ResponseValue.CONSENT_DENIED,
+            ResponseSource.USER_INPUT,
+            decision_id="decision-0002",
+        ),
+        config=_CONFIG,
+    )
+    assert denied.skeleton is not None
+    assert denied.skeleton.state is DecisionState.RESOLVED
+    assert denied.skeleton.action is DecisionAction.MARK_RESOLVED
+    assert denied.skeleton.template is TemplateId.KITCHEN_SHARE_DENIED
+
+
+def test_manual_proactive_check_in_uses_normal_mimo_question_path() -> None:
+    directive = on_demo_conversation(
+        _state(),
+        kind=DemoConversationKind.PROACTIVE_CHECK_IN,
+        timestamp_ms=15000.0,
+        config=_CONFIG,
+    )
+    assert directive.skeleton is not None
+    assert directive.skeleton.state is DecisionState.CHECK_IN_REQUIRED
+    assert directive.mimo_task is MimoTask.COMPOSE_CHECK_IN
+    assert directive.next_state.phase is SessionPhase.AWAITING_ELDER
 
 
 def test_consent_granted_notifies_family_with_card_task() -> None:

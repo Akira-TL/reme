@@ -37,6 +37,7 @@ class PosturePrediction:
     confidence: float
     probabilities: dict[str, float]
     visible_keypoint_ratio: float
+    classification_source: str = "unspecified"
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,11 +122,13 @@ class StaticPostureModel:
         feature, visible_ratio = extract_posture_features(
             record, score_threshold=self.score_threshold
         )
+        classification_source = "softmax"
         if not bool(record.get("person_detected")) or visible_ratio < self.min_visible_ratio:
             output_probabilities = np.zeros(len(POSTURE_LABELS), dtype=np.float64)
             output_probabilities[-1] = 1.0
             posture = "unknown"
             confidence = 1.0
+            classification_source = "visibility_reject"
         else:
             standardized = (feature - self.feature_mean) / self.feature_scale
             known_probabilities = _softmax(standardized @ self.weights + self.bias)
@@ -147,6 +150,7 @@ class StaticPostureModel:
             if rejected:
                 posture = "unknown"
                 confidence = float(output_probabilities[-1])
+                classification_source = "softmax_reject"
             else:
                 posture = self.labels[best_index]
                 confidence = best_confidence
@@ -158,6 +162,7 @@ class StaticPostureModel:
                 for index, label in enumerate(POSTURE_LABELS)
             },
             visible_keypoint_ratio=round(visible_ratio, 6),
+            classification_source=classification_source,
         )
 
     def to_payload(self) -> dict[str, object]:
