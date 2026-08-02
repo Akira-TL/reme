@@ -1,6 +1,6 @@
 # 公网事件触发式语音唤起 SPEC
 
-- Status: accepted-for-implementation
+- Status: implemented-production-mobile-gate-pending
 - Date: 2026-08-02
 - Owner: LBX 公网共享 Demo
 - Depends on: ADR-0005、ADR-0007、ADR-0008、ADR-0009
