@@ -39,6 +39,27 @@ export function startSession(httpBase, sessionRequest, signal) {
   });
 }
 
+export function getSessionStatus(httpBase, signal) {
+  return request(httpBase, "/api/session/status", { signal });
+}
+
+// B 是单会话制：页面刷新/崩溃遗留的旧会话会让新会话永远 409，且旧页面的
+// stop 与新页面的 start 在重载瞬间存在到达顺序竞态（同一秒内 200→409→stop
+// 的日志签名）。合同规定 C 是运行模式的唯一发起者，接管旧会话属于 C 的职权，
+// 语义与 A 侧 start 自动接管保持一致：查活跃会话 → 停掉 → 重试一次。
+export async function startSessionWithTakeover(httpBase, sessionRequest, signal) {
+  try {
+    return await startSession(httpBase, sessionRequest, signal);
+  } catch (error) {
+    if (error.status !== 409) throw error;
+    const status = await getSessionStatus(httpBase, signal).catch(() => null);
+    const activeId = status?.session_id;
+    if (!activeId || activeId === sessionRequest.session_id) throw error;
+    await stopSession(httpBase, activeId).catch(() => {});
+    return startSession(httpBase, sessionRequest, signal);
+  }
+}
+
 export function stopSession(httpBase, sessionId) {
   return request(httpBase, "/api/session/stop", {
     method: "POST",

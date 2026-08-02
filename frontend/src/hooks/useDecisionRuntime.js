@@ -6,7 +6,7 @@ import {
 } from "../adapters/perception";
 import {
   getDecisionUrls,
-  startSession,
+  startSessionWithTakeover,
   stopSession,
   submitResponse,
   uploadDangerFrame,
@@ -324,7 +324,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setDeadline(null);
       setAlarm(null);
       try {
-        await startSession(httpBase, createSessionRequest(sessionId, sceneRef.current), abortController.signal);
+        await startSessionWithTakeover(
+          httpBase,
+          createSessionRequest(sessionId, sceneRef.current),
+          abortController.signal,
+        );
         if (disposed) return;
         socket = new WebSocket(wsUrl);
         socket.onopen = () => {
