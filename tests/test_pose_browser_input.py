@@ -238,6 +238,28 @@ class TestLandmarkFrameEngine:
             assert len(set(typed)) == len(typed)
         assert engine.stats.landmark_frames == len(_fall_stream())
 
+    def test_manual_fall_scenario_uses_current_event_sequence(self) -> None:
+        engine, published = self._session()
+        engine.handle_text(
+            {
+                "type": "debug_scenario",
+                "session_id": SESSION,
+                "scene_id": SCENE,
+                "timestamp_ms": 5000.0,
+                "scenario": "fall",
+            }
+        )
+        engine.handle_text(
+            _landmark_message(_standing(), frame_index=1, timestamp_ms=5100.0)
+        )
+
+        assert [event.sequence for event in published[:3]] == [0, 1, 2]
+        assert published[1].event_type is RuntimeEventType.TRANSITION_EVENT
+        assert published[1].payload["transition"] == "fall_like_transition"
+        assert published[2].payload["posture"] == "lying"
+        assert published[2].payload["classification_source"] == "manual_debug"
+        assert published[3].sequence == 3
+
     def test_wrong_session_and_bad_payloads_counted(self) -> None:
         engine, published = self._session()
         engine.handle_text({"type": "landmarks_frame", "session_id": "other"})

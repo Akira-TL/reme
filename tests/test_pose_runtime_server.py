@@ -19,6 +19,7 @@ from typing import Protocol
 import pytest
 import reme.pose.runtime_server as runtime_server_module
 from reme.pose.c_stream import CSceneSignal, CVideoFrame
+from reme.pose.posture import PosturePrediction
 from reme.pose.runtime import (
     ModeProfile,
     RuntimeEvent,
@@ -29,6 +30,7 @@ from reme.pose.runtime import (
 from reme.pose.runtime_server import (
     CCameraWebSocketPerceptionWorker,
     EventBroker,
+    HybridPostureModel,
     PerceptionWorker,
     RuntimePerceptionController,
     build_runtime_handler,
@@ -40,6 +42,17 @@ from reme.pose.scene_bundle import MOVENET_KEYPOINT_NAMES
 
 class Publish(Protocol):
     def __call__(self, event: RuntimeEvent) -> None: ...
+
+
+class FixedPosturePredictor:
+    def __init__(self, prediction: PosturePrediction) -> None:
+        self.prediction = prediction
+        self.calls = 0
+
+    def predict_record(self, record: dict[str, object]) -> PosturePrediction:
+        del record
+        self.calls += 1
+        return self.prediction
 
 
 class FakePostureTracker:
@@ -112,6 +125,64 @@ def _wait_until(predicate: Callable[[], bool], timeout: float = 1.0) -> None:
             return
         time.sleep(0.005)
     raise AssertionError("condition was not met before timeout")
+
+
+def test_hybrid_posture_model_uses_geometry_only_after_softmax_rejects() -> None:
+    primary = FixedPosturePredictor(
+        PosturePrediction(
+            posture="unknown",
+            confidence=0.8,
+            probabilities={"unknown": 0.8},
+            visible_keypoint_ratio=0.9,
+            classification_source="softmax_reject",
+        )
+    )
+    fallback = FixedPosturePredictor(
+        PosturePrediction(
+            posture="standing",
+            confidence=0.7,
+            probabilities={"standing": 0.7},
+            visible_keypoint_ratio=0.9,
+            classification_source="geometry",
+        )
+    )
+    model = HybridPostureModel(primary=primary, fallback=fallback)  # type: ignore[arg-type]
+
+    prediction = model.predict_record({})
+
+    assert prediction.posture == "standing"
+    assert prediction.classification_source == "geometry_fallback"
+    assert primary.calls == 1
+    assert fallback.calls == 1
+
+
+def test_hybrid_posture_model_preserves_known_softmax_prediction() -> None:
+    primary = FixedPosturePredictor(
+        PosturePrediction(
+            posture="sitting",
+            confidence=0.75,
+            probabilities={"sitting": 0.75},
+            visible_keypoint_ratio=0.9,
+            classification_source="softmax",
+        )
+    )
+    fallback = FixedPosturePredictor(
+        PosturePrediction(
+            posture="standing",
+            confidence=0.7,
+            probabilities={"standing": 0.7},
+            visible_keypoint_ratio=0.9,
+            classification_source="geometry",
+        )
+    )
+    model = HybridPostureModel(primary=primary, fallback=fallback)  # type: ignore[arg-type]
+
+    prediction = model.predict_record({})
+
+    assert prediction.posture == "sitting"
+    assert prediction.classification_source == "softmax"
+    assert primary.calls == 1
+    assert fallback.calls == 0
 
 
 def test_live_pipeline_publishes_frame_posture_transition_in_order() -> None:
@@ -288,7 +359,11 @@ def test_browser_gateway_can_force_landmark_lane_when_jpeg_stack_is_ready(
     gateway = runtime_server_module.build_browser_gateway(args)
 
     assert gateway.mode == "landmarks"
-    assert gateway.capabilities()["accepts"] == ["landmarks_frame", "scene_signal"]
+    assert gateway.capabilities()["accepts"] == [
+        "landmarks_frame",
+        "debug_scenario",
+        "scene_signal",
+    ]
 
 
 def test_c_camera_worker_resets_scene_state_and_keeps_runtime_sequence(

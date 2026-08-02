@@ -37,6 +37,7 @@ from reme.pose.c_stream import (
     CStreamMessage,
     CVideoFrame,
 )
+from reme.pose.demo_scenarios import DemoScenarioCommand, build_demo_runtime_events
 from reme.pose.posture import PosturePrediction
 from reme.pose.posture_runtime import PostureRuntimeConfig, RealtimePostureTracker
 from reme.pose.runtime import (
@@ -215,6 +216,7 @@ class GeometricPostureModel:
             confidence=confidence,
             probabilities=probabilities,
             visible_keypoint_ratio=round(ratio, 6),
+            classification_source="geometry",
         )
 
 
@@ -239,6 +241,7 @@ class LandmarkFrameEngine:
         predictor: GeometricPostureModel | None = None,
         posture_config: PostureRuntimeConfig | None = None,
         transition_config: TransitionDetectorConfig | None = None,
+        transition_detector: Any | None = None,
     ) -> None:
         self.session_id = session_id
         self.scene_id = scene_id
@@ -249,7 +252,7 @@ class LandmarkFrameEngine:
             predictor=self._predictor,
             config=posture_config or PostureRuntimeConfig(),
         )
-        self._detector = TransitionDetector(
+        self._detector = transition_detector or TransitionDetector(
             session_id=session_id, config=transition_config or TransitionDetectorConfig()
         )
         self._lock = threading.Lock()
@@ -263,6 +266,8 @@ class LandmarkFrameEngine:
             return
         if kind == "landmarks_frame":
             self._ingest_landmarks(message)
+        elif kind == "debug_scenario":
+            self._ingest_debug_scenario(message)
         elif kind == "scene_signal":
             self._handle_scene_signal(message)
         elif kind in ("ping", "heartbeat", "frame_meta"):
@@ -286,6 +291,41 @@ class LandmarkFrameEngine:
             self.scene_id = scene_id
             self._tracker.reset()
             self._detector.reset(session_id=self.session_id)
+
+    def _ingest_debug_scenario(self, message: dict[str, Any]) -> None:
+        session_id = message.get("session_id")
+        scene_id = message.get("scene_id")
+        timestamp_ms = _finite_number(message.get("timestamp_ms"))
+        scenario = message.get("scenario")
+        if (
+            session_id != self.session_id
+            or not isinstance(scene_id, str)
+            or not scene_id
+            or timestamp_ms is None
+            or timestamp_ms < 0
+            or not isinstance(scenario, str)
+        ):
+            self.stats.dropped_messages += 1
+            return
+        try:
+            command = DemoScenarioCommand(
+                session_id=self.session_id,
+                scene_id=scene_id,
+                timestamp_ms=timestamp_ms,
+                scenario=scenario,
+            )
+            with self._lock:
+                start_sequence = self._sequence
+                events = build_demo_runtime_events(
+                    command,
+                    start_sequence=start_sequence,
+                )
+                self._sequence += len(events)
+        except ValueError:
+            self.stats.dropped_messages += 1
+            return
+        for event in events:
+            self._publish(event)
 
     def _ingest_landmarks(self, message: dict[str, Any]) -> None:
         record = self._frame_record(message)
@@ -467,12 +507,14 @@ class BrowserGatewayPerceptionWorker:
         predictor: GeometricPostureModel | None = None,
         posture_config: PostureRuntimeConfig | None = None,
         transition_config: TransitionDetectorConfig | None = None,
+        transition_detector_factory: Callable[[str], Any] | None = None,
         poll_interval_s: float = 0.1,
     ) -> None:
         self._jpeg_pipeline_factory = jpeg_pipeline_factory
         self._predictor = predictor
         self._posture_config = posture_config
         self._transition_config = transition_config
+        self._transition_detector_factory = transition_detector_factory
         self._poll_interval_s = poll_interval_s
         self._lock = threading.Lock()
         self._intakes: dict[str, SessionIntake] = {}
@@ -484,7 +526,9 @@ class BrowserGatewayPerceptionWorker:
     def capabilities(self) -> dict[str, Any]:
         jpeg = self._jpeg_pipeline_factory is not None
         accepts = (
-            ["frame_meta", "frame", "scene_signal"] if jpeg else ["landmarks_frame", "scene_signal"]
+            ["frame_meta", "frame", "debug_scenario", "scene_signal"]
+            if jpeg
+            else ["landmarks_frame", "debug_scenario", "scene_signal"]
         )
         return {
             "camera_input_ws": "/ws/camera-input",
@@ -524,6 +568,11 @@ class BrowserGatewayPerceptionWorker:
                 with self._lock:
                     self._intakes.pop(request.session_id, None)
             return
+        transition_detector = (
+            None
+            if self._transition_detector_factory is None
+            else self._transition_detector_factory(request.session_id)
+        )
         engine = LandmarkFrameEngine(
             session_id=request.session_id,
             scene_id=request.scene_id,
@@ -531,6 +580,7 @@ class BrowserGatewayPerceptionWorker:
             predictor=self._predictor,
             posture_config=self._posture_config,
             transition_config=self._transition_config,
+            transition_detector=transition_detector,
         )
         intake = SessionIntake(session_id=request.session_id, mode="landmarks", engine=engine)
         with self._lock:

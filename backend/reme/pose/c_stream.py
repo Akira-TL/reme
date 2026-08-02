@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlparse
 
+from reme.pose.demo_scenarios import DEBUG_SCENARIOS, DemoScenarioCommand
 from reme.pose.runtime import RuntimeSessionRequest
 
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -35,6 +36,24 @@ class CSceneSignal:
 
 
 @dataclass(frozen=True, slots=True)
+class CDebugScenario:
+    """One manual acceptance scenario carried over the existing input socket."""
+
+    session_id: str
+    scene_id: str
+    timestamp_ms: float
+    scenario: str
+
+    def to_command(self) -> DemoScenarioCommand:
+        return DemoScenarioCommand(
+            session_id=self.session_id,
+            scene_id=self.scene_id,
+            timestamp_ms=self.timestamp_ms,
+            scenario=self.scenario,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class CVideoFrame:
     """One JPEG frame captured and timestamped by C."""
 
@@ -45,7 +64,7 @@ class CVideoFrame:
     jpeg: bytes
 
 
-CStreamMessage = CSceneSignal | CVideoFrame
+CStreamMessage = CSceneSignal | CDebugScenario | CVideoFrame
 
 
 class CStreamDecoder:
@@ -81,6 +100,18 @@ class CStreamDecoder:
                     scene_id=_required_text(payload, "scene_id"),
                     timestamp_ms=_non_negative_number(payload, "timestamp_ms"),
                     signal=_optional_text(payload, "signal", default="activate"),
+                ),
+            )
+        if message_type == "debug_scenario":
+            scenario = _required_text(payload, "scenario")
+            if scenario not in DEBUG_SCENARIOS:
+                raise CStreamError(f"scenario must be one of {DEBUG_SCENARIOS}")
+            return (
+                CDebugScenario(
+                    session_id=_required_text(payload, "session_id"),
+                    scene_id=_required_text(payload, "scene_id"),
+                    timestamp_ms=_non_negative_number(payload, "timestamp_ms"),
+                    scenario=scenario,
                 ),
             )
         if message_type == "frame_meta":

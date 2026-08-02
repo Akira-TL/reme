@@ -443,7 +443,8 @@ class LinkObserver:
                 "A",
                 f"转变候选 {payload.get('transition')} conf={payload.get('transition_confidence')} "
                 f"{payload.get('start_ms')}→{payload.get('end_ms')}ms "
-                f"{evidence.get('posture_before')}→{evidence.get('posture_after')}",
+                f"{evidence.get('posture_before')}→{evidence.get('posture_after')} "
+                f"mil={evidence.get('fall_mil_probability', '—')}",
             )
 
     def on_b_event(self, event: RuntimeEvent) -> None:
@@ -499,8 +500,12 @@ class LinkObserver:
             )
         if self.transitions:
             for item in self.transitions:
+                evidence = item.get("evidence") or {}
+                transition_name = item.get("transition")
+                transition_confidence = item.get("transition_confidence")
                 lines.append(
-                    f"A 转变候选: {item.get('transition')} conf={item.get('transition_confidence')}"
+                    f"A 转变候选: {transition_name} conf={transition_confidence} "
+                    f"mil={evidence.get('fall_mil_probability', '—')}"
                 )
         decision_kinds = Counter(
             f"{item.get('state')}({item.get('source')})" for item in self.decisions

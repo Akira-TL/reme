@@ -126,6 +126,9 @@ class RealtimePostureTracker:
             "posture_duration_ms": round(duration_ms, 3),
             "motion_level": motion_level,
             "visible_keypoint_ratio": prediction.visible_keypoint_ratio,
+            "classification_source": getattr(
+                prediction, "classification_source", "unspecified"
+            ),
             "landmark_quality": _landmark_quality(payload.get("landmark_quality")),
         }
         self._last_emit_ms = timestamp_ms
