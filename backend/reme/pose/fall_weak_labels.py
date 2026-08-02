@@ -98,6 +98,8 @@ class WeakFallConfig:
     min_visible_ratio: float = 0.35
     min_standing_confidence: float = 0.45
     max_standing_torso_angle_deg: float = 35.0
+    max_standing_aspect_ratio: float = 0.65
+    max_standing_motion_speed: float = 0.20
     min_fallen_confidence: float = 0.35
     min_fallen_torso_angle_deg: float = 50.0
     min_fallen_aspect_ratio: float = 0.75
@@ -127,6 +129,8 @@ class WeakFallConfig:
                 raise FallWeakLabelError(f"{field_name} must be between 0 and 1")
         non_negative = {
             "max_standing_torso_angle_deg": self.max_standing_torso_angle_deg,
+            "max_standing_aspect_ratio": self.max_standing_aspect_ratio,
+            "max_standing_motion_speed": self.max_standing_motion_speed,
             "min_fallen_torso_angle_deg": self.min_fallen_torso_angle_deg,
             "min_fallen_aspect_ratio": self.min_fallen_aspect_ratio,
             "max_fallen_motion_speed": self.max_fallen_motion_speed,
@@ -290,13 +294,21 @@ def _stable_runs(
 
 
 def _is_standing(sample: FallPoseSample, config: WeakFallConfig) -> bool:
-    return (
-        sample.landmark_quality != "unavailable"
-        and sample.visible_keypoint_ratio >= config.min_visible_ratio
-        and sample.posture == "standing"
+    if (
+        sample.landmark_quality == "unavailable"
+        or sample.visible_keypoint_ratio < config.min_visible_ratio
+        or sample.motion_speed > config.max_standing_motion_speed
+    ):
+        return False
+    model_evidence = (
+        sample.posture == "standing"
         and sample.posture_confidence >= config.min_standing_confidence
-        and sample.torso_angle_deg <= config.max_standing_torso_angle_deg
     )
+    geometry_evidence = (
+        sample.torso_angle_deg <= config.max_standing_torso_angle_deg
+        and sample.bbox_aspect_ratio <= config.max_standing_aspect_ratio
+    )
+    return model_evidence or geometry_evidence
 
 
 def _is_fallen(sample: FallPoseSample, config: WeakFallConfig) -> bool:

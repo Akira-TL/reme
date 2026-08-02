@@ -81,6 +81,38 @@ def test_fast_standing_to_fallen_sequence_is_accepted() -> None:
     assert candidate.evidence["peak_motion_speed"] == 0.9
 
 
+def test_geometry_can_supply_standing_anchor_when_static_model_abstains() -> None:
+    samples = [
+        _sample(
+            index * 100.0,
+            posture="unknown",
+            confidence=0.1,
+            center_y=0.45,
+            torso_angle_deg=4.0,
+            aspect_ratio=0.30,
+            motion_speed=0.03,
+        )
+        for index in range(6)
+    ]
+    samples.extend(
+        _sample(
+            600.0 + index * 100.0,
+            posture="lying",
+            center_y=0.70,
+            torso_angle_deg=80.0,
+            aspect_ratio=1.50,
+            motion_speed=0.04 if index > 1 else 0.8,
+        )
+        for index in range(7)
+    )
+
+    candidate = infer_weak_fall_candidate(samples, clip_id="geometry-standing")
+
+    assert candidate.status == "accepted"
+    assert candidate.standing_start_ms == 0.0
+    assert candidate.transition_start_ms == 500.0
+
+
 def test_slow_normal_lie_down_is_not_accepted_as_fall() -> None:
     samples = [
         _sample(
