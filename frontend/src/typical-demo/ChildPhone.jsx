@@ -50,13 +50,15 @@ export function ChildPhone({
       : scene.phoneBody;
 
   return (
-    <section className="phone-column" aria-label="子女设备端">
+    <section className="phone-column" aria-label="家属端">
       <div className={`phone-shell ${emergency ? "has-emergency" : ""}`}>
         <div className="phone-statusbar"><b>9:41</b><span className="dynamic-island" /><span>▮▮ ᯤ ▰</span></div>
         <div className="phone-header"><b>外婆家</b><span>⌄</span><i /></div>
 
         <SceneViewport
           sceneId={scene.id}
+          backgroundImage={scene.backgroundImage}
+          aspectRatio={camera.aspectRatio}
           canvasRef={canvasRef}
           cameraReady={camera.cameraReady}
           viewMode={viewMode}
@@ -76,14 +78,14 @@ export function ChildPhone({
             onClick={onToggleFamilyView}
           >
             {scene.id === "bathroom"
-              ? "浴室不可查看原视频"
+              ? "浴室始终保护隐私"
               : !familyVideoAllowed
-                ? "等待实时连接"
+                ? "等待家中设备连接"
                 : familyViewOpen
-                  ? "关闭现场画面"
-                  : "查看原视频 + 骨架"}
+                  ? "收起现场画面"
+                  : "查看现场画面"}
           </Button>
-          <small>{viewMode === "video_skeleton" ? "原视频 + A 骨架" : "默认仅显示 A 骨架"}</small>
+          <small>{viewMode === "video_skeleton" ? "现场画面已叠加姿态识别" : "默认只显示姿态画面"}</small>
         </div>
 
         <div className={`phone-care-card ${danger ? "is-danger" : `is-${scene.tone}`}`}>
@@ -106,9 +108,9 @@ export function ChildPhone({
         {scene.id !== "kitchen" && (
           <div className="phone-timeline">
             <h3>家庭时间线</h3>
-            <div><i /><time>刚刚</time><span>{scene.id === "bathroom" ? "进入隐私保护" : danger ? "收到异常动作候选" : "检测到正常活动"}</span></div>
-            <div><i /><time>13:10</time><span>检测到睡醒</span></div>
-            <div><i /><time>12:00</time><span>检测到吃饭</span></div>
+            <div><i /><time>刚刚</time><span>{scene.id === "bathroom" ? "已切换为浴室隐私模式" : danger ? "发现一次较大的动作变化" : "家中有正常活动"}</span></div>
+            <div><i /><time>13:10</time><span>外婆起身活动</span></div>
+            <div><i /><time>12:00</time><span>外婆按时吃了午饭</span></div>
           </div>
         )}
 
@@ -125,7 +127,7 @@ export function ChildPhone({
             <h3>{fallState.status}</h3>
             <p>{fallState.message}</p>
             <div className="emergency-video-note">
-              <LockRoundedIcon /> {emergencyNote || "预授权紧急画面已临时开放"}
+              <LockRoundedIcon /> {emergencyNote || "已按预授权临时开放现场画面"}
             </div>
             {fallPhase === "emergency" && (
               <>
@@ -144,7 +146,7 @@ export function ChildPhone({
           </div>
         )}
       </div>
-      <strong className="column-label">子女设备端 · 实时同步</strong>
+      <strong className="column-label">家属端 · 与家中设备同步</strong>
     </section>
   );
 }

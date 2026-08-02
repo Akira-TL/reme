@@ -3,6 +3,8 @@ import WifiRoundedIcon from "@mui/icons-material/WifiRounded";
 
 export function SceneViewport({
   sceneId,
+  backgroundImage,
+  aspectRatio,
   canvasRef,
   cameraReady,
   viewMode,
@@ -15,7 +17,13 @@ export function SceneViewport({
   const night = sceneId === "fall";
 
   return (
-    <div className={`scene-viewport scene-${sceneId} ${compact ? "is-compact" : ""}`}>
+    <div
+      className={`scene-viewport scene-${sceneId} ${backgroundImage ? "has-scene-background" : ""} ${compact ? "is-compact" : ""}`}
+      style={{
+        "--scene-background": backgroundImage ? `url(${backgroundImage})` : "none",
+        aspectRatio: aspectRatio || 16 / 9,
+      }}
+    >
       <div className="room-wall" />
       <div className="room-floor" />
       <div className="set-window"><i /><i /></div>
@@ -33,7 +41,7 @@ export function SceneViewport({
       <canvas
         ref={canvasRef}
         className="live-output"
-        aria-label={viewMode === "video_skeleton" ? "实时原视频与后端骨架叠加" : "实时火柴人骨架"}
+        aria-label={viewMode === "video_skeleton" ? "现场画面与姿态识别叠加" : "实时姿态画面"}
       />
 
       {showStatus && (
@@ -48,12 +56,12 @@ export function SceneViewport({
             <LockOutlinedIcon />
             <span>
               {privacy
-                ? "浴室仅骨架"
+                ? "浴室仅显示姿态"
                 : viewMode === "video_skeleton"
-                  ? `${skeletonSource === "a_backend" ? "A 骨架" : "C 后备骨架"} + 原视频`
+                  ? `${skeletonSource === "a_backend" ? "实时姿态" : "本地姿态"} + 现场画面`
                   : viewMode === "video"
-                    ? (segmentationReady ? "人物抠像" : "原画降级")
-                    : skeletonSource === "a_backend" ? "A 返回骨架" : "C 本地后备"}
+                    ? (segmentationReady ? "人物轮廓画面" : "现场画面")
+                    : skeletonSource === "a_backend" ? "实时姿态画面" : "本地姿态画面"}
             </span>
           </div>
         </>

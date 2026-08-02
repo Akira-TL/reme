@@ -31,6 +31,8 @@ node_modules/
 .codegraph/
 **/*mp4
 **/*jpg
+!frontend/public/scenes/
+!frontend/public/scenes/*.jpg
 # Claude Code local state (agent worktrees, session settings)
 .claude/
 

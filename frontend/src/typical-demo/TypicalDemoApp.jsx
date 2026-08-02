@@ -68,6 +68,7 @@ export function TypicalDemoApp() {
     deviceCanvasRef,
     phoneCanvasRef,
     cameraReady,
+    aspectRatio: cameraAspectRatio,
     modelReady,
     segmentationReady,
     personDetected,
@@ -93,6 +94,7 @@ export function TypicalDemoApp() {
 
   const cameraState = useMemo(() => ({
     cameraReady,
+    aspectRatio: cameraAspectRatio,
     modelReady,
     segmentationReady,
     personDetected,
@@ -102,6 +104,7 @@ export function TypicalDemoApp() {
     retry: retryCamera,
   }), [
     backendSkeletonActive,
+    cameraAspectRatio,
     cameraError,
     cameraReady,
     modelReady,
@@ -234,16 +237,16 @@ export function TypicalDemoApp() {
       <header className="demo-topbar">
         <div className="brand-lockup">
           <span className="reme-word">Reme</span>
-          <div><h1>ABC 单机实时演示</h1><p>A 感知、B 决策与家属端在同一台电脑联动</p></div>
+          <div><h1>Reme 家庭关怀演示</h1><p>在本地理解日常状态，需要时再主动询问并提醒家人</p></div>
         </div>
         <div className="topbar-actions">
           <span className={`camera-health ${cameraReady ? "is-online" : ""}`}>
-            <VideocamRoundedIcon />{cameraReady ? "摄像头已连接" : "摄像头连接中"}
+            <VideocamRoundedIcon />{cameraReady ? "家中摄像头已连接" : "正在连接家中摄像头"}
           </span>
           <span className={`camera-health live-link-health ${liveActive ? "is-online" : ""}`}>
-            {liveActive ? "ABC 链路已接入" : "等待 ABC 链路"}
+            {liveActive ? "关怀链路已就绪" : "正在连接关怀链路"}
           </span>
-          <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>全屏演示</Button>
+          <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>进入全屏</Button>
         </div>
       </header>
 
@@ -303,7 +306,7 @@ export function TypicalDemoApp() {
       <RuntimeDebugPanel camera={cameraState} live={live} scene={scene} />
 
       <footer className="demo-footer">
-        <button type="button" onClick={resetAcceptance}><RestartAltRoundedIcon />重置当前场景</button>
+        <button type="button" onClick={resetAcceptance}><RestartAltRoundedIcon />重新开始当前场景</button>
       </footer>
     </main>
   );

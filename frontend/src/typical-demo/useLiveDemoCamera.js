@@ -6,8 +6,9 @@ const MP_WASM_URL = "/mediapipe/wasm";
 const POSE_MODEL_URL = "/mediapipe/pose_landmarker_lite.task";
 const MODEL_LOAD_TIMEOUT_MS = 15000;
 const BACKEND_FRAME_TTL_MS = 1600;
-const RENDER_WIDTH = 960;
-const RENDER_HEIGHT = 540;
+const DEFAULT_RENDER_WIDTH = 960;
+const DEFAULT_RENDER_HEIGHT = 540;
+const MAX_RENDER_EDGE = 1280;
 
 function withTimeout(promise, ms, label) {
   return Promise.race([
@@ -18,24 +19,33 @@ function withTimeout(promise, ms, label) {
   ]);
 }
 
-function drawCover(context, source, width, height, mirror = true) {
-  const sourceWidth = source.videoWidth || source.width;
-  const sourceHeight = source.videoHeight || source.height;
-  if (!sourceWidth || !sourceHeight) return;
-  const scale = Math.max(width / sourceWidth, height / sourceHeight);
-  const drawWidth = sourceWidth * scale;
-  const drawHeight = sourceHeight * scale;
-  const offsetX = (width - drawWidth) / 2;
-  const offsetY = (height - drawHeight) / 2;
+function getSourceSize(source) {
+  return {
+    width: source?.videoWidth || source?.width || DEFAULT_RENDER_WIDTH,
+    height: source?.videoHeight || source?.height || DEFAULT_RENDER_HEIGHT,
+  };
+}
+
+function resolveRenderSize(video) {
+  const source = getSourceSize(video);
+  const scale = Math.min(1, MAX_RENDER_EDGE / Math.max(source.width, source.height));
+  return {
+    width: Math.max(1, Math.round(source.width * scale)),
+    height: Math.max(1, Math.round(source.height * scale)),
+  };
+}
+
+function drawFrame(context, source, width, height, mirror = true) {
+  if (!source) return;
+  const sourceSize = getSourceSize(source);
+  if (!sourceSize.width || !sourceSize.height) return;
 
   context.save();
   if (mirror) {
     context.translate(width, 0);
     context.scale(-1, 1);
-    context.drawImage(source, offsetX, offsetY, drawWidth, drawHeight);
-  } else {
-    context.drawImage(source, offsetX, offsetY, drawWidth, drawHeight);
   }
+  context.drawImage(source, 0, 0, width, height);
   context.restore();
 }
 
@@ -52,7 +62,14 @@ function paintTarget(canvas, source) {
   const context = canvas.getContext("2d");
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.clearRect(0, 0, rect.width, rect.height);
-  context.drawImage(source, 0, 0, rect.width, rect.height);
+
+  const sourceRatio = source.width / source.height;
+  const targetRatio = rect.width / rect.height;
+  const drawWidth = targetRatio > sourceRatio ? rect.height * sourceRatio : rect.width;
+  const drawHeight = targetRatio > sourceRatio ? rect.height : rect.width / sourceRatio;
+  const offsetX = (rect.width - drawWidth) / 2;
+  const offsetY = (rect.height - drawHeight) / 2;
+  context.drawImage(source, offsetX, offsetY, drawWidth, drawHeight);
 }
 
 export function useLiveDemoCamera({
@@ -88,6 +105,7 @@ export function useLiveDemoCamera({
   const modelReadyRef = useRef(false);
 
   const [cameraReady, setCameraReady] = useState(false);
+  const [aspectRatio, setAspectRatio] = useState(DEFAULT_RENDER_WIDTH / DEFAULT_RENDER_HEIGHT);
   const [modelReady, setModelReady] = useState(false);
   const [segmentationReady, setSegmentationReady] = useState(false);
   const [personDetected, setPersonDetected] = useState(false);
@@ -144,6 +162,10 @@ export function useLiveDemoCamera({
       streamRef.current = stream;
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
+      const settings = stream.getVideoTracks()[0]?.getSettings?.() || {};
+      const sourceWidth = videoRef.current.videoWidth || settings.width;
+      const sourceHeight = videoRef.current.videoHeight || settings.height;
+      if (sourceWidth && sourceHeight) setAspectRatio(sourceWidth / sourceHeight);
       setCameraReady(true);
     } catch (cameraFailure) {
       cameraFallbackRef.current = true;
@@ -220,10 +242,10 @@ export function useLiveDemoCamera({
     deviceRenderCanvasRef.current = deviceRenderCanvas;
     phoneRenderCanvasRef.current = phoneRenderCanvas;
     maskCanvasRef.current = maskCanvas;
-    deviceRenderCanvas.width = RENDER_WIDTH;
-    deviceRenderCanvas.height = RENDER_HEIGHT;
-    phoneRenderCanvas.width = RENDER_WIDTH;
-    phoneRenderCanvas.height = RENDER_HEIGHT;
+    deviceRenderCanvas.width = DEFAULT_RENDER_WIDTH;
+    deviceRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
+    phoneRenderCanvas.width = DEFAULT_RENDER_WIDTH;
+    phoneRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
     const deviceContext = deviceRenderCanvas.getContext("2d");
     const phoneContext = phoneRenderCanvas.getContext("2d");
 
@@ -280,13 +302,15 @@ export function useLiveDemoCamera({
     }
 
     function drawMode(context, mode, points, video) {
-      context.clearRect(0, 0, RENDER_WIDTH, RENDER_HEIGHT);
+      const width = context.canvas.width;
+      const height = context.canvas.height;
+      context.clearRect(0, 0, width, height);
       const showVideo = mode === "video" || mode === "video_skeleton";
       if (showVideo && cameraReadyRef.current && video?.readyState >= 2) {
-        drawCover(context, video, RENDER_WIDTH, RENDER_HEIGHT);
+        drawFrame(context, video, width, height);
         if (mode === "video" && segmentationReady && maskCanvasRef.current?.width) {
           context.globalCompositeOperation = "destination-in";
-          drawCover(context, maskCanvasRef.current, RENDER_WIDTH, RENDER_HEIGHT);
+          drawFrame(context, maskCanvasRef.current, width, height);
           context.globalCompositeOperation = "source-over";
         }
       }
@@ -294,8 +318,8 @@ export function useLiveDemoCamera({
         drawSkeleton(
           context,
           points,
-          RENDER_WIDTH,
-          RENDER_HEIGHT,
+          width,
+          height,
           video,
           skeletonColorRef.current,
         );
@@ -310,6 +334,16 @@ export function useLiveDemoCamera({
         ? backendLandmarksRef.current
         : localLandmarksRef.current;
       const video = videoRef.current;
+      const renderSize = resolveRenderSize(cameraReadyRef.current ? video : null);
+      if (
+        deviceRenderCanvas.width !== renderSize.width
+        || deviceRenderCanvas.height !== renderSize.height
+      ) {
+        deviceRenderCanvas.width = renderSize.width;
+        deviceRenderCanvas.height = renderSize.height;
+        phoneRenderCanvas.width = renderSize.width;
+        phoneRenderCanvas.height = renderSize.height;
+      }
 
       drawMode(deviceContext, deviceViewModeRef.current, displayLandmarks, video);
       drawMode(phoneContext, phoneViewModeRef.current, displayLandmarks, video);
@@ -337,6 +371,7 @@ export function useLiveDemoCamera({
     deviceCanvasRef,
     phoneCanvasRef,
     cameraReady,
+    aspectRatio,
     modelReady,
     segmentationReady,
     personDetected,

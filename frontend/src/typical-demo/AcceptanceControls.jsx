@@ -9,15 +9,15 @@ import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { Button } from "@mui/material";
 
 const VOICE_STAGE_LABELS = {
-  idle: "等待对话",
-  tts_request: "MiMo TTS 合成询问中…",
-  playing: "正在播放 MiMo 语音…",
-  playing_fallback: "正在播放降级语音…",
-  waiting_reply: "即将自动聆听…",
-  recording: "正在自动聆听老人回复…",
-  asr_request: "MiMo ASR 识别中…",
-  complete: "本轮语音对话完成",
-  failed: "语音链路失败",
+  idle: "等待下一次对话",
+  tts_request: "正在准备语音询问…",
+  playing: "正在播放关怀语音…",
+  playing_fallback: "正在使用备用语音播放…",
+  waiting_reply: "播放结束后会自动聆听…",
+  recording: "正在聆听外婆的回复…",
+  asr_request: "正在理解语音回复…",
+  complete: "这一轮对话已完成",
+  failed: "语音对话暂时没有完成",
 };
 
 export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
@@ -32,19 +32,19 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
   const conversationBusy = ["waiting_scene", "requesting"].includes(mimoRequest.status);
 
   return (
-    <section className="acceptance-controls" aria-label="ABC 手动验收控制">
+    <section className="acceptance-controls" aria-label="手动演示控制">
       <div className="acceptance-control-title">
         <span><CampaignRoundedIcon /></span>
         <div>
-          <small>MANUAL ACCEPTANCE</small>
-          <strong>对话、沟通与提醒验收</strong>
-          <p>手动触发只代替现场事件，后续仍由 B 调用 MiMo、等待回复并发布真实决策。</p>
+          <small>演示控制</small>
+          <strong>手动演练关怀流程</strong>
+          <p>这里用于路演时补触发场景；后续询问、回复和提醒仍按真实链路执行。</p>
         </div>
       </div>
 
       <div className="acceptance-control-groups">
         <div className="acceptance-control-group">
-          <small>当前场景触发</small>
+          <small>场景演练</small>
           <div>
             {conversationScenario && (
               <Button
@@ -54,7 +54,7 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
                 disabled={!live.active || waitingResponse || conversationBusy}
                 onClick={() => live.startDemoConversation(conversationScenario)}
               >
-                {kitchen ? "触发包包子分享对话" : "手动触发 MiMo 主动询问"}
+                {kitchen ? "发起分享询问" : "发起主动关怀"}
               </Button>
             )}
             {fall && (
@@ -65,7 +65,7 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
                 disabled={!live.active}
                 onClick={onTriggerFall}
               >
-                手动触发跌倒报警
+                模拟一次跌倒异常
               </Button>
             )}
             <Button
@@ -74,13 +74,13 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
               disabled={!live.active}
               onClick={onReset}
             >
-              重置当前对话
+              重新开始当前场景
             </Button>
           </div>
         </div>
 
         <div className="acceptance-control-group">
-          <small>免按钮语音 / 手动回退</small>
+          <small>语音对话备用操作</small>
           <div>
             <Button
               variant="outlined"
@@ -88,7 +88,7 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
               disabled={!decision?.elder_message}
               onClick={live.replayVoice}
             >
-              重播 MiMo 询问
+              再听一遍询问
             </Button>
             {waitingConsent ? (
               <>
@@ -136,15 +136,15 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
 
       <div className="acceptance-control-status">
         <span className={live.active ? "is-online" : ""} />
-        <b>{live.active ? `当前场景：${scene.title}` : "ABC 链路未连接"}</b>
+        <b>{live.active ? `正在演示：${scene.title}` : "关怀链路尚未连接"}</b>
         <p>
           {voice.error
             || (voice.stage && voice.stage !== "idle" ? VOICE_STAGE_LABELS[voice.stage] : "")
             || mimoRequest.error
-            || (mimoRequest.status === "waiting_scene" ? "正在同步 B 场景，随后发起 MiMo 请求…" : "")
-            || (mimoRequest.status === "requesting" ? "MiMo 请求已发出，等待响应…" : "")
-            || (mimoRequest.status === "succeeded" ? `MiMo 已响应：${mimoRequest.source || "unknown"}` : "")
-            || (voice.transcript ? `识别文本：${voice.transcript}` : "MiMo 对话与语音识别结果会显示在这里")}
+            || (mimoRequest.status === "waiting_scene" ? "正在切换场景，稍后会发起询问…" : "")
+            || (mimoRequest.status === "requesting" ? "关怀询问已经发出，正在等待回复…" : "")
+            || (mimoRequest.status === "succeeded" ? `本轮决策已生成：${mimoRequest.source === "mimo" ? "MiMo" : "本地规则"}` : "")
+            || (voice.transcript ? `听到的回复：${voice.transcript}` : "对话进度和语音结果会显示在这里")}
         </p>
         {decision && (
           <em>
