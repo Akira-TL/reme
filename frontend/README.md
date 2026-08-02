@@ -1,6 +1,6 @@
-# Reme 手机端交互 Demo
+# Reme 前端与共享现场 Demo
 
-Reme 前端使用 Vite、React、TailwindCSS v4 与 MUI 构建。7 张高保真设计稿继续作为视觉基准，React 组件负责页面状态、场景切换、风险弹窗、设置交互、本地姿态识别，以及 A 感知运行时接入。
+Reme 前端使用 Vite、React、TailwindCSS v4 与 MUI 构建。当前正式入口优先服务单手机采集、多评委只读旁观的现场演示；既有四场景演示保留为明确的单机备份。
 
 ## 启动
 
@@ -19,7 +19,37 @@ npm run dev
 
 默认地址：`http://127.0.0.1:4174`
 
-首次打开时允许浏览器使用摄像头。页面不会显示摄像头原画，只在本地运行姿态识别并绘制 17 节点火柴人。首次初始化姿态模型需要联网；模型不可用时会明确进入动态演示模式。
+评委域名是只读端，不会请求摄像头或下载姿态模型。只有打开独立监控域名、输入正确控制密钥并主动点击“开启后置摄像头”后，监控页才会请求摄像头并在本地加载模型。
+
+## 双网址共享现场 Demo
+
+正式入口按主机名区分角色：
+
+```text
+https://reme.maniforld.com/          # 评委只读旁观端
+https://monitor.reme.maniforld.com/  # 唯一手机监控端
+```
+
+两个网址是不同的浏览器 Origin；它们不依赖 localStorage、IndexedDB 或所谓“同域存储”共享数据，而是连接同一个临时 relay 房间。`https://reme.maniforld.com/monitor` 仅保留为兼容入口。
+
+监控端在浏览器本地运行版本化 MoveNet 权重，只把不高于 10Hz 的 17 点骨架发送到 `relay.reme.maniforld.com`。评委端不下载模型、不请求摄像头，也不接收原始视频。Cloudflare Durable Object 只保存短期控制租约；最新骨架只附着在活跃控制 WebSocket 上，不建立业务数据库或录像存储。
+
+控制密钥原文不在仓库或 Vite 环境变量中。本机部署者可将它直接复制到剪贴板：
+
+```bash
+security find-generic-password \
+  -a reme-demo-monitor \
+  -s reme-shared-live-control-key \
+  -w | pbcopy
+```
+
+本地联调可在 `.env.local` 指向隔离的 Worker staging：
+
+```text
+VITE_REME_DEMO_RELAY_URL=https://reme-demo-relay-staging.lx-0506.workers.dev
+```
+
+staging 只允许已列出的本地端口和 Preview；正式 Worker 只允许评委域名、独立监控域名与固定 Preview 别名。
 
 ## 接入 A 感知服务
 
@@ -68,13 +98,17 @@ frontend/
 │   ├── data/               # 场景、看板和设置文案
 │   ├── hooks/              # 摄像头、MediaPipe 与 A 运行时生命周期
 │   ├── services/           # A HTTP/WS 地址与控制请求
+│   ├── model/              # 自训练 MoveNet 的 LiteRT.js 浏览器适配
+│   ├── shared-demo/        # 评委只读页与唯一监控端
 │   ├── typical-demo/       # 四场景双端现场演示
 │   ├── utils/              # 17 节点映射与 Canvas 绘制
 │   ├── App.jsx             # 产品状态与场景编排
 │   ├── index.css           # TailwindCSS + 精确坐标样式
 │   └── main.jsx            # React 入口和 MUI 主题
 ├── index.html
+├── monitor.html
 ├── typical-demo.html
+├── viewer.html
 ├── package.json
 └── vite.config.js
 ```

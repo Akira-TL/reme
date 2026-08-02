@@ -35,6 +35,10 @@ node_modules/
 
 # MediaPipe wasm 由 predev/prebuild 从 node_modules 拷贝（模型 .task 入库）
 frontend/public/mediapipe/wasm/
+# LiteRT.js wasm 同样由 predev/prebuild 从 node_modules 生成
+frontend/public/litert/wasm/
+# Vercel CLI 本地项目绑定与拉取的环境配置
+frontend/.vercel/
 
 # Derived keypoint copies used for local analysis (regenerate with git show)
 .scratch/posture-classifier-theory/data/
