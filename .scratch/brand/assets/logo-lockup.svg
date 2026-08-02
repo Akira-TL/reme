@@ -1,0 +1,46 @@
+<svg viewBox="0 0 780 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Reme 标志组合：图形标、字标与主口号">
+  <!-- 注：口号使用系统字体渲染，正式输出前应转曲 -->
+  <g transform="translate(6,0) scale(0.98)">
+    <path d="M 42 208 Q 122 248 200 196" fill="none" stroke="#E8794A" stroke-width="13" stroke-linecap="round"/>
+    <g fill="none" stroke="#1E2E3E" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="118" cy="52" r="16" stroke-width="9.5"/>
+      <path d="M 94 92 L 142 90"/>
+      <path d="M 94 92 L 103 142"/>
+      <path d="M 142 90 L 131 142"/>
+      <path d="M 103 142 L 131 142"/>
+      <path d="M 94 92 L 80 118 L 74 144"/>
+      <path d="M 142 90 L 166 74 L 178 44"/>
+      <path d="M 103 142 L 98 170 L 96 196"/>
+      <path d="M 131 142 L 138 170 L 143 196"/>
+    </g>
+    <g fill="#1E2E3E">
+      <circle cx="94" cy="92" r="7"/>
+      <circle cx="142" cy="90" r="7"/>
+      <circle cx="80" cy="118" r="7"/>
+      <circle cx="166" cy="74" r="7"/>
+      <circle cx="74" cy="144" r="7"/>
+      <circle cx="103" cy="142" r="7"/>
+      <circle cx="131" cy="142" r="7"/>
+      <circle cx="98" cy="170" r="7"/>
+      <circle cx="138" cy="170" r="7"/>
+      <circle cx="96" cy="196" r="7"/>
+      <circle cx="143" cy="196" r="7"/>
+    </g>
+    <circle cx="178" cy="44" r="8" fill="#E8794A"/>
+  </g>
+  <g transform="translate(262,42) scale(0.64)">
+    <g fill="none" stroke="#1E2E3E" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 40 112 L 40 30"/>
+      <path d="M 40 30 L 62 30 A 22 22 0 0 1 62 74 L 40 74"/>
+      <path d="M 60 74 L 84 112"/>
+      <path d="M 101 78 L 159 78"/>
+      <path d="M 159 78 A 29 29 0 1 0 149 105"/>
+      <path d="M 178 112 L 178 54"/>
+      <path d="M 178 71 A 17 17 0 0 1 212 71 L 212 112"/>
+      <path d="M 212 71 A 17 17 0 0 1 246 71 L 246 112"/>
+      <path d="M 264 78 L 322 78"/>
+      <path d="M 322 78 A 29 29 0 1 0 312 105"/>
+    </g>
+  </g>
+  <text x="284" y="165" font-size="30" letter-spacing="7" fill="#1E2E3E" font-family="MiSans, Inter, 'Noto Sans SC', 'PingFang SC', system-ui, sans-serif">看见需要，不看见隐私。</text>
+</svg>
