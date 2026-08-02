@@ -4,7 +4,7 @@ import { createDemoLandmarks, drawSkeleton, mapLandmarks, resizeCanvas } from ".
 const MP_WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const POSE_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
-export function usePoseLandmarker(externalFrame = null) {
+export function usePoseLandmarker(externalFrame = null, onLandmarks = null) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -16,6 +16,7 @@ export function usePoseLandmarker(externalFrame = null) {
   const fallbackRef = useRef(false);
   const personDetectedRef = useRef(false);
   const externalFrameRef = useRef(externalFrame);
+  const onLandmarksRef = useRef(onLandmarks);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [modelReady, setModelReady] = useState(false);
@@ -31,6 +32,10 @@ export function usePoseLandmarker(externalFrame = null) {
   useEffect(() => {
     externalFrameRef.current = externalFrame;
   }, [externalFrame]);
+
+  useEffect(() => {
+    onLandmarksRef.current = onLandmarks;
+  }, [onLandmarks]);
 
   const enableFallback = useCallback((message = "姿态模型暂不可用，已使用动态演示数据") => {
     fallbackRef.current = true;
@@ -168,7 +173,10 @@ export function usePoseLandmarker(externalFrame = null) {
       lastVideoTimeRef.current = video.currentTime;
       try {
         const result = landmarker.detectForVideo(video, now);
-        landmarksRef.current = result?.landmarks?.[0] ? mapLandmarks(result.landmarks[0]) : [];
+        const mapped = result?.landmarks?.[0] ? mapLandmarks(result.landmarks[0]) : [];
+        landmarksRef.current = mapped;
+        // 只回调真实推理的 17 点结果；fallback 演示数据不回调
+        if (mapped.length === 17) onLandmarksRef.current?.(mapped, performance.now());
       } catch {
         landmarksRef.current = [];
       }

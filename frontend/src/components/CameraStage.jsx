@@ -6,8 +6,8 @@ import { useEffect } from "react";
 import { describePosture } from "../adapters/perception";
 import { usePoseLandmarker } from "../hooks/usePoseLandmarker";
 
-export function CameraStage({ visible, onHide, runtime, externalFrame, posture, onVideoElement, onRetryRuntime }) {
-  const { videoRef, canvasRef, personDetected, status, retry } = usePoseLandmarker(externalFrame);
+export function CameraStage({ visible, onHide, runtime, externalFrame, posture, onVideoElement, onRetryRuntime, onLocalLandmarks }) {
+  const { videoRef, canvasRef, personDetected, status, retry } = usePoseLandmarker(externalFrame, onLocalLandmarks);
   const runtimeLabel = runtime.state === "running"
     ? `A已接入${posture?.posture ? ` · ${describePosture(posture.posture)}` : ""}`
     : ({

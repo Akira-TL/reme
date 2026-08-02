@@ -2,6 +2,7 @@ import { Alert, Snackbar } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CallDialog } from "./components/CallDialog";
 import { ContactDrawer } from "./components/ContactDrawer";
+import { DangerLayer } from "./components/DangerLayer";
 import { DashboardScreen } from "./components/DashboardScreen";
 import { DetailDialog } from "./components/DetailDialog";
 import { EmergencyOverlay } from "./components/EmergencyOverlay";
@@ -10,6 +11,7 @@ import { Navigation } from "./components/Navigation";
 import { SceneDrawer } from "./components/SceneDrawer";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { DASHBOARD_DETAILS, SCENES, SETTINGS_DETAILS } from "./data/content";
+import { useDecisionRuntime } from "./hooks/useDecisionRuntime";
 import { usePerceptionRuntime } from "./hooks/usePerceptionRuntime";
 
 export function App() {
@@ -29,6 +31,12 @@ export function App() {
 
   const scene = SCENES[sceneKey];
   const perception = usePerceptionRuntime({ videoElement, sceneId: sceneKey, enabled: Boolean(videoElement) });
+  const decision = useDecisionRuntime({
+    sessionId: perception.runtime.sessionId,
+    sceneId: sceneKey,
+    videoElement,
+    enabled: Boolean(videoElement),
+  });
   const handleVideoElement = useCallback((element) => setVideoElement(element), []);
 
   useEffect(() => {
@@ -109,6 +117,7 @@ export function App() {
         posture={perception.posture}
         onVideoElement={handleVideoElement}
         onRetryRuntime={perception.retry}
+        onLocalLandmarks={perception.sendLandmarks}
       />
       <DashboardScreen active={tab === "dashboard"} onOpenDetail={(key) => setDetail({ kind: "dashboard", key })} />
       <SettingsScreen
@@ -128,6 +137,8 @@ export function App() {
         onLive={() => { setEmergencyOpen(false); showToast("正在查看风险事件的实时骨骼状态"); }}
         onContact={() => { setEmergencyOpen(false); setContactsOpen(true); }}
       />
+
+      <DangerLayer decisionRuntime={decision} />
 
       <SceneDrawer open={sceneDrawerOpen} currentScene={sceneKey} onClose={() => setSceneDrawerOpen(false)} onSelect={selectScene} />
       <DetailDialog

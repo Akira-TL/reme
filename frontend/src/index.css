@@ -337,6 +337,170 @@ button {
   to { opacity: 1; transform: scale(1); }
 }
 
+.danger-checkin {
+  position: absolute;
+  z-index: 24;
+  left: 4%;
+  right: 4%;
+  bottom: 13.5%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 16px 14px;
+  border: 1px solid rgba(255, 105, 0, 0.35);
+  border-radius: 22px;
+  background: rgba(23, 23, 24, 0.92);
+  color: #fff;
+  box-shadow: 0 18px 44px rgba(20, 14, 8, 0.4);
+  animation: danger-rise 260ms var(--ease) both;
+}
+
+.danger-checkin-message {
+  margin: 0;
+  font-size: clamp(14px, 4vw, 18px);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.danger-checkin-hint {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: clamp(9px, 2.6vw, 12px);
+}
+
+.danger-countdown {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.danger-countdown b {
+  min-width: 30px;
+  color: var(--mi-orange);
+  font-size: clamp(10px, 2.8vw, 13px);
+  text-align: right;
+}
+
+.danger-countdown-track {
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.danger-countdown-track i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--mi-orange);
+  transform-origin: left center;
+}
+
+.danger-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.danger-button {
+  flex: 1;
+  min-height: 46px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 999px;
+  font-size: clamp(13px, 3.6vw, 16px);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.danger-button:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 2px;
+}
+
+.danger-button-safe {
+  background: var(--mi-green);
+  color: #fff;
+}
+
+.danger-button-help {
+  background: var(--mi-orange);
+  color: #fff;
+}
+
+.danger-alarm {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 8vh 8vw;
+  text-align: center;
+  animation: danger-flash 0.4s steps(1, end) infinite;
+}
+
+.danger-alarm-trigger {
+  padding: 6px 16px;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  font-size: clamp(13px, 3.4vw, 17px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.danger-alarm-message {
+  margin: 0;
+  max-width: 26em;
+  font-size: clamp(20px, 5.6vw, 34px);
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.danger-button-ack {
+  flex: 0 0 auto;
+  min-height: 54px;
+  padding: 14px 30px;
+  background: #171718;
+  color: #fff;
+  font-size: clamp(15px, 4.2vw, 19px);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
+}
+
+.danger-resolved-toast {
+  position: absolute;
+  z-index: 26;
+  left: 50%;
+  top: 9%;
+  transform: translateX(-50%);
+  max-width: 84%;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: rgba(35, 154, 52, 0.94);
+  color: #fff;
+  font-size: clamp(10px, 3vw, 13px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: danger-toast-in 220ms var(--ease) both;
+}
+
+@keyframes danger-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes danger-toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes danger-flash {
+  0%, 49.9% { background: #d40f10; color: #fff; }
+  50%, 100% { background: #fff; color: #b00c0c; }
+}
+
 @media (max-width: 500px) {
   html,
   body { background: #fff; }

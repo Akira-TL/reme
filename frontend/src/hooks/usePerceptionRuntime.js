@@ -4,6 +4,7 @@ import {
   createFrameMeta,
   createSceneSignal,
   createSessionRequest,
+  KEYPOINT_NAMES,
   mapFrameLandmarks,
   parseRuntimeStatus,
   POSTURE_SCHEMA,
@@ -52,9 +53,39 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
   const sessionRef = useRef(null);
   const sceneRef = useRef(sceneId);
   const frameIndexRef = useRef(0);
+  const landmarksModeRef = useRef(false);
+  const lastLandmarksSentRef = useRef(0);
   const retry = useCallback(() => {
     setRuntime({ state: "offline", reason: "正在重新连接 A 感知服务" });
     setRetryGeneration((value) => value + 1);
+  }, []);
+
+  // 关键点直传：A 声明 jpeg_inference=false 且接受 landmarks_frame 时，由浏览器本地
+  // MediaPipe 推理结果直接上送，替代 JPEG 帧。节流到 ≤10fps，非直传模式下为空操作。
+  const sendLandmarks = useCallback((points, timestampMs) => {
+    if (!landmarksModeRef.current || !Array.isArray(points) || points.length === 0) return;
+    const socket = inputSocketRef.current;
+    const sessionId = sessionRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !sessionId) return;
+    const now = Number.isFinite(timestampMs) ? timestampMs : performance.now();
+    if (now - lastLandmarksSentRef.current < 1000 / CAMERA_FPS) return;
+    lastLandmarksSentRef.current = now;
+    const visibleCount = points.filter((point) => Number(point.score) >= 0.2).length;
+    socket.send(JSON.stringify({
+      type: "landmarks_frame",
+      session_id: sessionId,
+      scene_id: sceneRef.current,
+      frame_index: frameIndexRef.current++,
+      timestamp_ms: now,
+      person_detected: points.length === 17,
+      keypoints: points.map((point, index) => ({
+        name: KEYPOINT_NAMES[index],
+        x_norm: point.x,
+        y_norm: point.y,
+        score: point.score,
+      })),
+      landmark_quality: visibleCount / points.length >= 0.5 ? "usable" : "degraded",
+    }));
   }, []);
 
   useEffect(() => {
@@ -79,6 +110,8 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
     let encoding = false;
     sessionRef.current = sessionId;
     frameIndexRef.current = 0;
+    landmarksModeRef.current = false;
+    lastLandmarksSentRef.current = 0;
     const parseEvent = createEventParser(sessionId);
 
     function applyStatus(payload) {
@@ -133,6 +166,14 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
         if (capabilities?.schemas?.runtime_event !== "reme-runtime-event/v0-experiment") {
           throw new Error("A 的 runtime event schema 不兼容");
         }
+        // capabilities 缺 input 字段时视为旧 A，保持 JPEG 帧行为
+        const landmarksMode = Boolean(
+          capabilities?.input
+          && capabilities.input.jpeg_inference === false
+          && Array.isArray(capabilities.input.accepts)
+          && capabilities.input.accepts.includes("landmarks_frame"),
+        );
+        landmarksModeRef.current = landmarksMode;
         const starting = await startRuntime(
           urls.httpBase,
           createSessionRequest(sessionId, sceneRef.current),
@@ -169,7 +210,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
           inputSocket.binaryType = "arraybuffer";
           inputSocketRef.current = inputSocket;
           sendScene("activate");
-          captureTimer = window.setInterval(captureFrame, 1000 / CAMERA_FPS);
+          if (!landmarksMode) captureTimer = window.setInterval(captureFrame, 1000 / CAMERA_FPS);
         } catch {
           setRuntime({
             state: "input_unavailable",
@@ -206,5 +247,5 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
     };
   }, [enabled, retryGeneration, videoElement]);
 
-  return { runtime, landmarkFrame, posture, transition, retry };
+  return { runtime, landmarkFrame, posture, transition, retry, sendLandmarks };
 }

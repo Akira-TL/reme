@@ -5,7 +5,7 @@ export const LANDMARKS_SCHEMA = "movenet-17/v0-experiment";
 export const POSTURE_SCHEMA = "reme-posture/v0-experiment";
 export const TRANSITION_SCHEMA = "reme-transition/v0-experiment";
 
-const KEYPOINT_NAMES = [
+export const KEYPOINT_NAMES = [
   "nose", "left_eye", "right_eye", "left_ear", "right_ear",
   "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
   "left_wrist", "right_wrist", "left_hip", "right_hip",
