@@ -12,6 +12,11 @@ import {
   uploadDangerFrame,
   uploadDangerVoice,
 } from "../services/decisionClient";
+import {
+  ensureAudioUnlock,
+  getSharedAudioContext,
+  playAssetUrl,
+} from "../utils/audioEngine";
 import { recordWav } from "../utils/wavRecorder";
 
 function pluckDecision(payload) {
@@ -60,6 +65,12 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const sceneRef = useRef(sceneId);
   const videoRef = useRef(videoElement);
   const apiRef = useRef({});
+
+  useEffect(() => {
+    // 尽早装手势解锁监听：用户任意一次点击/按键后，问询语音与响铃
+    // 都能绕过浏览器自动播放限制。
+    ensureAudioUnlock();
+  }, []);
 
   useEffect(() => {
     sceneRef.current = sceneId;
@@ -111,7 +122,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         } catch {
           // 振荡器可能已停止
         }
-        ring.context.close().catch(() => {});
+        // 共享上下文要留给问询语音复用，只能关自建的。
+        if (!ring.shared) ring.context.close().catch(() => {});
         ring = null;
       }
     }
@@ -131,9 +143,10 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         }
       }, 1200);
       try {
-        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContextCtor) return;
-        const context = new AudioContextCtor();
+        // 优先用手势解锁过的共享上下文；仍锁定时保底新建（可能无声，
+        // 但振动与全屏爆闪不受影响）。
+        const context = getSharedAudioContext()
+          || new (window.AudioContext || window.webkitAudioContext)();
         context.resume().catch(() => {});
         const gain = context.createGain();
         gain.gain.value = 0.2;
@@ -152,7 +165,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             // 忽略频率切换失败
           }
         }, 600);
-        ring = { context, oscillator, toggle };
+        ring = { context, oscillator, toggle, shared: context === getSharedAudioContext() };
       } catch {
         ring = null;
       }
@@ -172,13 +185,18 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
 
     function playDecisionVoice(payload) {
       if (payload.voice_asset) {
-        try {
-          const audio = new Audio(`${httpBase}${payload.voice_asset}`);
-          const playing = audio.play();
-          playing?.catch?.(() => speakElderMessage(payload.elder_message));
-        } catch {
-          speakElderMessage(payload.elder_message);
-        }
+        const url = `${httpBase}${payload.voice_asset}`;
+        // 首选手势解锁过的共享上下文（不受自动播放限制），失败再退
+        // HTMLAudio，最后退语音合成。
+        playAssetUrl(url).catch(() => {
+          try {
+            const audio = new Audio(url);
+            const playing = audio.play();
+            playing?.catch?.(() => speakElderMessage(payload.elder_message));
+          } catch {
+            speakElderMessage(payload.elder_message);
+          }
+        });
         return;
       }
       if (payload.elder_message && payload.need_dialogue) speakElderMessage(payload.elder_message);
