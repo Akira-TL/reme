@@ -47,19 +47,19 @@
 
 ## 7. 对照更新（2026-08-01 傍晚）：develop/akira `56c3604 统一ABC实验接口合同` 解决情况
 
-> 协调基准变更：`.scratch/abc-interface/spec.md`（548 行，七流接口 + SceneBundle + Adapter seam）自此为 A/B/C 接口的**唯一协调来源**，本清单 §1/§2 中与其重叠的裁决项按下表关闭或收窄。ADR 治理规则同步明确：**ADR 由各层 owner 自行创建**（2、3 层任务的两位 owner 自行确立各自 ADR），本清单只列问题、不代立 ADR。
+> 协调基准变更：`.scratch/abc-interface/spec.md`（548 行，七流接口 + SceneBundle + Adapter seam）自此为 A/B/C 接口的**唯一协调来源**，本清单 §1/§2 中与其重叠的裁决项按下表关闭或收窄。ADR 治理规则同步明确：**ADR 由各层 owner 自行创建**（2、3 层任务的两位 owner 自行确立各自 ADR），本清单只列问题、不代立 ADR。**夜间续核**：akira 后续 `74980ff 扩展离线多视频演示合同` 已解决的行在下表直接改判并标注（74980ff）。
 
 | 原清单项 | 状态 | 说明 |
 |---|---|---|
 | P0-1 A→B/C 感知合同 | ✅ 已解决 | 统一 `posture/posture_duration_ms/landmark_quality`；`candidate_event` 双层取消（B 内部组合）；**`prolonged_stillness` 归属已定**：A 出 `posture_duration_ms`+`motion_level` 事实、B 判是否构成关怀（abc-interface §7/§8） |
 | P0-2 B→C 决策合同 | ✅ 已解决 | `reme-care-decision/v0` 统一命名，C 的自有字段已在同提交中清除（software-demo/spec.md 同步改） |
-| P0-3 高风险旁路 | ⚠️ 收窄未闭 | 语义澄清：**"告警"= 向家属端（子女端）推送告警信息，非呼叫外部报警/急救**。因此与合同"询问先行"（fall_like→check_in_required→无回应→family_notification_required）可调和：询问先行保留，但**升级须由规则驱动且 MiMo 不可取消**；`urgent_attention` 仍无触发场景。增补提案见 §8.2 |
-| P0-4 行动卡/授权/回执 | ❌ 仍开放 | `action` 枚举无 action_card，无 consent 字段，InteractionResponse 无授权类响应**且无自由文本字段（老人主诉"牙疼"这句话无法从 C 传到 B/MiMo，具体需求分支根本跑不通）**；§14 四个验收场景不含"牙疼具体需求"分支。D 主故事仍无接口支撑——**当前最大开放项**。增补提案见 §8.1 |
+| P0-3 高风险旁路 | ✅ 已解决（74980ff） | 语义澄清保留：**"告警"= 向家属端（子女端）推送告警信息，非呼叫外部报警/急救**。74980ff 落定"询问先行 + 规则确定性升级"：高置信跌倒必带 `response_timeout_ms`（提案绝对口径改相对，判据见 §8.2 ④）、超时 `source=rule` 强制升级、MiMo 后到不可取消（§15.1 已勾）；`urgent_attention` 获触发场景（视频四二次超时）。隐私升档未进合同，归并 P0-5 剩余策略。详见 §8.2 状态更新 |
+| P0-4 行动卡/授权/回执 | ✅ 已解决（74980ff） | `text` 主诉通道、`consent_required`、六要素 `action_card`、`consent_granted/card_confirmed/family_input` 枚举全部进合同；牙疼闭环成为 §14 视频三，D 主故事获接口支撑。合同附红线：素材拍完并通过全链路回放前不得宣称端到端完成（§15.2）。详见 §8.1 状态更新 |
 | P0-5 隐私口径 | ✅ 机制解决 | `privacy_mode` 四档（visible/blurred/skeleton_only/hidden）由 B 指令、C 渲染；`visual_context.sent_to_mimo` 强制真实。剩余：三场景各用哪档的策略 |
 | P0-6 B→C 传输 | ⚠️ 阻塞解除 | Adapter seam 冻结（§13），HTTP/框架明确列入 §16 暂不冻结——降为实现细节 |
 | 接缝-时序关联 | ✅ 已解决 | 全记录强制 `scene_id`；`decision_id` 贯穿 CareDecision↔InteractionResponse |
 | 接缝-degraded | ✅ 已解决 | `state=degraded`/`fallback_used`/`source=degraded` 三者语义分清（§10、场景四） |
-| 接缝-演示时钟 | ❌ 仍开放 | 合同只统一了视频毫秒偏移；分钟级静止在 79s 素材中如何加速演示仍无机制、无 owner。增补提案见 §8.3 |
+| 接缝-演示时钟 | ✅ 已解决（74980ff） | `media.demo_time_scale` 进 manifest（可选正数默认 1.0），仅供 C 叙事换算、不改真实 `*_ms`、B 阈值不得据此伪造感知数据；A 落字段，owner 分工同提案。详见 §8.3 状态更新 |
 | C 自查-废止 ADR-0001 引用 | ❌ 仍在 | software-demo/spec.md 改了 105 行但 line 418 仍引用 ADR-0001 边界 |
 | §4 ADR 撞号 | 不涉及 | akira 未动 docs/adr/；本仓库侧改号 ADR-0004 的义务不变 |
 | pytest 破坏（e35b5bd） | ❌ akira 未修 | develop/akira 不含 pyproject.toml 修复，该分支上测试仍全挂；e35b5bd 仍需尽快进 upstream |
@@ -76,6 +76,8 @@
 > **文件定位（用户定调）**：本计划文件是相对参考，**具体以实际开发代码为主**，后续做一次统一调优时校正合同与本清单的偏差。
 
 ### 8.1 行动卡与授权闭环（闭 P0-4）
+
+> **状态更新（2026-08-01 夜，核对 akira `74980ff`）**：本节五项已全部进合同——① `text` 字段及"仅 `user_input | script` 可非空、`timeout` 必为 `null`"约束原样落地（合同 §11，样例即"牙疼，饭咬不动。"）；② `consent_required`/六要素 `action_card`（含 `status` 三值枚举）与授权前置约束逐条进 §10，合同并增设 `state = consent_required` 档（明确 risk_level 仍为 2，等待授权≠风险升级）；③ 三个 `response` 新枚举与 `source = family_input`（含"`card_confirmed` 仅家属视图提交"）进 §11；④ 回执按 `mark_resolved` + 回执文案 + 行动卡状态 `confirmed|done` 落入场景步骤；⑤ 即合同 §14"视频三：具体需求与行动卡闭环"，并附诚实红线：素材拍摄完成前不得宣称闭环端到端完成（§15.2 留待验收）。**P0-4 就此关闭**，剩余为素材拍摄与契约测试等实现项。
 
 **① `InteractionResponse` 增加可空 `text` 字段**——这是隐藏的先决缺口：老人主诉（"牙疼，饭咬不动"）必须能从 C 传到 B 再进 MiMo 做需求理解，否则"具体需求"分支整体不可运行。
 
@@ -124,7 +126,9 @@ B: mark_resolved + elder_message 回执（status=confirmed）
 
 与合同现行"询问先行"调和为：**询问可以先行，升级必须确定性**。
 
-**① `CareDecision` 增加可空 `respond_by_ms`**（要求回应的截止视频时刻）：C 据此渲染倒计时；`null` 表示本决策无时限。
+> **状态更新（2026-08-01 夜，核对 akira `74980ff`）**：本节语义已进合同——② 三条约束逐条落入合同 §10 约束区（高置信必带时限、超时后 `source=rule` 强制升级、MiMo 后到不得取消），③ 的二次超时→`urgent_attention` 已进合同 §14 视频四（隐私升档未进合同，归并 P0-5 隐私策略残项）；唯 ① 的字段未采用绝对口径，改为**相对倒计时 `response_timeout_ms`**（从 C 收到本条 CareDecision 起算），合同注明理由：预录视频输入下交互可能发生在视频暂停或结束后，锚定视频钟的绝对截止会失效。实现以合同字段为准，① 原文留作提案存档；两种口径的判据与生产形态的双字段演进见新增 ④。
+
+**① `CareDecision` 增加可空 `respond_by_ms`**（要求回应的截止视频时刻）：C 据此渲染倒计时；`null` 表示本决策无时限。〔已被合同以 `response_timeout_ms` 相对口径替代，见上方状态更新〕
 
 **② 确定性升级约束（写入合同 §10 约束区）**：
 
@@ -134,9 +138,24 @@ B: mark_resolved + elder_message 回执（status=confirmed）
 
 **③ `urgent_attention` 触发场景补进 §14**：场景三扩展一步——family_notification_required 后仍无任何回应（二次超时）→ `urgent_attention` + `privacy_mode` 可升档（如 `blurred→visible`，须 owner 确认隐私口径）。
 
-此节涉及安全叙事根基，**建议由决策层 owner 立 ADR 固化**（"检查-升级-不可取消"三段式），D 的路演话术依赖此 ADR。
+**④ 双字段演进模式（实况摄像头形态预案，本届演示不实施）**：口径选择的真判据不是"预录 vs 实时"，而是**截止所锚定的钟对回应者是否一直在走**。预录视频钟会暂停/跳转/放完，绝对截止一锚即死——故演示用相对 `response_timeout_ms` 正确；切到实况摄像头后感知钟≈现实钟，绝对截止的幂等与可审计优势才重新值钱（重复投递不重启窗口、老人端/家属端/审计端算得同一截止、离线可验升级时点）。届时不做二选一，锚点+时长双发（实况形态下三值均为现实钟 epoch 毫秒，不再是视频偏移）：
+
+```json
+"response_deadline": {
+  "issued_at_ms": 1780000000000,
+  "timeout_ms": 8000,
+  "respond_by_ms": 1780000008000
+}
+```
+
+- 端间钟同步可信（NTP 级）→ 按 `respond_by_ms` 渲染与校验；钟不可信 → 退化为收到起算的 `timeout_ms`，行为等价演示现状。绝对口径依赖对钟是老教训（HTTP `Expires` 因客户端钟不可信败给 `max-age`）；
+- **权威计时者上移到 B**：升级截止由 B 在自己的钟上强制执行，C 断线/卡死不阻断升级，C 的倒计时降级为纯展示；`source=timeout` 的超时判定随之从 C 移回 B（演示现状由 C 报超时，生产不可依赖展示端的钟与在线状态）。
+
+此节涉及安全叙事根基，**建议由决策层 owner 立 ADR 固化**（"检查-升级-不可取消"三段式），D 的路演话术依赖此 ADR；④ 的双字段演进可作为该 ADR 的"后续工作"附注一并记录。
 
 ### 8.3 演示时钟（闭演示时钟缺口）
+
+> **状态更新（2026-08-01 夜，核对 akira `74980ff`）**：已进合同——`media.demo_time_scale` 为可选正数、默认 `1.0`（合同样例即 `30.0`），且"只用于 C 的叙事时长换算、不改变任何真实 `*_ms`"与"B 规则阈值不得用它伪造感知数据"两条红线原文落地，与本节"数据层不变"原则完全一致；manifest 由 A 侧（SceneBundle 生成方）落字段，owner 分工与提案相同。**演示时钟缺口就此关闭**。
 
 **`SceneManifest` 增加可空 `demo_time_scale`**（数值；如 `30.0` = 1 视频秒代表 30 叙事秒）：
 

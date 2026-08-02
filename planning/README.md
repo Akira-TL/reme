@@ -14,6 +14,10 @@
 | [任务分解](docs/任务分解.md) | 87 个工程任务：验收标准、工时、依赖、优先级（v3.0 修订版） |
 | [开发计划](docs/开发计划.md) | 48 小时执行计划：泳道、六阶段、3 个合龙点、裁剪顺序 |
 | [v3.0 增量分析](docs/v3.0-增量分析.md) | v2.0 → v3.0 的全部实质变更与影响映射 |
+| [方案-MiMo接入](docs/方案-MiMo接入.md) | Reme 的 MiMo 代码使用方案：五个载荷结构 + 端到端流转图 + live 接入参数 |
+| [情报-MiMo-API](docs/情报-MiMo-API.md) | MiMo 官方 API 文档要点：接入/模型/限流/CORS 实测/备选链/许可 |
+| [情报-Miloco](docs/情报-Miloco.md) | Miloco 对 Reme 的影响分析与答辩口径 |
+| [情报-Miloco-代码剖析](docs/情报-Miloco-代码剖析.md) | Miloco 全屋智能代码级剖析：MiMo 调用方案/数据结构/流转图/出域清单 |
 | [PRD v2.0](docs/Reme-PRD-v2.0.md) | 历史版本（已被 v3.0 取代，仅存档） |
 
 ## 架构一览

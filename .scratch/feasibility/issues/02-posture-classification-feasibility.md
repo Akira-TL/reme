@@ -6,6 +6,10 @@
 
 **Status:** blocked
 
+**Harness ready:** `.scratch/tiny-transition-model/` holds a reproducible baseline-versus-learned-model
+comparison for temporal transitions, currently running on synthetic data only. None of its numbers count
+towards the acceptance criteria below; they unblock only the tooling, not the evidence.
+
 ## Working labels
 
 Static posture labels for the experiment:

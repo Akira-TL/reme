@@ -21,7 +21,8 @@ Feasibility analysis. The current priority is to validate the source video, comp
 ├── docs/
 │   ├── adr/                  # Architecture decision records
 │   └── agents/               # Agent workflow configuration
-├── src/reme/                 # Product code
+├── backend/reme/             # Product code
+├── frontend/                 # Frontend app
 ├── tests/                    # Deterministic tests
 └── .scratch/                 # Specs, tickets, experiments, and handoffs
 ```
