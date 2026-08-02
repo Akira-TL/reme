@@ -5,6 +5,9 @@ export const RESPONSE_SCHEMA = "reme-interaction-response/v0-experiment";
 const RESPONSE_SOURCE_RULES = {
   safe: "user_input",
   need_help: "user_input",
+  unclear: "user_input",
+  consent_granted: "user_input",
+  consent_denied: "user_input",
   none: "timeout",
   card_confirmed: "family_input",
 };
@@ -34,7 +37,12 @@ async function request(httpBase, path, options = {}) {
 export function startSession(httpBase, sessionRequest, signal) {
   return request(httpBase, "/api/session", {
     method: "POST",
-    body: JSON.stringify(sessionRequest),
+    body: JSON.stringify({
+      ...sessionRequest,
+      // C 是本地单实例页面。刷新/HMR 可能来不及执行旧页面 cleanup，
+      // 因此由 B 原子接管遗留 session，而不是让新页面永久卡在 409。
+      replace_active: true,
+    }),
     signal,
   });
 }
@@ -47,10 +55,53 @@ export function stopSession(httpBase, sessionId) {
   });
 }
 
+export function switchSessionScene(httpBase, { sessionId, sceneId }) {
+  return request(httpBase, "/api/session/scene", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, scene_id: sceneId }),
+  });
+}
+
 export function resetScene(httpBase, sceneId) {
   return request(httpBase, "/api/scene/reset", {
     method: "POST",
     body: JSON.stringify({ scene_id: sceneId }),
+  });
+}
+
+export function startDemoConversation(httpBase, { sceneId, scenario, timestampMs }) {
+  return request(httpBase, "/api/demo/conversation", {
+    method: "POST",
+    body: JSON.stringify({
+      scene_id: sceneId,
+      scenario,
+      timestamp_ms: timestampMs,
+    }),
+  });
+}
+
+export function requestDecisionVoice(httpBase, { sceneId, decisionId }) {
+  return request(httpBase, "/api/voice/tts", {
+    method: "POST",
+    body: JSON.stringify({ scene_id: sceneId, decision_id: decisionId }),
+  });
+}
+
+export function submitVoiceDialogue(httpBase, {
+  sceneId,
+  decisionId,
+  timestampMs,
+  audioB64,
+}) {
+  return request(httpBase, "/api/voice/dialogue", {
+    method: "POST",
+    body: JSON.stringify({
+      scene_id: sceneId,
+      decision_id: decisionId,
+      timestamp_ms: timestampMs,
+      audio_b64: audioB64,
+      audio_format: "wav",
+    }),
   });
 }
 

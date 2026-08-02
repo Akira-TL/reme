@@ -15,13 +15,6 @@ const TRIGGER_LABELS = {
   family_unresponsive: "家属未确认",
 };
 
-const PRIVACY_LABELS = {
-  visible: "原画可见",
-  blurred: "模糊处理",
-  skeleton_only: "仅骨架",
-  hidden: "画面隐藏",
-};
-
 export function useFallLiveLink({ enabled, videoElement, sceneId }) {
   const perception = usePerceptionRuntime({
     videoElement,
@@ -37,7 +30,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
   // 已在子女端确认过的告警决策 id：新告警事件天然拿到新 id，无需清理副作用。
   const [confirmedDecisionId, setConfirmedDecisionId] = useState(null);
 
-  const current = decision.decision;
+  const current = decision.decision?.scene_id === sceneId ? decision.decision : null;
   // 本轮会话里是否出现过告警（history 由决策钩子维护，纯派生）。
   const wasAlarmed = useMemo(
     () => decision.history.some((item) => item?.alarm),
@@ -111,24 +104,17 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     decision.respondNeedHelp();
   }, [decision]);
 
-  const triggerDebugScenario = useCallback((scenario) => (
-    perception.triggerDebugScenario(scenario)
-  ), [perception.triggerDebugScenario]);
+  const triggerDebugScenario = perception.triggerDebugScenario;
 
   const confirmAlarm = useCallback(() => {
     if (current) setConfirmedDecisionId(current.decision_id);
     decision.confirmAlarm();
   }, [current, decision]);
 
-  const privacyLabel = PRIVACY_LABELS[current?.privacy_mode] || "仅骨架";
-  const emergencyNote = current?.privacy_mode === "visible"
-    ? "画面已按隐私档位开放"
-    : `隐私档位：${privacyLabel}，未开放原画`;
-  const familyVideoAllowed = Boolean(
-    active
-      && sceneId !== "bathroom"
-      && current?.privacy_mode !== "hidden"
-  );
+  const emergencyNote = sceneId === "bathroom"
+    ? "浴室场景不可查看原视频"
+    : "家属可主动查看原视频与 A 骨架叠加";
+  const familyVideoAllowed = Boolean(active && sceneId !== "bathroom");
 
   return {
     active,
@@ -147,11 +133,14 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     triggerDebugScenario,
     respondSafe,
     respondNeedHelp,
+    respondConsentGranted: decision.respondConsentGranted,
+    respondConsentDenied: decision.respondConsentDenied,
+    startDemoConversation: decision.startDemoConversation,
     confirmAlarm,
     resetSceneState: decision.resetSceneState,
     replayVoice: decision.replayVoice,
     startVoiceReply: decision.startVoiceReply,
     voice: decision.voice,
-    decision,
+    decision: { ...decision, decision: current },
   };
 }

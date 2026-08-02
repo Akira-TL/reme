@@ -24,6 +24,7 @@ from reme.decision.home import (
 from reme.decision.memory import BehaviorMemoryStore
 from reme.decision.mimo.adapter import MimoClient, config_from_environment
 from reme.decision.mimo.prompts import PersonaConfig
+from reme.decision.mimo.speech import MimoSpeechClient, speech_config_from_environment
 from reme.decision.policy import (
     DecisionService,
     LiveMimoDecisionClient,
@@ -293,6 +294,14 @@ def build_mimo_client(config: ServerConfig) -> MimoDecisionClient | None:
         # degrade visibly instead of crashing the demo host.
         pass
     return LiveMimoDecisionClient(MimoClient(client_config))
+
+
+def build_speech_client(config: ServerConfig) -> MimoSpeechClient | None:
+    """Build the explicit ASR/TTS client for the live voice dialogue path."""
+
+    if config.demo_mode is not DemoMode.LIVE:
+        return None
+    return MimoSpeechClient(speech_config_from_environment())
 
 
 def build_danger_controller(

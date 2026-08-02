@@ -110,6 +110,34 @@ def test_compose_check_in_requires_elder_message() -> None:
         parse_mimo_proposal(json.dumps(payload, ensure_ascii=False), task=MimoTask.COMPOSE_CHECK_IN)
 
 
+def test_compose_kitchen_share_requires_consent_and_no_early_notification() -> None:
+    valid = _proposal_payload(
+        elder_message="王奶奶，我看到您在包包子，要不要分享给家人看看？",
+        reason_summary="看到厨房包包子场景，先征求分享授权",
+        uncertainty="low",
+    )
+    proposal = parse_mimo_proposal(
+        json.dumps(valid, ensure_ascii=False),
+        task=MimoTask.COMPOSE_KITCHEN_SHARE,
+    )
+    assert proposal.state is DecisionState.CONSENT_REQUIRED
+    assert proposal.consent_required is True
+
+    invalid = dict(valid, family_notification="已发送给家人")
+    with pytest.raises(MimoSchemaError, match="cannot notify family"):
+        parse_mimo_proposal(
+            json.dumps(invalid, ensure_ascii=False),
+            task=MimoTask.COMPOSE_KITCHEN_SHARE,
+        )
+
+
+def test_kitchen_share_prompt_states_scene_and_waits_for_reply() -> None:
+    system = build_system_prompt(MimoTask.COMPOSE_KITCHEN_SHARE, persona=PersonaConfig())
+    assert "包包子" in system
+    assert "必须等待老人明确回复" in system
+    assert '"consent_required"' in system
+
+
 def test_compose_card_requires_card_and_notification() -> None:
     payload = _proposal_payload(
         state="family_notification_required", risk_level=3, consent_required=False

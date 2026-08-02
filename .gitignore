@@ -30,6 +30,7 @@ node_modules/
 # CodeGraph local index
 .codegraph/
 **/*mp4
+**/*jpg
 # Claude Code local state (agent worktrees, session settings)
 .claude/
 

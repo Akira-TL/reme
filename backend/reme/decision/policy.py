@@ -64,11 +64,13 @@ from reme.decision.records import (
 )
 from reme.decision.state_machine import (
     DecisionSkeleton,
+    DemoConversationKind,
     Directive,
     MimoTask,
     SessionState,
     TemplateId,
     on_danger_confirmed,
+    on_demo_conversation,
     on_response,
     on_tick,
 )
@@ -225,6 +227,22 @@ _TEMPLATES: dict[TemplateId, _Template] = {
         Uncertainty.MEDIUM,
         elder_message="{name}，那先不打扰您了，有需要随时叫我。",
     ),
+    TemplateId.KITCHEN_SHARE_REQUEST: _Template(
+        "看到老人在厨房包包子，询问是否愿意分享给孩子",
+        Uncertainty.LOW,
+        elder_message="{name}，我看到您在包包子。要不要把这个生活片段分享给{relation}看看？",
+    ),
+    TemplateId.KITCHEN_SHARE_GRANTED: _Template(
+        "老人同意分享厨房生活片段，向家人发送普通生活提醒",
+        Uncertainty.LOW,
+        elder_message="{name}，好的，我会把这段包包子的生活片段分享给{relation}。",
+        family_notification="奶奶正在厨房包包子，并同意把这段生活片段分享给你。",
+    ),
+    TemplateId.KITCHEN_SHARE_DENIED: _Template(
+        "老人不同意分享，不向家人发送任何提醒",
+        Uncertainty.LOW,
+        elder_message="{name}，好的，这次不分享。",
+    ),
     TemplateId.CARD_FAMILY_NOTIFY: _Template(
         "老人已授权，通知家人并生成行动卡",
         Uncertainty.LOW,
@@ -367,6 +385,14 @@ class DecisionService:
         except KeyError as exc:
             raise UnknownSceneError(scene_id) from exc
 
+    def current_decision(self, scene_id: str) -> CareDecision | None:
+        """Return the current pending decision for voice/TTS endpoints."""
+
+        self._streams(scene_id)
+        with self._lock:
+            runtime = self._runtimes.get(scene_id)
+            return None if runtime is None else runtime.pending
+
     def get_decision(self, *, scene_id: str, timestamp_ms: float) -> CareDecision:
         """Evaluate the scene at one video timestamp and return the live decision."""
 
@@ -382,6 +408,49 @@ class DecisionService:
             runtime = self._runtime(scene_id)
             previous_id = None if runtime.pending is None else runtime.pending.decision_id
             directive = on_tick(runtime.session, context, config=self._effective_trigger(home))
+            outcome = self._commit_rule_directive(runtime, directive, timestamp_ms)
+            if outcome is None:
+                outcome = self._claim_mimo_or_reuse(runtime)
+                if outcome is None:
+                    snapshot = (runtime.epoch, runtime.session)
+        if outcome is not None:
+            self._publish(outcome, previous_id)
+            return outcome
+        try:
+            decision = self._run_mimo_transition(
+                scene_id,
+                directive,
+                timestamp_ms,
+                snapshot,
+                elder_text=None,
+            )
+        finally:
+            with self._lock:
+                runtime.mimo_inflight = False
+        self._publish(decision, previous_id)
+        return decision
+
+    def start_demo_conversation(
+        self,
+        *,
+        scene_id: str,
+        kind: DemoConversationKind,
+        timestamp_ms: float,
+    ) -> CareDecision:
+        """Start one explicit local-demo dialogue and publish its real B decision."""
+
+        self._streams(scene_id)
+        if self._config.demo_mode is DemoMode.RECORD:
+            raise DecisionRejectedError("invalid_response")
+        with self._lock:
+            runtime = self._runtime(scene_id)
+            previous_id = None if runtime.pending is None else runtime.pending.decision_id
+            directive = on_demo_conversation(
+                runtime.session,
+                kind=kind,
+                timestamp_ms=timestamp_ms,
+                config=self._config.trigger,
+            )
             outcome = self._commit_rule_directive(runtime, directive, timestamp_ms)
             if outcome is None:
                 outcome = self._claim_mimo_or_reuse(runtime)
@@ -835,6 +904,11 @@ class DecisionService:
                 "phase": directive.next_state.phase.value,
                 "clarification_used": directive.next_state.clarification_used,
                 "complaint_text": directive.next_state.complaint_text,
+                "conversation_kind": (
+                    None
+                    if directive.next_state.conversation_kind is None
+                    else directive.next_state.conversation_kind.value
+                ),
             },
             elder_text=elder_text,
             context_sections=sections or None,

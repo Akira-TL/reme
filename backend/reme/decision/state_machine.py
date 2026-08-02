@@ -48,10 +48,18 @@ class EscalationKind(StrEnum):
     CONCERN = "concern"
 
 
+class DemoConversationKind(StrEnum):
+    """Manually-triggered demo conversations owned by B."""
+
+    KITCHEN_SHARE = "kitchen_share"
+    PROACTIVE_CHECK_IN = "proactive_check_in"
+
+
 class MimoTask(StrEnum):
     """The one MiMo call the policy layer may run for a directive."""
 
     COMPOSE_CHECK_IN = "compose_check_in"
+    COMPOSE_KITCHEN_SHARE = "compose_kitchen_share"
     INTERPRET_RESPONSE = "interpret_response"
     COMPOSE_CARD = "compose_card"
 
@@ -73,6 +81,9 @@ class TemplateId(StrEnum):
     CONSENT_REQUEST = "consent_request"
     CONSENT_DENIED_CLOSE = "consent_denied_close"
     CONSENT_TIMEOUT_CLOSE = "consent_timeout_close"
+    KITCHEN_SHARE_REQUEST = "kitchen_share_request"
+    KITCHEN_SHARE_GRANTED = "kitchen_share_granted"
+    KITCHEN_SHARE_DENIED = "kitchen_share_denied"
     CARD_FAMILY_NOTIFY = "card_family_notify"
     RECEIPT_RESOLVED = "receipt_resolved"
     URGENT_ALERT = "urgent_alert"
@@ -101,6 +112,7 @@ class SessionState:
     risk_floor: int = 0
     generation: int = 0
     complaint_text: str | None = None
+    conversation_kind: DemoConversationKind | None = None
     card_draft: ActionCard | None = None
     pending_decision_id: str | None = None
     last_emitted_state: DecisionState | None = None
@@ -320,6 +332,85 @@ def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerCon
     return Directive(next_state=_mark_emitted(advanced, skeleton), skeleton=skeleton)
 
 
+def on_demo_conversation(
+    state: SessionState,
+    *,
+    kind: DemoConversationKind,
+    timestamp_ms: float,
+    config: TriggerConfig,
+) -> Directive:
+    """Start one explicit demo conversation without fabricating perception evidence."""
+
+    advanced = _advance_clock(state, timestamp_ms)
+    if advanced.phase not in {SessionPhase.MONITORING, SessionPhase.RESOLVED}:
+        return Directive(next_state=advanced, reject_code="episode_busy")
+    if kind is DemoConversationKind.KITCHEN_SHARE:
+        skeleton = DecisionSkeleton(
+            state=DecisionState.CONSENT_REQUIRED,
+            risk_level=2,
+            action=DecisionAction.ASK_ELDER,
+            need_dialogue=True,
+            dialogue_goal="request_consent",
+            consent_required=True,
+            response_timeout_ms=None,
+            template=TemplateId.KITCHEN_SHARE_REQUEST,
+        )
+        next_state = replace(
+            _mark_emitted(advanced, skeleton),
+            phase=SessionPhase.AWAITING_CONSENT,
+            escalation=EscalationKind.CONCERN,
+            clarification_used=False,
+            complaint_text="当前看到奶奶在厨房包包子，询问是否愿意把这个生活片段分享给孩子",
+            conversation_kind=kind,
+            card_draft=None,
+        )
+        return Directive(
+            next_state=next_state,
+            skeleton=skeleton,
+            mimo_task=MimoTask.COMPOSE_KITCHEN_SHARE,
+        )
+
+    skeleton = DecisionSkeleton(
+        state=DecisionState.CHECK_IN_REQUIRED,
+        risk_level=2,
+        action=DecisionAction.ASK_ELDER,
+        need_dialogue=True,
+        dialogue_goal="understand_need",
+        consent_required=False,
+        response_timeout_ms=config.check_in_timeout_ms,
+        template=TemplateId.CONCERN_CHECK_IN,
+    )
+    next_state = replace(
+        _mark_emitted(advanced, skeleton),
+        phase=SessionPhase.AWAITING_ELDER,
+        escalation=EscalationKind.CONCERN,
+        clarification_used=False,
+        complaint_text="现场场景手动触发一次自然、简短的主动关怀询问",
+        conversation_kind=kind,
+        card_draft=None,
+    )
+    return Directive(next_state=next_state, skeleton=skeleton, mimo_task=MimoTask.COMPOSE_CHECK_IN)
+
+
+def _kitchen_share_notification(state: SessionState) -> Directive:
+    skeleton = DecisionSkeleton(
+        state=DecisionState.RESOLVED,
+        risk_level=0,
+        action=DecisionAction.NOTIFY_FAMILY,
+        need_dialogue=True,
+        dialogue_goal=None,
+        consent_required=False,
+        response_timeout_ms=None,
+        template=TemplateId.KITCHEN_SHARE_GRANTED,
+    )
+    next_state = replace(
+        _mark_emitted(state, skeleton),
+        phase=SessionPhase.RESOLVED,
+        risk_floor=0,
+    )
+    return Directive(next_state=next_state, skeleton=skeleton)
+
+
 def _on_elder_response(
     state: SessionState, response: InteractionResponse, *, config: TriggerConfig
 ) -> Directive:
@@ -429,7 +520,10 @@ def _on_elder_response(
 
 def _on_consent_response(state: SessionState, response: InteractionResponse) -> Directive:
     value = response.response
+    kitchen_share = state.conversation_kind is DemoConversationKind.KITCHEN_SHARE
     if value is ResponseValue.CONSENT_GRANTED:
+        if kitchen_share:
+            return _kitchen_share_notification(state)
         return _family_alert(
             state,
             TemplateId.CARD_FAMILY_NOTIFY,
@@ -439,7 +533,10 @@ def _on_consent_response(state: SessionState, response: InteractionResponse) -> 
             mimo_task=MimoTask.COMPOSE_CARD if state.card_draft is None else None,
         )
     if value is ResponseValue.CONSENT_DENIED:
-        return _resolve(state, TemplateId.CONSENT_DENIED_CLOSE)
+        return _resolve(
+            state,
+            TemplateId.KITCHEN_SHARE_DENIED if kitchen_share else TemplateId.CONSENT_DENIED_CLOSE,
+        )
     if value is ResponseValue.UNCLEAR:
         if not state.clarification_used:
             skeleton = DecisionSkeleton(
@@ -450,15 +547,24 @@ def _on_consent_response(state: SessionState, response: InteractionResponse) -> 
                 dialogue_goal="request_consent",
                 consent_required=True,
                 response_timeout_ms=None,
-                template=TemplateId.CONSENT_REQUEST,
+                template=(
+                    TemplateId.KITCHEN_SHARE_REQUEST
+                    if kitchen_share
+                    else TemplateId.CONSENT_REQUEST
+                ),
             )
             next_state = replace(_mark_emitted(state, skeleton), clarification_used=True)
             return Directive(next_state=next_state, skeleton=skeleton)
-        return _resolve(state, TemplateId.CONSENT_TIMEOUT_CLOSE)
+        return _resolve(
+            state,
+            TemplateId.KITCHEN_SHARE_DENIED if kitchen_share else TemplateId.CONSENT_TIMEOUT_CLOSE,
+        )
     if value is ResponseValue.NONE:
-        # Conservative default the team may revisit: an unanswered consent
-        # request never becomes a family notification.
-        return _resolve(state, TemplateId.CONSENT_TIMEOUT_CLOSE)
+        # An unanswered consent request never becomes a family notification.
+        return _resolve(
+            state,
+            TemplateId.KITCHEN_SHARE_DENIED if kitchen_share else TemplateId.CONSENT_TIMEOUT_CLOSE,
+        )
     return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
 
 

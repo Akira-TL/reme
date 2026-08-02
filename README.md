@@ -53,7 +53,7 @@ uv run reme-local-demo
 - B 决策服务：`http://127.0.0.1:8100`
 - C Vite 页面：`http://127.0.0.1:4174/typical-demo.html`
 
-浏览器打开验收页面并允许摄像头权限。页面默认进入跌倒链路验收，并在同一页面显示 C 摄像头输入、A 姿态/转变事件和 B/MiMo 决策状态。按 `Ctrl+C` 会统一停止三个本地进程；不使用 systemd，也不由 B 静态托管前端。
+浏览器打开验收页面并允许摄像头权限。页面默认进入跌倒链路验收，并在同一页面显示老人端视频/A 骨架与家属手机端。厨房场景会由 `mimo-v2.5` 询问是否分享包包子的生活片段，只有老人同意后家属端才收到提醒；浴室以外场景可由家属主动查看原视频与骨架。按 `Ctrl+C` 会统一停止三个本地进程；不使用 systemd，也不由 B 静态托管前端。
 
 The existing `reme-demo` command and motion-data files came from an early exploratory spike. They are not an accepted architecture and should not be used to constrain the feasibility experiments.
 

@@ -6,8 +6,12 @@ import {
 } from "../adapters/perception";
 import {
   getDecisionUrls,
+  requestDecisionVoice,
   resetScene as requestSceneReset,
+  startDemoConversation as requestDemoConversation,
   startSession,
+  submitVoiceDialogue,
+  switchSessionScene,
   stopSession,
   submitResponse,
   uploadDangerFrame,
@@ -40,6 +44,13 @@ function captureJpegBase64(video) {
   }
 }
 
+function playBase64Audio(audioB64, audioFormat = "wav") {
+  if (!audioB64) return Promise.reject(new Error("语音数据为空"));
+  const mimeType = audioFormat === "mp3" ? "audio/mpeg" : "audio/wav";
+  const audio = new Audio(`data:${mimeType};base64,${audioB64}`);
+  return audio.play();
+}
+
 function speakElderMessage(text) {
   if (!text || !("speechSynthesis" in window)) return;
   try {
@@ -59,11 +70,27 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const [history, setHistory] = useState([]);
   const [deadline, setDeadline] = useState(null);
   const [alarm, setAlarm] = useState(null);
+  const [mimoRequest, setMimoRequest] = useState({
+    status: "idle",
+    scenario: null,
+    requestedAt: null,
+    respondedAt: null,
+    source: null,
+    decisionId: null,
+    error: "",
+  });
   const [voice, setVoice] = useState({
     supported: typeof window !== "undefined"
-      && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition),
+      && Boolean(navigator.mediaDevices?.getUserMedia)
+      && Boolean(window.AudioContext || window.webkitAudioContext),
     listening: false,
+    stage: "idle",
     transcript: "",
+    responseValue: "",
+    asrModel: "mimo-v2.5-asr",
+    ttsModel: "mimo-v2.5-tts",
+    asrLatencyMs: null,
+    ttsLatencyMs: null,
     error: "",
   });
 
@@ -72,6 +99,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const apiRef = useRef({});
 
   useEffect(() => {
+    if (sceneRef.current === sceneId) return;
+    if (apiRef.current.switchScene) {
+      apiRef.current.switchScene(sceneId).catch(() => {});
+      return;
+    }
     sceneRef.current = sceneId;
   }, [sceneId]);
 
@@ -88,6 +120,15 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         setHistory([]);
         setDeadline(null);
         setAlarm(null);
+        setMimoRequest({
+          status: "idle",
+          scenario: null,
+          requestedAt: null,
+          respondedAt: null,
+          source: null,
+          decisionId: null,
+          error: "",
+        });
         setVoice((current) => ({
           ...current,
           listening: false,
@@ -107,6 +148,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     let latestDecision = null;
     let latestAlarmDecision = null;
     let countdown = { decisionId: null, timer: 0 };
+    let pendingSceneSwitch = Promise.resolve();
     let vibrateTimer = 0;
     let ring = null;
     let recognition = null;
@@ -360,14 +402,22 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
               .trim();
             setVoice((current) => ({ ...current, transcript, error: "" }));
             if (!transcript) return;
-            const safe = /(没事|没关系|我很好|不用|安全|还好)/.test(transcript);
+            let response;
+            if (target.consent_required) {
+              if (/(不分享|不要分享|不发|不用发|拒绝|算了)/.test(transcript)) {
+                response = "consent_denied";
+              } else if (/(分享|发给|可以|同意|愿意)/.test(transcript)) {
+                response = "consent_granted";
+              } else {
+                response = "unclear";
+              }
+            } else {
+              response = /(没事|没关系|我很好|不用|安全|还好)/.test(transcript)
+                ? "safe"
+                : "need_help";
+            }
             markResponded(target.decision_id);
-            submitFor(
-              target,
-              safe ? "safe" : "need_help",
-              "user_input",
-              transcript,
-            );
+            submitFor(target, response, "user_input", transcript);
           };
           recognition.start();
         } catch {
@@ -377,6 +427,99 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             error: "无法启动语音识别",
           }));
         }
+      },
+      switchScene(nextSceneId) {
+        if (!nextSceneId || nextSceneId === sceneRef.current) return pendingSceneSwitch;
+        pendingSceneSwitch = switchSessionScene(httpBase, {
+          sessionId,
+          sceneId: nextSceneId,
+        }).then(() => {
+          if (disposed) return;
+          sceneRef.current = nextSceneId;
+          latestDecision = null;
+          latestAlarmDecision = null;
+          clearAlarmState();
+          clearCountdown();
+          setDecision(null);
+          setHistory([]);
+          setMimoRequest({
+            status: "idle",
+            scenario: null,
+            requestedAt: null,
+            respondedAt: null,
+            source: null,
+            decisionId: null,
+            error: "",
+          });
+          setVoice((current) => ({
+            ...current,
+            listening: false,
+            transcript: "",
+            error: "",
+          }));
+        }).catch((error) => {
+          if (!disposed) setReason(error.message || "B 场景切换失败");
+          throw error;
+        });
+        return pendingSceneSwitch;
+      },
+      startDemoConversation(scenario) {
+        let requestedAt = null;
+        setMimoRequest({
+          status: "waiting_scene",
+          scenario,
+          requestedAt: null,
+          respondedAt: null,
+          source: null,
+          decisionId: null,
+          error: "",
+        });
+        return pendingSceneSwitch.then(() => {
+          requestedAt = Date.now();
+          if (!disposed) {
+            setMimoRequest({
+              status: "requesting",
+              scenario,
+              requestedAt,
+              respondedAt: null,
+              source: null,
+              decisionId: null,
+              error: "",
+            });
+          }
+          return requestDemoConversation(httpBase, {
+            sceneId: sceneRef.current,
+            scenario,
+            timestampMs: performance.now(),
+          });
+        }).then((payload) => {
+          if (disposed) return null;
+          const next = pluckDecision(payload);
+          if (next) ingestDecision(next);
+          setMimoRequest({
+            status: "succeeded",
+            scenario,
+            requestedAt,
+            respondedAt: Date.now(),
+            source: next?.source || null,
+            decisionId: next?.decision_id || null,
+            error: "",
+          });
+          return next;
+        }).catch((error) => {
+          if (!disposed) {
+            setMimoRequest({
+              status: "failed",
+              scenario,
+              requestedAt: requestedAt || Date.now(),
+              respondedAt: Date.now(),
+              source: null,
+              decisionId: null,
+              error: error.message || "MiMo 请求失败",
+            });
+          }
+          throw error;
+        });
       },
       resetScene() {
         return requestSceneReset(httpBase, sceneRef.current)
@@ -415,6 +558,15 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setHistory([]);
       setDeadline(null);
       setAlarm(null);
+      setMimoRequest({
+        status: "idle",
+        scenario: null,
+        requestedAt: null,
+        respondedAt: null,
+        source: null,
+        decisionId: null,
+        error: "",
+      });
       setVoice((current) => ({
         ...current,
         listening: false,
@@ -471,6 +623,15 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const respondNeedHelp = useCallback(() => {
     apiRef.current.respond?.("need_help", "user_input");
   }, []);
+  const respondConsentGranted = useCallback(() => {
+    apiRef.current.respond?.("consent_granted", "user_input");
+  }, []);
+  const respondConsentDenied = useCallback(() => {
+    apiRef.current.respond?.("consent_denied", "user_input");
+  }, []);
+  const startDemoConversation = useCallback((scenario) => (
+    apiRef.current.startDemoConversation?.(scenario) || Promise.resolve(null)
+  ), []);
   const confirmAlarm = useCallback(() => {
     apiRef.current.confirmAlarm?.();
   }, []);
@@ -494,8 +655,12 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     history,
     deadline,
     alarm,
+    mimoRequest,
     respondSafe,
     respondNeedHelp,
+    respondConsentGranted,
+    respondConsentDenied,
+    startDemoConversation,
     confirmAlarm,
     dismissAlarm,
     replayVoice,

@@ -13,13 +13,16 @@ import { useLiveDemoCamera } from "./useLiveDemoCamera";
 
 export function TypicalDemoApp() {
   const [sceneId, setSceneId] = useState("fall");
-  const [fallPhase, setFallPhase] = useState("idle");
-  const [kitchenShared, setKitchenShared] = useState(false);
   const [familyViewOpen, setFamilyViewOpen] = useState(false);
   const [videoElement, setVideoElement] = useState(null);
   const [pendingScenario, setPendingScenario] = useState(null);
-  const timersRef = useRef([]);
   const sendLandmarksRef = useRef(null);
+  const autoConversationRef = useRef(null);
+  const conversationGuardRef = useRef({
+    status: "idle",
+    scenario: null,
+    waitingResponse: false,
+  });
 
   const scene = useMemo(
     () => DEMO_SCENES.find((item) => item.id === sceneId),
@@ -34,7 +37,25 @@ export function TypicalDemoApp() {
     videoElement,
     sceneId,
   });
-  const effectivePhase = sceneId === "fall" && live.active ? live.phase : fallPhase;
+  const {
+    active: liveActive,
+    runtime: liveRuntime,
+    triggerDebugScenario,
+    resetSceneState,
+    startDemoConversation,
+  } = live;
+  const effectivePhase = sceneId === "fall" && liveActive ? live.phase : "idle";
+  const kitchenShareDecision = useMemo(
+    () => [live.decision?.decision, ...(live.decision?.history || [])]
+      .find((item) => (
+        item?.scene_id === "kitchen"
+        && item.action === "notify_family"
+        && item.family_notification
+      )),
+    [live.decision?.decision, live.decision?.history],
+  );
+  const kitchenShared = Boolean(kitchenShareDecision);
+  const kitchenNotification = kitchenShareDecision?.family_notification || "";
   const deviceViewMode = sceneId === "bathroom" ? "skeleton" : "video_skeleton";
   const phoneViewMode = familyViewOpen && live.familyVideoAllowed
     ? "video_skeleton"
@@ -90,106 +111,116 @@ export function TypicalDemoApp() {
     skeletonSource,
   ]);
 
-  const clearTimers = useCallback(() => {
-    timersRef.current.forEach((timer) => window.clearTimeout(timer));
-    timersRef.current = [];
+  const selectScene = useCallback((nextScene) => {
+    setSceneId(nextScene);
+    setFamilyViewOpen(false);
+    autoConversationRef.current = null;
   }, []);
 
-  const selectScene = useCallback((nextScene) => {
-    clearTimers();
-    setSceneId(nextScene);
-    setFallPhase("idle");
-    setKitchenShared(false);
-    setFamilyViewOpen(false);
-  }, [clearTimers]);
-
-  const startFall = useCallback(() => {
-    clearTimers();
-    setFallPhase("candidate");
-    navigator.vibrate?.([80, 50, 80]);
-    timersRef.current = [
-      window.setTimeout(() => setFallPhase("checking"), 2200),
-      window.setTimeout(() => {
-        setFallPhase("emergency");
-        navigator.vibrate?.([180, 80, 180]);
-      }, 5600),
-    ];
-  }, [clearTimers]);
-
-  const markSafe = useCallback(() => {
-    if (live.active) {
-      live.respondSafe();
-      return;
-    }
-    clearTimers();
-    setFallPhase("idle");
-  }, [clearTimers, live]);
+  const markSafe = live.respondSafe;
 
   const requestManualScenario = useCallback((scenario, targetScene) => {
-    if (!live.active) return;
+    if (!liveActive) return;
     if (sceneId !== targetScene) {
       setPendingScenario({ scenario, targetScene });
       selectScene(targetScene);
       return;
     }
-    live.triggerDebugScenario(scenario);
-  }, [live.active, live.triggerDebugScenario, sceneId, selectScene]);
+    triggerDebugScenario(scenario);
+  }, [liveActive, sceneId, selectScene, triggerDebugScenario]);
 
   const resetAcceptance = useCallback(() => {
-    clearTimers();
-    setFallPhase("idle");
     setPendingScenario(null);
-    live.resetSceneState()
-      .then(() => live.triggerDebugScenario("normal"));
-  }, [clearTimers, live.resetSceneState, live.triggerDebugScenario]);
+    resetSceneState()
+      .then(() => triggerDebugScenario("normal"));
+  }, [resetSceneState, triggerDebugScenario]);
 
   useEffect(() => {
     if (
       !pendingScenario
       || sceneId !== pendingScenario.targetScene
-      || !live.active
-      || !live.runtime?.sessionId
+      || !liveActive
+      || !liveRuntime?.sessionId
     ) {
       return undefined;
     }
     const timer = window.setTimeout(() => {
-      if (live.triggerDebugScenario(pendingScenario.scenario)) {
+      if (triggerDebugScenario(pendingScenario.scenario)) {
         setPendingScenario(null);
       }
     }, 250);
     return () => window.clearTimeout(timer);
   }, [
-    live.active,
-    live.runtime?.sessionId,
-    live.triggerDebugScenario,
+    liveActive,
+    liveRuntime?.sessionId,
+    triggerDebugScenario,
     pendingScenario,
     sceneId,
   ]);
 
-  const contactEmergency = useCallback(() => {
-    if (live.active) {
-      live.confirmAlarm();
-      return;
-    }
-    clearTimers();
-    setFallPhase("contacting");
-    timersRef.current = [window.setTimeout(() => setFallPhase("resolved"), 2400)];
-  }, [clearTimers, live]);
+  useEffect(() => {
+    conversationGuardRef.current = {
+      status: live.decision?.mimoRequest?.status || "idle",
+      scenario: live.decision?.mimoRequest?.scenario || null,
+      waitingResponse: Boolean(live.decision?.decision?.need_dialogue),
+    };
+  }, [
+    live.decision?.decision?.need_dialogue,
+    live.decision?.mimoRequest?.scenario,
+    live.decision?.mimoRequest?.status,
+  ]);
 
-  useEffect(() => () => clearTimers(), [clearTimers]);
+  useEffect(() => {
+    const sessionId = liveRuntime?.sessionId;
+    const scenario = scene.conversationScenario;
+    const requestKey = sessionId && scenario ? `${sessionId}:${scene.id}:${scenario}` : null;
+    const alreadyCompleted = scenario === "kitchen_share" && kitchenShared;
+    if (
+      !scene.autoConversation
+      || !liveActive
+      || live.connection !== "open"
+      || !requestKey
+      || alreadyCompleted
+      || autoConversationRef.current === requestKey
+    ) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      const guard = conversationGuardRef.current;
+      if (
+        guard.waitingResponse
+        || (guard.scenario === scenario
+          && ["waiting_scene", "requesting", "succeeded"].includes(guard.status))
+      ) return;
+      autoConversationRef.current = requestKey;
+      startDemoConversation(scenario).catch(() => {
+        if (autoConversationRef.current === requestKey) {
+          autoConversationRef.current = null;
+        }
+      });
+    }, 2500);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    kitchenShared,
+    live.connection,
+    liveActive,
+    liveRuntime?.sessionId,
+    scene,
+    startDemoConversation,
+  ]);
+
+  const contactEmergency = live.confirmAlarm;
 
   useEffect(() => {
     function onKeyDown(event) {
       if (["INPUT", "TEXTAREA", "BUTTON"].includes(document.activeElement?.tagName)) return;
       if (/^[1-4]$/.test(event.key)) selectScene(DEMO_SCENES[Number(event.key) - 1].id);
-      if (event.code === "Space" && sceneId === "fall" && fallPhase === "idle" && !live.active) {
-        event.preventDefault();
-        startFall();
-      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [fallPhase, live.active, sceneId, selectScene, startFall]);
+  }, [selectScene]);
 
   async function enterFullscreen() {
     if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
@@ -209,8 +240,8 @@ export function TypicalDemoApp() {
           <span className={`camera-health ${cameraReady ? "is-online" : ""}`}>
             <VideocamRoundedIcon />{cameraReady ? "摄像头已连接" : "摄像头连接中"}
           </span>
-          <span className={`camera-health live-link-health ${live.active ? "is-online" : ""}`}>
-            {live.active ? "ABC 链路已接入" : "等待 ABC 链路"}
+          <span className={`camera-health live-link-health ${liveActive ? "is-online" : ""}`}>
+            {liveActive ? "ABC 链路已接入" : "等待 ABC 链路"}
           </span>
           <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>全屏演示</Button>
         </div>
@@ -234,17 +265,9 @@ export function TypicalDemoApp() {
       <div className="demo-workspace">
         <DevicePanel
           scene={scene}
-          fallPhase={effectivePhase}
-          fallStateOverride={live.active ? live.fallState : null}
-          liveActive={live.active}
-          kitchenShared={kitchenShared}
           canvasRef={deviceCanvasRef}
           camera={cameraState}
           viewMode={deviceViewMode}
-          onShare={() => setKitchenShared(true)}
-          onStartFall={startFall}
-          onSafe={markSafe}
-          onResetFall={markSafe}
         />
 
         <div className="sync-rail" aria-hidden="true">
@@ -255,9 +278,10 @@ export function TypicalDemoApp() {
         <ChildPhone
           scene={scene}
           fallPhase={effectivePhase}
-          fallStateOverride={live.active ? live.fallState : null}
-          emergencyNote={live.active ? live.emergencyNote : null}
+          fallStateOverride={liveActive ? live.fallState : null}
+          emergencyNote={liveActive ? live.emergencyNote : null}
           kitchenShared={kitchenShared}
+          kitchenNotification={kitchenNotification}
           canvasRef={phoneCanvasRef}
           camera={cameraState}
           viewMode={phoneViewMode}
@@ -272,16 +296,14 @@ export function TypicalDemoApp() {
       <AcceptanceControls
         scene={scene}
         live={live}
-        onTrigger={requestManualScenario}
+        onTriggerFall={() => requestManualScenario("fall", "fall")}
         onReset={resetAcceptance}
       />
 
       <RuntimeDebugPanel camera={cameraState} live={live} scene={scene} />
 
       <footer className="demo-footer">
-        <span><b>老人端</b> 非浴室场景显示本机原视频与 A 返回骨架叠加</span>
-        <span><b>家属端</b> 默认仅骨架，主动查看且隐私策略允许时才显示原视频</span>
-        <button type="button" onClick={() => selectScene(sceneId)}><RestartAltRoundedIcon />重置当前场景</button>
+        <button type="button" onClick={resetAcceptance}><RestartAltRoundedIcon />重置当前场景</button>
       </footer>
     </main>
   );

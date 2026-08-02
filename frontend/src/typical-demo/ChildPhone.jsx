@@ -25,6 +25,7 @@ export function ChildPhone({
   fallStateOverride = null,
   emergencyNote = null,
   kitchenShared,
+  kitchenNotification,
   canvasRef,
   camera,
   viewMode,
@@ -37,8 +38,16 @@ export function ChildPhone({
   const danger = scene.id === "fall" && fallPhase !== "idle";
   const emergency = scene.id === "fall" && ["emergency", "contacting", "resolved"].includes(fallPhase);
   const fallState = fallStateOverride || FALL_PHASES[fallPhase];
-  const title = scene.id === "fall" && danger ? fallState.status : scene.phoneTitle;
-  const body = scene.id === "fall" && danger ? fallState.message : scene.phoneBody;
+  const title = scene.id === "fall" && danger
+    ? fallState.status
+    : scene.id === "kitchen"
+      ? kitchenShared ? "收到奶奶分享" : "外婆家一切正常"
+      : scene.phoneTitle;
+  const body = scene.id === "fall" && danger
+    ? fallState.message
+    : scene.id === "kitchen"
+      ? kitchenShared ? kitchenNotification : "暂无新的家庭动态"
+      : scene.phoneBody;
 
   return (
     <section className="phone-column" aria-label="子女设备端">
@@ -63,14 +72,16 @@ export function ChildPhone({
             startIcon={familyViewOpen && familyVideoAllowed
               ? <VisibilityOffRoundedIcon />
               : <VisibilityRoundedIcon />}
-            disabled={!familyVideoAllowed}
+            disabled={!familyVideoAllowed || !camera.cameraReady}
             onClick={onToggleFamilyView}
           >
             {scene.id === "bathroom"
-              ? "隐私场景仅骨架"
-              : familyViewOpen && familyVideoAllowed
-                ? "关闭现场画面"
-                : familyVideoAllowed ? "主动查看现场" : "等待隐私授权"}
+              ? "浴室不可查看原视频"
+              : !familyVideoAllowed
+                ? "等待实时连接"
+                : familyViewOpen
+                  ? "关闭现场画面"
+                  : "查看原视频 + 骨架"}
           </Button>
           <small>{viewMode === "video_skeleton" ? "原视频 + A 骨架" : "默认仅显示 A 骨架"}</small>
         </div>
@@ -80,15 +91,15 @@ export function ChildPhone({
           <div><strong>{title}</strong><p>{body}</p></div>
         </div>
 
-        {scene.id === "kitchen" && (
-          <div className={`phone-moment ${kitchenShared ? "is-shared" : ""}`}>
+        {scene.id === "kitchen" && kitchenShared && (
+          <div className="phone-moment is-shared">
             <div className="moment-visual"><RestaurantRoundedIcon /></div>
             <div>
-              <small>{kitchenShared ? "刚刚收到" : "等待长辈确认"}</small>
-              <b>{kitchenShared ? "奶奶的包饺子记忆" : "发现一个生活片段"}</b>
-              <p>{kitchenShared ? "已整理关键步骤与现场片段" : "确认前不会向你展示或保存"}</p>
+              <small>刚刚收到</small>
+              <b>奶奶分享了包包子的生活片段</b>
+              <p>{kitchenNotification}</p>
             </div>
-            {kitchenShared && <CheckCircleRoundedIcon className="shared-check" />}
+            <CheckCircleRoundedIcon className="shared-check" />
           </div>
         )}
 

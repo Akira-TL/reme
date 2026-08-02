@@ -49,6 +49,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
   const transition = live.transition;
   const decisionRuntime = live.decision || {};
   const decision = decisionRuntime.decision;
+  const mimoRequest = decisionRuntime.mimoRequest || {};
 
   const rawSnapshot = {
     c: {
@@ -57,6 +58,8 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       model_ready: camera.modelReady,
       person_detected: camera.personDetected,
       skeleton_source: camera.skeletonSource || null,
+      conversation_scenario: scene.conversationScenario || null,
+      auto_conversation: Boolean(scene.autoConversation),
       error: camera.error || null,
     },
     a: {
@@ -71,6 +74,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       history_size: decisionRuntime.history?.length || 0,
       mimo_model: MIMO_MODEL,
       mimo_configured: MIMO_CONFIGURED,
+      mimo_request: mimoRequest,
     },
   };
 
@@ -108,6 +112,8 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="姿态模型" value={camera.modelReady ? "ready" : "loading / degraded"} />
               <DebugValue label="检测到人物" value={camera.personDetected ? "yes" : "no"} />
               <DebugValue label="骨架显示来源" value={camera.skeletonSource || "—"} />
+              <DebugValue label="场景对话任务" value={scene.conversationScenario || "disabled"} />
+              <DebugValue label="自动对话" value={scene.autoConversation ? "enabled (2.5s)" : "manual / disabled"} />
               {camera.error && <DebugValue label="C 错误" value={camera.error} wide />}
             </div>
           </div>
@@ -150,6 +156,13 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="WebSocket" value={decisionRuntime.connection || "closed"} />
               <DebugValue label="MiMo 模型" value={MIMO_MODEL} />
               <DebugValue label="MiMo Key" value={MIMO_CONFIGURED ? "configured" : "missing"} />
+              <DebugValue label="MiMo 请求状态" value={mimoRequest.status || "idle"} />
+              <DebugValue label="MiMo 请求场景" value={mimoRequest.scenario || "—"} />
+              <DebugValue label="MiMo 发起时间" value={mimoRequest.requestedAt ? new Date(mimoRequest.requestedAt).toLocaleTimeString() : "—"} />
+              <DebugValue label="MiMo 响应时间" value={mimoRequest.respondedAt ? new Date(mimoRequest.respondedAt).toLocaleTimeString() : "—"} />
+              <DebugValue label="MiMo 返回来源" value={mimoRequest.source || "—"} />
+              <DebugValue label="MiMo Decision ID" value={mimoRequest.decisionId || "—"} wide />
+              {mimoRequest.error && <DebugValue label="MiMo 请求错误" value={mimoRequest.error} wide />}
               <DebugValue label="决策状态" value={decision?.state || "等待决策"} />
               <DebugValue label="决策来源" value={decision?.source || "—"} />
               <DebugValue label="动作" value={decision?.action || "—"} />
