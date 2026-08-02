@@ -57,7 +57,8 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
   const renderCanvasRef = useRef(null);
   const viewModeRef = useRef(viewMode);
   const skeletonColorRef = useRef(skeletonColor);
-  const fallbackRef = useRef(false);
+  const cameraFallbackRef = useRef(false);
+  const modelFallbackRef = useRef(false);
   const detectedRef = useRef(false);
   const cameraReadyRef = useRef(false);
   const modelReadyRef = useRef(false);
@@ -66,7 +67,8 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
   const [modelReady, setModelReady] = useState(false);
   const [segmentationReady, setSegmentationReady] = useState(false);
   const [personDetected, setPersonDetected] = useState(false);
-  const [error, setError] = useState("");
+  const [cameraError, setCameraError] = useState("");
+  const [modelError, setModelError] = useState("");
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -82,10 +84,11 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
   }, [modelReady]);
 
   const startCamera = useCallback(async () => {
-    setError("");
+    setCameraError("");
+    cameraFallbackRef.current = false;
     if (!navigator.mediaDevices?.getUserMedia) {
-      fallbackRef.current = true;
-      setError("当前浏览器不支持摄像头，已进入动态骨架演示");
+      cameraFallbackRef.current = true;
+      setCameraError("当前浏览器不支持摄像头，已进入动态骨架演示");
       return;
     }
     try {
@@ -104,9 +107,9 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
       await videoRef.current.play();
       setCameraReady(true);
     } catch (cameraError) {
-      fallbackRef.current = true;
+      cameraFallbackRef.current = true;
       setCameraReady(false);
-      setError(cameraError?.name === "NotAllowedError"
+      setCameraError(cameraError?.name === "NotAllowedError"
         ? "摄像头权限被拒绝，请允许权限后重试"
         : "摄像头连接失败，已进入动态骨架演示");
     }
@@ -116,6 +119,7 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
     let cancelled = false;
 
     async function loadModel() {
+      modelFallbackRef.current = false;
       try {
         const { FilesetResolver, PoseLandmarker } = await import("@mediapipe/tasks-vision");
         const vision = await FilesetResolver.forVisionTasks(MP_WASM_URL);
@@ -134,10 +138,16 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
           options.baseOptions = { modelAssetPath: POSE_MODEL_URL };
           landmarkerRef.current = await PoseLandmarker.createFromOptions(vision, options);
         }
-        if (!cancelled) setModelReady(true);
+        if (!cancelled) {
+          setModelReady(true);
+          setModelError("");
+        }
       } catch {
-        fallbackRef.current = true;
-        if (!cancelled) setError((current) => current || "姿态/抠像模型暂不可用，真人场景将显示摄像头原画");
+        modelFallbackRef.current = true;
+        if (!cancelled) {
+          setModelReady(false);
+          setModelError("姿态/抠像模型暂不可用，真人场景将显示摄像头原画");
+        }
       }
     }
 
@@ -189,7 +199,7 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
     }
 
     function detect(now) {
-      if (fallbackRef.current) {
+      if (cameraFallbackRef.current || modelFallbackRef.current) {
         landmarksRef.current = createDemoLandmarks(now);
         return;
       }
@@ -255,7 +265,7 @@ export function useLiveDemoCamera({ viewMode, skeletonColor }) {
     modelReady,
     segmentationReady,
     personDetected,
-    error,
+    error: cameraError || modelError,
     retry: startCamera,
   };
 }
