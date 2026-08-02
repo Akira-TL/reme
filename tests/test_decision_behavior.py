@@ -527,3 +527,70 @@ def test_carried_in_duration_is_clamped_to_the_window() -> None:
         _streams(postures=postures), timestamp_ms=40000.0, window_ms=20000.0
     )
     assert features.longest_still_ms == 20000.0
+
+
+# --- A/B 对接：A 实际发出的 evidence 键（upstream transitions.py） -----------
+
+
+def _a_evidence(**overrides: Any) -> dict[str, Any]:
+    """One TransitionEvent.evidence dict shaped like A actually emits it."""
+
+    payload: dict[str, Any] = {
+        "center_height_change": 0.21,
+        "maximum_center_drop": 0.24,
+        "peak_keypoint_speed": 0.71,
+        "torso_direction_change_deg": 52.0,
+        "maximum_torso_excursion_deg": 58.0,
+        "posture_before": "standing",
+        "posture_after": "lying",
+        "intermediate_postures": [],
+        "visible_keypoint_ratio": 0.83,
+        "window_duration_ms": 1180.0,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_parses_the_evidence_a_actually_emits() -> None:
+    hints = parse_spatial_hints(_a_evidence())
+    assert hints is not None
+    assert hints.torso_drop_ratio == 0.24
+    assert hints.peak_keypoint_speed == 0.71
+    assert hints.torso_direction_change_deg == 52.0
+    assert hints.window_duration_ms == 1180.0
+    # The idealised keys stay absent: A does not measure a pure descent.
+    assert hints.descent_duration_ms is None
+    assert hints.com_drop_ratio is None
+
+
+def test_a_evidence_supports_a_fall_hypothesis() -> None:
+    assert plausible_fall_dynamics(parse_spatial_hints(_a_evidence())) is True
+
+
+def test_shallow_torso_drop_contradicts_a_fall() -> None:
+    hints = parse_spatial_hints(_a_evidence(maximum_center_drop=0.03))
+    assert hints is not None
+    assert plausible_fall_dynamics(hints) is False
+
+
+def test_upward_center_move_is_not_a_drop() -> None:
+    # Image y grows downward, so a negative delta means the body rose.
+    hints = parse_spatial_hints(_a_evidence(maximum_center_drop=-0.3))
+    assert hints is not None
+    assert hints.torso_drop_ratio is None
+    # No drop and no descent time: unknown, never a denial.
+    assert plausible_fall_dynamics(hints) is None
+
+
+def test_window_duration_is_not_used_as_a_descent_gate() -> None:
+    # A's window spans the whole transition plus settle; feeding it to the
+    # 150-2000ms descent gate would reject genuine falls.
+    hints = parse_spatial_hints(_a_evidence(window_duration_ms=3200.0))
+    assert hints is not None
+    assert plausible_fall_dynamics(hints) is True
+
+
+def test_a_evidence_survives_partial_payloads() -> None:
+    hints = parse_spatial_hints({"maximum_center_drop": 0.3})
+    assert hints is not None and hints.torso_drop_ratio == 0.3
+    assert parse_spatial_hints({"posture_before": "standing"}) is None

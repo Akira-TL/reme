@@ -212,7 +212,9 @@ def test_parse_session_request_accepts_a_live_camera_payload() -> None:
 
 
 def test_parse_session_request_rejects_a_contradicting_derived_field() -> None:
-    with pytest.raises(SessionRegistryError, match="contradicts") as excinfo:
+    # Wording comes from A's official from_payload now that B delegates to it;
+    # what B guarantees is the rejection and the machine-readable code.
+    with pytest.raises(SessionRegistryError, match="decision_mode") as excinfo:
         parse_session_request(
             {
                 "session_id": "session-live-001",

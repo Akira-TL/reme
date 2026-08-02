@@ -40,9 +40,28 @@ STILL_EPISODE_MIN_MS = 10000.0
 FALL_DESCENT_MIN_MS = 150.0
 FALL_DESCENT_MAX_MS = 2000.0
 
+# Idealised keys: what a producer would send if it measured the descent
+# directly.  No producer emits these today; kept because the parser is a
+# superset and costs nothing when they are absent.
 EVIDENCE_DESCENT_KEY = "descent_duration_ms"
 EVIDENCE_DROP_RATIO_KEY = "com_drop_ratio"
 EVIDENCE_POST_IMPACT_KEY = "post_impact_motion"
+
+# Keys A actually emits (pose/transitions.py, upstream 56e91e3).  Positional
+# quantities are fractions of normalised frame height; the "center" is the
+# median y of the torso keypoints — a TORSO MIDPOINT, deliberately not called
+# a centre of mass: approximating CoM by one point does not hold across
+# postures (docs/references/cognition-evidence.md R12/R13).
+EVIDENCE_TORSO_DROP_KEY = "maximum_center_drop"
+EVIDENCE_PEAK_SPEED_KEY = "peak_keypoint_speed"
+EVIDENCE_TORSO_TURN_KEY = "torso_direction_change_deg"
+EVIDENCE_WINDOW_MS_KEY = "window_duration_ms"
+
+# A's own fall gate already screens on drop/speed/duration before it ever
+# labels a window fall_like.  B therefore does not re-derive a verdict from
+# these numbers; it only checks that the evidence does not contradict the
+# hypothesis A sent (see plausible_fall_dynamics).
+TORSO_DROP_MIN_RATIO = 0.10
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,11 +70,19 @@ class SpatialHints:
 
     Monocular uncalibrated camera: only durations and dimensionless ratios
     are claimable — never metres or velocities (ADR-0006 §limits).
+
+    The first three fields are the idealised contract; the last four mirror
+    what A emits today.  Every field is optional, so a producer that sends
+    neither set still yields ``None`` and changes nothing downstream.
     """
 
     descent_duration_ms: float | None
     com_drop_ratio: float | None
     post_impact_motion: float | None
+    torso_drop_ratio: float | None = None
+    peak_keypoint_speed: float | None = None
+    torso_direction_change_deg: float | None = None
+    window_duration_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,27 +140,66 @@ def parse_spatial_hints(evidence: Mapping[str, object]) -> SpatialHints | None:
         descent_duration_ms = None
     com_drop_ratio = _ratio(EVIDENCE_DROP_RATIO_KEY)
     post_impact_motion = _ratio(EVIDENCE_POST_IMPACT_KEY)
-    if descent_duration_ms is None and com_drop_ratio is None and post_impact_motion is None:
+
+    # A's positional deltas are signed (image y grows downward, so a rise is
+    # negative); only a genuine downward move is a "drop".
+    torso_drop_ratio = _finite_number(EVIDENCE_TORSO_DROP_KEY)
+    if torso_drop_ratio is not None and not 0.0 < torso_drop_ratio <= 1.0:
+        torso_drop_ratio = None
+    peak_keypoint_speed = _finite_number(EVIDENCE_PEAK_SPEED_KEY)
+    if peak_keypoint_speed is not None and peak_keypoint_speed < 0.0:
+        peak_keypoint_speed = None
+    torso_direction_change_deg = _finite_number(EVIDENCE_TORSO_TURN_KEY)
+    if torso_direction_change_deg is not None and not 0.0 <= torso_direction_change_deg <= 180.0:
+        torso_direction_change_deg = None
+    window_duration_ms = _finite_number(EVIDENCE_WINDOW_MS_KEY)
+    if window_duration_ms is not None and window_duration_ms <= 0.0:
+        window_duration_ms = None
+
+    values = (
+        descent_duration_ms,
+        com_drop_ratio,
+        post_impact_motion,
+        torso_drop_ratio,
+        peak_keypoint_speed,
+        torso_direction_change_deg,
+        window_duration_ms,
+    )
+    if all(value is None for value in values):
         return None
     return SpatialHints(
         descent_duration_ms=descent_duration_ms,
         com_drop_ratio=com_drop_ratio,
         post_impact_motion=post_impact_motion,
+        torso_drop_ratio=torso_drop_ratio,
+        peak_keypoint_speed=peak_keypoint_speed,
+        torso_direction_change_deg=torso_direction_change_deg,
+        window_duration_ms=window_duration_ms,
     )
 
 
 def plausible_fall_dynamics(hints: SpatialHints) -> bool | None:
     """Physics screen for a fall hypothesis; None when evidence is insufficient.
 
-    Without a descent duration there is nothing to screen, so the answer is
-    None (unknown) rather than False (implausible) — the caller must not read
-    missing evidence as counter-evidence.  With a duration, the descent has to
-    sit inside the guardband above, and a centre-of-mass drop ratio, when the
-    producer supplies one, has to be large enough to be a real drop instead of
-    a lean; a ratio-free hint is accepted on the duration alone.
+    Missing evidence is never counter-evidence: with nothing to screen the
+    answer is None (unknown), not False.
+
+    Two producer shapes are supported.  With a measured descent duration the
+    descent must sit inside the guardband above, and a supplied drop ratio
+    must be deep enough to be a fall rather than a lean.  With A's payload
+    (no descent time, but a torso-midpoint drop) the check degrades to "is
+    the drop deep enough to be consistent with the fall A already
+    classified" — B does not re-derive A's verdict, it only refuses to
+    amplify a hypothesis its own evidence contradicts.
     """
 
     if hints.descent_duration_ms is None:
+        # A's payload: no measured descent, but a torso drop we can sanity
+        # check.  Deliberately NOT treating window_duration_ms as a descent
+        # time — A's window spans the whole transition plus settle, so
+        # feeding it to the descent gate would reject genuine falls.
+        if hints.torso_drop_ratio is not None:
+            return hints.torso_drop_ratio >= TORSO_DROP_MIN_RATIO
         return None
     if not FALL_DESCENT_MIN_MS <= hints.descent_duration_ms <= FALL_DESCENT_MAX_MS:
         return False
