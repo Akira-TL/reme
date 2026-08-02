@@ -130,6 +130,10 @@ C→B 的用户回应仍走 `POST /api/response`（HTTP，有明确成败）；`
 
 上传被拒不影响主链路：按钮回应、倒计时超时照常工作。
 
+### 全链集成状态（lbx 分支，2026-08-02）
+
+以上全部职责在 `frontend/` 已有参考实现：`services/decisionClient.js` + `hooks/useDecisionRuntime.js` + `components/DangerLayer.jsx`（B 会话/WS 去重/倒计时自动 timeout/语音播放/抓帧与 WAV 录音上传/alarm 渲染）。A 侧 `/api/runtime/capabilities` 现有 `input` 段：`jpeg_inference=false` 时 C 自动把本地 17 点以 `landmarks_frame` 直传 `/ws/camera-input`（≤10fps），不再推 JPEG。六跳链路 E2E 与真实 key 冒烟均绿：跌倒→check-in 0.02s、真图确认→告警 1.44s、全链 1.46s。启动方式见 `.scratch/handoff/2026-08-02-danger-link-lbx.md`。
+
 ## 附录：mkcert HTTPS（手机摄像头硬前提）
 
 手机浏览器只在安全上下文开放 `getUserMedia`；`http://内网IP` 不算。一次性配置：
