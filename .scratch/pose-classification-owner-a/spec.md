@@ -5,11 +5,13 @@
 - Owner: A
 - Date: 2026-08-01
 - Project: Reme
-- Scope: 原始视频、本地人体关键点提取、姿态分类与时序事件候选
+- Scope: 实时摄像头与预录视频、本地人体关键点提取、姿态分类与时序事件候选
+- Implementation directory: `backend/reme/pose/`
+- Shared interface: [`../abc-interface/spec.md`](../abc-interface/spec.md)
 
 ## 1. 角色目标
 
-A 负责 Reme 的视觉感知与姿态分类链路，将团队确认可使用的原始视频转换为可复现、可评估、可被 B 和 C 消费的结构化结果。
+A 负责 Reme 的视觉感知与姿态分类链路：实时模式从当前电脑摄像头持续生成感知结果，预录模式生成可复现、可评估、可回放的结构化结果。两种模式向 B/C 提供相同的 payload。
 
 A 的最终责任不是“跑出一个火柴人”，而是回答以下问题：
 
@@ -46,6 +48,10 @@ A 的最终责任不是“跑出一个火柴人”，而是回答以下问题：
 
 ### 3.1 A 负责
 
+- 接收 C 发起的 RuntimeSessionRequest，并回报实际 RuntimeSessionStatus；
+- 在 `live_camera` 下使用当前电脑摄像头运行实时感知；
+- 在 `recorded_video` 下提供预计算感知记录；
+- 使用 RuntimeEvent 和 `session_id` 隔离迟到数据；
 - 整理并检查原始视频；
 - 运行和维护人体关键点提取链路；
 - 生成 2D 关键点和可选 3D 关键点数据；
@@ -55,8 +61,8 @@ A 的最终责任不是“跑出一个火柴人”，而是回答以下问题：
 - 将静态姿态和时序动作转变分开建模；
 - 输出置信度、拒判状态和失败原因；
 - 记录评价指标、测试条件和已知限制；
-- 向 B 提供分类与事件候选；
-- 向 C 提供视频、时间戳、关键点和分类结果；
+- 按共享接口向 B 提供姿态观察、转变事件和受控媒体引用；
+- 按共享接口向 C 提供 SceneManifest、时间戳、关键点、姿态观察和转变事件；
 - 在演示版本冻结后提供可重复生成结果的命令。
 
 ### 3.2 A 不负责
@@ -74,12 +80,13 @@ A 的最终责任不是“跑出一个火柴人”，而是回答以下问题：
 
 A 的正式输入包括：
 
-1. 团队确认有权使用的原始视频；
-2. 每段视频的场景说明；
-3. 需要支持的姿态和动作转变范围；
-4. 比赛演示需要出现的关键时间点；
-5. 当前 MoveNet 17 点关键点结果；
-6. 必要时补充拍摄的训练或验证视频。
+1. C 发起的 `live_camera` 或 `recorded_video` RuntimeSessionRequest；
+2. 当前电脑可用的单人摄像头输入；
+3. 团队确认有权使用的训练、验证和预录视频；
+4. 每段视频的场景说明；
+5. 需要支持的姿态和动作转变范围；
+6. 当前 MoveNet 17 点关键点结果；
+7. 必要时补充拍摄的训练或验证视频。
 
 每个输入视频至少需要记录：
 
@@ -105,8 +112,8 @@ A 的正式输入包括：
 | `standing` | 躯干总体直立，主要由腿部支撑 |
 | `sitting` | 髋部由椅面、床沿或其他表面支撑 |
 | `lying` | 躯干整体接近水平并由床、地面或沙发支撑 |
-| `bending_or_crouching` | 明显弯腰、下蹲、跪姿或低位动作 |
-| `unknown` | 人体离画、严重遮挡、多人重叠或证据不足 |
+| `bending_or_crouching` | 明显弯腰或下蹲；v0 不承诺下跪、俯卧撑等其他低位动作 |
+| `unknown` | 人体离画、严重遮挡、多人重叠、下跪/俯卧撑等未支持动作或证据不足 |
 
 “走路”优先作为独立的运动属性 `moving=true`，不急于扩展为新的静态姿态类别。
 
@@ -130,7 +137,7 @@ A 的正式输入包括：
 
 - 确认比赛使用的视频及文件哈希；
 - 检查视频编码、分辨率、帧率和时长；
-- 人工播放原视频和骨架视频；
+- 人工并排播放原视频与 MotionBERT Three.js 三维骨架，必要时参考 2D 骨架诊断视频；
 - 标记关键动作、遮挡、离画和骨架异常区间；
 - 确认最佳 MoveNet 结果仍可复现；
 - 将需要长期保留的派生产物放入被 Git 忽略的 `artifacts/`，不要依赖 `/tmp` 作为唯一副本。
@@ -270,22 +277,23 @@ fall_demo_01,12100,14400,normal_transition,test,主动缓慢躺下
 - **Conditional Go**：静态姿态可靠，但跌倒式转变不可靠；Demo 只展示状态理解或脚本事件，不宣称跌倒检测；
 - **No-Go**：关键点或分类结果不稳定；需要调整视频、机位、标签或方法。
 
-### Phase A5：结果冻结与交接
+### Phase A5：实时运行与结果冻结
 
 #### 工作内容
 
-- 固定比赛演示使用的模型和配置；
-- 为每段 Demo 视频预生成关键点、分类和事件结果；
-- 输出 schema 版本和字段说明；
-- 提供一条完整复现命令；
-- 向 B 和 C 进行联合验收；
-- 冻结后只修复 P0 问题，不再随意增加标签或更换模型。
+- 将摄像头取帧、MoveNet、姿态分类和 RuntimeEvent 串成实时链路；
+- 达到关键点至少15 FPS、姿态输出5–10 Hz的目标并记录实测；
+- 向 B/C 发送同一个 `session_id` 下的关键点、姿态和事件；
+- 为后续预录模式生成可回放的关键点、分类和事件结果；
+- 输出 schema、复现命令、性能报告和已知限制；
+- 向 B 和 C 进行联合验收。
 
 #### 完成条件
 
-- B 可以读取 A 的分类和事件数据；
-- C 可以同步播放视频、骨架和状态；
-- 结果文件可在无模型运行环境下离线回放；
+- C 可以启动和停止 `live_camera`，A 回报真实状态；
+- B/C 可以消费当前 session 的姿态结果，旧 session 数据被拒绝；
+- 实时链路连续运行至少10分钟无阻断错误；
+- 预录结果可在无模型运行环境下回放；
 - 同一命令重复运行不出现结构漂移；
 - 所有已知限制已写入交接说明。
 
@@ -300,15 +308,16 @@ B 负责 MiMo 推理、隐私判断和主动交互策略。A 只提供客观感�
 ```json
 {
   "schema_version": "reme-posture/v0-experiment",
-  "scene_id": "fall_demo_01",
+  "scene_id": "live-camera-001",
   "timestamp_ms": 12500,
   "frame_index": 375,
   "person_detected": true,
   "posture": "lying",
   "posture_confidence": 0.88,
-  "motion_state": "still",
+  "posture_duration_ms": 4200,
+  "motion_level": "still",
   "visible_keypoint_ratio": 0.94,
-  "quality_state": "usable"
+  "landmark_quality": "usable"
 }
 ```
 
@@ -317,18 +326,19 @@ B 负责 MiMo 推理、隐私判断和主动交互策略。A 只提供客观感�
 ```json
 {
   "schema_version": "reme-transition/v0-experiment",
-  "scene_id": "fall_demo_01",
+  "scene_id": "live-camera-001",
+  "event_id": "transition-0003",
   "start_ms": 11100,
   "end_ms": 12700,
-  "event_type": "fall_like_transition",
-  "event_confidence": 0.76,
+  "transition": "fall_like_transition",
+  "transition_confidence": 0.76,
   "evidence": {
     "center_height_change": 0.41,
     "peak_keypoint_speed": 0.18,
     "posture_before": "standing",
     "posture_after": "lying"
   },
-  "quality_state": "usable"
+  "landmark_quality": "usable"
 }
 ```
 
@@ -346,9 +356,11 @@ A 不负责执行网络发送，也不默认持久化导出的原始帧文件。
 
 ## 8. A 向 C 的交付接口
 
-C 负责软件演示、骨架可视化和接入 B 的交互结果。A 需要向 C 提供：
+C 负责运行控制、骨架可视化和接入 B 的交互结果。A 需要向 C 提供：
 
-- 原始视频或比赛冻结后的 Demo 视频；
+- RuntimeSessionStatus；
+- 当前会话的 RuntimeEvent 流；
+- 实时摄像头帧引用或预录视频；
 - 视频 FPS、时长和分辨率；
 - 逐帧 2D 关键点；
 - 可选 3D 关键点；
@@ -463,9 +475,9 @@ conda run -n DL python \
 
 - [ ] MoveNet 最佳结果可以复现；
 - [ ] 几何基线已经完成；
-- [ ] 至少一个轻量学习模型已经完成；
-- [ ] 所有模型使用相同测试划分；
-- [ ] 输出每类 precision、recall、F1 和混淆矩阵；
+- [ ] Ticket 02 证明样本覆盖充足时，至少完成一个轻量学习模型；样本不足时必须记录 no-go 和最小补拍要求，不强行训练；
+- [ ] 实际参与比较的模型使用相同测试划分；
+- [ ] 对实际完成且样本有效的模型输出每类 precision、recall、F1 和混淆矩阵；
 - [ ] 输出拒判率和错误片段；
 - [ ] 跌倒式转变按时间窗口评估；
 - [ ] 没有将论文指标冒充项目指标。
@@ -488,11 +500,17 @@ conda run -n DL python \
 - [ ] 提供不可用和拒判状态；
 - [ ] C 已完成视频、骨架和标签同步测试。
 
-### 比赛冻结
+### 实时与回放冻结
 
-- [ ] Demo 结果可以离线回放；
+- [ ] C可以启动和停止实时摄像头会话；
+- [ ] MoveNet实时推理达到至少15 FPS目标或记录明确差距；
+- [ ] 姿态输出达到5–10 Hz目标；
+- [ ] 关键点到页面延迟P95目标不超过300 ms；
+- [ ] 姿态标签到页面延迟P95目标不超过500 ms；
+- [ ] 实时链路连续运行至少10分钟无阻断错误；
+- [ ] 旧session事件被拒绝；
+- [ ] 预录结果可以离线回放；
 - [ ] 一条命令可以重建关键产物；
-- [ ] 连续运行至少三次无阻断错误；
 - [ ] 已知限制已经书面记录；
 - [ ] 冻结后不再随意增加标签或更换模型。
 
@@ -500,13 +518,13 @@ conda run -n DL python \
 
 A 当前应按以下顺序推进：
 
-1. 从 `/tmp/reme-litert-lightning-f16-tracking-full/keypoints.jsonl` 固化当前最佳关键点结果；
-2. 人工播放原视频和骨架视频，完成静态姿态片段标注；
-3. 单独标注正常转变和跌倒式转变；
-4. 建立几何基线并输出第一版混淆矩阵；
-5. 使用相同划分运行 Conv1D 或其他轻量模型；
-6. 比较结果并确定 `unknown` 阈值；
-7. 生成 B 和 C 可直接读取的冻结结果；
-8. 与 B、C 完成一次联合数据验收。
+1. 完成 RuntimeSession 与 RuntimeEvent 基础合同；
+2. 在当前电脑接入单人摄像头和实时 MoveNet 2D 关键点；
+3. 同时推进 Ticket 02 标注，获得静态姿态分类真值；
+4. 建立几何姿态基线和 `unknown` 拒判；
+5. 将分类器接入实时摄像头，输出5–10 Hz PostureObservation；
+6. 仅在样本覆盖有效时评估轻量学习模型，否则记录no-go；
+7. 与B/C接通完整实时链路并连续运行10分钟；
+8. 基础实时能力稳定后，再处理转变事件和预录Playback Adapter。
 
-在上述步骤完成前，不应把时间优先投入实时摄像头、树莓派部署、更多复杂类别或大模型视觉理解。
+实时阶段只要求MoveNet 2D推理；C可以将2D关键点映射为展示型3D。MotionBERT根节点相对3D保留给预录视频，不作为实时P0。树莓派、多人姿态和具体比赛故事不进入当前优先级。

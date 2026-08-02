@@ -19,6 +19,7 @@ models/
 recordings/
 data/raw/
 artifacts/
+Downloads*.zip
 
 # Local environment
 .env

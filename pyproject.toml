@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Reme Team" }]
-dependencies = []
+dependencies = [
+  "numpy>=2.0",
+]
 
 [project.scripts]
 reme-demo = "reme.demo:entrypoint"
@@ -21,13 +23,17 @@ dev = [
   "pytest>=8.3",
   "ruff>=0.9",
 ]
+pose = [
+  "ai-edge-litert>=2.1",
+  "opencv-python-headless>=5.0",
+]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/reme"]
+packages = ["backend/reme"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-pythonpath = ["src"]
+pythonpath = ["backend"]
 testpaths = ["tests"]
 
 [tool.ruff]
@@ -40,4 +46,5 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+mypy_path = "backend"
 packages = ["reme"]
