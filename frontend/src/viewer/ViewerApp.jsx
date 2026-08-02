@@ -47,7 +47,7 @@ const TRIGGER_LABELS = {
   family_unresponsive: "家属未确认",
 };
 
-const SOURCE_LABELS = { mimo: "MiMo 判断", rule: "规则升级", record: "回放", degraded: "降级" };
+const SOURCE_LABELS = { mimo: "MiMo 判断", rule: "规则", record: "回放", degraded: "降级" };
 
 const ALERT_STATES = new Set(["family_notification_required", "urgent_attention"]);
 const SKELETON_STALE_MS = 2000;
