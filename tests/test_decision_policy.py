@@ -19,6 +19,7 @@ from reme.decision.policy import (
 )
 from reme.decision.records import (
     CardStatus,
+    CareDecision,
     DecisionSource,
     DecisionState,
     DemoMode,
@@ -670,3 +671,58 @@ def test_visual_flag_attaches_clip_and_records_context(tmp_path: Path) -> None:
     assert decision.visual_context is not None
     assert decision.visual_context.sent_to_mimo is True
     assert decision.visual_context.start_ms == 30000.0
+
+
+def test_tick_during_inflight_mimo_reuses_instead_of_stacking(tmp_path: Path) -> None:
+    """Ticks landing while one MiMo call is in flight must not each re-dial.
+
+    Posture ticks arrive at 5-10 Hz and a MiMo round trip takes seconds;
+    before the in-flight latch every tick in that window launched its own
+    identical paid call, the CAS discarded all but one, and each discard
+    re-broadcast the same decision_id to C.
+    """
+
+    fake = _FakeMimo()
+
+    class _CapturePublisher:
+        def __init__(self) -> None:
+            self.published: list[str] = []
+
+        def publish_decision(self, decision: CareDecision) -> None:
+            self.published.append(decision.decision_id)
+
+    publisher = _CapturePublisher()
+    service = DecisionService(
+        scenes=_toothache_scenes(tmp_path),
+        config=PolicyConfig(),
+        mimo=fake,
+        publisher=publisher,
+    )
+    scene = "toothache_demo_01"
+    baseline = service.get_decision(scene_id=scene, timestamp_ms=1000.0)
+    assert baseline.source is DecisionSource.RULE
+
+    reentrant: list[CareDecision] = []
+    fake.on_call = lambda: reentrant.append(
+        service.get_decision(scene_id=scene, timestamp_ms=41100.0)
+    )
+    check_in = service.get_decision(scene_id=scene, timestamp_ms=41000.0)
+    assert check_in.state is DecisionState.CHECK_IN_REQUIRED
+    assert check_in.source is DecisionSource.MIMO
+    assert fake.calls == ["compose_check_in"], "the in-flight window must not stack calls"
+    assert len(reentrant) == 1
+    assert reentrant[0].decision_id == baseline.decision_id, "reuse, not a new decision"
+    assert publisher.published == [baseline.decision_id, check_in.decision_id]
+
+    # The latch releases with the call: the next MiMo directive launches fine.
+    consent = service.submit_response(
+        _response(
+            scene_id=scene,
+            decision_id=check_in.decision_id,
+            value=ResponseValue.NEED_HELP,
+            text="牙疼，饭咬不动。",
+        )
+    )
+    assert consent.state is DecisionState.CONSENT_REQUIRED
+    assert fake.calls == ["compose_check_in", "interpret_response"]
+    assert publisher.published[-1] == consent.decision_id

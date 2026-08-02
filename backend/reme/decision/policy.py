@@ -303,6 +303,10 @@ class _SceneRuntime:
     replay_index: int = 0
     epoch: int = 0
     last_observe_ms: float = float("-inf")
+    # One MiMo slot per scene: posture ticks arrive at 5-10 Hz while a MiMo
+    # round trip takes seconds, so without a latch every tick in that window
+    # launches its own identical (paid) call and the CAS discards all but one.
+    mimo_inflight: bool = False
 
 
 class DecisionService:
@@ -380,17 +384,23 @@ class DecisionService:
             directive = on_tick(runtime.session, context, config=self._effective_trigger(home))
             outcome = self._commit_rule_directive(runtime, directive, timestamp_ms)
             if outcome is None:
-                snapshot = (runtime.epoch, runtime.session)
+                outcome = self._claim_mimo_or_reuse(runtime)
+                if outcome is None:
+                    snapshot = (runtime.epoch, runtime.session)
         if outcome is not None:
             self._publish(outcome, previous_id)
             return outcome
-        decision = self._run_mimo_transition(
-            scene_id,
-            directive,
-            timestamp_ms,
-            snapshot,
-            elder_text=None,
-        )
+        try:
+            decision = self._run_mimo_transition(
+                scene_id,
+                directive,
+                timestamp_ms,
+                snapshot,
+                elder_text=None,
+            )
+        finally:
+            with self._lock:
+                runtime.mimo_inflight = False
         self._publish(decision, previous_id)
         return decision
 
@@ -410,17 +420,23 @@ class DecisionService:
             directive = on_response(runtime.session, response, config=self._config.trigger)
             outcome = self._commit_rule_directive(runtime, directive, response.timestamp_ms)
             if outcome is None:
-                snapshot = (runtime.epoch, runtime.session)
+                outcome = self._claim_mimo_or_reuse(runtime)
+                if outcome is None:
+                    snapshot = (runtime.epoch, runtime.session)
         if outcome is not None:
             self._publish(outcome, previous_id)
             return outcome
-        decision = self._run_mimo_transition(
-            response.scene_id,
-            directive,
-            response.timestamp_ms,
-            snapshot,
-            elder_text=response.text,
-        )
+        try:
+            decision = self._run_mimo_transition(
+                response.scene_id,
+                directive,
+                response.timestamp_ms,
+                snapshot,
+                elder_text=response.text,
+            )
+        finally:
+            with self._lock:
+                runtime.mimo_inflight = False
         self._publish(decision, previous_id)
         return decision
 
@@ -519,6 +535,23 @@ class DecisionService:
                 if live is not None:
                     return live
             raise UnknownSceneError(scene_id) from exc
+
+    def _claim_mimo_or_reuse(self, runtime: _SceneRuntime) -> CareDecision | None:
+        """Claim the scene's single MiMo slot, or reuse the pending decision.
+
+        Called under the lock when a directive needs a MiMo call. The first
+        claimant returns None and must launch (its ``finally`` releases the
+        latch on this same runtime object, so a session reset that swaps the
+        runtime can never be unlatched by a stale call). Everyone else gets
+        the current decision back, exactly like any other no-op tick.
+        """
+
+        if not runtime.mimo_inflight:
+            runtime.mimo_inflight = True
+            return None
+        if runtime.pending is None:
+            raise DecisionRejectedError("no_pending_decision")
+        return runtime.pending
 
     def _publish(self, decision: CareDecision, previous_id: str | None) -> None:
         """Push a newly emitted decision to the runtime stream, best-effort.
