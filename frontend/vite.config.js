@@ -10,6 +10,7 @@ export default defineConfig({
       input: {
         mobile: fileURLToPath(new URL("./index.html", import.meta.url)),
         typicalDemo: fileURLToPath(new URL("./typical-demo.html", import.meta.url)),
+        viewer: fileURLToPath(new URL("./viewer.html", import.meta.url)),
       },
     },
   },

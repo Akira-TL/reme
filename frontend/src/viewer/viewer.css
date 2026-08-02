@@ -1,0 +1,270 @@
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: #101014;
+  color: #f3f3f0;
+  font-family: "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+}
+
+.viewer-shell {
+  min-height: 100vh;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 16px 16px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.viewer-header b {
+  color: #ff5a00;
+  font-size: 20px;
+  margin-right: 8px;
+}
+
+.viewer-header span {
+  color: #b9b9b2;
+  font-size: 14px;
+}
+
+.viewer-links {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #b9b9b2;
+}
+
+.viewer-links .session-tail {
+  margin-left: 6px;
+  color: #7c7c76;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  background: #555;
+}
+
+.dot.is-on {
+  background: #34c759;
+  box-shadow: 0 0 6px rgba(52, 199, 89, 0.8);
+}
+
+.dot.is-warm {
+  background: #ffcc00;
+}
+
+.dot.is-off {
+  background: #ff453a;
+}
+
+.viewer-idle {
+  border: 1px dashed #3a3a40;
+  border-radius: 16px;
+  padding: 42px 24px;
+  text-align: center;
+  color: #b9b9b2;
+}
+
+.viewer-idle b {
+  display: block;
+  color: #f3f3f0;
+  margin-bottom: 8px;
+}
+
+.viewer-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.viewer-stage {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 50% 0%, #23232b 0%, #16161c 60%, #101015 100%);
+  aspect-ratio: 16 / 10;
+  border: 1px solid #2a2a31;
+}
+
+.viewer-stage.is-alert {
+  border-color: #ff3b30;
+  box-shadow: 0 0 18px rgba(255, 59, 48, 0.35);
+}
+
+.viewer-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.stage-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #6f6f6a;
+  font-size: 14px;
+}
+
+.stage-chips {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  gap: 8px;
+}
+
+.chip {
+  background: rgba(16, 16, 20, 0.72);
+  border: 1px solid #33333a;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.chip-danger {
+  border-color: #ff3b30;
+  color: #ff6b61;
+}
+
+.stage-privacy {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  color: #6f6f6a;
+  font-size: 11px;
+}
+
+.viewer-card {
+  border-radius: 16px;
+  border: 1px solid #2a2a31;
+  background: #17171d;
+  padding: 16px;
+}
+
+.viewer-card.is-alert {
+  border-color: #ff3b30;
+  background: #241416;
+}
+
+.card-empty {
+  margin: 0;
+  color: #8a8a84;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.card-head b {
+  font-size: 17px;
+}
+
+.card-source {
+  font-size: 12px;
+  color: #9a9a94;
+}
+
+.card-family {
+  margin: 6px 0;
+  font-weight: 600;
+  color: #ffd7ad;
+}
+
+.card-elder,
+.card-reason {
+  margin: 6px 0;
+  color: #c9c9c2;
+  font-size: 14px;
+}
+
+.viewer-countdown {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #ffcc00;
+}
+
+.viewer-history {
+  border-radius: 12px;
+  border: 1px solid #26262c;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-row {
+  display: flex;
+  justify-content: space-between;
+  color: #9a9a94;
+  font-size: 13px;
+}
+
+.alarm-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(120, 10, 10, 0.55);
+  animation: alarm-flash 0.8s steps(2) infinite;
+  z-index: 30;
+}
+
+@keyframes alarm-flash {
+  0% {
+    background: rgba(130, 10, 10, 0.62);
+  }
+  100% {
+    background: rgba(30, 4, 4, 0.72);
+  }
+}
+
+.alarm-panel {
+  background: #1c1c22;
+  border: 2px solid #ff3b30;
+  border-radius: 18px;
+  padding: 24px 28px;
+  max-width: 420px;
+  margin: 0 16px;
+  text-align: center;
+}
+
+.alarm-panel b {
+  font-size: 20px;
+  color: #ff6b61;
+}
+
+.alarm-panel p {
+  color: #f3f3f0;
+  margin: 12px 0 18px;
+}
+
+.alarm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.alarm-error {
+  display: block;
+  margin-top: 10px;
+  color: #ff8d85;
+}
