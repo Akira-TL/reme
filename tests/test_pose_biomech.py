@@ -11,13 +11,17 @@ import pytest
 from reme.pose.biomech import (
     BODY_AXIS_INDICES,
     COCO17_NAMES,
+    DEFAULT_UNCERTAINTY,
+    LEFT_ANKLE,
     LEFT_HIP,
     LEFT_KNEE,
     LEFT_SHOULDER,
+    NOSE,
     RIGHT_SHOULDER,
     TRUNK_AXIS_INDICES,
     BiomechError,
     ImageGeometry,
+    UncertaintyModel,
     joint_angle,
     min_segment_length_for_angle_budget,
     parse_frame_record,
@@ -150,13 +154,29 @@ class TestGeometryIsClosedForm:
 
 class TestUncertainty:
     def test_shorter_segments_carry_larger_angular_uncertainty(self) -> None:
-        frame = parse_frame_record(build_record(upright_person()), image=GEOMETRY)
+        """Isolate the 1/L effect by holding per-keypoint sigma flat.
+
+        With the real model, sigma varies per keypoint (the hip carries far more
+        systematic bias than the shoulder), so a bare short-vs-long comparison
+        across different joints no longer isolates segment length.
+        """
+
+        frame = parse_frame_record(
+            build_record(upright_person()), image=GEOMETRY, sigma_px=2.0
+        )
         long_segment = segment_angle_from_gravity(frame, LEFT_HIP, LEFT_KNEE, name="thigh")
         short_segment = segment_angle_from_gravity(
             frame, LEFT_SHOULDER, RIGHT_SHOULDER, name="shoulders"
         )
         assert long_segment is not None and short_segment is not None
         assert short_segment.sigma > long_segment.sigma
+
+    def test_hip_carries_more_uncertainty_than_ankle(self) -> None:
+        """Systematic bias, not jitter, makes the hip the worst core keypoint."""
+
+        frame = parse_frame_record(build_record(upright_person()), image=GEOMETRY)
+        assert frame.sigma_px[LEFT_HIP] > frame.sigma_px[LEFT_ANKLE]
+        assert frame.sigma_px[LEFT_HIP] > frame.sigma_px[NOSE]
 
     def test_minimum_length_matches_the_measured_budget(self) -> None:
         assert min_segment_length_for_angle_budget(1.31, 5.0) == pytest.approx(21.2, abs=0.3)
@@ -405,8 +425,33 @@ def test_real_clip_is_predominantly_standing() -> None:
             labels[verdict.posture] = labels.get(verdict.posture, 0) + 1
     total = sum(labels.values())
     assert total == 2370
-    assert labels.get("standing", 0) / total > 0.95
+    # 92.9% with the full uncertainty model (jitter + systematic bias); the
+    # jitter-only model reached 98.7%, and the difference is the confidence that
+    # was never actually earned.
+    assert labels.get("standing", 0) / total > 0.90
     assert set(labels) <= {"standing", "unknown"}
+
+
+@pytest.mark.skipif(not REAL_CLIP.exists(), reason="derived keypoint copy is git-ignored")
+def test_systematic_bias_makes_the_classifier_abstain_more() -> None:
+    """Adding the bias term must cost coverage; if it does not, it is not wired in."""
+
+    jitter_only = UncertaintyModel(include_bias=False)
+    counts: dict[bool, int] = {}
+    for include_bias in (False, True):
+        model = DEFAULT_UNCERTAINTY if include_bias else jitter_only
+        unknown = 0
+        with REAL_CLIP.open(encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                frame = parse_frame_record(
+                    json.loads(line), image=GEOMETRY, uncertainty=model
+                )
+                if classify_frame(frame).posture == "unknown":
+                    unknown += 1
+        counts[include_bias] = unknown
+    assert counts[True] > counts[False]
 
 
 class TestAxisSeparation:
@@ -448,7 +493,7 @@ class TestRollTolerance:
         assert margin.sigma > 4.0
         assert "roll term" in margin.note
 
-    def test_calibrated_gravity_removes_the_roll_term(self) -> None:
+    def test_calibrated_gravity_removes_the_roll_term(self) -> None:  # noqa: D401
         calibrated = ImageGeometry(
             width=WIDTH,
             height=HEIGHT,
@@ -459,7 +504,14 @@ class TestRollTolerance:
         frame = parse_frame_record(build_record(seated), image=calibrated)
         margin = vertical_order_margin(frame, LEFT_HIP, LEFT_KNEE, name="hip_above_knee")
         assert margin is not None
-        assert margin.sigma < 2.0
+        assert "roll term 0.00 px" in margin.note
+
+        uncalibrated = parse_frame_record(build_record(seated), image=GEOMETRY)
+        loose = vertical_order_margin(
+            uncalibrated, LEFT_HIP, LEFT_KNEE, name="hip_above_knee"
+        )
+        assert loose is not None
+        assert margin.sigma < loose.sigma
 
     def test_vertically_aligned_pair_is_barely_affected(self) -> None:
         """Standing must not pay the roll penalty: hip and knee are nearly plumb."""
@@ -469,10 +521,20 @@ class TestRollTolerance:
         assert margin is not None
         assert "roll term 0.00 px" in margin.note
 
+    def test_roll_term_is_isolated_from_body_scale(self) -> None:
+        """Compare the same seated frame with and without a roll allowance.
+
+        Comparing a seated frame against a standing one would confound the roll
+        term with body scale, since a folded body spans fewer pixels and so
+        carries less jitter.  Holding the frame fixed isolates roll.
+        """
+
         seated = upright_person(thigh_deg=85.0, shoulder_half_width=6.0)
-        seated_frame = parse_frame_record(build_record(seated), image=GEOMETRY)
-        seated_margin = vertical_order_margin(
-            seated_frame, LEFT_HIP, LEFT_KNEE, name="hip_above_knee"
+        frame = parse_frame_record(build_record(seated), image=GEOMETRY)
+        without_roll = vertical_order_margin(
+            frame, LEFT_HIP, LEFT_KNEE, name="hip_above_knee", roll_tolerance_deg=0.0
         )
-        assert seated_margin is not None
-        assert seated_margin.sigma > 2.0 * margin.sigma
+        with_roll = vertical_order_margin(frame, LEFT_HIP, LEFT_KNEE, name="hip_above_knee")
+        assert without_roll is not None and with_roll is not None
+        assert with_roll.sigma > without_roll.sigma
+        assert "roll term 0.00 px" in without_roll.note

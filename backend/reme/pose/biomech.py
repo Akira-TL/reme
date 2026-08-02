@@ -105,6 +105,45 @@ MEASURED_BODY_HEIGHT_PX = 318.9
 #: Scale-free localisation noise: sigma as a fraction of body pixel height.
 MEASURED_SIGMA_PER_BODY_HEIGHT = MEASURED_SIGMA_PX_AT_720P / MEASURED_BODY_HEIGHT_PX
 
+#: Official COCO keypoint-evaluation sigmas, in COCO's canonical index order.
+#: These express *annotator disagreement* about where each joint centre is, so
+#: they rank a joint by how ill-defined its location is, not by how noisily a
+#: model tracks it.  Source: the COCO keypoint evaluation definition
+#: (https://cocodataset.org/#keypoints-eval).
+COCO_OKS_SIGMA: tuple[float, ...] = (
+    0.026,  # nose
+    0.025,  # left_eye
+    0.025,  # right_eye
+    0.035,  # left_ear
+    0.035,  # right_ear
+    0.079,  # left_shoulder
+    0.079,  # right_shoulder
+    0.072,  # left_elbow
+    0.072,  # right_elbow
+    0.062,  # left_wrist
+    0.062,  # right_wrist
+    0.107,  # left_hip
+    0.107,  # right_hip
+    0.087,  # left_knee
+    0.087,  # right_knee
+    0.089,  # left_ankle
+    0.089,  # right_ankle
+)
+
+#: Systematic joint-centre bias for hip and knee as a fraction of body height.
+#: Needham et al. 2021 (Sci Rep 11:20673, doi:10.1038/s41598-021-00212-x) measured
+#: 30-50 mm for hip and knee and 1-15 mm for ankle, and attributed it to
+#: large-scale mislabelling of hip joint-centre locations in the datasets used to
+#: train these models.  That cause is a property of the training data, so it
+#: carries over in kind to MoveNet -- but the magnitude does not transfer
+#: exactly: Needham triangulated from a calibrated multi-camera 200 Hz rig, while
+#: this project has one uncalibrated view.  Treat as an order of magnitude that
+#: needs project calibration, not a measured constant.
+NEEDHAM_HIP_KNEE_BIAS_PER_HEIGHT = 0.02
+
+#: Ankle bias from the same study (1-15 mm, midpoint ~8 mm on a 1.7 m subject).
+NEEDHAM_ANKLE_BIAS_PER_HEIGHT = 0.005
+
 #: Frontal biacromial-width to trunk-length expectation, from Winter's segment
 #: proportions (shoulder breadth ~0.245 of stature, shoulder-to-hip ~0.288).
 #: Used only as the normaliser of the azimuth proxy, never as a classification
@@ -202,6 +241,104 @@ class ImageGeometry:
 
 
 @dataclass(frozen=True, slots=True)
+class UncertaintyModel:
+    """Per-keypoint localisation uncertainty, split into its physical parts.
+
+    Frame-to-frame jitter is not the whole error and is not even the largest
+    part.  A model that places the hip centre in a consistently wrong spot is
+    *temporally stable*, so a jitter estimator built on time differences is
+    structurally blind to it.  This project's own numbers show exactly that: the
+    measured jitter ranks the hips as the calmest core joint, while COCO's
+    annotation sigma ranks them the most ill-defined and Needham et al. measured
+    the largest systematic offset there.  A confidence built on jitter alone is
+    therefore optimistic in a known direction.
+
+    The total combines three independent contributions in quadrature, following
+    the GUM treatment of Type A (statistical) and Type B (other evidence)
+    uncertainty:
+
+    ``sigma(i)^2 = random(i)^2 + absolute^2 + bias(i)^2``
+
+    ``random`` is measurable from the data and shrinks with filtering;
+    ``absolute`` is the heatmap grid floor; ``bias`` neither averages out over
+    time nor responds to filtering, so it sets the ceiling on achievable
+    confidence no matter how long the observation window is.
+
+    Treating the bias terms of two different keypoints as independent is the
+    conservative choice.  A bias common to the whole skeleton would cancel in
+    any difference between two points, so this over-states rather than
+    under-states uncertainty -- the safe direction for a care system.
+    """
+
+    #: Random jitter as a fraction of body pixel height, measured on this
+    #: project's clip.
+    random_per_height: float = MEASURED_SIGMA_PER_BODY_HEIGHT
+    #: Heatmap quantisation floor in pixels.  MoveNet Lightning decodes a 48x48
+    #: heatmap with offset regression; the full-image value additionally depends
+    #: on whether the producer applied tracking crop, which FrameLandmarks does
+    #: not report.  Left at zero until that interface gap is closed, so the
+    #: number is never silently invented.
+    absolute_px: float = 0.0
+    #: Systematic joint-centre bias for hip and knee as a fraction of body
+    #: height; other joints are scaled from it by their COCO sigma ratio.
+    bias_per_height: float = NEEDHAM_HIP_KNEE_BIAS_PER_HEIGHT
+    #: Set False to reproduce the jitter-only behaviour, for comparison only.
+    include_bias: bool = True
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("random_per_height", self.random_per_height),
+            ("absolute_px", self.absolute_px),
+            ("bias_per_height", self.bias_per_height),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                raise BiomechError(f"{name} must be finite and non-negative")
+
+    def bias_profile(self, body_height_px: float) -> np.ndarray:
+        """Return per-keypoint systematic bias in pixels.
+
+        Hip and knee are anchored on the measured 30-50 mm; every other joint is
+        extrapolated by its COCO sigma relative to the hip, because COCO sigma
+        measures how ill-defined a joint centre is and that is the same property
+        the mislabelling acts on.  Only hip, knee and ankle have direct
+        literature support; the rest is a documented extrapolation.
+        """
+
+        if not self.include_bias:
+            return np.zeros(len(COCO17_NAMES), dtype=np.float64)
+        hip_sigma = COCO_OKS_SIGMA[LEFT_HIP]
+        scale = self.bias_per_height * body_height_px / hip_sigma
+        profile = np.asarray(COCO_OKS_SIGMA, dtype=np.float64) * scale
+        ankle_bias = NEEDHAM_ANKLE_BIAS_PER_HEIGHT * body_height_px
+        profile[LEFT_ANKLE] = ankle_bias
+        profile[RIGHT_ANKLE] = ankle_bias
+        return profile
+
+    def sigma_profile(self, body_height_px: float) -> np.ndarray:
+        """Return the total per-keypoint standard uncertainty in pixels."""
+
+        random_term = self.random_per_height * body_height_px
+        bias = self.bias_profile(body_height_px)
+        total: np.ndarray = np.sqrt(random_term**2 + self.absolute_px**2 + bias**2)
+        return total
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "random_per_height": round(self.random_per_height, 6),
+            "absolute_px": round(self.absolute_px, 4),
+            "bias_per_height": round(self.bias_per_height, 6),
+            "include_bias": self.include_bias,
+            "bias_source": (
+                "Needham 2021 doi:10.1038/s41598-021-00212-x, hip/knee 30-50 mm; "
+                "magnitude needs project calibration"
+            ),
+        }
+
+
+DEFAULT_UNCERTAINTY = UncertaintyModel()
+
+
+@dataclass(frozen=True, slots=True)
 class FrameGeometry:
     """One frame lifted into pixel space with per-keypoint uncertainty."""
 
@@ -215,6 +352,15 @@ class FrameGeometry:
     usable: np.ndarray
     sigma_px: np.ndarray
     image: ImageGeometry
+    uncertainty: UncertaintyModel = DEFAULT_UNCERTAINTY
+
+    @property
+    def representative_sigma_px(self) -> float:
+        """Return the median sigma over usable keypoints, for scale gating."""
+
+        if not bool(self.usable.any()):
+            return float(np.median(self.sigma_px))
+        return float(np.median(self.sigma_px[self.usable]))
 
     @property
     def usable_ratio(self) -> float:
@@ -243,6 +389,7 @@ def parse_frame_record(
     image: ImageGeometry,
     score_threshold: float = 0.2,
     sigma_px: float | None = None,
+    uncertainty: UncertaintyModel = DEFAULT_UNCERTAINTY,
 ) -> FrameGeometry:
     """Parse one FrameLandmarks record into pixel-space geometry.
 
@@ -299,7 +446,9 @@ def parse_frame_record(
         raise BiomechError("landmark_quality is invalid")
 
     usable = scores >= score_threshold
-    resolved_sigma = _resolve_sigma(coords, usable, sigma_px=sigma_px)
+    sigma_profile = _resolve_sigma_profile(
+        coords, usable, sigma_px=sigma_px, uncertainty=uncertainty
+    )
 
     return FrameGeometry(
         scene_id=_text(record.get("scene_id", "unknown-scene"), "scene_id"),
@@ -310,33 +459,60 @@ def parse_frame_record(
         xy=coords,
         score=scores,
         usable=usable,
-        sigma_px=np.full(len(COCO17_NAMES), resolved_sigma, dtype=np.float64),
+        sigma_px=sigma_profile,
         image=image,
+        uncertainty=uncertainty,
     )
 
 
-def _resolve_sigma(
-    coords: np.ndarray, usable: np.ndarray, *, sigma_px: float | None
-) -> float:
-    """Return per-keypoint localisation sigma in pixels.
+def _resolve_sigma_profile(
+    coords: np.ndarray,
+    usable: np.ndarray,
+    *,
+    sigma_px: float | None,
+    uncertainty: UncertaintyModel,
+) -> np.ndarray:
+    """Return the per-keypoint localisation sigma in pixels.
 
     MoveNet's ``score`` correlates only weakly with actual localisation error
     (measured -0.31 on this project's clip), so it is used as a usability filter
-    and never converted into a sigma.  The fallback instead scales the measured
-    noise fraction by the person's observed pixel height.
+    and never converted into a sigma.  The uncertainty instead scales with the
+    person's observed pixel height, so a subject further from the camera
+    correctly becomes less certain rather than falsely more precise.
+
+    Passing ``sigma_px`` overrides everything with one flat value; it exists for
+    tests and for comparing against the jitter-only behaviour, not for
+    production use.
     """
 
     if sigma_px is not None:
         if not math.isfinite(sigma_px) or sigma_px <= 0.0:
             raise BiomechError("sigma_px must be finite and positive")
-        return float(sigma_px)
-    if not bool(usable.any()):
-        return MEASURED_SIGMA_PX_AT_720P
-    visible = coords[usable]
-    body_height = float(visible[:, 1].max() - visible[:, 1].min())
-    if body_height <= 1.0:
-        return MEASURED_SIGMA_PX_AT_720P
-    return MEASURED_SIGMA_PER_BODY_HEIGHT * body_height
+        return np.full(len(COCO17_NAMES), float(sigma_px), dtype=np.float64)
+    return uncertainty.sigma_profile(body_scale_px(coords, usable))
+
+
+def body_scale_px(coords: np.ndarray, usable: np.ndarray) -> float:
+    """Return a posture-invariant body scale in pixels.
+
+    Vertical extent is the obvious choice and the wrong one: a seated or lying
+    person occupies fewer rows, which would shrink the estimated scale and make
+    every derived uncertainty *smaller* exactly in the postures the classifier is
+    least sure about -- confidence rising because the person lay down.
+
+    The maximum pairwise distance across the core skeleton is used instead.  It
+    measures the same body span whichever way the body is oriented, and it
+    excludes the arms, whose reach would otherwise inflate the scale whenever
+    someone stretches.
+    """
+
+    indices = [index for index in BODY_AXIS_INDICES if bool(usable[index])]
+    if len(indices) < 2:
+        return MEASURED_BODY_HEIGHT_PX
+    points = coords[indices]
+    differences = points[:, None, :] - points[None, :, :]
+    span = float(np.sqrt((differences**2).sum(axis=2)).max())
+    return span if span > 1.0 else MEASURED_BODY_HEIGHT_PX
 
 
 def segment_angle_from_gravity(
@@ -453,7 +629,8 @@ def principal_axis_angle(
     spread = float((centred @ principal) @ (centred @ principal))
     if spread <= 1e-9:
         return None
-    sigma_axis = math.degrees(float(frame.sigma_px[usable_indices[0]]) / math.sqrt(spread))
+    representative = float(np.sqrt(np.mean(frame.sigma_px[usable_indices] ** 2)))
+    sigma_axis = math.degrees(representative / math.sqrt(spread))
 
     gravity = frame.image.gravity
     cosine = abs(float(np.dot(principal, gravity)))

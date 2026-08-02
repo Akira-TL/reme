@@ -276,7 +276,7 @@ def classify_frame(
         return _abstain(gates, (), "too few usable keypoints", quantities)
 
     budget = THRESHOLDS["angle_budget_deg"].value
-    sigma = float(frame.sigma_px[0])
+    sigma = frame.representative_sigma_px
     min_length = min_segment_length_for_angle_budget(sigma, budget)
     gates.append(
         Gate(
