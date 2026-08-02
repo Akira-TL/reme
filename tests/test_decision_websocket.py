@@ -596,6 +596,59 @@ def test_accept_survives_a_crashing_replay_provider(capsys: pytest.CaptureFixtur
         link.close()
 
 
+def test_snapshot_precedes_a_broadcast_racing_with_registration() -> None:
+    # Wire-order claim: once the connection is observable in the hub, the
+    # send reservation is already held, so a broadcast fired at that exact
+    # moment must queue behind the snapshot — snapshot-then-broadcast on the
+    # wire, never the reverse (the consumer only dedups, it cannot reorder).
+    hub = DecisionEventHub()
+    snapshot = {"event_type": "care_decision", "sequence": 3}
+    hub.set_replay_provider(lambda: snapshot)
+    link = _Link(hub=hub)
+    try:
+        _await_connections(hub, 1)
+        hub.broadcast_json({"sequence": 4})
+        assert json.loads(link.peer.read_frame()[2].decode("utf-8")) == snapshot
+        assert json.loads(link.peer.read_frame()[2].decode("utf-8")) == {"sequence": 4}
+    finally:
+        link.close()
+
+
+def test_a_stuck_snapshot_write_does_not_stall_the_hub() -> None:
+    # Codex review (Medium): the snapshot send must happen outside the hub
+    # lock. A joiner that never reads blocks its own write on the filled
+    # socket buffer; registration, other accepts and the hub registry must
+    # stay reachable meanwhile (the old in-lock send deadlocked them all).
+    hub = DecisionEventHub()
+    calls = {"count": 0}
+
+    def one_big_snapshot() -> dict[str, Any] | None:
+        calls["count"] += 1
+        if calls["count"] > 1:
+            return None
+        # Far beyond any socketpair buffer, so the reserved write blocks
+        # until the peer goes away.
+        return {"pad": "x" * (4 * 1024 * 1024)}
+
+    hub.set_replay_provider(one_big_snapshot)
+    stuck = _Link(hub=hub)
+    try:
+        # Registration must become visible while the write is (still) in
+        # flight — pre-fix this poll deadlocked on the hub lock.
+        _await_connections(hub, 1)
+        second = _Link(hub=hub)
+        try:
+            assert second.handshake.startswith("HTTP/1.1 101 Switching Protocols")
+            _await_connections(hub, 2)
+        finally:
+            # Free the stuck writer first (broken pipe), then drain both.
+            stuck.peer.close()
+            second.close()
+    finally:
+        # Joins the accept thread: the broken pipe must have unblocked it.
+        stuck.close()
+
+
 def test_close_all_wakes_a_blocked_recv_loop_and_blocks_new_accepts() -> None:
     hub = DecisionEventHub()
     link = _Link(hub=hub)

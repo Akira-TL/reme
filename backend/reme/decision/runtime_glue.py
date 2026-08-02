@@ -97,9 +97,13 @@ class RuntimeDecisionPublisher:
         if event is None:
             return None
         if event.get("session_id") != self._registry.active_session_id():
-            # Session switched or stopped: the old episode's decision must
-            # not leak into the new session (C would drop it by session_id,
-            # but B does not get to rely on that).
+            # Steady-state hygiene: an envelope from a stopped or previous
+            # session must not linger onto joiners of the next one. This is
+            # deliberately best-effort — a stop/start racing between this
+            # check and the socket write can still put an old-session frame
+            # on the wire (the live broadcast path has the exact same
+            # window), which is why abc-interface §4 makes session_id
+            # validation a hard consumer obligation, not a B guarantee.
             return None
         return event
 

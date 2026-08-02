@@ -16,10 +16,13 @@ Frozen decisions:
   its buffer after the upgrade request); writes go through ``handler.wfile``
   under a per-connection lock.
 - A hub may carry a replay provider (``set_replay_provider``): its snapshot
-  frame is sent to every new connection inside the registration critical
-  section, so a late joiner can neither miss a decision nor receive an older
-  frame after a newer one. Duplicate delivery stays possible and remains the
-  consumer's documented dedup case (decision_id).
+  frame is sent to every new connection so a late joiner can neither miss a
+  decision nor receive an older frame after a newer one. The snapshot fetch
+  and the registration share the hub lock (memory-only), while the actual
+  send happens under the connection's reserved send lock, outside the hub
+  lock — a client that stops reading stalls only its own wire, never the
+  hub. Duplicate delivery stays possible and remains the consumer's
+  documented dedup case (decision_id).
 """
 
 from __future__ import annotations
@@ -30,8 +33,8 @@ import json
 import socket
 import struct
 import threading
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from io import BufferedIOBase
 from typing import Any, Protocol
@@ -243,6 +246,24 @@ class ServerConnection:
 
         self._send_frame(encode_frame(OPCODE_TEXT, text.encode("utf-8")))
 
+    @contextmanager
+    def reserved_sends(self) -> Iterator[None]:
+        """Hold the send lock over a multi-step window (hub replay-on-accept).
+
+        Any concurrent sender queues behind the reservation, so the holder
+        controls wire order across the window. Do not call the regular send
+        methods inside the block — the lock is not reentrant; use
+        ``send_text_reserved``.
+        """
+
+        with self._send_lock:
+            yield
+
+    def send_text_reserved(self, text: str) -> None:
+        """Text send for callers already inside a ``reserved_sends`` block."""
+
+        self._write_locked(encode_frame(OPCODE_TEXT, text.encode("utf-8")))
+
     def send_close(self, code: int = _CLOSE_NORMAL) -> None:
         with self._send_lock:
             if self._close_sent:
@@ -406,38 +427,48 @@ class DecisionEventHub:
             if self._closing:
                 raise WebSocketError("hub is shutting down")
         connection = _handshake(handler)
-        with self._lock:
-            if self._closing:
-                connection.send_close()
-                return
-            # Replay and registration share one critical section on purpose:
-            # a concurrent broadcast either copied its targets before this
-            # block (its frame is then already visible to the provider) or
-            # copies them after (this connection is registered and gets it
-            # live). Either way the joiner misses nothing and can never see
-            # an older frame after a newer one — only duplicates, which the
-            # consumer dedups by decision_id. The snapshot send does block
-            # broadcasts' target-copy briefly; fine at this fan-out.
-            self._replay_latest(connection)
-            self._connections.append(connection)
+        closing = False
+        snapshot: dict[str, Any] | None = None
+        # Ordering argument for late-joiner replay: snapshot fetch and
+        # registration share the hub lock (memory-only), so a concurrent
+        # broadcast either copied its targets before that section (its store
+        # is then already visible to the provider — nothing missed) or after
+        # (this connection is registered and receives it live). The actual
+        # snapshot write happens OUTSIDE the hub lock but inside the
+        # connection's send reservation taken before registration: a live
+        # frame aimed at this connection queues behind the reservation, so
+        # the wire order stays snapshot-then-newer, never the reverse. Only
+        # duplicates remain, which the consumer dedups by decision_id. The
+        # hub lock is never held across socket I/O (Codex review: a client
+        # that stops reading must stall only its own wire, not broadcasts,
+        # other accepts, close_all, or the publisher behind them).
+        with connection.reserved_sends():
+            with self._lock:
+                if self._closing:
+                    closing = True
+                else:
+                    snapshot = self._fetch_snapshot()
+                    self._connections.append(connection)
+            if not closing and snapshot is not None:
+                connection.send_text_reserved(json.dumps(snapshot, ensure_ascii=False))
+        if closing:
+            connection.send_close()
+            return
         try:
             connection.serve()
         finally:
             self._unregister([connection])
 
-    def _replay_latest(self, connection: ServerConnection) -> None:
-        """Send the provider's snapshot frame to one fresh connection."""
+    def _fetch_snapshot(self) -> dict[str, Any] | None:
+        """The provider's current snapshot frame, or None (never raises)."""
 
         if self._replay_provider is None:
-            return
+            return None
         try:
-            snapshot = self._replay_provider()
+            return self._replay_provider()
         except Exception as exc:  # noqa: BLE001 - replay must never kill accept
             print(f"warning: decision replay provider failed: {exc}")
-            return
-        if snapshot is None:
-            return
-        connection.send_text(json.dumps(snapshot, ensure_ascii=False))
+            return None
 
     def _unregister(self, dead: list[ServerConnection]) -> None:
         with self._lock:

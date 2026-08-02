@@ -13,13 +13,22 @@ from http.server import ThreadingHTTPServer
 from typing import Any
 
 from reme.decision.policy import DecisionService, PolicyConfig
+from reme.decision.records import (
+    CareDecision,
+    DecisionAction,
+    DecisionSource,
+    DecisionState,
+    DemoMode,
+    PrivacyMode,
+    Uncertainty,
+)
 from reme.decision.runtime_glue import (
     RuntimeDecisionPublisher,
     live_streams_resolver,
     spawn_post_ingest_evaluation,
 )
 from reme.decision.server import build_decision_handler
-from reme.decision.session import RuntimeSessionRegistry
+from reme.decision.session import RuntimeSessionRegistry, parse_session_request
 from reme.decision.stream import EventIngest
 from reme.decision.websocket import DecisionEventHub
 
@@ -294,6 +303,53 @@ def test_snapshot_from_a_stopped_session_is_not_replayed_into_the_next() -> None
             client.close()
     finally:
         _stop(server, thread, hub)
+
+
+def _care_decision() -> CareDecision:
+    return CareDecision(
+        scene_id=SCENE_ID,
+        decision_id="decision-0007",
+        timestamp_ms=12800.0,
+        state=DecisionState.CHECK_IN_REQUIRED,
+        risk_level=2,
+        privacy_mode=PrivacyMode.SKELETON_ONLY,
+        need_dialogue=True,
+        dialogue_goal="confirm_safety",
+        elder_message="您还好吗？",
+        family_notification=None,
+        action=DecisionAction.ASK_ELDER,
+        reason_summary="测试用决策。",
+        uncertainty=Uncertainty.MEDIUM,
+        fallback_used=False,
+        source=DecisionSource.RULE,
+        demo_mode=DemoMode.LIVE,
+        response_timeout_ms=8000,
+    )
+
+
+def test_publisher_stores_the_snapshot_before_broadcasting() -> None:
+    # White-box ordering guard (Codex review): the replay proof depends on
+    # store-then-broadcast — with the order flipped, a joiner registering
+    # between the two misses the frame forever, and no black-box schedule
+    # catches that deterministically.
+    registry = RuntimeSessionRegistry()
+    registry.start(parse_session_request(_session_request_payload()))
+    hub = DecisionEventHub()
+    publisher = RuntimeDecisionPublisher(registry=registry, hub=hub)
+    stored_at_broadcast: list[dict[str, Any] | None] = []
+
+    def spying_broadcast(payload: dict[str, Any]) -> int:
+        stored_at_broadcast.append(publisher.latest_decision_event())
+        return 0
+
+    hub.broadcast_json = spying_broadcast  # type: ignore[method-assign]
+    publisher.publish_decision(_care_decision())
+
+    assert len(stored_at_broadcast) == 1
+    stored = stored_at_broadcast[0]
+    assert stored is not None, "the snapshot must already be stored when the broadcast starts"
+    assert stored["event_type"] == "care_decision"
+    assert stored["payload"]["decision_id"] == "decision-0007"
 
 
 def test_stale_session_event_is_rejected_end_to_end() -> None:
