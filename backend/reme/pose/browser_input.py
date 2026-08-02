@@ -141,11 +141,18 @@ class _VanishSample:
 class VanishFallDetector:
     """Emit one fall_like payload when a visible person drops and vanishes."""
 
+    # Flicker tolerance: MediaPipe intermittently re-detects a phantom for a
+    # frame or two while the person is actually below the frame (measured
+    # live 2026-08-02); only this many consecutive detected frames count as
+    # a genuine return that resets the loss window.
+    VISIBLE_STREAK_TO_RESET = 3
+
     def __init__(self, *, scene_id: str, config: VanishFallConfig | None = None) -> None:
         self.scene_id = scene_id
         self.config = config or VanishFallConfig()
         self._trail: list[_VanishSample] = []
         self._lost_since: float | None = None
+        self._visible_streak = 0
         self._cooldown_until: float = float("-inf")
         self._fired_this_loss = False
         self._counter = 0
@@ -155,6 +162,7 @@ class VanishFallDetector:
             self.scene_id = scene_id
         self._trail.clear()
         self._lost_since = None
+        self._visible_streak = 0
         self._fired_this_loss = False
 
     def update(self, record: dict[str, Any]) -> dict[str, Any] | None:
@@ -177,9 +185,15 @@ class VanishFallDetector:
             self._trail.pop(0)
 
         if not lost:
-            self._lost_since = None
-            self._fired_this_loss = False
+            self._visible_streak += 1
+            if (
+                self._lost_since is None
+                or self._visible_streak >= self.VISIBLE_STREAK_TO_RESET
+            ):
+                self._lost_since = None
+                self._fired_this_loss = False
             return None
+        self._visible_streak = 0
         if self._lost_since is None:
             self._lost_since = timestamp_ms
         if self._fired_this_loss or timestamp_ms < self._cooldown_until:

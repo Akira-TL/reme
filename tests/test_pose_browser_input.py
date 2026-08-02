@@ -395,6 +395,39 @@ class TestVanishFall:
         assert payload["evidence"]["center_drop"] >= 0.13
         assert len(falls) == 1, "one loss episode must emit exactly one candidate"
 
+    def test_flickering_phantom_redetection_still_fires(self) -> None:
+        """Measured live: MediaPipe re-detects a phantom for 1-2 frames while
+        the person is really below the frame; the loss window must survive it."""
+
+        engine, published = self._engine()
+        index, timestamp = 0, 0.0
+        for _ in range(30):
+            engine.handle_text(
+                _landmark_message(_half_body(), frame_index=index, timestamp_ms=timestamp)
+            )
+            index += 1
+            timestamp += 100.0
+        for step in range(1, 5):
+            engine.handle_text(
+                _landmark_message(
+                    _half_body(drop=0.09 * step), frame_index=index, timestamp_ms=timestamp
+                )
+            )
+            index += 1
+            timestamp += 100.0
+        for cycle in range(14):
+            if cycle % 4 == 3:
+                engine.handle_text(
+                    _landmark_message(
+                        _half_body(drop=0.36), frame_index=index, timestamp_ms=timestamp
+                    )
+                )
+            else:
+                engine.handle_text(_empty_message(frame_index=index, timestamp_ms=timestamp))
+            index += 1
+            timestamp += 100.0
+        assert self._vanish_events(published), "phantom flickers must not reset the loss window"
+
     def test_sideways_walk_out_does_not_fire(self) -> None:
         engine, published = self._engine()
         index, timestamp = 0, 0.0
