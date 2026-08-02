@@ -118,6 +118,42 @@ export function viewerGrantFallbackMs(grant, nowMs = Date.now()) {
   return Math.max(0, Math.min(absoluteMs, relativeMs));
 }
 
+function decodedFrameCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function createDecodedFrameCounter(video) {
+  if (typeof video.getVideoPlaybackQuality === "function") {
+    const read = () => {
+      try {
+        return decodedFrameCount(video.getVideoPlaybackQuality()?.totalVideoFrames);
+      } catch {
+        return null;
+      }
+    };
+    const initial = read();
+    if (initial != null) return { initial, read };
+  }
+
+  let initial;
+  try {
+    initial = decodedFrameCount(video.webkitDecodedFrameCount);
+  } catch {
+    initial = null;
+  }
+  if (initial == null) return null;
+  return {
+    initial,
+    read() {
+      try {
+        return decodedFrameCount(video.webkitDecodedFrameCount);
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
 export function createViewerVideoGuard({
   video,
   stream,
@@ -143,6 +179,10 @@ export function createViewerVideoGuard({
   let frameConfirmed = false;
   let frameCallbackId = null;
   let frameTimeoutId = null;
+  const decodedFrameCounter = typeof video.requestVideoFrameCallback === "function"
+    ? null
+    : createDecodedFrameCounter(video);
+  let lastDecodedFrameCount = decodedFrameCounter?.initial ?? null;
 
   const cancelFrameCallback = () => {
     if (frameCallbackId != null && typeof video.cancelVideoFrameCallback === "function") {
@@ -214,11 +254,22 @@ export function createViewerVideoGuard({
       scheduleDecodedFrame();
       return;
     }
-    confirmFrame({ fresh: !frameConfirmed });
+    if (frameConfirmed && !isRenderableViewerVideoFrame(video, stream)) {
+      confirmFrame();
+      return;
+    }
+    confirmFallbackFrame();
   };
 
   const confirmFallbackFrame = () => {
     if (typeof video.requestVideoFrameCallback === "function") return;
+    const nextDecodedFrameCount = decodedFrameCounter?.read();
+    if (
+      nextDecodedFrameCount == null
+      || lastDecodedFrameCount == null
+      || nextDecodedFrameCount <= lastDecodedFrameCount
+    ) return;
+    lastDecodedFrameCount = nextDecodedFrameCount;
     confirmFrame({ fresh: true });
   };
   const failEmptied = () => fail(

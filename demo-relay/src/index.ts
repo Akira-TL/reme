@@ -1094,6 +1094,22 @@ export class DemoRoom extends DurableObject<Env> {
       return;
     }
 
+    if (
+      event.event_type === "activity_state"
+      && event.payload.phase === "confirmed"
+      && !this.activityEventMatchesReceipt(event, now)
+    ) {
+      this.clearActivityRecognitionEvidence(attachment.sessionId);
+      safeSend(ws, JSON.stringify({
+        type: "error",
+        error: "activity_evidence_not_verified",
+        event_sequence: event.event_sequence,
+        event_type: event.event_type,
+      }));
+      this.revokeInvalidatedGrants(event, ws);
+      return;
+    }
+
     if (event.event_type === "alarm_state" && event.payload.phase === "checking") {
       if (acceptedCheckingDeadline === null) {
         throw new Error("validated checking alarm is missing a deadline");
@@ -1482,37 +1498,25 @@ export class DemoRoom extends DurableObject<Env> {
     );
   }
 
-  private invalidateActivityReceipt(sessionId: string): void {
-    this.ctx.storage.sql.exec(
-      `UPDATE activity_recognition_evidence
-          SET receipt_id = NULL,
-              receipt_expires_at_ms = NULL,
-              receipt_confidence = NULL,
-              receipt_after_event_sequence = NULL,
-              verified_event_sequence = NULL
-        WHERE session_id = ?`,
-      sessionId,
-    );
-  }
-
   private bindOrInvalidateActivityFact(
     event: Extract<DemoEvent, { event_type: "activity_state" }>,
     now: number,
   ): void {
     const row = this.activityRecognitionRow(event.session_id);
-    const matchesReceipt = event.payload.phase === "confirmed"
-      && event.payload.source === "mimo_visual"
-      && event.payload.confidence !== null
+    const preservesPendingEvidence = event.payload.source === "mimo_visual"
+      && (event.payload.phase === "sampling" || event.payload.phase === "candidate")
       && row !== null
-      && row.receipt_id !== null
-      && row.receipt_expires_at_ms !== null
-      && row.receipt_expires_at_ms > now
-      && row.receipt_confidence === event.payload.confidence
-      && row.receipt_after_event_sequence !== null
-      && event.event_sequence > row.receipt_after_event_sequence
-      && row.consecutive >= 2;
+      && row.receipt_id === null
+      && row.verified_event_sequence === null
+      && row.consecutive <= 1;
+    if (preservesPendingEvidence) return;
+
+    const matchesReceipt = this.activityEventMatchesReceipt(event, now, row);
     if (!matchesReceipt || row === null) {
-      this.invalidateActivityReceipt(event.session_id);
+      // This event ends the current evidence generation. Delete the entire
+      // row so counters and an in-flight attempt cannot cross a stop, hide,
+      // scene/activity change, disconnect, or capture restart boundary.
+      this.clearActivityRecognitionEvidence(event.session_id);
       return;
     }
     this.ctx.storage.sql.exec(
@@ -1527,6 +1531,24 @@ export class DemoRoom extends DurableObject<Env> {
       event.session_id,
       row.receipt_id,
     );
+  }
+
+  private activityEventMatchesReceipt(
+    event: Extract<DemoEvent, { event_type: "activity_state" }>,
+    now: number,
+    row = this.activityRecognitionRow(event.session_id),
+  ): boolean {
+    return event.payload.phase === "confirmed"
+      && event.payload.source === "mimo_visual"
+      && event.payload.confidence !== null
+      && row !== null
+      && row.receipt_id !== null
+      && row.receipt_expires_at_ms !== null
+      && row.receipt_expires_at_ms > now
+      && row.receipt_confidence === event.payload.confidence
+      && row.receipt_after_event_sequence !== null
+      && event.event_sequence > row.receipt_after_event_sequence
+      && row.consecutive >= 2;
   }
 
   private isActivityVerdict(value: ActivityVerdict): boolean {

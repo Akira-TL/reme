@@ -1,6 +1,96 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createCookingConfirmationTracker, recognizeCooking } from "./activityRecognition.js";
+import {
+  classifyCookingConfirmationAck,
+  createCookingConfirmationTracker,
+  isCookingRecognitionContextCurrent,
+  recognizeCooking,
+  recordLocalMoment,
+} from "./activityRecognition.js";
+
+function cookingContext(overrides = {}) {
+  const stream = overrides.stream || {};
+  return {
+    generation: 3,
+    captureGeneration: 7,
+    stream,
+    sessionId: "session-a",
+    token: "token-a",
+    ...overrides,
+  };
+}
+
+function currentCookingContext(context, overrides = {}) {
+  return {
+    ...context,
+    captureActive: true,
+    sceneId: "kitchen",
+    visibilityState: "visible",
+    ...overrides,
+  };
+}
+
+class FakeMediaStream {
+  constructor(tracks) {
+    this.tracks = tracks;
+  }
+
+  getVideoTracks() {
+    return this.tracks;
+  }
+}
+
+function createRecorderClass({ emitStop = false, startThrows = false, stopThrows = false } = {}) {
+  return class FakeMediaRecorder {
+    static instances = [];
+
+    static isTypeSupported() {
+      return true;
+    }
+
+    constructor() {
+      this.listeners = new Map();
+      this.mimeType = "video/webm";
+      this.state = "inactive";
+      this.constructor.instances.push(this);
+    }
+
+    addEventListener(type, listener) {
+      const listeners = this.listeners.get(type) || new Set();
+      listeners.add(listener);
+      this.listeners.set(type, listeners);
+    }
+
+    removeEventListener(type, listener) {
+      this.listeners.get(type)?.delete(listener);
+    }
+
+    emit(type, event = {}) {
+      for (const listener of this.listeners.get(type) || []) listener(event);
+    }
+
+    start() {
+      if (startThrows) throw new Error("start failed");
+      this.state = "recording";
+    }
+
+    stop() {
+      if (stopThrows) throw new Error("stop failed");
+      this.state = "inactive";
+      if (emitStop) this.emit("stop");
+    }
+  };
+}
+
+function localMomentOptions(MediaRecorderImpl, overrides = {}) {
+  return {
+    MediaRecorderImpl,
+    MediaStreamImpl: FakeMediaStream,
+    durationMs: 2,
+    settlementTimeoutMs: 2,
+    ...overrides,
+  };
+}
 
 test("cooking needs two consecutive confident visual verdicts", () => {
   const tracker = createCookingConfirmationTracker();
@@ -108,4 +198,142 @@ test("activity recognition forwards cancellation to the visual request", async (
   );
   controller.abort();
   await assert.rejects(request, (error) => error.name === "AbortError");
+});
+
+test("cooking results and Relay acknowledgements bind to one active capture generation", () => {
+  const context = cookingContext();
+  const current = currentCookingContext(context);
+  assert.equal(isCookingRecognitionContextCurrent(context, current), true);
+  for (const stale of [
+    { captureActive: false },
+    { generation: context.generation + 1 },
+    { captureGeneration: context.captureGeneration + 1 },
+    { stream: {} },
+    { sessionId: "session-b" },
+    { token: "token-b" },
+    { sceneId: "living" },
+    { visibilityState: "hidden" },
+    { visibilityState: "prerender" },
+    { visibilityState: undefined },
+  ]) {
+    assert.equal(isCookingRecognitionContextCurrent(
+      context,
+      { ...current, ...stale },
+    ), false);
+  }
+
+  const pending = { eventSequence: 12, context };
+  assert.equal(classifyCookingConfirmationAck(pending, {
+    type: "event_accepted",
+    event_type: "activity_state",
+    event_sequence: 12,
+  }, current), "verified");
+  assert.equal(classifyCookingConfirmationAck(pending, {
+    type: "error",
+    error: "activity_evidence_not_verified",
+    event_type: "activity_state",
+    event_sequence: 12,
+  }, current), "rejected");
+  assert.equal(classifyCookingConfirmationAck(pending, {
+    type: "error",
+    error: "activity_evidence_not_verified",
+    event_type: "activity_state",
+    event_sequence: 11,
+  }, current), "ignore");
+  for (const stale of [
+    { captureActive: false },
+    { generation: context.generation + 1 },
+    { captureGeneration: context.captureGeneration + 1 },
+    { stream: {} },
+    { sessionId: "session-b" },
+    { token: "token-b" },
+    { sceneId: "living" },
+    { visibilityState: "hidden" },
+  ]) {
+    assert.equal(classifyCookingConfirmationAck(pending, {
+      type: "event_accepted",
+      event_type: "activity_state",
+      event_sequence: 12,
+    }, { ...current, ...stale }), "stale");
+  }
+  assert.equal(classifyCookingConfirmationAck(pending, {
+    type: "event_accepted",
+    event_type: "care_card",
+    event_sequence: 12,
+  }, current), "ignore");
+});
+
+test("local moment fails closed when recorder stop never settles", async () => {
+  const MediaRecorderImpl = createRecorderClass();
+  let trackStops = 0;
+  const track = { stop: () => { trackStops += 1; } };
+  const recorder = recordLocalMoment(
+    new FakeMediaStream([track]),
+    localMomentOptions(MediaRecorderImpl),
+  );
+  await assert.doesNotReject(recorder.promise);
+  assert.equal(await recorder.promise, null);
+  assert.equal(trackStops, 0);
+});
+
+test("local moment settles null when stop throws or error arrives first", async () => {
+  const ThrowingRecorder = createRecorderClass({ stopThrows: true });
+  const track = { stop: () => assert.fail("shared camera track must stay active") };
+  const throwing = recordLocalMoment(
+    new FakeMediaStream([track]),
+    localMomentOptions(ThrowingRecorder),
+  );
+  assert.equal(await throwing.promise, null);
+
+  const ErrorRecorder = createRecorderClass();
+  const errored = recordLocalMoment(
+    new FakeMediaStream([track]),
+    localMomentOptions(ErrorRecorder, { durationMs: 100 }),
+  );
+  ErrorRecorder.instances[0].emit("error");
+  assert.equal(await errored.promise, null);
+});
+
+test("local moment settles null when recorder start throws", async () => {
+  const StartThrowingRecorder = createRecorderClass({ startThrows: true });
+  const track = { stop: () => assert.fail("shared camera track must stay active") };
+  const recording = recordLocalMoment(
+    new FakeMediaStream([track]),
+    localMomentOptions(StartThrowingRecorder),
+  );
+  assert.equal(await recording.promise, null);
+});
+
+test("local moment resolves a local blob after a successful stop", async () => {
+  const MediaRecorderImpl = createRecorderClass();
+  let trackStops = 0;
+  const track = { stop: () => { trackStops += 1; } };
+  const recording = recordLocalMoment(
+    new FakeMediaStream([track]),
+    localMomentOptions(MediaRecorderImpl, { durationMs: 100 }),
+  );
+  const recorder = MediaRecorderImpl.instances[0];
+  recorder.emit("dataavailable", { data: new Blob(["moment"]) });
+  recorder.state = "inactive";
+  recorder.emit("stop");
+  const result = await recording.promise;
+  assert.equal(result?.blob.size, 6);
+  assert.equal(result?.mimeType, "video/webm");
+  assert.equal(trackStops, 0);
+});
+
+test("cancelling a local moment is immediate, idempotent, and keeps camera tracks", async () => {
+  const MediaRecorderImpl = createRecorderClass();
+  let trackStops = 0;
+  const track = { stop: () => { trackStops += 1; } };
+  const recorder = recordLocalMoment(
+    new FakeMediaStream([track]),
+    localMomentOptions(MediaRecorderImpl, { durationMs: 100 }),
+  );
+  const first = recorder.cancel();
+  const second = recorder.cancel();
+  assert.equal(first, recorder.promise);
+  assert.equal(second, recorder.promise);
+  assert.equal(await recorder.promise, null);
+  assert.equal(trackStops, 0);
 });

@@ -7,6 +7,7 @@ import {
   closeViewerMediaImmediately,
   createViewerVideoGuard,
   createViewerMediaSession,
+  detachViewerVideo,
   isRenderableViewerVideoFrame,
   isSignalForViewer,
   viewerGrantFallbackMs,
@@ -252,6 +253,8 @@ test("viewer media requires a real non-zero video frame before LIVE", () => {
   const track = new FakeTrack();
   const stream = new FakeStream([track]);
   const video = new FakeVideo(stream);
+  let decodedFrames = 0;
+  video.getVideoPlaybackQuality = () => ({ totalVideoFrames: decodedFrames });
   let frameCount = 0;
   const failures = [];
   const guard = createViewerVideoGuard({
@@ -269,6 +272,7 @@ test("viewer media requires a real non-zero video frame before LIVE", () => {
 
   video.videoWidth = 1280;
   video.videoHeight = 720;
+  decodedFrames = 1;
   video.emit("loadeddata");
   assert.equal(isRenderableViewerVideoFrame(video, stream), true);
   assert.equal(frameCount, 1);
@@ -277,6 +281,150 @@ test("viewer media requires a real non-zero video frame before LIVE", () => {
   video.emit("resize");
   assert.equal(failures.length, 1);
   assert.match(failures[0], /画面已失效/);
+  guard.dispose();
+});
+
+test("viewer media confirms fallback LIVE only after decoded frame count grows", () => {
+  const track = new FakeTrack();
+  const stream = new FakeStream([track]);
+  const video = new FakeVideo(stream);
+  video.paused = false;
+  video.readyState = 4;
+  video.videoWidth = 1280;
+  video.videoHeight = 720;
+  let decodedFrames = 4;
+  video.getVideoPlaybackQuality = () => ({ totalVideoFrames: decodedFrames });
+  let frameCount = 0;
+  const guard = createViewerVideoGuard({
+    video,
+    stream,
+    onFrame: () => { frameCount += 1; },
+    onFailure: () => assert.fail("growing decoded frame count must remain live"),
+  });
+
+  video.emit("timeupdate");
+  assert.equal(frameCount, 0, "the initial counter value is only a baseline");
+  decodedFrames = 5;
+  video.emit("timeupdate");
+  assert.equal(frameCount, 1);
+  guard.dispose();
+});
+
+test("viewer media accepts the monotonic WebKit decoded frame counter fallback", () => {
+  const track = new FakeTrack();
+  const stream = new FakeStream([track]);
+  const video = new FakeVideo(stream);
+  video.paused = false;
+  video.readyState = 4;
+  video.videoWidth = 1280;
+  video.videoHeight = 720;
+  video.webkitDecodedFrameCount = 8;
+  let frameCount = 0;
+  const guard = createViewerVideoGuard({
+    video,
+    stream,
+    onFrame: () => { frameCount += 1; },
+    onFailure: () => assert.fail("growing WebKit decoded frame count must remain live"),
+  });
+
+  video.webkitDecodedFrameCount = 9;
+  video.emit("timeupdate");
+  assert.equal(frameCount, 1);
+  guard.dispose();
+});
+
+test("viewer media fallback does not refresh the watchdog for a repeated frame count", () => {
+  const track = new FakeTrack();
+  const stream = new FakeStream([track]);
+  const video = new FakeVideo(stream);
+  video.paused = false;
+  video.readyState = 4;
+  video.videoWidth = 1280;
+  video.videoHeight = 720;
+  let decodedFrames = 0;
+  video.getVideoPlaybackQuality = () => ({ totalVideoFrames: decodedFrames });
+  const timers = new Map();
+  let nextTimerId = 1;
+  const setTimeoutImpl = (callback, delay) => {
+    const id = nextTimerId;
+    nextTimerId += 1;
+    timers.set(id, { callback, delay });
+    return id;
+  };
+  const failures = [];
+  let frameCount = 0;
+  const guard = createViewerVideoGuard({
+    video,
+    stream,
+    onFrame: () => { frameCount += 1; },
+    onFailure: (message) => {
+      detachViewerVideo(video, { stopTracks: true });
+      failures.push(message);
+    },
+    setTimeoutImpl,
+    clearTimeoutImpl: (id) => timers.delete(id),
+  });
+
+  decodedFrames = 1;
+  video.emit("timeupdate");
+  assert.equal(frameCount, 1);
+  assert.equal(timers.size, 1);
+  const activeTimerId = [...timers.keys()][0];
+  assert.equal(timers.get(activeTimerId).delay, VIEWER_VIDEO_FRAME_TIMEOUT_MS);
+
+  video.emit("timeupdate");
+  video.emit("timeupdate");
+  assert.deepEqual([...timers.keys()], [activeTimerId]);
+
+  timers.get(activeTimerId).callback();
+  assert.equal(failures.length, 1);
+  assert.match(failures[0], /停止接收新画面/);
+  assert.equal(video.srcObject, null);
+  assert.ok(track.stopCount > 0);
+  guard.dispose();
+});
+
+test("viewer media fallback without a reliable decoded frame counter fails closed", () => {
+  const track = new FakeTrack();
+  const stream = new FakeStream([track]);
+  const video = new FakeVideo(stream);
+  video.paused = false;
+  video.readyState = 4;
+  video.videoWidth = 1280;
+  video.videoHeight = 720;
+  const timers = new Map();
+  let nextTimerId = 1;
+  const failures = [];
+  let frameCount = 0;
+  const guard = createViewerVideoGuard({
+    video,
+    stream,
+    onFrame: () => { frameCount += 1; },
+    onFailure: (message) => {
+      detachViewerVideo(video, { stopTracks: true });
+      failures.push(message);
+    },
+    setTimeoutImpl: (callback, delay) => {
+      const id = nextTimerId;
+      nextTimerId += 1;
+      timers.set(id, { callback, delay });
+      return id;
+    },
+    clearTimeoutImpl: (id) => timers.delete(id),
+  });
+
+  video.emit("playing");
+  video.emit("loadeddata");
+  video.emit("timeupdate");
+  assert.equal(frameCount, 0);
+  assert.equal(timers.size, 1);
+  const activeTimer = [...timers.values()][0];
+  assert.equal(activeTimer.delay, VIEWER_VIDEO_FRAME_TIMEOUT_MS);
+
+  activeTimer.callback();
+  assert.equal(failures.length, 1);
+  assert.equal(video.srcObject, null);
+  assert.ok(track.stopCount > 0);
   guard.dispose();
 });
 

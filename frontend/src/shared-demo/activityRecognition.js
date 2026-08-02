@@ -1,5 +1,6 @@
 const DEFAULT_MIN_CONFIDENCE = 0.65;
 const DEFAULT_REQUIRED_CONSECUTIVE = 2;
+const DEFAULT_RECORDER_SETTLEMENT_MS = 1_500;
 
 function isUnitNumber(value) {
   return Number.isFinite(value) && value >= 0 && value <= 1;
@@ -116,8 +117,39 @@ export async function recognizeCooking(
   };
 }
 
-function supportedMomentMimeType() {
-  if (typeof MediaRecorder === "undefined") return "";
+export function isCookingRecognitionContextCurrent(context, current) {
+  return Boolean(
+    context
+    && current
+    && current.captureActive === true
+    && current.sceneId === "kitchen"
+    && current.visibilityState === "visible"
+    && context.generation === current.generation
+    && context.captureGeneration === current.captureGeneration
+    && context.stream === current.stream
+    && context.sessionId === current.sessionId
+    && context.token === current.token,
+  );
+}
+
+export function classifyCookingConfirmationAck(pending, ack, current) {
+  if (!pending || !ack) return "ignore";
+  const rejected = ack.type === "error"
+    && ack.error === "activity_evidence_not_verified"
+    && ack.event_type === "activity_state"
+    && Number.isSafeInteger(ack.event_sequence)
+    && ack.event_sequence === pending.eventSequence;
+  const accepted = ack.type === "event_accepted"
+    && ack.event_type === "activity_state"
+    && Number.isSafeInteger(ack.event_sequence)
+    && ack.event_sequence === pending.eventSequence;
+  if (!accepted && !rejected) return "ignore";
+  if (!isCookingRecognitionContextCurrent(pending.context, current)) return "stale";
+  return accepted ? "verified" : "rejected";
+}
+
+function supportedMomentMimeType(MediaRecorderImpl) {
+  if (!MediaRecorderImpl) return "";
   const candidates = [
     "video/mp4;codecs=h264",
     "video/mp4",
@@ -125,59 +157,134 @@ function supportedMomentMimeType() {
     "video/webm;codecs=vp8",
     "video/webm",
   ];
-  return candidates.find((type) => MediaRecorder.isTypeSupported?.(type)) || "";
+  return candidates.find((type) => MediaRecorderImpl.isTypeSupported?.(type)) || "";
 }
 
-export function recordLocalMoment(stream, { durationMs = 6_000 } = {}) {
-  if (!stream || typeof MediaRecorder === "undefined") {
-    return { promise: Promise.resolve(null), cancel() {} };
+export function recordLocalMoment(stream, {
+  MediaRecorderImpl = globalThis.MediaRecorder,
+  MediaStreamImpl = globalThis.MediaStream,
+  clearTimeoutImpl = globalThis.clearTimeout,
+  durationMs = 6_000,
+  nowImpl = Date.now,
+  setTimeoutImpl = globalThis.setTimeout,
+  settlementTimeoutMs = DEFAULT_RECORDER_SETTLEMENT_MS,
+} = {}) {
+  if (!stream || !MediaRecorderImpl || !MediaStreamImpl) {
+    const promise = Promise.resolve(null);
+    return { promise, cancel: () => promise };
   }
   const videoTracks = stream.getVideoTracks();
-  if (!videoTracks.length) return { promise: Promise.resolve(null), cancel() {} };
-  const mimeType = supportedMomentMimeType();
+  if (
+    !videoTracks.length
+    || !Number.isFinite(durationMs)
+    || durationMs < 0
+    || !Number.isFinite(settlementTimeoutMs)
+    || settlementTimeoutMs < 0
+  ) {
+    const promise = Promise.resolve(null);
+    return { promise, cancel: () => promise };
+  }
+  const mimeType = supportedMomentMimeType(MediaRecorderImpl);
   let recorder;
   try {
-    recorder = new MediaRecorder(new MediaStream(videoTracks), {
+    recorder = new MediaRecorderImpl(new MediaStreamImpl(videoTracks), {
       ...(mimeType ? { mimeType } : {}),
       videoBitsPerSecond: 450_000,
     });
   } catch {
-    return { promise: Promise.resolve(null), cancel() {} };
+    const promise = Promise.resolve(null);
+    return { promise, cancel: () => promise };
   }
   let cancelled = false;
-  let timer = 0;
+  let durationTimer = 0;
+  let settlementTimer = 0;
+  let settled = false;
+  let cancelRecording = () => {};
   const chunks = [];
   const promise = new Promise((resolve) => {
-    const finish = () => {
-      window.clearTimeout(timer);
+    const cleanup = () => {
+      clearTimeoutImpl(durationTimer);
+      clearTimeoutImpl(settlementTimer);
+      recorder.removeEventListener("dataavailable", onData);
+      recorder.removeEventListener("stop", onStop);
+      recorder.removeEventListener("error", onError);
+    };
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const onData = (event) => {
+      if (event.data?.size) chunks.push(event.data);
+    };
+    const onStop = () => {
       if (cancelled || !chunks.length) {
-        resolve(null);
+        settle(null);
         return;
       }
-      resolve({
-        blob: new Blob(chunks, { type: recorder.mimeType || mimeType || "video/webm" }),
-        mimeType: recorder.mimeType || mimeType || "video/webm",
+      const resolvedMimeType = recorder.mimeType || mimeType || "video/webm";
+      settle({
+        blob: new Blob(chunks, { type: resolvedMimeType }),
+        mimeType: resolvedMimeType,
         durationMs,
-        recordedAtMs: Date.now(),
+        recordedAtMs: nowImpl(),
       });
     };
-    recorder.addEventListener("dataavailable", (event) => {
-      if (event.data?.size) chunks.push(event.data);
-    });
-    recorder.addEventListener("stop", finish, { once: true });
-    recorder.addEventListener("error", () => resolve(null), { once: true });
-    recorder.start(500);
-    timer = window.setTimeout(() => {
-      if (recorder.state !== "inactive") recorder.stop();
-    }, durationMs);
+    const onError = () => {
+      cancelled = true;
+      if (recorder.state !== "inactive") {
+        try {
+          recorder.stop();
+        } catch {
+          // The error event is already terminal for this local-only draft.
+        }
+      }
+      settle(null);
+    };
+    const requestStop = () => {
+      if (settled) return;
+      if (recorder.state === "inactive") {
+        settle(null);
+        return;
+      }
+      try {
+        recorder.stop();
+      } catch {
+        settle(null);
+        return;
+      }
+      if (!settled) {
+        settlementTimer = setTimeoutImpl(
+          () => settle(null),
+          settlementTimeoutMs,
+        );
+      }
+    };
+    recorder.addEventListener("dataavailable", onData);
+    recorder.addEventListener("stop", onStop, { once: true });
+    recorder.addEventListener("error", onError, { once: true });
+    try {
+      recorder.start(500);
+    } catch {
+      settle(null);
+      return;
+    }
+    if (settled) return;
+    durationTimer = setTimeoutImpl(requestStop, durationMs);
+
+    cancelRecording = () => {
+      cancelled = true;
+      requestStop();
+      if (!settled) settle(null);
+    };
   });
 
   return {
     promise,
     cancel() {
-      cancelled = true;
-      window.clearTimeout(timer);
-      if (recorder.state !== "inactive") recorder.stop();
+      cancelRecording();
+      return promise;
     },
   };
 }

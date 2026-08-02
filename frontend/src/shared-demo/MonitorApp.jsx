@@ -10,7 +10,9 @@ import { createMoveNetBrowserEstimator } from "../model/movenet.js";
 import { ensureAudioContextRunning, recordVoiceReply } from "../utils/wavRecorder.js";
 import {
   captureJpegBase64,
+  classifyCookingConfirmationAck,
   createCookingConfirmationTracker,
+  isCookingRecognitionContextCurrent,
   recognizeCooking,
   recordLocalMoment,
 } from "./activityRecognition.js";
@@ -325,6 +327,8 @@ export function MonitorApp() {
   const pendingAlarmAckRef = useRef(null);
   const sessionPersistenceHealthyRef = useRef(true);
   const cookingTrackerRef = useRef(createCookingConfirmationTracker());
+  const cookingRecognitionAbortRef = useRef(null);
+  const cookingRecognitionGenerationRef = useRef(0);
   const recognitionUnavailableRef = useRef(false);
   const heartCardRef = useRef(null);
   const momentRecorderRef = useRef(null);
@@ -524,6 +528,9 @@ export function MonitorApp() {
   const clearKitchenCaptureEvidence = useCallback((reason, {
     publishUnavailable = false,
   } = {}) => {
+    cookingRecognitionGenerationRef.current += 1;
+    cookingRecognitionAbortRef.current?.abort();
+    cookingRecognitionAbortRef.current = null;
     if (publishUnavailable) {
       publishEvent("activity_state", {
         activity: "cooking",
@@ -849,6 +856,77 @@ export function MonitorApp() {
 
     const connection = { socket, heartbeat: 0, readyTimeout: 0, ready: false };
     controllerRef.current = connection;
+    const completeKitchenConfirmation = (value) => {
+      const pending = pendingKitchenGrantRef.current;
+      const action = classifyCookingConfirmationAck(pending, value, {
+        generation: cookingRecognitionGenerationRef.current,
+        captureGeneration: captureGenerationRef.current,
+        stream: streamRef.current,
+        sessionId: sessionIdRef.current,
+        token: tokenRef.current,
+        captureActive: captureActiveRef.current,
+        sceneId: sceneIdRef.current,
+        visibilityState: document.visibilityState,
+      });
+      if (action === "ignore") return false;
+      pendingKitchenGrantRef.current = null;
+      if (action === "stale") return true;
+      if (action === "rejected") {
+        const reason = "Relay 未验证本次做饭证据；不会创建心跳、短片或实景授权。";
+        clearKitchenCaptureEvidence(reason, { publishUnavailable: true });
+        recognitionUnavailableRef.current = true;
+        setMediaStatus({ state: "failed", detail: reason });
+        return true;
+      }
+
+      const { activity: confirmedActivity, context, eventId } = pending;
+      kitchenLiveEventIdRef.current = eventId;
+      setKitchenLiveEventId(eventId);
+      setActivity(confirmedActivity);
+      const card = {
+        card_id: randomId("heartbeat"),
+        event_id: eventId,
+        kind: "family_heartbeat",
+        title: "厨房里的家庭心跳",
+        body: "连续两次真实视觉判定观察到做饭活动；已形成家庭心跳，6 秒短时刻仅在本机内存暂存。",
+        occurred_at_ms: Date.now(),
+        share_state: "local_only",
+      };
+      heartCardRef.current = card;
+      setHeartCard(card);
+      publishEvent("care_card", card);
+
+      const recorder = recordLocalMoment(context.stream);
+      momentRecorderRef.current = recorder;
+      setMoment({ status: "recording", size: 0, mimeType: "" });
+      void recorder.promise.then((recorded) => {
+        if (momentRecorderRef.current !== recorder) return;
+        momentRecorderRef.current = null;
+        if (!recorded) {
+          setMoment({ status: "unavailable", size: 0, mimeType: "" });
+          return;
+        }
+        momentBlobRef.current = recorded.blob;
+        setMoment({
+          status: "ready",
+          size: recorded.blob.size,
+          mimeType: recorded.mimeType,
+        });
+        window.clearTimeout(momentExpiryRef.current);
+        momentExpiryRef.current = window.setTimeout(() => {
+          stopLocalMoment();
+        }, 60_000);
+      });
+
+      const requested = requestMediaGrant(eventId, "kitchen_moment", 60_000);
+      setMediaStatus({
+        state: requested ? "authorizing" : "failed",
+        detail: requested
+          ? "做饭活动已由 Relay 验证，正在开放最多 60 秒厨房实时画面。"
+          : "做饭活动已验证，但当前控制链路无法签发厨房实景。",
+      });
+      return true;
+    };
     socket.onopen = () => {
       if (controllerRef.current !== connection) return;
       if (socket.protocol !== CONTROLLER_PROTOCOL) {
@@ -949,6 +1027,11 @@ export function MonitorApp() {
         return;
       }
       if (!connection.ready) return;
+      if (
+        value?.type === "error"
+        && value.error === "activity_evidence_not_verified"
+        && completeKitchenConfirmation(value)
+      ) return;
       if (isMediaGrantError(value)) {
         mediaRequestTrackerRef.current.invalidate();
         if (value.error === "media_grant_already_active" && activeGrantRef.current) {
@@ -1014,27 +1097,7 @@ export function MonitorApp() {
           acceptAlarmEvent(value.event_sequence);
         }
         if (value.event_type === "activity_state") {
-          const pending = pendingKitchenGrantRef.current;
-          if (pending?.eventSequence === value.event_sequence) {
-            pendingKitchenGrantRef.current = null;
-            if (
-              sceneIdRef.current === "kitchen"
-              && captureActiveRef.current
-              && document.visibilityState !== "hidden"
-            ) {
-              const requested = requestMediaGrant(
-                pending.eventId,
-                "kitchen_moment",
-                60_000,
-              );
-              setMediaStatus({
-                state: requested ? "authorizing" : "failed",
-                detail: requested
-                  ? "做饭活动已由 Relay 确认，正在开放最多 60 秒厨房实时画面。"
-                  : "做饭活动已确认，但当前控制链路无法签发厨房实景。",
-              });
-            }
-          }
+          completeKitchenConfirmation(value);
         }
         return;
       }
@@ -1173,6 +1236,7 @@ export function MonitorApp() {
     requestMediaGrant,
     scheduleControllerReconnect,
     setSessionPersistenceStatus,
+    stopLocalMoment,
   ]);
 
   useEffect(() => {
@@ -2325,12 +2389,23 @@ export function MonitorApp() {
     let inFlight = false;
     let interval = 0;
     let recognitionController = null;
+    const currentRecognitionContext = () => ({
+      generation: cookingRecognitionGenerationRef.current,
+      captureGeneration: captureGenerationRef.current,
+      stream: streamRef.current,
+      sessionId: sessionIdRef.current,
+      token: tokenRef.current,
+      captureActive: captureActiveRef.current,
+      sceneId: sceneIdRef.current,
+      visibilityState: document.visibilityState,
+    });
     const run = async () => {
       if (
         cancelled
         || inFlight
         || recognitionUnavailableRef.current
         || kitchenLiveEventIdRef.current
+        || pendingKitchenGrantRef.current
         || document.visibilityState === "hidden"
       ) return;
       const imageB64 = captureJpegBase64(videoRef.current);
@@ -2338,6 +2413,14 @@ export function MonitorApp() {
       inFlight = true;
       const controller = new AbortController();
       recognitionController = controller;
+      cookingRecognitionAbortRef.current = controller;
+      const context = {
+        generation: cookingRecognitionGenerationRef.current,
+        captureGeneration: captureGenerationRef.current,
+        stream: streamRef.current,
+        sessionId: sessionIdRef.current,
+        token: tokenRef.current,
+      };
       setActivity((current) => ({
         ...current,
         phase: "sampling",
@@ -2353,7 +2436,7 @@ export function MonitorApp() {
       try {
         const verdict = await recognizeCooking(
           getRelayBase(),
-          tokenRef.current,
+          context.token,
           imageB64,
           globalThis.fetch,
           { signal: controller.signal },
@@ -2361,8 +2444,10 @@ export function MonitorApp() {
         if (
           cancelled
           || controller.signal.aborted
-          || sceneIdRef.current !== "kitchen"
-          || document.visibilityState === "hidden"
+          || !isCookingRecognitionContextCurrent(
+            context,
+            currentRecognitionContext(),
+          )
         ) return;
         const tracked = cookingTrackerRef.current.push(verdict);
         const serverVerified = Boolean(
@@ -2374,15 +2459,25 @@ export function MonitorApp() {
           ? "confirmed"
           : tracked.phase === "confirmed" ? "candidate" : tracked.phase;
         const reason = verdict.reason.slice(0, 240);
-        setActivity({
-          phase: activityPhase,
+        const confirmedActivity = {
+          phase: "confirmed",
           classification: verdict.classification,
           confidence: verdict.confidence,
           reason,
           latencyMs: verdict.latencyMs,
           model: verdict.model,
           consecutive: verdict.consecutive,
-        });
+        };
+        setActivity(serverVerified
+          ? {
+            ...confirmedActivity,
+            phase: "candidate",
+            reason: `${reason} Relay 正在验证本次真实识别凭证。`,
+          }
+          : {
+            ...confirmedActivity,
+            phase: activityPhase,
+          });
         const activityEvent = publishEvent("activity_state", {
           activity: "cooking",
           phase: activityPhase,
@@ -2391,50 +2486,32 @@ export function MonitorApp() {
           reason,
         });
         if (serverVerified && !kitchenLiveEventIdRef.current) {
-          const eventId = activityEvent
-            ? `activity-${activityEvent.event_sequence}`
-            : randomId("activity-unconfirmed");
-          kitchenLiveEventIdRef.current = activityEvent ? eventId : null;
-          setKitchenLiveEventId(activityEvent ? eventId : null);
-          pendingKitchenGrantRef.current = activityEvent
-            ? { eventId, eventSequence: activityEvent.event_sequence }
-            : null;
-          const card = {
-            card_id: randomId("heartbeat"),
-            event_id: eventId,
-            kind: "family_heartbeat",
-            title: "厨房里的家庭心跳",
-            body: "连续两次真实视觉判定观察到做饭活动；已形成家庭心跳，6 秒短时刻仅在本机内存暂存。",
-            occurred_at_ms: Date.now(),
-            share_state: "local_only",
-          };
-          heartCardRef.current = card;
-          setHeartCard(card);
-          publishEvent("care_card", card);
-          const recorder = recordLocalMoment(streamRef.current);
-          momentRecorderRef.current = recorder;
-          setMoment({ status: "recording", size: 0, mimeType: "" });
-          void recorder.promise.then((recorded) => {
-            if (cancelled || momentRecorderRef.current !== recorder) return;
-            momentRecorderRef.current = null;
-            if (!recorded) {
-              setMoment({ status: "unavailable", size: 0, mimeType: "" });
-              return;
-            }
-            momentBlobRef.current = recorded.blob;
-            setMoment({
-              status: "ready",
-              size: recorded.blob.size,
-              mimeType: recorded.mimeType,
+          if (!activityEvent) {
+            recognitionUnavailableRef.current = true;
+            setActivity({
+              ...createActivityState(),
+              phase: "unavailable",
+              reason: "控制链路未接受本次真实识别；不会创建心跳、短片或实景授权。",
             });
-            window.clearTimeout(momentExpiryRef.current);
-            momentExpiryRef.current = window.setTimeout(() => {
-              stopLocalMoment();
-            }, 60_000);
-          });
+            return;
+          }
+          const eventId = `activity-${activityEvent.event_sequence}`;
+          pendingKitchenGrantRef.current = {
+            activity: confirmedActivity,
+            context,
+            eventId,
+            eventSequence: activityEvent.event_sequence,
+          };
         }
       } catch (error) {
-        if (cancelled || controller.signal.aborted || document.visibilityState === "hidden") return;
+        if (
+          cancelled
+          || controller.signal.aborted
+          || !isCookingRecognitionContextCurrent(
+            context,
+            currentRecognitionContext(),
+          )
+        ) return;
         recognitionUnavailableRef.current = true;
         const reason = error instanceof Error ? error.message.slice(0, 240) : "活动识别不可用";
         setActivity({
@@ -2455,6 +2532,9 @@ export function MonitorApp() {
         });
       } finally {
         if (recognitionController === controller) recognitionController = null;
+        if (cookingRecognitionAbortRef.current === controller) {
+          cookingRecognitionAbortRef.current = null;
+        }
         inFlight = false;
       }
     };
@@ -2462,7 +2542,11 @@ export function MonitorApp() {
     interval = window.setInterval(() => void run(), COOKING_SAMPLE_INTERVAL_MS);
     return () => {
       cancelled = true;
+      cookingRecognitionGenerationRef.current += 1;
       recognitionController?.abort();
+      if (cookingRecognitionAbortRef.current === recognitionController) {
+        cookingRecognitionAbortRef.current = null;
+      }
       window.clearTimeout(first);
       window.clearInterval(interval);
     };

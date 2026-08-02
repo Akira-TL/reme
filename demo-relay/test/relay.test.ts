@@ -363,7 +363,7 @@ describe("single-room demo relay", () => {
 
     const living = makeSceneEvent(lease.session_id, 0, "living");
     await publishEvent(controller, living, [viewer]);
-    const activity = makeActivityEvent(lease.session_id, 1);
+    const activity = makeActivityEvent(lease.session_id, 1, "candidate");
     await publishEvent(controller, activity, [viewer]);
     const card = makeCareCardEvent(lease.session_id, 2, "consent_pending");
     await publishEvent(controller, card, [viewer]);
@@ -410,7 +410,13 @@ describe("single-room demo relay", () => {
     await nextJson(controller);
 
     await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), []);
-    await publishEvent(controller, makeActivityEvent(lease.session_id, 1), []);
+    controller.send(JSON.stringify(makeActivityEvent(lease.session_id, 1)));
+    await expect(nextJson(controller)).resolves.toEqual({
+      type: "error",
+      error: "activity_evidence_not_verified",
+      event_sequence: 1,
+      event_type: "activity_state",
+    });
     controller.send(JSON.stringify({
       type: "media_grant_request",
       event_id: "activity-1",
@@ -429,7 +435,11 @@ describe("single-room demo relay", () => {
       consecutive: number;
     }>();
     expect(firstVerdict).toMatchObject({ receipt_id: null, consecutive: 1 });
-    await publishEvent(controller, makeActivityEvent(lease.session_id, 2, "candidate"), []);
+    await publishEvent(
+      controller,
+      makeActivityEvent(lease.session_id, 2, "candidate"),
+      [],
+    );
 
     const secondVerdict = await (await recognize(lease.token, MINIMAL_JPEG_B64)).json<{
       receipt_id: string | null;
@@ -585,6 +595,67 @@ describe("single-room demo relay", () => {
     expect(revokeAck.grant.payload).toMatchObject({ grant_id: grantId, status: "revoked" });
     await expect(revokeForA).resolves.toEqual(revokeAck.grant);
     await expect(revokeForLate).resolves.toEqual(revokeAck.grant);
+  });
+
+  it("revokes an active kitchen grant when an unverified replacement is rejected", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    const scene = makeSceneEvent(lease.session_id, 0, "kitchen");
+    await publishEvent(controller, scene, [viewer]);
+
+    vi.stubGlobal("fetch", vi.fn(async () => mimoActivityResponse("cooking", 0.87)));
+    await recognize(lease.token, MINIMAL_JPEG_B64);
+    await recognize(lease.token, MINIMAL_JPEG_B64);
+    const verified = makeActivityEvent(lease.session_id, 1);
+    await publishEvent(controller, verified, [viewer]);
+
+    const grantForViewer = nextJson(viewer);
+    const grantAckPromise = nextJson(controller);
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "activity-1",
+      scope: "kitchen_moment",
+      expires_in_ms: 30_000,
+    }));
+    const grantAck = readGrantAck(await grantAckPromise, "media_grant_accepted");
+    await expect(grantForViewer).resolves.toEqual(grantAck.grant);
+    const grantId = mediaGrantId(grantAck.grant);
+
+    const controllerRejection = nextJsonBatch(controller, 2);
+    const viewerRevocation = nextJson(viewer);
+    controller.send(JSON.stringify(makeActivityEvent(lease.session_id, 3)));
+    const [error, revokedValue] = await controllerRejection;
+    expect(error).toEqual({
+      type: "error",
+      error: "activity_evidence_not_verified",
+      event_sequence: 3,
+      event_type: "activity_state",
+    });
+    const revoked = readGrantAck(revokedValue, "media_grant_revoked");
+    expect(revoked.grant.payload).toMatchObject({
+      grant_id: grantId,
+      status: "revoked",
+    });
+    await expect(viewerRevocation).resolves.toEqual(revoked.grant);
+
+    const lateViewer = await connectViewer();
+    await expect(nextJson(lateViewer)).resolves.toEqual(scene);
+    await expect(nextJson(lateViewer)).resolves.toEqual(verified);
+    await expectNoMessage(lateViewer);
+
+    controller.send(JSON.stringify({
+      schema_version: MEDIA_SIGNAL_SCHEMA_VERSION,
+      grant_id: grantId,
+      target_id: viewerId(viewer),
+      signal_type: "offer",
+      signal: { sdp: "v=0\r\n" },
+    } satisfies MediaSignal));
+    await expect(nextJson(controller)).resolves.toEqual({
+      type: "error",
+      error: "media_signal_not_authorized",
+    });
   });
 
   it("revokes media grants on disconnect while keeping the lease resumable", async () => {
@@ -745,7 +816,14 @@ describe("single-room demo relay", () => {
       });
 
       const restartedWithoutEvidence = makeActivityEvent(lease.session_id, 8);
-      await publishEvent(controller, restartedWithoutEvidence, [lateViewer]);
+      controller.send(JSON.stringify(restartedWithoutEvidence));
+      await expect(nextJson(controller)).resolves.toEqual({
+        type: "error",
+        error: "activity_evidence_not_verified",
+        event_sequence: 8,
+        event_type: "activity_state",
+      });
+      await expectNoMessage(lateViewer);
       controller.send(JSON.stringify({
         type: "media_grant_request",
         event_id: "activity-8",
@@ -761,7 +839,7 @@ describe("single-room demo relay", () => {
       await expect(nextJson(afterRestart)).resolves.toEqual(
         makeSceneEvent(lease.session_id, 0, "kitchen", baseTime),
       );
-      await expect(nextJson(afterRestart)).resolves.toEqual(restartedWithoutEvidence);
+      await expect(nextJson(afterRestart)).resolves.toEqual(unavailable);
       await expectNoMessage(afterRestart);
     } finally {
       now.mockRestore();
@@ -1147,6 +1225,88 @@ describe("single-room demo relay", () => {
     });
     expect(authority.finishAttempt).toHaveBeenCalledTimes(1);
     expect(authority.cancelAttempt).not.toHaveBeenCalled();
+  });
+
+  it("starts cooking evidence from one after an unavailable generation boundary", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), []);
+    const tokenHash = await testSha256Hex(lease.token);
+
+    const first = await runInDurableObject(
+      roomStub(),
+      (instance) => instance.beginActivityRecognitionAttempt(tokenHash),
+    );
+    if (!first.ok) throw new Error("first activity attempt should start");
+    await expect(runInDurableObject(
+      roomStub(),
+      (instance) => instance.finishActivityRecognitionAttempt(
+        tokenHash,
+        first.attempt_id,
+        { classification: "cooking", confidence: 0.87, reason: "第一次真实做饭" },
+      ),
+    )).resolves.toEqual({ receipt_id: null, consecutive: 1 });
+
+    await publishEvent(
+      controller,
+      makeActivityEvent(lease.session_id, 1, "unavailable"),
+      [],
+    );
+    const restarted = await runInDurableObject(
+      roomStub(),
+      (instance) => instance.beginActivityRecognitionAttempt(tokenHash),
+    );
+    if (!restarted.ok) throw new Error("restarted activity attempt should start");
+    await expect(runInDurableObject(
+      roomStub(),
+      (instance) => instance.finishActivityRecognitionAttempt(
+        tokenHash,
+        restarted.attempt_id,
+        { classification: "cooking", confidence: 0.87, reason: "新采集第一次做饭" },
+      ),
+    )).resolves.toEqual({ receipt_id: null, consecutive: 1 });
+  });
+
+  it("rejects an in-flight activity finish after its generation is invalidated", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    await publishEvent(controller, makeSceneEvent(lease.session_id, 0, "kitchen"), []);
+    const tokenHash = await testSha256Hex(lease.token);
+    const stale = await runInDurableObject(
+      roomStub(),
+      (instance) => instance.beginActivityRecognitionAttempt(tokenHash),
+    );
+    if (!stale.ok) throw new Error("activity attempt should start");
+
+    await publishEvent(
+      controller,
+      makeActivityEvent(lease.session_id, 1, "unavailable"),
+      [],
+    );
+    await expect(runInDurableObject(
+      roomStub(),
+      (instance) => instance.finishActivityRecognitionAttempt(
+        tokenHash,
+        stale.attempt_id,
+        { classification: "cooking", confidence: 0.87, reason: "失效后的旧响应" },
+      ),
+    )).resolves.toBeNull();
+
+    const current = await runInDurableObject(
+      roomStub(),
+      (instance) => instance.beginActivityRecognitionAttempt(tokenHash),
+    );
+    if (!current.ok) throw new Error("new activity generation should start");
+    await expect(runInDurableObject(
+      roomStub(),
+      (instance) => instance.finishActivityRecognitionAttempt(
+        tokenHash,
+        current.attempt_id,
+        { classification: "cooking", confidence: 0.87, reason: "新代次响应" },
+      ),
+    )).resolves.toEqual({ receipt_id: null, consecutive: 1 });
   });
 
   it("a stale activity finish cannot clear the newer in-flight attempt", async () => {
