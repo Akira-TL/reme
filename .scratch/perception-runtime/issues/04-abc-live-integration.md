@@ -10,8 +10,12 @@
 
 - [ ] C启动live_camera后A/B分别回报真实running状态。A侧HTTP控制已完成：请求先返回starting；正式模式连接C camera WebSocket并处理首帧后才回报running。B侧状态仍待联调。
 - [ ] A关键点、姿态和转变候选事件通过WebSocket到达B/C。A侧已按`FrameLandmarks → PostureObservation → TransitionEvent`顺序接入send-only WebSocket；2026-08-01 正常客户端 P95 为关键点 9.694 ms、姿态 45.596 ms；B/C实际消费者仍待接入并验证转变候选展示。
+  - [x] B 消费者已在本地实链路验证（2026-08-02）：B `PerceptionBridge` 拉取 A `/ws/events`，三类事件按序到达并驱动决策；见 `../results/2026-08-02-a-to-b-local-link.md`。
+  - [ ] C 消费者仍待接入。
 - [ ] C使用自己采集的原视频显示实时画面，并将A关键点叠加为2D骨架和“2D关键点三维可视化”。A不回传原视频。
 - [ ] B正常稳定时不持续调用MiMo，事件触发时返回CareDecision。
+  - [x] 本地 A→B 实链路已验证（2026-08-02，真 MiMo key）：still/fall 场景 0 次 MiMo 调用；concern 链路事件触发 3 条 source=mimo 决策（问询/解读/家属卡）。修复了 MiMo 在途窗口的 5Hz tick 重复起调（11×API 调用 + 重复广播），见 `policy.py` 在途门闩与 `../results/2026-08-02-a-to-b-local-link.md`。
+  - [ ] 与 C 同场联调仍待。
 - [ ] C可以提交safe、need_help、unclear和timeout回应。
 - [ ] C音频和用户回应进入C/B链路，不经过A；response_timeout_ms按现实交互时间运行。
 - [ ] A或B失败时分别显示degraded，不自动切换预录模式。

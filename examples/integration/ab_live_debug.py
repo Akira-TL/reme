@@ -14,17 +14,27 @@
 
 用法：
 
-  # 合成「站立→跌倒→躺地」序列，观察 B 的事件触发式 MiMo 决策
+  # 「站立→跌倒→躺地」：规则跌倒问询 → 8s 无回应 → 规则家属升级（危险链路全程不等 MiMo）
   .venv/bin/python examples/integration/ab_live_debug.py
 
-  # 合成持续站立，验证正常稳定时 B 不调用 MiMo
-  .venv/bin/python examples/integration/ab_live_debug.py --scenario still --duration 8
+  # 「坐姿静止 30s」关切链路，MiMo 三次出场：撰写问询（COMPOSE_CHECK_IN）→
+  # 解读老人主诉（need_help+text → INTERPRET_RESPONSE）→ 同意后撰写家属卡（COMPOSE_CARD）
+  .venv/bin/python examples/integration/ab_live_debug.py --scenario concern \
+      --respond-text "牙疼了两天，饭都吃不下，又不想麻烦孩子"
+
+  # 关切问询后不回应：MiMo 撰写问询 → 超时 → 规则家属升级
+  .venv/bin/python examples/integration/ab_live_debug.py --scenario concern
+
+  # 持续站立，验证正常稳定时 B 不调用 MiMo
+  .venv/bin/python examples/integration/ab_live_debug.py --scenario still --duration 8 --linger 3
 
   # 不注入任何输入，旁听当前已激活会话（例如浏览器真人驱动时）
   .venv/bin/python examples/integration/ab_live_debug.py --attach
 
 合成骨架与 tests/test_danger_link_e2e.py 保持一致，走 A 的浏览器关键点直传
 通道（``/ws/camera-input`` 的 ``landmarks_frame``），不需要摄像头和模型文件。
+倒计时归 C 所有（状态机不自带定时器），本脚本会替 C 扮演：超时提交
+``response=none/source=timeout``，或按 ``--respond-text`` 替老人回话。
 """
 
 from __future__ import annotations
@@ -85,8 +95,9 @@ def _say(side: str, message: str) -> None:
 def _request(
     base: str, method: str, path: str, payload: dict[str, Any] | None = None
 ) -> tuple[int, Any]:
+    # MiMo 同步解读回应时 /api/response 可能耗时数秒，超时给足余量。
     parsed = urlparse(base)
-    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=10)
+    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=30)
     try:
         body = None if payload is None else json.dumps(payload)
         headers = {"Content-Type": "application/json"} if body is not None else {}
@@ -205,6 +216,29 @@ def _lying() -> dict[str, tuple[float, float]]:
     }
 
 
+def _sitting() -> dict[str, tuple[float, float]]:
+    # 直立躯干 + 腿部折叠（踝-髋落差 < 0.72×1.4×躯干长），几何分类器判 sitting。
+    return {
+        "nose": (0.50, 0.30),
+        "left_eye": (0.485, 0.29),
+        "right_eye": (0.515, 0.29),
+        "left_ear": (0.47, 0.30),
+        "right_ear": (0.53, 0.30),
+        "left_shoulder": (0.44, 0.42),
+        "right_shoulder": (0.56, 0.42),
+        "left_elbow": (0.42, 0.52),
+        "right_elbow": (0.58, 0.52),
+        "left_wrist": (0.42, 0.60),
+        "right_wrist": (0.58, 0.60),
+        "left_hip": (0.46, 0.62),
+        "right_hip": (0.54, 0.62),
+        "left_knee": (0.44, 0.70),
+        "right_knee": (0.60, 0.70),
+        "left_ankle": (0.44, 0.78),
+        "right_ankle": (0.60, 0.78),
+    }
+
+
 def _skeleton(coords: dict[str, tuple[float, float]]) -> list[dict[str, Any]]:
     return [
         {
@@ -237,6 +271,9 @@ Pose = dict[str, tuple[float, float]]
 def _scenario_poses(scenario: str, duration_s: float, fps: float) -> list[Pose]:
     if scenario == "still":
         return [_standing()] * max(1, round(duration_s * fps))
+    if scenario == "concern":
+        # 关切触发条件（guardrails 默认值）：sitting + 静止 ≥30s。
+        return [_sitting()] * round(31.0 * fps)
     # 站立基线必须短：转变检测器的 short_window 信号要求评估窗口 ≤1400ms，
     # 而滑窗从场景开始（或上一事件清空）起累积，站立前奏过长会把窗口撑破，
     # 跌倒只能判成 uncertain。0.6s+0.4s 与 tests/test_danger_link_e2e.py 同节奏。
@@ -248,14 +285,113 @@ def _scenario_poses(scenario: str, duration_s: float, fps: float) -> list[Pose]:
     return poses
 
 
+# -- 扮演 C：倒计时与回应 ----------------------------------------------------
+
+
+class StreamClock:
+    """记录注入端最新发出的感知时间戳（响应 timestamp_ms 用它对齐时间轴）。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._latest_ms = 0.0
+
+    def advance(self, timestamp_ms: float) -> None:
+        with self._lock:
+            self._latest_ms = max(self._latest_ms, timestamp_ms)
+
+    def now_ms(self) -> float:
+        with self._lock:
+            return self._latest_ms
+
+
+class CResponder:
+    """替 C 扮演回应角色：按决策状态走剧本（状态机不带定时器，倒计时归 C）。
+
+    - ``check_in_required``：给了 ``--respond-text`` 就以老人身份回
+      ``need_help`` + 主诉文本（关切链路里这会触发 MiMo 解读）；否则等满
+      ``response_timeout_ms`` 提交 ``none/timeout``，走规则升级。
+    - ``consent_required``：自动回 ``consent_granted``（触发 MiMo 家属卡撰写）。
+    - 家属侧确认等流程不在 A→B 调试范围，不回应。
+
+    注意：跌倒链路对 ``need_help`` 的响应是立刻规则告警（危险不等 MiMo），
+    想看 MiMo 出话请用 ``--scenario concern``。
+    """
+
+    def __init__(
+        self,
+        *,
+        b_url: str,
+        scene_id: str,
+        clock: StreamClock,
+        respond_text: str | None,
+        respond_delay_s: float,
+    ) -> None:
+        self._b_url = b_url
+        self._scene_id = scene_id
+        self._clock = clock
+        self._respond_text = respond_text
+        self._respond_delay_s = respond_delay_s
+        self._lock = threading.Lock()
+        self._handled_ids: set[str] = set()
+        self._text_sent = False
+
+    def consider(self, decision: dict[str, Any]) -> None:
+        if not decision.get("need_dialogue"):
+            return
+        state = decision.get("state")
+        decision_id = str(decision.get("decision_id"))
+        with self._lock:
+            if decision_id in self._handled_ids:
+                return
+            plan: tuple[str, str | None, float] | None = None
+            if state == "check_in_required":
+                if self._respond_text is not None and not self._text_sent:
+                    self._text_sent = True
+                    plan = ("need_help", self._respond_text, self._respond_delay_s)
+                elif decision.get("response_timeout_ms"):
+                    plan = ("none", None, float(decision["response_timeout_ms"]) / 1000.0)
+            elif state == "consent_required" and self._respond_text is not None:
+                plan = ("consent_granted", None, self._respond_delay_s)
+            if plan is None:
+                return
+            self._handled_ids.add(decision_id)
+        threading.Thread(target=self._run, args=(decision_id, *plan), daemon=True).start()
+
+    def _run(self, decision_id: str, value: str, text: str | None, delay_s: float) -> None:
+        time.sleep(delay_s)
+        payload: dict[str, Any] = {
+            "schema_version": "reme-interaction-response/v0-experiment",
+            "scene_id": self._scene_id,
+            "decision_id": decision_id,
+            "timestamp_ms": self._clock.now_ms(),
+            "response": value,
+            "source": "timeout" if value == "none" else "user_input",
+        }
+        if value == "none":
+            _say("驱动", f"倒计时 {delay_s:g}s 无人回应，替 C 提交超时（{decision_id}）")
+        elif value == "consent_granted":
+            _say("驱动", f"替老人同意告知家属（{decision_id}）")
+        else:
+            payload["text"] = text
+            _say("驱动", f"替老人回话（{decision_id}）: response={value}「{text}」")
+        try:
+            status, body = _request(self._b_url, "POST", "/api/response", payload)
+        except OSError as exc:
+            _say("!", f"提交回应失败：{exc}")
+            return
+        if status != 200:
+            _say("!", f"回应被拒：HTTP {status} {body!r}")
+
+
 # -- 事件观察 ----------------------------------------------------------------
 
 
 class LinkObserver:
     """双流观察者：A 姿态去重打印，B 决策全文打印，收尾出摘要。"""
 
-    def __init__(self, verbose: bool) -> None:
+    def __init__(self, verbose: bool, responder: CResponder | None = None) -> None:
         self._verbose = verbose
+        self._responder = responder
         self._last_posture: tuple[str, str] | None = None
         self._last_posture_print = 0.0
         self.a_counts: Counter[str] = Counter()
@@ -321,14 +457,18 @@ class LinkObserver:
         if family:
             _say("B", f"  家属通知: {json.dumps(family, ensure_ascii=False)}")
         extras: list[str] = []
-        if payload.get("need_dialogue"):
+        if payload.get("need_dialogue") and payload.get("response_timeout_ms"):
             extras.append(f"等待回应 {payload.get('response_timeout_ms')}ms")
+        elif payload.get("need_dialogue"):
+            extras.append("等待回应（无倒计时）")
         if payload.get("confirm_channels"):
             extras.append(f"确认通道 {payload.get('confirm_channels')}")
         if payload.get("alarm"):
             extras.append(f"告警 {payload.get('alarm')}")
         if extras:
             _say("B", "  " + " | ".join(extras))
+        if self._responder is not None:
+            self._responder.consider(payload)
 
     def summary(self) -> str:
         lines = ["", "=== A→B 链路摘要 ==="]
@@ -421,36 +561,62 @@ def _connect_camera_input(a_url: str) -> _WsSender:
 
 
 def _drive_scenario(
-    sender: _WsSender, session_id: str, scene_id: str, scenario: str, duration_s: float, fps: float
+    sender: _WsSender,
+    session_id: str,
+    scene_id: str,
+    scenario: str,
+    duration_s: float,
+    fps: float,
+    hold_s: float,
+    clock: StreamClock,
 ) -> None:
     poses = _scenario_poses(scenario, duration_s, fps)
+    # 主序列结束后保持末姿态继续推流：B 的评估由 A 事件驱动（状态机无定时器），
+    # 断流即无 tick；同时倒计时期间人仍在画面里也更接近真实。
+    poses += [poses[-1]] * max(0, round(hold_s * fps))
     interval = 1.0 / fps
-    _say("驱动", f"开始注入合成关键点：scenario={scenario} 共 {len(poses)} 帧 @ {fps:g}fps")
+    _say(
+        "驱动",
+        f"开始注入合成关键点：scenario={scenario} 共 {len(poses)} 帧 @ {fps:g}fps"
+        f"（含末姿态保持 {hold_s:g}s）",
+    )
     for index, coords in enumerate(poses):
+        timestamp_ms = round(index * 1000.0 / fps, 1)
         sender.send_json(
             {
                 "type": "landmarks_frame",
                 "session_id": session_id,
                 "scene_id": scene_id,
                 "frame_index": index,
-                "timestamp_ms": round(index * 1000.0 / fps, 1),
+                "timestamp_ms": timestamp_ms,
                 "person_detected": True,
                 "keypoints": _skeleton(coords),
             }
         )
+        clock.advance(timestamp_ms)
         time.sleep(interval)
-    _say("驱动", "合成序列注入完毕")
+    _say("驱动", "注入结束")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--a-url", default="http://127.0.0.1:8770", help="A 感知服务地址")
     parser.add_argument("--b-url", default="http://127.0.0.1:8100", help="B 决策服务地址")
-    parser.add_argument("--scenario", choices=("fall", "still"), default="fall")
+    parser.add_argument("--scenario", choices=("fall", "concern", "still"), default="fall")
     parser.add_argument("--duration", type=float, default=8.0, help="still 场景时长（秒）")
     parser.add_argument("--fps", type=float, default=10.0, help="注入帧率")
-    parser.add_argument("--linger", type=float, default=15.0, help="注入完成后继续观察的秒数")
+    parser.add_argument(
+        "--linger", type=float, default=15.0, help="主序列后保持末姿态继续推流的秒数"
+    )
     parser.add_argument("--scene-id", default=DEFAULT_SCENE_ID)
+    parser.add_argument(
+        "--respond-text",
+        default=None,
+        help="问询后替老人提交的自由文本回应（触发 MiMo 解读）；缺省则倒计时超时",
+    )
+    parser.add_argument(
+        "--respond-delay", type=float, default=2.0, help="收到问询后几秒提交文本回应"
+    )
     parser.add_argument(
         "--attach", action="store_true", help="不注入输入，旁听 A 当前活跃会话（Ctrl+C 退出）"
     )
@@ -474,7 +640,19 @@ def main(argv: list[str] | None = None) -> int:
         _stop_active_a_session(args.a_url)
         _start_sessions(args.a_url, args.b_url, session_id, args.scene_id)
 
-    observer = LinkObserver(verbose=args.verbose)
+    clock = StreamClock()
+    responder = (
+        None
+        if args.attach
+        else CResponder(
+            b_url=args.b_url,
+            scene_id=args.scene_id,
+            clock=clock,
+            respond_text=args.respond_text,
+            respond_delay_s=args.respond_delay,
+        )
+    )
+    observer = LinkObserver(verbose=args.verbose, responder=responder)
     a_client = PerceptionEventClient(url=a_ws, session_id=session_id, on_event=observer.on_a_event)
     b_client = PerceptionEventClient(url=b_ws, session_id=session_id, on_event=observer.on_b_event)
     a_client.start()
@@ -488,10 +666,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             sender = _connect_camera_input(args.a_url)
             _drive_scenario(
-                sender, session_id, args.scene_id, args.scenario, args.duration, args.fps
+                sender,
+                session_id,
+                args.scene_id,
+                args.scenario,
+                args.duration,
+                args.fps,
+                args.linger,
+                clock,
             )
-            _say("驱动", f"继续观察 {args.linger:g}s（等待 B 的超时升级/尾随决策）")
-            time.sleep(args.linger)
+            time.sleep(3.0)  # 收尾观察，接住最后广播的决策
     except KeyboardInterrupt:
         _say("驱动", "收到 Ctrl+C，收尾")
     finally:
