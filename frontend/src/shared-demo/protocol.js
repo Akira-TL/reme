@@ -203,6 +203,17 @@ export function isRelayCapabilities(value) {
     && value.activity_confirmation === ACTIVITY_CONFIRMATION_PROTOCOL;
 }
 
+export function transitionActivityConfirmationCapability(current, signal) {
+  if (!["pending", "supported", "unsupported"].includes(current)) {
+    throw new TypeError("invalid activity confirmation capability state");
+  }
+  if (signal !== "supported" && signal !== "timeout") {
+    throw new TypeError("invalid activity confirmation capability signal");
+  }
+  if (current !== "pending") return current;
+  return signal === "supported" ? "supported" : "unsupported";
+}
+
 export function isMediaGrantError(value) {
   return hasExactKeys(value, SOCKET_ERROR_KEYS)
     && value.type === "error"

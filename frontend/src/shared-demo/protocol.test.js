@@ -26,6 +26,7 @@ import {
   parseDemoEvent,
   parsePoseFrame,
   parseForwardedMediaSignal,
+  transitionActivityConfirmationCapability,
 } from "./protocol.js";
 import { containedContentRect, mapPointIntoContainedContent } from "./geometry.js";
 import {
@@ -437,6 +438,29 @@ test("verified activity confirmation is a capability-gated wrapper, never a publ
     activity_confirmation: ACTIVITY_CONFIRMATION_PROTOCOL,
     extra: true,
   }), false);
+});
+
+test("activity confirmation capability is monotonic for one controller connection", () => {
+  assert.equal(
+    transitionActivityConfirmationCapability("pending", "supported"),
+    "supported",
+  );
+  assert.equal(
+    transitionActivityConfirmationCapability("pending", "timeout"),
+    "unsupported",
+  );
+  assert.equal(
+    transitionActivityConfirmationCapability("unsupported", "supported"),
+    "unsupported",
+  );
+  assert.equal(
+    transitionActivityConfirmationCapability("supported", "timeout"),
+    "supported",
+  );
+  assert.throws(
+    () => transitionActivityConfirmationCapability("pending", "unknown"),
+    /invalid activity confirmation capability signal/,
+  );
 });
 
 test("controller event blocks leave deterministic room for Relay grant events", () => {

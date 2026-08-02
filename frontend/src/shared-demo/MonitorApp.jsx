@@ -52,6 +52,7 @@ import {
   isHeartbeatAck,
   isMediaGrantError,
   isRelayCapabilities,
+  transitionActivityConfirmationCapability,
 } from "./protocol.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import { createMonitorState, reduceMonitorState } from "./state.js";
@@ -868,7 +869,7 @@ export function MonitorApp() {
       heartbeat: 0,
       readyTimeout: 0,
       activityCapabilityTimeout: 0,
-      activityConfirmationSupported: false,
+      activityConfirmationCapability: "pending",
       ready: false,
     };
     controllerRef.current = connection;
@@ -1015,8 +1016,14 @@ export function MonitorApp() {
           if (
             controllerRef.current === connection
             && connection.ready
-            && !connection.activityConfirmationSupported
-          ) setActivityConfirmationCapability("unsupported");
+            && connection.activityConfirmationCapability === "pending"
+          ) {
+            connection.activityConfirmationCapability = transitionActivityConfirmationCapability(
+              connection.activityConfirmationCapability,
+              "timeout",
+            );
+            setActivityConfirmationCapability(connection.activityConfirmationCapability);
+          }
         }, ACTIVITY_CAPABILITY_TIMEOUT_MS);
         leaseExpiresAtRef.current = value.lease_expires_at_ms;
         const readyFrameSequence = Number.isSafeInteger(value.last_frame_sequence)
@@ -1056,9 +1063,15 @@ export function MonitorApp() {
       }
       if (!connection.ready) return;
       if (isRelayCapabilities(value)) {
-        connection.activityConfirmationSupported = true;
+        // Once this connection has timed out, a late additive message cannot
+        // reopen activity publishing. A reconnect starts a fresh negotiation.
+        if (connection.activityConfirmationCapability !== "pending") return;
+        connection.activityConfirmationCapability = transitionActivityConfirmationCapability(
+          connection.activityConfirmationCapability,
+          "supported",
+        );
         window.clearTimeout(connection.activityCapabilityTimeout);
-        setActivityConfirmationCapability("supported");
+        setActivityConfirmationCapability(connection.activityConfirmationCapability);
         return;
       }
       if (
