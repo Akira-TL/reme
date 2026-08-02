@@ -119,6 +119,7 @@ const CONTROLLER_READY_KEYS = [
 const LEGACY_CONTROLLER_READY_KEYS = CONTROLLER_READY_KEYS.filter(
   (key) => key !== "current_alarm",
 );
+const PRE_CURSOR_CONTROLLER_READY_KEYS = ["lease_expires_at_ms", "session_id", "type"];
 const HEARTBEAT_ACK_KEYS = ["lease_expires_at_ms", "type"];
 const SOCKET_ERROR_KEYS = ["error", "type"];
 const MEDIA_GRANT_ERROR_CODES = Object.freeze([
@@ -167,13 +168,16 @@ function isSequenceCursor(value) {
 export function isControllerReady(value) {
   const hasCurrentAlarm = hasExactKeys(value, CONTROLLER_READY_KEYS);
   const isLegacyTransition = hasExactKeys(value, LEGACY_CONTROLLER_READY_KEYS);
-  return (hasCurrentAlarm || isLegacyTransition)
+  const isPreCursorTransition = hasExactKeys(value, PRE_CURSOR_CONTROLLER_READY_KEYS);
+  return (hasCurrentAlarm || isLegacyTransition || isPreCursorTransition)
     && value.type === "controller_ready"
     && isOpaqueId(value.session_id)
     && Number.isFinite(value.lease_expires_at_ms)
     && value.lease_expires_at_ms >= 0
-    && isSequenceCursor(value.last_event_sequence)
-    && isSequenceCursor(value.last_frame_sequence)
+    && (isPreCursorTransition || (
+      isSequenceCursor(value.last_event_sequence)
+      && isSequenceCursor(value.last_frame_sequence)
+    ))
     && (!hasCurrentAlarm || (
       value.current_alarm === null
       || (

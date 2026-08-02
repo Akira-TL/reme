@@ -427,6 +427,13 @@ test("controller resume messages require exact authoritative cursors", () => {
   const legacyReady = { ...ready };
   delete legacyReady.current_alarm;
   assert.equal(isControllerReady(legacyReady), true);
+  const preCursorReady = {
+    type: "controller_ready",
+    session_id: ready.session_id,
+    lease_expires_at_ms: ready.lease_expires_at_ms,
+  };
+  assert.equal(isControllerReady(preCursorReady), true);
+  assert.equal(isControllerReady({ ...preCursorReady, cursor: -1 }), false);
   assert.equal(isControllerReady({ ...ready, last_frame_sequence: -2 }), false);
   assert.equal(isControllerReady({ ...ready, token: "forbidden" }), false);
   assert.equal(isControllerReady({ ...ready, session_id: "bad session" }), false);

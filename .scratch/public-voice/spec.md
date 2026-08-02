@@ -127,7 +127,7 @@ Relay：
 1. 本地全绿并确认 `frontend/`、`demo-relay/`、本 SPEC/ADR 之外无意外改动。
 2. 先部署 Worker staging；用本地受允 Origin 验证 CORS、401/4xx 不触发 MiMo，再用合成“我没事/需要帮助”WAV 做一次真实授权调用。
 3. Vercel Preview 验证构建、`Permissions-Policy`、viewer 不请求麦克风和 monitor 状态机；随机 Preview Origin 未加入 staging allowlist 时不得伪称跨域 Gate 已过。
-4. `controller_ready` 新前端在发布窗口内同时严格接受旧五字段合同与带 `current_alarm` 的新合同；因此先发布 Vercel production（旧 Worker 下语音端点只会显式降级），确认控制链路正常后再发布 Worker production。上线后做安全 smoke、权威 alarm 收敛、真实 MiMo synthetic WAV 和脱敏日志核对。
+4. `controller_ready` 新前端在发布窗口内同时严格接受生产回滚版三字段、带 cursor 的五字段和带 `current_alarm` 的新六字段合同；缺失 cursor 只在精确三字段分支归一为 `-1`。因此先发布 Vercel production（旧 Worker 下语音端点只会显式降级），确认控制链路正常后再发布 Worker production。上线后做安全 smoke、权威 alarm 收敛、真实 MiMo synthetic WAV 和脱敏日志核对。
 5. 目标 iPhone Safari 与 Android Chrome 人工 Gate：HTTPS 权限、提示音回声、自然换气、噪声、safe/help、拒权、后台/前台恢复、停止后麦克风指示器熄灭。
 6. 回滚先恢复上一 Worker production，再恢复上一 Vercel production，避免旧前端遇到新增 `current_alarm` 字段；独立新增端点若保持安全且 controller 合同不变，才可只回滚前端。
 

@@ -793,11 +793,17 @@ export function MonitorApp() {
         connection.ready = true;
         window.clearTimeout(connection.readyTimeout);
         leaseExpiresAtRef.current = value.lease_expires_at_ms;
-        sequenceRef.current = value.last_frame_sequence + 1;
-        if (value.last_event_sequence >= 0) {
+        const readyFrameSequence = Number.isSafeInteger(value.last_frame_sequence)
+          ? value.last_frame_sequence
+          : -1;
+        const readyEventSequence = Number.isSafeInteger(value.last_event_sequence)
+          ? value.last_event_sequence
+          : -1;
+        sequenceRef.current = readyFrameSequence + 1;
+        if (readyEventSequence >= 0) {
           eventSequenceRef.current = advanceControllerEventSequence(
             eventSequenceRef.current,
-            value.last_event_sequence,
+            readyEventSequence,
           );
         }
         if (readyReconciliation.action === "adopt") {
