@@ -25,12 +25,39 @@ from reme.pose.runtime_server import (
     PerceptionWorker,
     RuntimePerceptionController,
     build_runtime_handler,
+    derive_live_perception_events,
     encode_websocket_frame,
 )
 
 
 class Publish(Protocol):
     def __call__(self, event: RuntimeEvent) -> None: ...
+
+
+class FakePostureTracker:
+    def process_frame_event(self, event: RuntimeEvent) -> RuntimeEvent:
+        return RuntimeEvent(
+            session_id=event.session_id,
+            sequence=event.sequence,
+            event_type=RuntimeEventType.POSTURE_OBSERVATION,
+            payload={"scene_id": "live-camera-001", "posture": "standing"},
+        )
+
+
+class FakeTransitionDetector:
+    def __init__(self) -> None:
+        self.inputs: list[RuntimeEventType] = []
+
+    def process_runtime_event(self, event: RuntimeEvent) -> RuntimeEvent | None:
+        self.inputs.append(event.event_type)
+        if event.event_type is not RuntimeEventType.FRAME_LANDMARKS:
+            return None
+        return RuntimeEvent(
+            session_id=event.session_id,
+            sequence=event.sequence,
+            event_type=RuntimeEventType.TRANSITION_EVENT,
+            payload={"scene_id": "live-camera-001", "transition": "normal_transition"},
+        )
 
 
 class FakeWorker(PerceptionWorker):
@@ -77,6 +104,34 @@ def _wait_until(predicate: Callable[[], bool], timeout: float = 1.0) -> None:
             return
         time.sleep(0.005)
     raise AssertionError("condition was not met before timeout")
+
+
+def test_live_pipeline_publishes_frame_posture_transition_in_order() -> None:
+    frame = RuntimeEvent(
+        session_id="session-live-001",
+        sequence=8,
+        event_type=RuntimeEventType.FRAME_LANDMARKS,
+        payload={"scene_id": "live-camera-001", "frame_index": 8},
+    )
+    detector = FakeTransitionDetector()
+
+    events = derive_live_perception_events(
+        frame,
+        posture_tracker=FakePostureTracker(),
+        transition_detector=detector,
+    )
+
+    assert [event.event_type for event in events] == [
+        RuntimeEventType.FRAME_LANDMARKS,
+        RuntimeEventType.POSTURE_OBSERVATION,
+        RuntimeEventType.TRANSITION_EVENT,
+    ]
+    assert detector.inputs == [
+        RuntimeEventType.POSTURE_OBSERVATION,
+        RuntimeEventType.FRAME_LANDMARKS,
+    ]
+    assert all(event.session_id == "session-live-001" for event in events)
+    assert all(event.sequence == 8 for event in events)
 
 
 def test_event_broker_fans_out_and_closes_one_session() -> None:

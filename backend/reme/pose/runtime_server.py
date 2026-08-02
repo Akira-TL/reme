@@ -30,6 +30,7 @@ from reme.pose.runtime import (
     RuntimeSessionStatus,
     ensure_new_session,
 )
+from reme.pose.transitions import TransitionDetector
 
 DEFAULT_MOVENET_MODEL = Path("models/movenet/movenet_lightning_f16_v4.tflite")
 DEFAULT_POSTURE_MODEL = Path(
@@ -90,6 +91,18 @@ class EventBroker:
             _put_latest(subscription, None)
 
 
+class PostureEventTracker(Protocol):
+    """Produce optional low-frequency posture events from frame events."""
+
+    def process_frame_event(self, event: RuntimeEvent) -> RuntimeEvent | None: ...
+
+
+class TransitionEventDetector(Protocol):
+    """Consume ordered posture/frame events and emit optional transitions."""
+
+    def process_runtime_event(self, event: RuntimeEvent) -> RuntimeEvent | None: ...
+
+
 class PerceptionWorker(Protocol):
     """Adapter seam for one live perception implementation."""
 
@@ -103,8 +116,29 @@ class PerceptionWorker(Protocol):
     ) -> None: ...
 
 
+def derive_live_perception_events(
+    frame_event: RuntimeEvent,
+    *,
+    posture_tracker: PostureEventTracker,
+    transition_detector: TransitionEventDetector,
+) -> tuple[RuntimeEvent, ...]:
+    """Derive ordered posture and transition events for one landmark frame."""
+
+    posture_event = posture_tracker.process_frame_event(frame_event)
+    if posture_event is not None:
+        transition_detector.process_runtime_event(posture_event)
+    transition_event = transition_detector.process_runtime_event(frame_event)
+
+    events = [frame_event]
+    if posture_event is not None:
+        events.append(posture_event)
+    if transition_event is not None:
+        events.append(transition_event)
+    return tuple(events)
+
+
 class LiveCameraPerceptionWorker:
-    """Run camera, MoveNet, and posture classification behind one worker interface."""
+    """Run camera, MoveNet, posture, and transition inference behind one interface."""
 
     def __init__(
         self,
@@ -148,6 +182,7 @@ class LiveCameraPerceptionWorker:
                 score_threshold=self.score_threshold,
             ),
         )
+        transition_detector = TransitionDetector(session_id=request.session_id)
         stream = LiveMoveNetStream(
             session_id=request.session_id,
             scene_id=request.scene_id,
@@ -160,10 +195,12 @@ class LiveCameraPerceptionWorker:
             if not announced:
                 mark_running()
                 announced = True
-            publish(frame_event)
-            posture_event = tracker.process_frame_event(frame_event)
-            if posture_event is not None:
-                publish(posture_event)
+            for event in derive_live_perception_events(
+                frame_event,
+                posture_tracker=tracker,
+                transition_detector=transition_detector,
+            ):
+                publish(event)
 
 
 class RuntimePerceptionController:

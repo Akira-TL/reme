@@ -203,7 +203,7 @@ GET  /api/health
 WS   /ws/events?session_id=<session_id>
 ```
 
-`POST /api/runtime/start`只接受共享合同中的`live_camera`请求。HTTP响应先返回`starting`；摄像头成功打开并完成首帧推理后，`GET /api/runtime/status`才返回`running`。WebSocket发送同一`session_id`下的`FrameLandmarks`和`PostureObservation`。替换session时旧连接收到关闭帧，旧事件不会进入新会话。
+`POST /api/runtime/start`只接受共享合同中的`live_camera`请求。HTTP响应先返回`starting`；摄像头成功打开并完成首帧推理后，`GET /api/runtime/status`才返回`running`。WebSocket发送同一`session_id`下的`FrameLandmarks`、`PostureObservation`和确定性`TransitionEvent`候选。每帧先更新姿态上下文，再分析转变，最后按关键点、姿态、转变的顺序发布。`fall_like_transition`只是待验证候选，不代表已证明的跌倒识别。替换session时旧连接收到关闭帧，旧事件不会进入新会话。
 
 ## MotionBERT 可重复重建
 

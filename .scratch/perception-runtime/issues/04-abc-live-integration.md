@@ -9,7 +9,7 @@
 **Status:** claimed
 
 - [ ] C启动live_camera后A/B分别回报真实running状态。A侧HTTP控制已完成：请求先返回starting，摄像头首帧后才回报running；B侧状态仍待联调。
-- [ ] A关键点和姿态事件通过WebSocket到达B/C。A侧send-only WebSocket事件流与本地客户端验收已完成；2026-08-01 正常客户端 P95 为关键点 9.694 ms、姿态 45.596 ms；B/C实际消费者仍待接入。
+- [ ] A关键点、姿态和转变候选事件通过WebSocket到达B/C。A侧已按`FrameLandmarks → PostureObservation → TransitionEvent`顺序接入send-only WebSocket；2026-08-01 正常客户端 P95 为关键点 9.694 ms、姿态 45.596 ms；B/C实际消费者仍待接入并验证转变候选展示。
 - [ ] C显示实时视频、2D骨架和“2D关键点三维可视化”。
 - [ ] B正常稳定时不持续调用MiMo，事件触发时返回CareDecision。
 - [ ] C可以提交safe、need_help、unclear和timeout回应。
