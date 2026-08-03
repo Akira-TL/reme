@@ -3,11 +3,13 @@
 - Date: 2026-08-02
 - Base: `c126958a109c82b579bdcf7de76be91da5901a1d`
 - Implementation commit: `c39d5d20e669b196f58c5a89f660d64016bef0e5`
+- Integrated LBX code boundary: `e9312aedc9e4016dec280a48bb47c4b72552f434`（在实现与证据提交之上保留原本仅本地的 danger voice 修复）
 - Release status: 本地自动化与独立审查通过；尚未 push、部署或完成真实公网媒体 Gate。
 
 ## 静止代码门禁
 
 - Frontend：`npm test` 244/244；`npm run lint`；`npm run build`（977 modules）均通过。
+- Integrated LBX：重放既有 danger voice 修复后，frontend `npm test` 245/245、lint、977-module build 与 `git diff --check upstream/lbx..HEAD` 再次通过。
 - Relay：静止代码上的完整 `npm test -- --reporter=dot` 连续三轮均为 102/102；`npm run check` 通过。
 - Wrangler：production 与 staging `npm run dry-run` 均通过；两端 bundle 均为 180.35 KiB / gzip 31.75 KiB，未部署。
 - Git hygiene：`git diff --check`、冲突标记扫描、staged secret/bundle scan 均通过；前端构建中没有 `TURN_KEY_ID`、`TURN_KEY_API_TOKEN` 或 provider credential endpoint。
