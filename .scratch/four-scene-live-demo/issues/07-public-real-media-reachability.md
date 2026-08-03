@@ -84,4 +84,5 @@
 
 ## Results
 
-待实现与自动化验证后写入独立 `results/` 文件；不得把 dry-run、ICE config 200 或同网成功替代跨网真机 Gate。
+- 自动化与静止代码证据：`../results/2026-08-02-public-real-media-automated-gates.md`
+- Cloudflare Realtime 仍等待用户本人完成付款方式与激活；key、secrets、部署和跨网真机 Gate 均未完成。不得把 dry-run、ICE config 200 或同网成功替代跨网真机 Gate。
