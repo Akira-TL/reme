@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   FALL_INQUIRY_DELAY_MS,
   FALL_POST_PROMPT_GRACE_MS,
+  FALL_VOICE_CAPTURE_MS,
   getDecisionVoicePlan,
   getVoiceAlarmDelayMs,
   getVoiceCaptureWindowMs,
@@ -63,9 +64,10 @@ test("non-fall dialogue keeps the existing MiMo-first path", () => {
 });
 
 test("fall alarm waits three seconds after the prompt has actually ended", () => {
-  const decision = { ...FALL_CHECK_IN, response_timeout_ms: 2000 };
+  const decision = { ...FALL_CHECK_IN, response_timeout_ms: 3000 };
   assert.equal(getVoiceCaptureWindowMs(decision), 2000);
   assert.equal(getVoiceAlarmDelayMs(decision), 3000);
+  assert.equal(FALL_VOICE_CAPTURE_MS, 2000);
   assert.equal(FALL_POST_PROMPT_GRACE_MS, 3000);
 });
 

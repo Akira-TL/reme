@@ -1,4 +1,5 @@
 export const FALL_INQUIRY_DELAY_MS = 1000;
+export const FALL_VOICE_CAPTURE_MS = 2000;
 export const FALL_POST_PROMPT_GRACE_MS = 3000;
 
 export function isFallCheckInDecision(payload) {
@@ -20,6 +21,7 @@ export function getDecisionVoicePlan(payload, { force = false } = {}) {
 }
 
 export function getVoiceCaptureWindowMs(payload) {
+  if (isFallCheckInDecision(payload)) return FALL_VOICE_CAPTURE_MS;
   return Number.isFinite(payload?.response_timeout_ms)
     && payload.response_timeout_ms > 0
     ? payload.response_timeout_ms

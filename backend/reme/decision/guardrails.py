@@ -75,7 +75,7 @@ class TriggerConfig:
         default_factory=lambda: frozenset({Posture.SITTING})
     )
     check_in_timeout_ms: int = 2500
-    fall_response_timeout_ms: int = 2000
+    fall_response_timeout_ms: int = 3000
     family_ack_timeout_ms: int = 8000
     rewind_tolerance_ms: float = 3000.0
     default_privacy_mode: PrivacyMode = PrivacyMode.BLURRED

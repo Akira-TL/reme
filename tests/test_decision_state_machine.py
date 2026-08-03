@@ -158,7 +158,7 @@ def test_fall_trigger_enters_awaiting_elder_with_mandatory_timeout() -> None:
     assert directive.skeleton is not None
     assert directive.skeleton.state is DecisionState.CHECK_IN_REQUIRED
     assert directive.skeleton.response_timeout_ms == _CONFIG.fall_response_timeout_ms
-    assert directive.skeleton.response_timeout_ms == 2000
+    assert directive.skeleton.response_timeout_ms == 3000
     assert directive.skeleton.template is TemplateId.FALL_CHECK_IN
     assert directive.skeleton.confirm_channels == ("voice",)
     assert directive.mimo_task is None
