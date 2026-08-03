@@ -9,7 +9,7 @@ The team has confirmed two constraints:
 - Source video may be decoded locally, but judge/family-facing output must not make the person easily identifiable.
 - A usable MiMo API is available.
 
-The current feasibility question is whether the current CUDA development computer can sustain a single-person live-camera pipeline from MoveNet 2D landmarks to posture observations and a complete event-triggered MiMo interaction loop. Recorded video remains a later stability and playback path. The final classifier, transition capability, Raspberry Pi role, and competition story remain open until measured.
+The current core feasibility question is whether the current CUDA development computer can sustain a single-person live-camera pipeline from MoveNet 2D landmarks to posture observations and a complete event-triggered MiMo interaction loop. Recorded video remains a later stability and playback path. In parallel, ADR-0012 permits a demo-only, display-only MediaPipe experiment for zero to four anonymous pose candidates; its target-phone capability Gate is still pending and it cannot feed fall, cooking, voice, care-card, or media-authority decisions. The final classifier, transition capability, Raspberry Pi role, and competition story remain open until measured.
 
 ## Primary user story
 
@@ -70,6 +70,7 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 - **Live camera profile**: `camera + live perception + live decision`. This is the current P0 development path.
 - **Recorded video profile**: `video + recorded perception + recorded decision`. This is a later stable playback path and does not rerun A or B during presentation.
 - **Frame landmarks**: the human keypoints observed at one source time. Landmark confidence describes input quality, not posture or event accuracy.
+- **Anonymous pose batch**: zero to four frame-local 17-point pose candidates from one source frame. Array order is not identity, and no cross-frame tracking or re-identification is implied.
 - **Posture observation**: a static body-state hypothesis at one source-video time, such as `standing` or `lying`. A posture observation is not a care event.
 - **Transition event**: a time-window hypothesis about a change between body states, such as `normal_transition` or `fall_like_transition`. A single `lying` observation cannot establish a transition event.
 - **Care decision**: the decision layer's current recommendation about observation, check-in, family notification, privacy presentation, or degradation. It is distinct from perception output.
@@ -107,6 +108,7 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 5. What events should trigger MiMo, and when is visual context materially useful?
 6. Which exact prerecorded videos and competition story should be produced after the live pipeline is stable?
 7. Is Raspberry Pi 4B deployment worth the time and risk?
+8. Does the isolated anonymous multi-pose projection pass its frozen target-phone Pilot and Holdout Gate without weakening the single-person authority path?
 
 ## Repository status
 

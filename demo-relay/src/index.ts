@@ -38,6 +38,9 @@ import {
 export type { DemoEvent, MediaSignal } from "./protocol";
 
 const FRAME_SCHEMA_VERSION = "movenet-17/v1-demo";
+const POSE_BATCH_SCHEMA_VERSION = "reme-pose-batch-17/v1-demo";
+const POSE_PROJECTION_RESET_SCHEMA_VERSION = "reme-pose-reset/v1-demo";
+const POSE_PROJECTION_UNAVAILABLE_TYPE = "pose_projection_unavailable";
 const VIEWER_PROTOCOL = "reme-viewer-v1";
 const CONTROLLER_PROTOCOL = "reme-controller-v1";
 
@@ -47,6 +50,7 @@ const LEASE_TTL_MS = 30_000;
 const LATEST_FRAME_TTL_MS = 2_500;
 const MAX_JSON_BYTES = 16_384;
 const KEYPOINT_SCORE_THRESHOLD = 0.2;
+const MAX_POSES_PER_BATCH = 4;
 const UNLOCK_ATTEMPT_WINDOW_MS = 60_000;
 const MAX_UNLOCK_ATTEMPTS_PER_WINDOW = 5;
 const MAX_TRACKED_CLIENTS = 1_024;
@@ -101,6 +105,42 @@ export interface FrameLandmarks {
   }>;
 }
 
+export interface PoseBatchFrame {
+  schema_version: typeof POSE_BATCH_SCHEMA_VERSION;
+  session_id: string;
+  sequence: number;
+  timestamp_ms: number;
+  source_width: number;
+  source_height: number;
+  poses: Array<{
+    landmark_quality: "usable" | "degraded";
+    keypoints: Array<{
+      name: KeypointName;
+      x: number;
+      y: number;
+      score: number;
+    }>;
+  }>;
+}
+
+export interface PoseProjectionReset {
+  schema_version: typeof POSE_PROJECTION_RESET_SCHEMA_VERSION;
+  session_id: string;
+  sequence: number;
+  timestamp_ms: number;
+  pose_mode: "single" | "multi";
+}
+
+export interface PoseProjectionUnavailable {
+  type: typeof POSE_PROJECTION_UNAVAILABLE_TYPE;
+  session_id: string;
+  timestamp_ms: number;
+  through_sequence: number;
+  pose_mode: "single" | "multi";
+}
+
+export type PoseWireFrame = FrameLandmarks | PoseBatchFrame | PoseProjectionReset;
+
 interface LeaseRow {
   [key: string]: SqlStorageValue;
   token_hash: string;
@@ -118,14 +158,14 @@ interface ControllerAttachment {
   tokenHash: string;
   sessionId: string;
   leaseExpiresAtMs: number;
-  latestFrame: FrameLandmarks | null;
+  latestFrame: PoseWireFrame | null;
   latestFrameReceivedAtMs: number | null;
 }
 
 type SocketAttachment = ViewerAttachment | ControllerAttachment;
 
 type FrameValidation =
-  | { ok: true; frame: FrameLandmarks }
+  | { ok: true; frame: PoseWireFrame }
   | { ok: false; error: "invalid_frame" | "media_fields_forbidden" };
 
 interface EventSequenceRow {
@@ -944,6 +984,7 @@ export class DemoRoom extends DurableObject<Env> {
   webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): void {
     const attachment = readAttachment(ws);
     if (attachment?.role === "controller") {
+      this.clearPoseProjectionOnControllerLoss(ws, attachment, Date.now());
       // The lease remains briefly reconnectable, but event-scoped media is
       // fail-closed immediately when the publishing socket disappears.
       this.revokeAllActiveGrants(attachment.sessionId, Date.now(), null);
@@ -956,11 +997,48 @@ export class DemoRoom extends DurableObject<Env> {
   webSocketError(ws: WebSocket, _error: unknown): void {
     const attachment = readAttachment(ws);
     if (attachment?.role === "controller") {
+      this.clearPoseProjectionOnControllerLoss(ws, attachment, Date.now());
       this.revokeAllActiveGrants(attachment.sessionId, Date.now(), null);
       this.clearActivityRecognitionEvidence(attachment.sessionId);
     } else if (attachment?.role === "viewer") {
       this.removeViewerFromActiveAudiences(attachment.viewerId, Date.now());
     }
+  }
+
+  private clearPoseProjectionOnControllerLoss(
+    ws: WebSocket,
+    attachment: ControllerAttachment,
+    now: number,
+  ): void {
+    const latest = attachment.latestFrame;
+    if (latest === null || latest.schema_version === POSE_PROJECTION_RESET_SCHEMA_VERSION) return;
+    const cursor = this.ctx.storage.sql.exec<FrameSequenceRow>(
+      `SELECT session_id, last_frame_sequence
+         FROM room_frame_sequence
+        WHERE singleton = 1`,
+    ).toArray()[0];
+    if (
+      cursor === undefined
+      || cursor.session_id !== attachment.sessionId
+      || cursor.last_frame_sequence !== latest.sequence
+    ) return;
+    const unavailable: PoseProjectionUnavailable = {
+      type: POSE_PROJECTION_UNAVAILABLE_TYPE,
+      session_id: attachment.sessionId,
+      timestamp_ms: now,
+      through_sequence: latest.sequence,
+      pose_mode: latest.schema_version === POSE_BATCH_SCHEMA_VERSION ? "multi" : "single",
+    };
+    // Controller loss is an out-of-band availability boundary. It must clear
+    // existing viewers immediately without consuming the authoritative frame
+    // cursor that the reconnecting controller resumes from.
+    ws.serializeAttachment({
+      ...attachment,
+      latestFrame: null,
+      latestFrameReceivedAtMs: null,
+    } satisfies ControllerAttachment);
+    const serialized = JSON.stringify(unavailable);
+    for (const viewer of this.openSockets("viewer")) safeSend(viewer, serialized);
   }
 
   private async acceptDemoEvent(
@@ -2698,7 +2776,7 @@ export class DemoRoom extends DurableObject<Env> {
     }
   }
 
-  private latestControllerFrame(now: number): FrameLandmarks | null {
+  private latestControllerFrame(now: number): PoseWireFrame | null {
     for (const socket of this.openSockets("controller")) {
       const attachment = readAttachment(socket);
       if (
@@ -2843,6 +2921,8 @@ function validateFrame(value: unknown, sessionId: string): FrameValidation {
     return { ok: false, error: "media_fields_forbidden" };
   }
   return isStrictFrame(value, sessionId)
+    || isStrictPoseBatchFrame(value, sessionId)
+    || isStrictPoseProjectionReset(value, sessionId)
     ? { ok: true, frame: value }
     : { ok: false, error: "invalid_frame" };
 }
@@ -2908,6 +2988,99 @@ function isStrictFrame(value: unknown, sessionId: string): value is FrameLandmar
     )
       ? "usable"
       : "degraded";
+  return value.landmark_quality === expectedQuality;
+}
+
+function isStrictPoseBatchFrame(value: unknown, sessionId: string): value is PoseBatchFrame {
+  if (
+    !isExactObject(value, [
+      "schema_version",
+      "session_id",
+      "sequence",
+      "timestamp_ms",
+      "source_width",
+      "source_height",
+      "poses",
+    ])
+    || value.schema_version !== POSE_BATCH_SCHEMA_VERSION
+    || value.session_id !== sessionId
+    || !Number.isSafeInteger(value.sequence)
+    || typeof value.sequence !== "number"
+    || value.sequence < 0
+    || !isFiniteNonNegativeNumber(value.timestamp_ms)
+    || !isSourceDimension(value.source_width)
+    || !isSourceDimension(value.source_height)
+    || !Array.isArray(value.poses)
+    || value.poses.length > MAX_POSES_PER_BATCH
+  ) {
+    return false;
+  }
+  for (let poseIndex = 0; poseIndex < value.poses.length; poseIndex += 1) {
+    if (!isStrictDetectedPose(value.poses[poseIndex])) return false;
+  }
+  return true;
+}
+
+function isStrictPoseProjectionReset(
+  value: unknown,
+  sessionId: string,
+): value is PoseProjectionReset {
+  return isExactObject(value, [
+    "schema_version",
+    "session_id",
+    "sequence",
+    "timestamp_ms",
+    "pose_mode",
+  ])
+    && value.schema_version === POSE_PROJECTION_RESET_SCHEMA_VERSION
+    && value.session_id === sessionId
+    && typeof value.sequence === "number"
+    && Number.isSafeInteger(value.sequence)
+    && value.sequence >= 0
+    && isFiniteNonNegativeNumber(value.timestamp_ms)
+    && (value.pose_mode === "single" || value.pose_mode === "multi");
+}
+
+function isStrictDetectedPose(value: unknown): value is PoseBatchFrame["poses"][number] {
+  if (
+    !isExactObject(value, ["landmark_quality", "keypoints"])
+    || (value.landmark_quality !== "usable" && value.landmark_quality !== "degraded")
+    || !Array.isArray(value.keypoints)
+    || value.keypoints.length !== MOVENET_KEYPOINT_NAMES.length
+  ) {
+    return false;
+  }
+
+  const rawKeypoints = value.keypoints;
+  for (let index = 0; index < MOVENET_KEYPOINT_NAMES.length; index += 1) {
+    const keypoint = rawKeypoints[index];
+    if (
+      !isExactObject(keypoint, ["name", "x", "y", "score"])
+      || keypoint.name !== MOVENET_KEYPOINT_NAMES[index]
+      || !isUnitNumber(keypoint.x)
+      || !isUnitNumber(keypoint.y)
+      || !isUnitNumber(keypoint.score)
+    ) {
+      return false;
+    }
+  }
+
+  const keypoints = rawKeypoints as PoseBatchFrame["poses"][number]["keypoints"];
+  const torsoDetected = [5, 6].some(
+    (index) => keypoints[index]?.score !== undefined
+      && keypoints[index].score >= KEYPOINT_SCORE_THRESHOLD,
+  ) && [11, 12].some(
+    (index) => keypoints[index]?.score !== undefined
+      && keypoints[index].score >= KEYPOINT_SCORE_THRESHOLD,
+  );
+  if (!torsoDetected) return false;
+
+  const expectedQuality: PoseBatchFrame["poses"][number]["landmark_quality"] = [
+    5, 6, 11, 12, 13, 14, 15, 16,
+  ].every(
+    (index) => keypoints[index]?.score !== undefined
+      && keypoints[index].score >= KEYPOINT_SCORE_THRESHOLD,
+  ) ? "usable" : "degraded";
   return value.landmark_quality === expectedQuality;
 }
 

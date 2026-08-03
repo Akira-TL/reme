@@ -4,7 +4,8 @@ import {
   isMediaSignal,
   parseDemoEvent,
   parseForwardedMediaSignal,
-  parsePoseFrame,
+  parsePoseProjectionUnavailable,
+  parsePoseWireFrame,
   VIEWER_PROTOCOL,
 } from "./protocol.js";
 import { createViewerState, reduceViewerState } from "./state.js";
@@ -155,9 +156,18 @@ export function useViewerRelay() {
           dispatch({ type: "viewer_ready", viewerId: ready.viewer_id });
           return;
         }
-        const frame = parsePoseFrame(event.data);
+        const frame = parsePoseWireFrame(event.data);
         if (frame) {
           dispatch({ type: "frame", frame, receivedAtMs: Date.now() });
+          return;
+        }
+        const projectionUnavailable = parsePoseProjectionUnavailable(event.data);
+        if (projectionUnavailable) {
+          dispatch({
+            type: "pose_projection_unavailable",
+            message: projectionUnavailable,
+            receivedAtMs: Date.now(),
+          });
           return;
         }
         const demoEvent = parseDemoEvent(event.data);

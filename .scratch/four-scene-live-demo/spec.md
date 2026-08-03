@@ -5,7 +5,7 @@
 - Owner: C（LBX）
 - Date: 2026-08-02
 - Branch boundary: 只允许提交到 `lbx`，只允许推送 `upstream/lbx`
-- Related: `docs/adr/0008-event-scoped-family-media.md`
+- Related: `docs/adr/0008-event-scoped-family-media.md`、`docs/adr/0011-judge-demo-live-scene-projection.md`、`docs/adr/0012-demo-multipose-projection.md`
 
 ## 1. 用户目标
 
@@ -54,7 +54,12 @@
 
 ## 4. 版本化事件合同
 
-姿态合同保持 `movenet-17/v1-demo` 不变。新增事件使用：
+单人姿态合同保持 `movenet-17/v1-demo` 不变。可选的多人火柴人实验使用独立严格合同
+`reme-pose-batch-17/v1-demo`（每帧 `0..4` 个匿名 17 点姿态），不得把数组扩展进单人合同，也不得进入
+跌倒、做饭、语音、卡片、receipt 或媒体授权链。模式切换/隐藏/停止通过共享 frame cursor 的
+`reme-pose-reset/v1-demo` 立即清场；controller 异常断开由 Relay 发带 `through_sequence` 的
+`pose_projection_unavailable`，不消费 cursor，旧断线消息也不能清掉重连新帧。完整边界与 pending
+目标手机 Gate 见 ADR-0012。新增事件使用：
 
 ```json
 {

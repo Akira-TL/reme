@@ -965,6 +965,123 @@ body {
   font-style: normal;
 }
 
+.pose-mode-card {
+  margin-top: 10px;
+  padding: 14px 16px;
+  border: 1px solid #e7e3df;
+  border-radius: 19px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(80, 64, 52, 0.07);
+}
+
+.pose-mode-card.is-unavailable {
+  border-color: #ffc7c3;
+  background: #fffafa;
+}
+
+.pose-mode-card-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pose-mode-card-head span,
+.pose-mode-card-head small,
+.pose-mode-card-head b {
+  display: block;
+}
+
+.pose-mode-card-head small {
+  color: #ff5a00;
+  font-size: 8px;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+}
+
+.pose-mode-card-head b {
+  margin-top: 2px;
+  color: #222;
+  font-size: 14px;
+}
+
+.pose-mode-card-head em {
+  padding: 6px 9px;
+  border-radius: 999px;
+  color: #71675f;
+  background: #f4f1ee;
+  font-size: 9px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.pose-mode-segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 12px;
+  padding: 4px;
+  border: 1px solid #e8e3df;
+  border-radius: 15px;
+  background: #f5f2ef;
+}
+
+.pose-mode-segmented button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 11px;
+  color: #6d655f;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pose-mode-segmented button:hover:not(:disabled) {
+  color: #d94c00;
+  background: #fff;
+}
+
+.pose-mode-segmented button.is-active {
+  color: #fff;
+  background: #a83a00;
+  box-shadow: 0 6px 16px rgba(255, 90, 0, 0.2);
+}
+
+.pose-mode-segmented button:focus-visible {
+  outline: 3px solid rgba(255, 90, 0, 0.25);
+  outline-offset: 2px;
+}
+
+.pose-mode-segmented button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.pose-mode-card > p,
+.pose-mode-boundary {
+  display: block;
+  margin: 10px 0 0;
+  color: #777;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.pose-mode-card.is-loading > p {
+  color: #d94c00;
+}
+
+.pose-mode-card.is-unavailable > p {
+  color: #cf312a;
+}
+
+.pose-mode-boundary {
+  padding-top: 9px;
+  border-top: 1px solid #eee9e5;
+  color: #71675f;
+}
+
 .monitor-layout .control-panel {
   max-height: none;
   padding: 18px 0;
@@ -1541,6 +1658,15 @@ body {
     width: 38px;
     height: 38px;
     border-radius: 12px;
+  }
+
+  .pose-mode-card {
+    padding: 12px 14px;
+    border-radius: 17px;
+  }
+
+  .pose-mode-segmented button {
+    min-height: 44px;
   }
 
   .demo-footer {

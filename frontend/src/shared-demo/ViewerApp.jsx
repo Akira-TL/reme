@@ -6,6 +6,7 @@ import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
 import VerifiedUserRoundedIcon from "@mui/icons-material/VerifiedUserRounded";
 import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import { SkeletonStage } from "./SkeletonStage.jsx";
+import { selectPoseFrameView } from "./poseFrameView.js";
 import {
   selectActiveMediaGrant,
   selectViewerPresentation,
@@ -307,6 +308,7 @@ export function ViewerApp() {
   });
   const alarmEffects = useAlarmEffects(relay.alarm);
   const { ageMs } = presentation;
+  const poseFrameView = selectPoseFrameView(relay.frame, relay.poseMode);
   const videoVisible = Boolean(
     activeGrant && mediaStream && mediaStatus === "live",
   );
@@ -314,6 +316,13 @@ export function ViewerApp() {
   const showsSkeleton = !videoVisible
     && (presentation.kind === "live" || presentation.kind === "degraded");
   const alarmActive = relay.alarm?.phase === "escalated";
+  const poseModeCopy = ["live", "degraded", "unavailable"].includes(presentation.kind)
+    ? poseFrameView.modeCopy
+    : poseFrameView.mode === "multi"
+      ? "多人 · 实验模式 · 人物层已清除，等待新帧"
+      : poseFrameView.mode === "single"
+        ? "单人模式 · 人物层已清除，等待新帧"
+        : "人物层已清除，等待模式同步";
   const stageStatus = videoVisible
     ? {
       label: realVideoMode === "kitchen_moment" ? "COOKING LIVE" : "ALERT LIVE",
@@ -322,16 +331,16 @@ export function ViewerApp() {
     : {
       live: { label: "LIVE", dot: "live-dot" },
       degraded: { label: "DEGRADED", dot: "degraded-dot" },
-      unavailable: { label: "NO PERSON", dot: "no-person-dot" },
+      unavailable: { label: "UNAVAILABLE", dot: "no-person-dot" },
       stale: { label: "WAITING", dot: "wait-dot" },
       waiting: { label: "WAITING", dot: "wait-dot" },
     }[presentation.kind];
   const stageModeCopy = (() => {
     if (realVideoMode === "kitchen_moment") return "真实做饭已确认 · 临时实时实景";
     if (realVideoMode === "fall_emergency") return "权威告警已升级 · 临时实时实景";
-    if (scene.scene_id === "bathroom") return "完全隐私 · 强制纯骨架";
-    if (scene.scene_id === "kitchen") return "厨房固定示意 · 实景未接通时显示骨架";
-    return "固定家具示意 · 不代表现场识别或复原";
+    if (scene.scene_id === "bathroom") return `完全隐私 · ${poseModeCopy}`;
+    if (scene.scene_id === "kitchen") return `厨房固定示意 · ${poseModeCopy}`;
+    return `固定家具示意 · ${poseModeCopy}`;
   })();
   const primaryStatus = (() => {
     if (relay.alarm?.phase === "escalated") {
@@ -406,8 +415,12 @@ export function ViewerApp() {
     if (["degraded", "unavailable"].includes(presentation.kind)) {
       return {
         tone: "warning",
-        label: presentation.kind === "degraded" ? "骨架质量较低" : "当前未检测到人物",
-        detail: "系统正在明确显示降级状态，不会用假画面替代真实检测结果。",
+        label: presentation.kind === "degraded" ? "骨架质量较低" : "可靠骨架不可用",
+        detail: presentation.kind === "degraded"
+          ? "至少一个匿名姿态候选的关键点质量较低；系统不会用假画面替代真实检测结果。"
+          : poseFrameView.mode === "multi"
+            ? "多人模式本帧没有可靠的匿名姿态候选；不显示假骨架，也不追踪身份。"
+            : "单人模式本帧没有可靠骨架；系统不会用假画面替代真实检测结果。",
         Icon: ShieldRoundedIcon,
       };
     }
@@ -460,7 +473,11 @@ export function ViewerApp() {
           {presentation.kind === "degraded" && !videoVisible ? (
             <div className="quality-notice" role="status">
               <b>关键点质量较低</b>
-              <span>部分肢体关键点置信度不足，当前画面已明确降级。</span>
+              <span>
+                {poseFrameView.mode === "multi"
+                  ? "至少一个匿名姿态候选的部分关键点置信度不足，当前画面已明确降级。"
+                  : "部分肢体关键点置信度不足，当前画面已明确降级。"}
+              </span>
             </div>
           ) : null}
           {!showsSkeleton && !videoVisible ? (
@@ -468,16 +485,22 @@ export function ViewerApp() {
               <VerifiedUserRoundedIcon className="placeholder-status-icon" aria-hidden="true" />
               <b>
                 {presentation.kind === "unavailable"
-                  ? "未检测到人物"
+                  ? "可靠骨架不可用"
                   : presentation.kind === "stale"
                     ? "画面暂时中断"
+                    : poseFrameView.isReset
+                      ? "姿态模式切换中"
                     : "等待监控端开始采集"}
               </b>
               <p>
                 {presentation.kind === "unavailable"
-                  ? "监控端仍在同步，但当前帧没有可靠的人体骨架。"
+                  ? poseFrameView.mode === "multi"
+                    ? "多人模式本帧没有可靠的匿名姿态候选；不会推断或追踪身份。"
+                    : "监控端仍在同步，但当前帧没有可靠的单人骨架。"
                   : presentation.kind === "stale"
                     ? "通用环境示意可以保留，人物状态明确标为不可用。"
+                    : poseFrameView.isReset
+                      ? "旧人物层已经清除；只有新模式的真实有效帧到达后才会重新显示火柴人。"
                     : "监控手机开始采集后，这里会自动显示同一实时抽象骨架。"}
               </p>
             </div>
@@ -500,8 +523,8 @@ export function ViewerApp() {
               : realVideoMode === "fall_emergency"
                 ? "权威跌倒告警：临时实景经 WebRTC 点对点接收"
               : scene.scene_id === "bathroom"
-                ? "完全隐私：始终只显示 17 点抽象骨架"
-                : "手机本地识别，当前仅同步 17 点抽象骨架"}
+                ? `完全隐私：${poseModeCopy}`
+                : `手机本地识别：${poseModeCopy}`}
           </div>
         </section>
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { containedContentRect, mapPointIntoContainedContent } from "./geometry.js";
 import { KEYPOINT_SCORE_THRESHOLD } from "./protocol.js";
+import { expandAnonymousPoses } from "./poseFrameView.js";
 
 const CONNECTIONS = [
   [0, 1], [0, 2], [1, 3], [2, 4],
@@ -23,7 +24,8 @@ function draw(canvas, frame, color) {
   const context = canvas.getContext("2d");
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.clearRect(0, 0, width, height);
-  if (!frame?.person_detected || !frame?.keypoints?.length) return;
+  const poses = expandAnonymousPoses(frame);
+  if (poses.length === 0) return;
 
   const contentRect = containedContentRect(
     frame.source_width,
@@ -32,8 +34,6 @@ function draw(canvas, frame, color) {
     height,
   );
   if (!contentRect) return;
-  const points = frame.keypoints.map((point) =>
-    mapPointIntoContainedContent(point, contentRect));
   context.save();
   context.lineCap = "round";
   context.lineJoin = "round";
@@ -41,21 +41,25 @@ function draw(canvas, frame, color) {
   context.shadowBlur = 14;
   context.strokeStyle = color;
   context.lineWidth = Math.max(2.4, width / 180);
-  for (const [from, to] of CONNECTIONS) {
-    const a = points[from];
-    const b = points[to];
-    if (a.score < KEYPOINT_SCORE_THRESHOLD || b.score < KEYPOINT_SCORE_THRESHOLD) continue;
-    context.beginPath();
-    context.moveTo(a.x, a.y);
-    context.lineTo(b.x, b.y);
-    context.stroke();
-  }
-  for (const point of points) {
-    if (point.score < KEYPOINT_SCORE_THRESHOLD) continue;
-    context.beginPath();
-    context.arc(point.x, point.y, Math.max(3, width / 150), 0, Math.PI * 2);
-    context.fillStyle = color;
-    context.fill();
+  context.fillStyle = color;
+  for (const pose of poses) {
+    const points = pose.keypoints.map((point) =>
+      mapPointIntoContainedContent(point, contentRect));
+    for (const [from, to] of CONNECTIONS) {
+      const a = points[from];
+      const b = points[to];
+      if (a.score < KEYPOINT_SCORE_THRESHOLD || b.score < KEYPOINT_SCORE_THRESHOLD) continue;
+      context.beginPath();
+      context.moveTo(a.x, a.y);
+      context.lineTo(b.x, b.y);
+      context.stroke();
+    }
+    for (const point of points) {
+      if (point.score < KEYPOINT_SCORE_THRESHOLD) continue;
+      context.beginPath();
+      context.arc(point.x, point.y, Math.max(3, width / 150), 0, Math.PI * 2);
+      context.fill();
+    }
   }
   context.restore();
 }

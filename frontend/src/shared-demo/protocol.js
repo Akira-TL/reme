@@ -1,4 +1,7 @@
 export const FRAME_SCHEMA_VERSION = "movenet-17/v1-demo";
+export const POSE_BATCH_SCHEMA_VERSION = "reme-pose-batch-17/v1-demo";
+export const POSE_PROJECTION_RESET_SCHEMA_VERSION = "reme-pose-reset/v1-demo";
+export const POSE_PROJECTION_UNAVAILABLE_TYPE = "pose_projection_unavailable";
 export const DEMO_EVENT_SCHEMA_VERSION = "reme-demo-event/v1";
 export const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
 export const ACTIVITY_CONFIRMATION_PROTOCOL = "verified-activity-event/v1";
@@ -6,6 +9,7 @@ export const CONTROLLER_EVENT_SEQUENCE_BLOCK_SIZE = 1024;
 export const VIEWER_PROTOCOL = "reme-viewer-v1";
 export const CONTROLLER_PROTOCOL = "reme-controller-v1";
 export const KEYPOINT_SCORE_THRESHOLD = 0.2;
+export const MAX_POSES_PER_BATCH = 4;
 export const LANDMARK_QUALITIES = Object.freeze(["usable", "degraded", "unavailable"]);
 export const DEMO_SCENE_IDS = Object.freeze(["living", "kitchen", "bathroom", "fall"]);
 export const DEMO_EVENT_TYPES = Object.freeze([
@@ -71,7 +75,32 @@ const FRAME_KEYS = [
   "source_width",
   "timestamp_ms",
 ];
+const POSE_BATCH_FRAME_KEYS = [
+  "poses",
+  "schema_version",
+  "sequence",
+  "session_id",
+  "source_height",
+  "source_width",
+  "timestamp_ms",
+];
+const POSE_PROJECTION_RESET_KEYS = [
+  "pose_mode",
+  "schema_version",
+  "sequence",
+  "session_id",
+  "timestamp_ms",
+];
+const POSE_PROJECTION_UNAVAILABLE_KEYS = [
+  "pose_mode",
+  "session_id",
+  "through_sequence",
+  "timestamp_ms",
+  "type",
+];
+const POSE_KEYS = ["keypoints", "landmark_quality"];
 const KEYPOINT_KEYS = ["name", "score", "x", "y"];
+const MODEL_KEYPOINT_KEYS = ["name", "score", "x_norm", "y_norm"];
 const EVENT_KEYS = [
   "event_sequence",
   "event_type",
@@ -139,6 +168,13 @@ function hasExactKeys(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const actual = Object.keys(value).sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function isDenseArray(value) {
+  if (!Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === value.length
+    && keys.every((key, index) => key === String(index));
 }
 
 function isUnitNumber(value) {
@@ -346,6 +382,126 @@ export function parsePoseFrame(raw) {
   }
 }
 
+export function isPoseBatchFrame(value) {
+  if (!hasExactKeys(value, POSE_BATCH_FRAME_KEYS)) return false;
+  if (value.schema_version !== POSE_BATCH_SCHEMA_VERSION) return false;
+  if (typeof value.session_id !== "string" || value.session_id.length < 1) return false;
+  if (!Number.isSafeInteger(value.sequence) || value.sequence < 0) return false;
+  if (!Number.isFinite(value.timestamp_ms) || value.timestamp_ms < 0) return false;
+  if (!isPositiveDimension(value.source_width) || !isPositiveDimension(value.source_height)) {
+    return false;
+  }
+  if (
+    !isDenseArray(value.poses)
+    || value.poses.length > MAX_POSES_PER_BATCH
+  ) {
+    return false;
+  }
+
+  for (let poseIndex = 0; poseIndex < value.poses.length; poseIndex += 1) {
+    const pose = value.poses[poseIndex];
+    if (!hasExactKeys(pose, POSE_KEYS)) return false;
+    if (!isDenseArray(pose.keypoints) || pose.keypoints.length !== KEYPOINT_NAMES.length) {
+      return false;
+    }
+    if (!pose.keypoints.every((point, index) =>
+      hasExactKeys(point, KEYPOINT_KEYS)
+        && point.name === KEYPOINT_NAMES[index]
+        && isUnitNumber(point.x)
+        && isUnitNumber(point.y)
+        && isUnitNumber(point.score),
+    )) {
+      return false;
+    }
+
+    const torsoDetected = TORSO_SHOULDER_INDICES.some(
+      (index) => pose.keypoints[index].score >= KEYPOINT_SCORE_THRESHOLD,
+    ) && TORSO_HIP_INDICES.some(
+      (index) => pose.keypoints[index].score >= KEYPOINT_SCORE_THRESHOLD,
+    );
+    if (!torsoDetected) return false;
+    const expectedQuality = CORE_KEYPOINT_INDICES.every(
+      (index) => pose.keypoints[index].score >= KEYPOINT_SCORE_THRESHOLD,
+    ) ? "usable" : "degraded";
+    if (pose.landmark_quality !== expectedQuality) return false;
+  }
+  return true;
+}
+
+export function parsePoseBatchFrame(raw) {
+  if (typeof raw !== "string") return null;
+  try {
+    const value = JSON.parse(raw);
+    return isPoseBatchFrame(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isPoseProjectionReset(value) {
+  return hasExactKeys(value, POSE_PROJECTION_RESET_KEYS)
+    && value.schema_version === POSE_PROJECTION_RESET_SCHEMA_VERSION
+    && typeof value.session_id === "string"
+    && value.session_id.length > 0
+    && Number.isSafeInteger(value.sequence)
+    && value.sequence >= 0
+    && Number.isFinite(value.timestamp_ms)
+    && value.timestamp_ms >= 0
+    && ["single", "multi"].includes(value.pose_mode);
+}
+
+export function createPoseProjectionReset({
+  sessionId,
+  sequence,
+  timestampMs,
+  poseMode,
+}) {
+  const reset = {
+    schema_version: POSE_PROJECTION_RESET_SCHEMA_VERSION,
+    session_id: sessionId,
+    sequence,
+    timestamp_ms: timestampMs,
+    pose_mode: poseMode,
+  };
+  return isPoseProjectionReset(reset) ? reset : null;
+}
+
+export function isPoseProjectionUnavailable(value) {
+  return hasExactKeys(value, POSE_PROJECTION_UNAVAILABLE_KEYS)
+    && value.type === POSE_PROJECTION_UNAVAILABLE_TYPE
+    && typeof value.session_id === "string"
+    && value.session_id.length > 0
+    && Number.isFinite(value.timestamp_ms)
+    && value.timestamp_ms >= 0
+    && Number.isSafeInteger(value.through_sequence)
+    && value.through_sequence >= 0
+    && ["single", "multi"].includes(value.pose_mode);
+}
+
+export function parsePoseProjectionUnavailable(raw) {
+  if (typeof raw !== "string") return null;
+  try {
+    const value = JSON.parse(raw);
+    return isPoseProjectionUnavailable(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isPoseWireFrame(value) {
+  return isPoseFrame(value) || isPoseBatchFrame(value) || isPoseProjectionReset(value);
+}
+
+export function parsePoseWireFrame(raw) {
+  if (typeof raw !== "string") return null;
+  try {
+    const value = JSON.parse(raw);
+    return isPoseWireFrame(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createPoseFrame({
   sessionId,
   sequence,
@@ -380,6 +536,52 @@ export function createPoseFrame({
     })),
   };
   return isPoseFrame(frame) ? frame : null;
+}
+
+export function createPoseBatchFrame({
+  sessionId,
+  sequence,
+  timestampMs,
+  sourceWidth,
+  sourceHeight,
+  poses,
+}) {
+  if (!isDenseArray(poses) || poses.length > MAX_POSES_PER_BATCH) return null;
+  for (let poseIndex = 0; poseIndex < poses.length; poseIndex += 1) {
+    const pose = poses[poseIndex];
+    if (
+      !hasExactKeys(pose, POSE_KEYS)
+      || !isDenseArray(pose.keypoints)
+      || pose.keypoints.length !== KEYPOINT_NAMES.length
+      || !pose.keypoints.every((point, index) => (
+        hasExactKeys(point, MODEL_KEYPOINT_KEYS)
+        && point.name === KEYPOINT_NAMES[index]
+        && isUnitNumber(point.x_norm)
+        && isUnitNumber(point.y_norm)
+        && isUnitNumber(point.score)
+      ))
+    ) {
+      return null;
+    }
+  }
+  const frame = {
+    schema_version: POSE_BATCH_SCHEMA_VERSION,
+    session_id: sessionId,
+    sequence,
+    timestamp_ms: timestampMs,
+    source_width: sourceWidth,
+    source_height: sourceHeight,
+    poses: poses.map((pose) => ({
+      landmark_quality: pose.landmark_quality,
+      keypoints: pose.keypoints.map((point) => ({
+        name: point.name,
+        x: point.x_norm,
+        y: point.y_norm,
+        score: point.score,
+      })),
+    })),
+  };
+  return isPoseBatchFrame(frame) ? frame : null;
 }
 
 export function isDemoEvent(value, { sessionId = null } = {}) {

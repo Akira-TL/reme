@@ -7,6 +7,7 @@ import PersonalInjuryRoundedIcon from "@mui/icons-material/PersonalInjuryRounded
 import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
 import VisibilityOffRoundedIcon from "@mui/icons-material/VisibilityOffRounded";
 import { createMoveNetBrowserEstimator } from "../model/movenet.js";
+import { createMultiPoseBrowserEstimator } from "../model/multipose.js";
 import { ensureAudioContextRunning, recordVoiceReply } from "../utils/wavRecorder.js";
 import {
   captureJpegBase64,
@@ -45,6 +46,8 @@ import {
   createDemoEvent,
   createMediaGrantRequest,
   createMediaGrantRevoke,
+  createPoseBatchFrame,
+  createPoseProjectionReset,
   createPoseFrame,
   isControllerReady,
   isDemoEvent,
@@ -54,6 +57,21 @@ import {
   isRelayCapabilities,
   transitionActivityConfirmationCapability,
 } from "./protocol.js";
+import {
+  POSE_MODE_MULTI,
+  POSE_MODE_SINGLE,
+  SOURCE_FRAME_STALE_AFTER_MS,
+  createPoseEstimatorPool,
+  createSourceFrameFreshnessTracker,
+  describePoseFrame,
+  isFallAuthorityPoseFrame,
+  isPoseInferenceContextCurrent,
+  isSourceInferenceResultFresh,
+  readSourceFrameMarker,
+  releaseOwnedPoseCapture,
+  runPoseInferenceWithDeadline,
+  shouldArmManualFallDetection,
+} from "./poseMode.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import { createMonitorState, reduceMonitorState } from "./state.js";
 import {
@@ -291,6 +309,11 @@ export function MonitorApp() {
   const [controlKey, setControlKey] = useState("");
   const [localFrame, setLocalFrame] = useState(null);
   const [stats, setStats] = useState({ inferenceMs: null, published: 0, quality: "—" });
+  const [poseMode, setPoseMode] = useState(POSE_MODE_SINGLE);
+  const [poseModelStatus, setPoseModelStatus] = useState({
+    state: "idle",
+    detail: "开启摄像头后加载单人姿态模型。",
+  });
   const [sceneId, setSceneId] = useState(authoritativeRestoredScene);
   const [sceneSelectionSource, setSceneSelectionSource] = useState(
     () => restoredControllerSession ? "restored" : "manual",
@@ -319,7 +342,12 @@ export function MonitorApp() {
   const fallSyncRef = useRef(null);
   const stopCaptureRef = useRef(null);
   const streamRef = useRef(null);
-  const estimatorRef = useRef(null);
+  const poseEstimatorPoolRef = useRef(null);
+  const poseModeRef = useRef(POSE_MODE_SINGLE);
+  const poseInferenceGenerationRef = useRef(0);
+  const poseInferenceUnavailableModeRef = useRef(null);
+  const poseSourceUnavailableRef = useRef(null);
+  const poseLoopRestartRef = useRef(null);
   const mediaBridgeRef = useRef(null);
   const animationRef = useRef(0);
   const captureGenerationRef = useRef(0);
@@ -385,6 +413,29 @@ export function MonitorApp() {
       event.event_sequence,
     );
     return event;
+  }, []);
+
+  const publishPoseProjectionReset = useCallback((poseMode = poseModeRef.current) => {
+    const connection = controllerRef.current;
+    const socket = connection?.socket;
+    const sessionId = sessionIdRef.current;
+    if (connection?.ready !== true || socket?.readyState !== WebSocket.OPEN || !sessionId) {
+      return null;
+    }
+    const reset = createPoseProjectionReset({
+      sessionId,
+      sequence: sequenceRef.current,
+      timestampMs: Date.now(),
+      poseMode,
+    });
+    if (!reset) return null;
+    try {
+      socket.send(JSON.stringify(reset));
+    } catch {
+      return null;
+    }
+    sequenceRef.current += 1;
+    return reset;
   }, []);
 
   const requestMediaGrant = useCallback((eventId, scope, expiresInMs) => {
@@ -1779,6 +1830,10 @@ export function MonitorApp() {
 
   const applyManualScene = useCallback((nextSceneId) => {
     if (!DEMO_SCENES.some((scene) => scene.id === nextSceneId)) return;
+    const armFallDetection = shouldArmManualFallDetection(
+      nextSceneId,
+      poseModeRef.current,
+    );
     const exitAction = selectFallExitAction(fallRef.current, {
       persistenceHealthy: sessionPersistenceHealthyRef.current,
     });
@@ -1800,7 +1855,7 @@ export function MonitorApp() {
     stopLocalMoment();
     clearFallTimer();
     releaseVoiceResources(createVoiceState({
-      detail: nextSceneId === "fall"
+      detail: armFallDetection
         ? "正在准备事件触发式语音回应。"
         : VOICE_PHASE_COPY.idle[1],
     }));
@@ -1813,8 +1868,8 @@ export function MonitorApp() {
     if (!persistControllerSessionPatch({ fall: emptyFall, sceneId: nextSceneId })) return;
     fallRef.current = emptyFall;
     setFall(emptyFall);
-    fallDetectionArmedRef.current = nextSceneId === "fall";
-    setFallDetectionArmed(nextSceneId === "fall");
+    fallDetectionArmedRef.current = armFallDetection;
+    setFallDetectionArmed(armFallDetection);
     setSceneSelectionSource("manual");
     sceneIdRef.current = nextSceneId;
     setSceneId(nextSceneId);
@@ -1823,7 +1878,7 @@ export function MonitorApp() {
       scene_id: nextSceneId,
       visual_mode: nextSceneId === "bathroom" ? "skeleton_only" : "abstract_environment",
     });
-    if (nextSceneId === "fall") void preauthorizeMicrophone();
+    if (armFallDetection) void preauthorizeMicrophone();
   }, [
     clearFallTimer,
     clearKitchenCaptureEvidence,
@@ -2044,10 +2099,18 @@ export function MonitorApp() {
 
   const stopCapture = useCallback(async () => {
     cancelAutomaticSceneRecognition("摄像头已停止；自动识别样本与待返回结果均已取消。");
+    const hadPoseProjection = captureActiveRef.current
+      || streamRef.current !== null
+      || poseEstimatorPoolRef.current !== null;
     captureGenerationRef.current += 1;
+    poseInferenceGenerationRef.current += 1;
+    poseInferenceUnavailableModeRef.current = null;
+    poseSourceUnavailableRef.current = null;
     captureActiveRef.current = false;
     window.cancelAnimationFrame(animationRef.current);
     animationRef.current = 0;
+    poseLoopRestartRef.current = null;
+    if (hadPoseProjection) publishPoseProjectionReset();
     failClosedFallCheckIn();
     releaseVoiceResources();
     clearKitchenCaptureEvidence("摄像头已停止，旧做饭确认不能用于后续实景。", {
@@ -2061,20 +2124,27 @@ export function MonitorApp() {
     stream?.getTracks().forEach((track) => track.stop());
     if (videoRef.current) videoRef.current.srcObject = null;
 
-    const estimator = estimatorRef.current;
-    estimatorRef.current = null;
-    if (estimator) {
+    const estimatorPool = poseEstimatorPoolRef.current;
+    poseEstimatorPoolRef.current = null;
+    setLocalFrame(null);
+    setPoseModelStatus({
+      state: "idle",
+      detail: poseModeRef.current === POSE_MODE_MULTI
+        ? "开启摄像头后加载多人姿态实验模型。"
+        : "开启摄像头后加载单人姿态模型。",
+    });
+    if (estimatorPool) {
       try {
-        await estimator.dispose();
+        await estimatorPool.dispose();
       } catch {
         // 资源已经从页面引用中移除，释放失败不掩盖后续 UI 状态。
       }
     }
-    setLocalFrame(null);
   }, [
     cancelAutomaticSceneRecognition,
     clearKitchenCaptureEvidence,
     failClosedFallCheckIn,
+    publishPoseProjectionReset,
     releaseVoiceResources,
     revokeActiveGrant,
     stopLocalMoment,
@@ -2193,6 +2263,146 @@ export function MonitorApp() {
     persistFallRecoveryState,
   ]);
 
+  const selectPoseMode = useCallback((nextMode) => {
+    if (![POSE_MODE_SINGLE, POSE_MODE_MULTI].includes(nextMode)) return;
+    if (
+      nextMode === POSE_MODE_MULTI
+      && (fallDetectionArmedRef.current || fallRef.current.phase !== "idle")
+    ) {
+      setPoseModelStatus({
+        state: "unavailable",
+        detail: "安全问询或单人跌倒规则尚未关闭，当前不能切换到多人实验模式。",
+      });
+      return;
+    }
+    const changed = poseModeRef.current !== nextMode;
+    if (changed) {
+      poseModeRef.current = nextMode;
+      poseInferenceGenerationRef.current += 1;
+      poseInferenceUnavailableModeRef.current = null;
+      poseSourceUnavailableRef.current = null;
+      setPoseMode(nextMode);
+      setLocalFrame(null);
+      if (captureActiveRef.current) publishPoseProjectionReset(nextMode);
+      fallDetectorRef.current.reset();
+      setStats((current) => ({
+        ...current,
+        inferenceMs: null,
+        quality: nextMode === POSE_MODE_MULTI ? "等待多人实验模型" : "等待单人模型",
+      }));
+    }
+
+    const estimatorPool = poseEstimatorPoolRef.current;
+    if (!estimatorPool) {
+      setPoseModelStatus({
+        state: "idle",
+        detail: nextMode === POSE_MODE_MULTI
+          ? "开启摄像头后加载多人姿态实验模型。"
+          : "开启摄像头后加载单人姿态模型。",
+      });
+      return;
+    }
+
+    if (estimatorPool.peek(nextMode)) {
+      const retryingUnavailable = poseInferenceUnavailableModeRef.current === nextMode;
+      poseInferenceUnavailableModeRef.current = null;
+      const sourceUnavailable = poseSourceUnavailableRef.current?.mode === nextMode
+        ? poseSourceUnavailableRef.current
+        : null;
+      setPoseModelStatus(sourceUnavailable || {
+        state: "ready",
+        detail: nextMode === POSE_MODE_MULTI
+          ? "多人实验模型已就绪；最多 4 个匿名候选，目标手机 Gate 尚待实测。"
+          : "单人 MoveNet 已就绪；该模式保留现有跌倒演示检测链路。",
+      });
+      if (changed || retryingUnavailable) poseLoopRestartRef.current?.();
+      return;
+    }
+
+    const captureGeneration = captureGenerationRef.current;
+    const inferenceGeneration = poseInferenceGenerationRef.current;
+    setPoseModelStatus({
+      state: "loading",
+      detail: nextMode === POSE_MODE_MULTI ? "正在加载多人姿态实验模型…" : "正在加载单人姿态模型…",
+    });
+    void estimatorPool.load(nextMode).then(() => {
+      if (
+        poseEstimatorPoolRef.current !== estimatorPool
+        || captureGenerationRef.current !== captureGeneration
+        || poseInferenceGenerationRef.current !== inferenceGeneration
+        || poseModeRef.current !== nextMode
+      ) return;
+      const sourceUnavailable = poseSourceUnavailableRef.current?.mode === nextMode
+        ? poseSourceUnavailableRef.current
+        : null;
+      setPoseModelStatus(sourceUnavailable || {
+        state: "ready",
+        detail: nextMode === POSE_MODE_MULTI
+          ? "多人实验模型已就绪；最多 4 个匿名候选，目标手机 Gate 尚待实测。"
+          : "单人 MoveNet 已就绪；该模式保留现有跌倒演示检测链路。",
+      });
+      poseInferenceUnavailableModeRef.current = null;
+      poseLoopRestartRef.current?.();
+    }).catch((error) => {
+      if (
+        poseEstimatorPoolRef.current !== estimatorPool
+        || captureGenerationRef.current !== captureGeneration
+        || poseInferenceGenerationRef.current !== inferenceGeneration
+        || poseModeRef.current !== nextMode
+      ) return;
+      poseInferenceUnavailableModeRef.current = nextMode;
+      setPoseModelStatus({
+        state: "unavailable",
+        detail: `${nextMode === POSE_MODE_MULTI ? "多人" : "单人"}姿态模型不可用：${error instanceof Error ? error.message : "加载失败"}`,
+      });
+    });
+  }, [publishPoseProjectionReset]);
+
+  const pausePoseProjectionForVisibility = useCallback(() => {
+    if (!captureActiveRef.current) return;
+    poseInferenceGenerationRef.current += 1;
+    window.cancelAnimationFrame(animationRef.current);
+    animationRef.current = 0;
+    setLocalFrame(null);
+    publishPoseProjectionReset();
+    fallDetectorRef.current.reset();
+    setStats((current) => ({
+      ...current,
+      inferenceMs: null,
+      quality: "页面隐藏，人物层已清除",
+    }));
+    if (poseInferenceUnavailableModeRef.current !== poseModeRef.current) {
+      setPoseModelStatus({
+        state: "idle",
+        detail: "页面隐藏期间暂停人物层；恢复可见后仅从新的解码帧继续。",
+      });
+    }
+  }, [publishPoseProjectionReset]);
+
+  const resumePoseProjectionAfterVisibility = useCallback(() => {
+    if (!captureActiveRef.current) return;
+    const activeMode = poseModeRef.current;
+    poseSourceUnavailableRef.current = null;
+    if (poseEstimatorPoolRef.current?.peek(activeMode)) {
+      // A replacement load may finish while hidden after the callback's
+      // generation was invalidated. The pool entry itself is capture-owned and
+      // proves that visible resume can adopt that replacement safely.
+      poseInferenceUnavailableModeRef.current = null;
+      setPoseModelStatus({
+        state: "ready",
+        detail: activeMode === POSE_MODE_MULTI
+          ? "多人实验模型已就绪；等待新的可靠解码帧。"
+          : "单人 MoveNet 已就绪；等待新的可靠解码帧。",
+      });
+    } else {
+      // A load that failed while hidden has no callback in the now-current
+      // visibility generation. Re-enter the normal deduplicated load path so
+      // resume cannot leave the projection loop waiting forever for a model.
+      selectPoseMode(activeMode);
+    }
+    poseLoopRestartRef.current?.({ resetFreshness: true });
+  }, [selectPoseMode]);
+
   const startCapture = useCallback(async () => {
     if (captureActiveRef.current || ui.connection !== "connected") return;
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -2221,6 +2431,19 @@ export function MonitorApp() {
     }
     const generation = captureGenerationRef.current + 1;
     captureGenerationRef.current = generation;
+    poseSourceUnavailableRef.current = null;
+    let ownedStream = null;
+    let ownedEstimatorPool = null;
+    let ownedVideo = null;
+    const discardOwnedResources = async () => {
+      await releaseOwnedPoseCapture({
+        stream: ownedStream,
+        estimatorPool: ownedEstimatorPool,
+        video: ownedVideo,
+        streamRef,
+        estimatorPoolRef: poseEstimatorPoolRef,
+      }).catch(() => undefined);
+    };
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -2230,23 +2453,87 @@ export function MonitorApp() {
           height: { ideal: 720 },
         },
       });
-      streamRef.current = stream;
-      const estimator = await createMoveNetBrowserEstimator();
+      ownedStream = stream;
       if (captureGenerationRef.current !== generation) {
-        stream.getTracks().forEach((track) => track.stop());
-        await estimator.dispose();
+        await discardOwnedResources();
         return;
       }
 
-      estimatorRef.current = estimator;
+      const estimatorPool = createPoseEstimatorPool({
+        [POSE_MODE_SINGLE]: () => createMoveNetBrowserEstimator(),
+        [POSE_MODE_MULTI]: () => createMultiPoseBrowserEstimator(),
+      });
+      ownedEstimatorPool = estimatorPool;
+      if (captureGenerationRef.current !== generation) {
+        await discardOwnedResources();
+        return;
+      }
+      streamRef.current = stream;
+      poseEstimatorPoolRef.current = estimatorPool;
+      const initialPoseMode = poseModeRef.current;
+      const initialInferenceGeneration = poseInferenceGenerationRef.current;
+      setPoseModelStatus({
+        state: "loading",
+        detail: initialPoseMode === POSE_MODE_MULTI
+          ? "正在加载多人姿态实验模型…"
+          : "正在加载单人姿态模型…",
+      });
+      let initialPoseLoadError = null;
+      try {
+        await estimatorPool.load(initialPoseMode);
+      } catch (error) {
+        if (captureGenerationRef.current !== generation) {
+          await discardOwnedResources();
+          return;
+        }
+        const initialContextStillCurrent = (
+          poseInferenceGenerationRef.current === initialInferenceGeneration
+          && poseModeRef.current === initialPoseMode
+        );
+        if (initialContextStillCurrent && initialPoseMode === POSE_MODE_SINGLE) throw error;
+        if (initialContextStillCurrent) {
+          initialPoseLoadError = error;
+          poseInferenceUnavailableModeRef.current = initialPoseMode;
+          setPoseModelStatus({
+            state: "unavailable",
+            detail: `多人姿态实验模型不可用：${error instanceof Error ? error.message : "加载失败"}；摄像头与安全链路保持运行。`,
+          });
+        }
+      }
+      if (captureGenerationRef.current !== generation) {
+        await discardOwnedResources();
+        return;
+      }
+
+      if (
+        initialPoseLoadError === null
+        && poseInferenceGenerationRef.current === initialInferenceGeneration
+        && poseModeRef.current === initialPoseMode
+      ) {
+        poseInferenceUnavailableModeRef.current = null;
+        setPoseModelStatus({
+          state: "ready",
+          detail: initialPoseMode === POSE_MODE_MULTI
+            ? "多人实验模型已就绪；最多 4 个匿名候选，目标手机 Gate 尚待实测。"
+            : "单人 MoveNet 已就绪；该模式保留现有跌倒演示检测链路。",
+        });
+      }
       const video = videoRef.current;
+      if (!video) throw new Error("摄像头预览组件不可用");
+      ownedVideo = video;
       video.srcObject = stream;
       await video.play();
       await waitForVideo(video);
+      if (captureGenerationRef.current !== generation) {
+        await discardOwnedResources();
+        return;
+      }
       captureActiveRef.current = true;
       setStats({ inferenceMs: null, published: 0, quality: "准备首帧" });
 
-      const socketReady = controllerRef.current?.socket.readyState === WebSocket.OPEN;
+      const connection = controllerRef.current;
+      const socketReady = connection?.ready === true
+        && connection.socket.readyState === WebSocket.OPEN;
       if (socketReady) {
         dispatch({ type: "live" });
       } else {
@@ -2259,70 +2546,285 @@ export function MonitorApp() {
       }
 
       let lastAttemptMs = -MIN_PUBLISH_INTERVAL_MS;
-      const sample = async () => {
+      let inferenceInFlight = false;
+      const sourceFreshness = createSourceFrameFreshnessTracker(
+        SOURCE_FRAME_STALE_AFTER_MS,
+      );
+      let loop;
+      const currentInferenceContext = () => ({
+        captureGeneration: captureGenerationRef.current,
+        inferenceGeneration: poseInferenceGenerationRef.current,
+        poseMode: poseModeRef.current,
+        estimatorPool: poseEstimatorPoolRef.current,
+        stream: streamRef.current,
+      });
+      const scheduleNext = () => {
+        if (
+          captureGenerationRef.current !== generation
+          || document.visibilityState === "hidden"
+          || inferenceInFlight
+        ) return;
+        window.cancelAnimationFrame(animationRef.current);
+        animationRef.current = window.requestAnimationFrame(loop);
+      };
+      const sample = async ({
+        sourceMarker,
+        sourceObservedAtMs,
+        sourceTimestampMs,
+      }) => {
+        const activePoseMode = poseModeRef.current;
+        const inferenceGeneration = poseInferenceGenerationRef.current;
+        const expectedContext = {
+          captureGeneration: generation,
+          inferenceGeneration,
+          poseMode: activePoseMode,
+          estimatorPool,
+          stream,
+        };
+        const estimator = estimatorPool.peek(activePoseMode);
+        if (!estimator) return;
+        inferenceInFlight = true;
         try {
-          const result = await estimator.infer(video);
-          if (captureGenerationRef.current !== generation) return;
-          const frame = createPoseFrame({
-            sessionId: ui.sessionId,
+          const result = await runPoseInferenceWithDeadline(
+            () => estimator.infer(video),
+            SOURCE_FRAME_STALE_AFTER_MS,
+          );
+          if (!isPoseInferenceContextCurrent(expectedContext, currentInferenceContext())) return;
+          if (document.visibilityState === "hidden") return;
+          if (!isSourceInferenceResultFresh({
+            startedMarker: sourceMarker,
+            currentMarker: readSourceFrameMarker(video),
+            elapsedMs: performance.now() - sourceObservedAtMs,
+          })) {
+            poseInferenceGenerationRef.current += 1;
+            setLocalFrame(null);
+            if (activePoseMode === POSE_MODE_SINGLE) {
+              await stopCapture();
+              dispatch({
+                type: "degraded",
+                captureActive: false,
+                error: "单人姿态安全链路已停止：推理返回时源帧已超过可靠新鲜度边界。",
+              });
+              return;
+            }
+            const sourceUnavailable = {
+              mode: POSE_MODE_MULTI,
+              state: "unavailable",
+              detail: "多人实验人物层已暂停：推理返回时源帧已超过可靠新鲜度边界；其他链路保持运行。",
+            };
+            poseSourceUnavailableRef.current = sourceUnavailable;
+            publishPoseProjectionReset(POSE_MODE_MULTI);
+            setPoseModelStatus(sourceUnavailable);
+            setStats((current) => ({
+              ...current,
+              inferenceMs: null,
+              quality: "源视频帧在推理期间失鲜",
+            }));
+            return;
+          }
+          const commonFrame = {
+            sessionId: sessionIdRef.current,
             sequence: sequenceRef.current,
-            timestampMs: Date.now(),
+            timestampMs: sourceTimestampMs,
             sourceWidth: video.videoWidth,
             sourceHeight: video.videoHeight,
-            personDetected: result.person_detected,
-            landmarkQuality: result.landmark_quality,
-            keypoints: result.keypoints,
-          });
+          };
+          const frame = activePoseMode === POSE_MODE_MULTI
+            ? createPoseBatchFrame({
+              ...commonFrame,
+              poses: result.poses,
+            })
+            : createPoseFrame({
+              ...commonFrame,
+              personDetected: result.person_detected,
+              landmarkQuality: result.landmark_quality,
+              keypoints: result.keypoints,
+            });
           if (!frame) {
-            throw new Error("姿态结果不符合 17 点发布合同");
+            throw new Error(activePoseMode === POSE_MODE_MULTI
+              ? "多人姿态结果不符合匿名批次发布合同"
+              : "姿态结果不符合 17 点发布合同");
           }
           setLocalFrame(frame);
-          if (fallDetectionArmedRef.current) {
+          if (
+            fallDetectionArmedRef.current
+            && isFallAuthorityPoseFrame(activePoseMode, frame)
+          ) {
             const fallResult = fallDetectorRef.current.push(frame);
             if (fallResult.event) startFallCheckIn(fallResult.event);
           }
-          const activeSocket = controllerRef.current?.socket;
-          if (activeSocket?.readyState === WebSocket.OPEN) {
-            activeSocket.send(JSON.stringify(frame));
-            sequenceRef.current += 1;
-            setStats((current) => ({
-              inferenceMs: result.inference_ms,
-              published: current.published + 1,
-              quality: result.landmark_quality,
-            }));
+          const frameSummary = describePoseFrame(activePoseMode, frame);
+          const activeConnection = controllerRef.current;
+          const activeSocket = activeConnection?.socket;
+          if (
+            activeConnection?.ready === true
+            && activeSocket?.readyState === WebSocket.OPEN
+          ) {
+            try {
+              activeSocket.send(JSON.stringify(frame));
+              sequenceRef.current += 1;
+              setStats((current) => ({
+                inferenceMs: result.inference_ms,
+                published: current.published + 1,
+                quality: frameSummary.quality,
+              }));
+            } catch {
+              setStats((current) => ({
+                ...current,
+                inferenceMs: result.inference_ms,
+                quality: frameSummary.quality,
+              }));
+              dispatch({
+                type: "degraded",
+                connection: "disconnected",
+                captureActive: true,
+                error: "姿态已在本机生成，但本帧未能发往 Relay；模型与摄像头保持运行。",
+              });
+            }
           } else {
             setStats((current) => ({
               ...current,
               inferenceMs: result.inference_ms,
-              quality: result.landmark_quality,
+              quality: frameSummary.quality,
             }));
           }
         } catch (error) {
-          if (captureGenerationRef.current !== generation) return;
+          if (!isPoseInferenceContextCurrent(expectedContext, currentInferenceContext())) return;
+          if (activePoseMode === POSE_MODE_MULTI) {
+            poseInferenceGenerationRef.current += 1;
+            poseInferenceUnavailableModeRef.current = POSE_MODE_MULTI;
+            estimatorPool.invalidate(POSE_MODE_MULTI);
+            setLocalFrame(null);
+            publishPoseProjectionReset(POSE_MODE_MULTI);
+            setPoseModelStatus({
+              state: "unavailable",
+              detail: `多人姿态实验推理已暂停：${error instanceof Error ? error.message : "推理失败"}；摄像头与安全链路保持运行。`,
+            });
+            setStats((current) => ({
+              ...current,
+              inferenceMs: null,
+              quality: "多人实验人物层不可用",
+            }));
+            return;
+          }
           await stopCapture();
           dispatch({
             type: "degraded",
             captureActive: false,
-            error: `姿态模型已停止：${error instanceof Error ? error.message : "推理失败"}`,
+            error: `单人姿态安全链路已停止：${error instanceof Error ? error.message : "推理失败"}`,
           });
-          return;
         }
-        if (captureGenerationRef.current === generation) {
-          animationRef.current = window.requestAnimationFrame(loop);
+        finally {
+          inferenceInFlight = false;
+          if (
+            captureGenerationRef.current === generation
+            && document.visibilityState !== "hidden"
+            && estimatorPool.peek(poseModeRef.current)
+            && poseInferenceUnavailableModeRef.current !== poseModeRef.current
+          ) {
+            scheduleNext();
+          }
         }
       };
-      const loop = (nowMs) => {
-        if (captureGenerationRef.current !== generation) return;
+      loop = (nowMs) => {
+        if (
+          captureGenerationRef.current !== generation
+          || document.visibilityState === "hidden"
+        ) return;
+        if (inferenceInFlight) {
+          return;
+        }
         if (nowMs - lastAttemptMs < MIN_PUBLISH_INTERVAL_MS) {
           animationRef.current = window.requestAnimationFrame(loop);
           return;
         }
+        const sourceMarker = readSourceFrameMarker(video);
+        const sourceObservation = sourceFreshness.observe(sourceMarker, nowMs);
+        const activePoseMode = poseModeRef.current;
+        if (!sourceObservation.advanced) {
+          if (
+            sourceObservation.stale
+            && poseSourceUnavailableRef.current?.mode !== activePoseMode
+          ) {
+            poseInferenceGenerationRef.current += 1;
+            setLocalFrame(null);
+            setStats((current) => ({
+              ...current,
+              inferenceMs: null,
+              quality: sourceObservation.reliable
+                ? "源视频帧已停止更新"
+                : "浏览器无可靠解码帧计数",
+            }));
+            if (activePoseMode === POSE_MODE_SINGLE) {
+              void stopCapture().then(() => dispatch({
+                type: "degraded",
+                captureActive: false,
+                error: sourceObservation.reliable
+                  ? "单人姿态安全链路已停止：源视频帧超过 3 秒未更新。"
+                  : "单人姿态安全链路已停止：浏览器无法提供可靠的解码帧证据。",
+              }));
+              return;
+            }
+            publishPoseProjectionReset(activePoseMode);
+            const sourceUnavailable = {
+              mode: POSE_MODE_MULTI,
+              state: "unavailable",
+              detail: sourceObservation.reliable
+                ? "多人实验人物层已暂停：源视频帧超过 3 秒未更新；其他链路保持运行。"
+                : "多人实验人物层已暂停：浏览器无可靠解码帧计数；其他链路保持运行。",
+            };
+            poseSourceUnavailableRef.current = sourceUnavailable;
+            setPoseModelStatus(sourceUnavailable);
+          }
+          animationRef.current = window.requestAnimationFrame(loop);
+          return;
+        }
+        const recoveredSource = poseSourceUnavailableRef.current?.mode === activePoseMode;
+        if (recoveredSource) {
+          poseSourceUnavailableRef.current = null;
+        }
+        if (
+          recoveredSource
+          && poseInferenceUnavailableModeRef.current !== activePoseMode
+        ) {
+          setPoseModelStatus({
+            state: "ready",
+            detail: activePoseMode === POSE_MODE_MULTI
+              ? "多人实验模型与源视频已恢复；最多 4 个匿名候选。"
+            : "单人 MoveNet 与源视频已恢复。",
+          });
+        }
+        if (poseInferenceUnavailableModeRef.current === activePoseMode) return;
+        if (!estimatorPool.peek(activePoseMode)) {
+          animationRef.current = window.requestAnimationFrame(loop);
+          return;
+        }
         lastAttemptMs = nowMs;
-        void sample();
+        void sample({
+          sourceMarker,
+          sourceObservedAtMs: nowMs,
+          sourceTimestampMs: Date.now(),
+        });
       };
-      animationRef.current = window.requestAnimationFrame(loop);
+      const restartLoop = ({ resetFreshness = false } = {}) => {
+        if (captureGenerationRef.current !== generation) return;
+        window.cancelAnimationFrame(animationRef.current);
+        animationRef.current = 0;
+        if (resetFreshness) {
+          sourceFreshness.rebase(readSourceFrameMarker(video), performance.now());
+        }
+        if (inferenceInFlight) {
+          return;
+        }
+        scheduleNext();
+      };
+      poseLoopRestartRef.current = restartLoop;
+      if (estimatorPool.peek(poseModeRef.current)) restartLoop();
     } catch (error) {
-      if (captureGenerationRef.current !== generation) return;
+      if (captureGenerationRef.current !== generation) {
+        await discardOwnedResources();
+        return;
+      }
       await stopCapture();
       dispatch({
         type: "degraded",
@@ -2330,7 +2832,14 @@ export function MonitorApp() {
         error: `无法开始采集：${error instanceof Error ? error.message : "摄像头或模型不可用"}`,
       });
     }
-  }, [clearKitchenCaptureEvidence, preauthorizeMicrophone, startFallCheckIn, stopCapture, ui.connection, ui.sessionId]);
+  }, [
+    clearKitchenCaptureEvidence,
+    preauthorizeMicrophone,
+    publishPoseProjectionReset,
+    startFallCheckIn,
+    stopCapture,
+    ui.connection,
+  ]);
 
   const stopOnly = useCallback(async () => {
     await stopCapture();
@@ -2657,6 +3166,7 @@ export function MonitorApp() {
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
+        pausePoseProjectionForVisibility();
         cancelAutomaticSceneRecognition(
           "页面已隐藏；自动识别样本与待返回结果均已取消。",
         );
@@ -2691,6 +3201,7 @@ export function MonitorApp() {
         nowMs: Date.now(),
         visibilityState: document.visibilityState,
       }) === "escalate") failClosedFallCheckIn();
+      resumePoseProjectionAfterVisibility();
     };
     window.addEventListener("pagehide", suspendController);
     window.addEventListener("pageshow", resumeController);
@@ -2709,7 +3220,9 @@ export function MonitorApp() {
     clearReconnectTimer,
     closeControllerSocket,
     failClosedFallCheckIn,
+    pausePoseProjectionForVisibility,
     releaseVoiceResources,
+    resumePoseProjectionAfterVisibility,
     revokeActiveGrant,
     stopLocalMoment,
     stopCapture,
@@ -2718,6 +3231,7 @@ export function MonitorApp() {
   const locked = ui.phase === "locked" || (ui.phase === "degraded" && !ui.sessionId);
   const canStart = ui.connection === "connected" && !ui.captureActive && ui.phase !== "starting";
   const activeScene = DEMO_SCENES.find((scene) => scene.id === sceneId) || DEMO_SCENES[0];
+  const poseFrameSummary = describePoseFrame(poseMode, localFrame);
   const fallExitAction = selectFallExitAction(fall, { persistenceHealthy: sessionPersistenceHealthy });
   const automaticSceneBusy = ["capturing", "analyzing"].includes(automaticScene.phase);
   const kitchenOperationActive = Boolean(
@@ -2833,7 +3347,12 @@ export function MonitorApp() {
                 </div>
               )}
               <div className="stage-topline">
-                <span><i className={ui.phase === "live" ? "live-dot" : "wait-dot"} />{ui.phase === "live" ? "PUBLISHING" : "LOCAL / PAUSED"}</span>
+                <span>
+                  <i className={ui.phase === "live" ? "live-dot" : "wait-dot"} />
+                  {ui.phase === "live"
+                    ? poseMode === POSE_MODE_MULTI ? "MULTI PUBLISHING" : "SINGLE PUBLISHING"
+                    : "LOCAL / PAUSED"}
+                </span>
                 <span>{sceneId === "bathroom" ? "完全隐私 · 画面本机也已遮蔽" : "原始画面默认仅在本机"}</span>
               </div>
             </div>
@@ -2848,13 +3367,50 @@ export function MonitorApp() {
                 <em>{activeScene.detail}</em>
               </span>
             </div>
+            <section className={`pose-mode-card is-${poseModelStatus.state}`} aria-labelledby="pose-mode-title">
+              <div className="pose-mode-card-head">
+                <span>
+                  <small>STICK FIGURE</small>
+                  <b id="pose-mode-title">火柴人模式</b>
+                </span>
+                <em>{poseMode === POSE_MODE_MULTI
+                  ? `本帧 ${poseFrameSummary.count} 个匿名姿态`
+                  : poseFrameSummary.count > 0 ? "单人姿态可见" : "等待单人姿态"}</em>
+              </div>
+              <div className="pose-mode-segmented" role="group" aria-label="切换单人或多人火柴人模式">
+                <button
+                  type="button"
+                  className={poseMode === POSE_MODE_SINGLE ? "is-active" : ""}
+                  aria-pressed={poseMode === POSE_MODE_SINGLE}
+                  disabled={ui.phase === "starting"}
+                  onClick={() => selectPoseMode(POSE_MODE_SINGLE)}
+                >
+                  单人
+                </button>
+                <button
+                  type="button"
+                  className={poseMode === POSE_MODE_MULTI ? "is-active" : ""}
+                  aria-pressed={poseMode === POSE_MODE_MULTI}
+                  disabled={ui.phase === "starting" || fallDetectionArmed || fall.phase !== "idle"}
+                  onClick={() => selectPoseMode(POSE_MODE_MULTI)}
+                >
+                  多人 · 实验
+                </button>
+              </div>
+              <p role="status" aria-live="polite">{poseModelStatus.detail}</p>
+              {poseMode === POSE_MODE_MULTI ? (
+                <small className="pose-mode-boundary">
+                  多人候选只用于本帧匿名投影，不做身份或跨帧跟踪；候选本身不能产生做饭凭证、跌倒告警或原画授权。
+                </small>
+              ) : null}
+            </section>
           </section>
 
           <aside className="control-panel">
             <div>
               <div className="eyebrow">CONTROLLER</div>
               <h1>四场景监控端</h1>
-              <p className="intro-copy">后置摄像头在本机运行团队提供的 MoveNet 权重。骨架、事件、授权视频与事件语音保持独立通道。</p>
+              <p className="intro-copy">后置摄像头在本机运行单人 MoveNet 或多人 MediaPipe 姿态模型。骨架、事件、授权视频与事件语音保持独立通道。</p>
             </div>
 
             <button
@@ -2948,13 +3504,13 @@ export function MonitorApp() {
               <div><dt>会话</dt><dd title={ui.sessionId}>{ui.sessionId ? `…${ui.sessionId.slice(-12)}` : "—"}</dd></div>
               <div><dt>发布帧</dt><dd>{stats.published}</dd></div>
               <div><dt>单帧推理</dt><dd>{Number.isFinite(stats.inferenceMs) ? `${stats.inferenceMs.toFixed(1)} ms` : "—"}</dd></div>
-              <div><dt>骨架质量</dt><dd>{stats.quality}</dd></div>
+              <div><dt>姿态状态</dt><dd>{stats.quality}</dd></div>
             </dl>
 
             {sceneId === "living" && (
               <div className="scenario-card is-living">
                 <b>日常 · 通用环境抽象</b>
-                <p>评委端会用固定虚拟家具衬托同一火柴人；这不是对真实家庭家具的重建。</p>
+                <p>评委端会用固定虚拟家具衬托当前匿名火柴人；这不是对真实家庭家具的重建。</p>
               </div>
             )}
 
@@ -3010,19 +3566,36 @@ export function MonitorApp() {
             {sceneId === "fall" && (
               <div className={`scenario-card fall-card is-${fall.phase}`}>
                 <div className="scenario-card-head">
-                  <b>{fall.phase === "idle" && !fallDetectionArmed
+                  <b>{poseMode === POSE_MODE_MULTI
+                    ? "多人跌倒展示 · 不参与安全判定"
+                    : fall.phase === "idle" && !fallDetectionArmed
                     ? sceneSelectionSource === "automatic" ? "MiMo 跌倒展示候选" : "跌倒展示已恢复"
                     : "真实姿态跌倒链路"}</b>
-                  <span>{fall.phase === "idle" && !fallDetectionArmed ? "仅展示"
+                  <span>{poseMode === POSE_MODE_MULTI ? "匿名投影"
+                    : fall.phase === "idle" && !fallDetectionArmed ? "仅展示"
                     : fall.phase === "idle" ? "规则待命"
                     : fall.phase === "checking" ? "正在问询"
                       : fall.phase === "escalated"
                         ? fall.delivery === "accepted" ? "已告警" : "告警待同步"
                         : fall.delivery === "accepted" ? "已关闭" : "关闭待同步"}</span>
                 </div>
-                <p>{fall.phase === "idle" && !fallDetectionArmed
+                <p>{poseMode === POSE_MODE_MULTI
+                  ? fallDetectionArmed
+                    ? "原有跌倒规则状态保持不变，但多人候选只用于显示；切回单人模式后才会继续由 MoveNet 帧驱动检测。"
+                    : "多人候选只用于匿名火柴人展示，不会触发跌倒、语音或告警。需要演示真实跌倒链路时，请显式切回单人模式。"
+                  : fall.phase === "idle" && !fallDetectionArmed
                   ? "自动提议不会启动报警链；手动点击下方“跌倒”按钮后，才启用本地 MoveNet 时序规则。"
                   : fall.message}</p>
+                {poseMode === POSE_MODE_MULTI && fall.phase === "idle" && (
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => {
+                      selectPoseMode(POSE_MODE_SINGLE);
+                      selectScene("fall");
+                    }}
+                  >切为单人并启用真实跌倒规则</button>
+                )}
                 {fall.eventId && fall.delivery !== "accepted" && (
                   <small role="status">Relay 尚未确认当前安全事件；控制端会保留会话并在重连后自动补发。</small>
                 )}

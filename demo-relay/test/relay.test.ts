@@ -12,6 +12,8 @@ import {
   type DemoEvent,
   type FrameLandmarks,
   type MediaSignal,
+  type PoseBatchFrame,
+  type PoseProjectionReset,
 } from "../src/index";
 import { handleActivityRecognition } from "../src/activity";
 import { ACTIVITY_CONFIRMATION_PROTOCOL, validateDemoEvent } from "../src/protocol";
@@ -22,6 +24,8 @@ const MONITOR_ORIGIN = "https://monitor.reme.maniforld.com";
 const VERCEL_ORIGIN = "https://reme-sage.vercel.app";
 const CONTROL_KEY = "correct horse battery staple";
 const FRAME_SCHEMA_VERSION = "movenet-17/v1-demo";
+const POSE_BATCH_SCHEMA_VERSION = "reme-pose-batch-17/v1-demo";
+const POSE_PROJECTION_RESET_SCHEMA_VERSION = "reme-pose-reset/v1-demo";
 const EVENT_SCHEMA_VERSION = "reme-demo-event/v1";
 const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
 const VIEWER_PROTOCOL = "reme-viewer-v1";
@@ -154,6 +158,149 @@ describe("single-room demo relay", () => {
     });
   });
 
+  it("fans an anonymous pose batch out and replays the same latest union frame", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    const sceneEvent = makeSceneEvent(lease.session_id, 0, "living");
+    await publishEvent(
+      controller,
+      sceneEvent,
+      [viewer],
+    );
+    const authorityBefore = await demoAuthoritySnapshot();
+    const frame = makeBatchFrame(lease.session_id, 1, 4);
+    const received = nextJson(viewer);
+    const accepted = nextJson(controller);
+
+    controller.send(JSON.stringify(frame));
+
+    await expect(received).resolves.toEqual(frame);
+    await expect(accepted).resolves.toEqual({ type: "frame_accepted", sequence: 1 });
+    await expect(demoAuthoritySnapshot()).resolves.toEqual(authorityBefore);
+
+    const lateViewer = await connectViewer();
+    await expect(nextJson(lateViewer)).resolves.toEqual(sceneEvent);
+    await expect(nextJson(lateViewer)).resolves.toEqual(frame);
+
+    const emptyFrame = makeBatchFrame(lease.session_id, 2, 0);
+    const emptyForViewer = nextJson(viewer);
+    const emptyForLateViewer = nextJson(lateViewer);
+    const emptyAccepted = nextJson(controller);
+    controller.send(JSON.stringify(emptyFrame));
+    await expect(emptyForViewer).resolves.toEqual(emptyFrame);
+    await expect(emptyForLateViewer).resolves.toEqual(emptyFrame);
+    await expect(emptyAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 2 });
+    await expect(demoAuthoritySnapshot()).resolves.toEqual(authorityBefore);
+  });
+
+  it("uses one monotonic sequence cursor for legacy and batch pose frames", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    const batch = makeBatchFrame(lease.session_id, 9, 2);
+    const batchForViewer = nextJson(viewer);
+    const batchAccepted = nextJson(controller);
+    controller.send(JSON.stringify(batch));
+    await expect(batchForViewer).resolves.toEqual(batch);
+    await expect(batchAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 9 });
+
+    const rejection = nextJson(controller);
+    const unavailableForViewer = nextJson(viewer);
+    controller.send(JSON.stringify(makeFrame(lease.session_id, 9)));
+    await expect(rejection).resolves.toEqual({
+      type: "error",
+      error: "non_increasing_sequence",
+    });
+    await expect(unavailableForViewer).resolves.toEqual(expect.objectContaining({
+      type: "pose_projection_unavailable",
+      session_id: lease.session_id,
+      pose_mode: "multi",
+      through_sequence: 9,
+    }));
+  });
+
+  it("clears the old projection for existing and late viewers without changing authority", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    const frame = makeBatchFrame(lease.session_id, 1, 2);
+    const frameForViewer = nextJson(viewer);
+    const frameAccepted = nextJson(controller);
+    controller.send(JSON.stringify(frame));
+    await expect(frameForViewer).resolves.toEqual(frame);
+    await expect(frameAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 1 });
+    const authorityBefore = await demoAuthoritySnapshot();
+
+    const reset = makeProjectionReset(lease.session_id, 2, "single");
+    const resetForViewer = nextJson(viewer);
+    const resetAccepted = nextJson(controller);
+    controller.send(JSON.stringify(reset));
+    await expect(resetForViewer).resolves.toEqual(reset);
+    await expect(resetAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 2 });
+    await expect(demoAuthoritySnapshot()).resolves.toEqual(authorityBefore);
+
+    const lateViewer = await connectViewer();
+    await expect(nextJson(lateViewer)).resolves.toEqual(reset);
+    const nextFrame = makeFrame(lease.session_id, 3);
+    const nextForViewer = nextJson(viewer);
+    const nextForLateViewer = nextJson(lateViewer);
+    const nextAccepted = nextJson(controller);
+    controller.send(JSON.stringify(nextFrame));
+    await expect(nextForViewer).resolves.toEqual(nextFrame);
+    await expect(nextForLateViewer).resolves.toEqual(nextFrame);
+    await expect(nextAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 3 });
+  });
+
+  it("broadcasts immediate out-of-band projection unavailability on controller loss", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    const frame = makeBatchFrame(lease.session_id, 1, 2);
+    const frameForViewer = nextJson(viewer);
+    const frameAccepted = nextJson(controller);
+    controller.send(JSON.stringify(frame));
+    await expect(frameForViewer).resolves.toEqual(frame);
+    await expect(frameAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 1 });
+
+    const unavailableForViewer = nextJson(viewer);
+    controller.close(1000, "test disconnect");
+    const unavailable = await unavailableForViewer;
+    expect(unavailable).toEqual(expect.objectContaining({
+      type: "pose_projection_unavailable",
+      session_id: lease.session_id,
+      pose_mode: "multi",
+      through_sequence: 1,
+    }));
+    expect(unavailable).not.toHaveProperty("sequence");
+
+    const lateWhileDisconnected = await connectViewer();
+    await expectNoMessage(lateWhileDisconnected);
+    const resumed = await connectController(lease.token);
+    await expect(nextJson(resumed)).resolves.toMatchObject({
+      type: "controller_ready",
+      session_id: lease.session_id,
+      last_frame_sequence: 1,
+    });
+    await expectNoMessage(lateWhileDisconnected);
+
+    const resumedFrame = makeFrame(lease.session_id, 2);
+    const resumedForViewer = nextJson(viewer);
+    const resumedForLateViewer = nextJson(lateWhileDisconnected);
+    const resumedAccepted = nextJson(resumed);
+    resumed.send(JSON.stringify(resumedFrame));
+    await expect(resumedForViewer).resolves.toEqual(resumedFrame);
+    await expect(resumedForLateViewer).resolves.toEqual(resumedFrame);
+    await expect(resumedAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 2 });
+
+    const lateAfterNewFrame = await connectViewer();
+    await expect(nextJson(lateAfterNewFrame)).resolves.toEqual(resumedFrame);
+  });
+
   it("resumes the same token with authoritative event and frame cursors", async () => {
     const lease = await unlock();
     const firstController = await connectController(lease.token);
@@ -174,7 +321,14 @@ describe("single-room demo relay", () => {
     });
     await expect(frameReceived).resolves.toEqual(makeFrame(lease.session_id, 7));
 
+    const unavailableForViewer = nextJson(viewer);
     await closeControllerSocket(firstController, 1000, "controller_refresh");
+    await expect(unavailableForViewer).resolves.toEqual(expect.objectContaining({
+      type: "pose_projection_unavailable",
+      session_id: lease.session_id,
+      pose_mode: "single",
+      through_sequence: 7,
+    }));
     const status = await relayFetch("/api/status");
     await expect(status.json()).resolves.toMatchObject({
       controller_locked: true,
@@ -212,6 +366,59 @@ describe("single-room demo relay", () => {
       type: "error",
       error: "non_increasing_sequence",
     });
+  });
+
+  it("ignores a delayed close from an old session without corrupting the new cursor", async () => {
+    const oldLease = await unlock();
+    const oldController = await connectController(oldLease.token);
+    await nextJson(oldController);
+    const oldFrame = makeFrame(oldLease.session_id, 7);
+    const oldAccepted = nextJson(oldController);
+    oldController.send(JSON.stringify(oldFrame));
+    await expect(oldAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 7 });
+    await release(oldLease.token);
+
+    const newLease = await unlock();
+    const newController = await connectController(newLease.token);
+    await nextJson(newController);
+    const viewer = await connectViewer();
+    const newFrame = makeBatchFrame(newLease.session_id, 3, 2);
+    const newForViewer = nextJson(viewer);
+    const newAccepted = nextJson(newController);
+    newController.send(JSON.stringify(newFrame));
+    await expect(newForViewer).resolves.toEqual(newFrame);
+    await expect(newAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 3 });
+
+    const staleSocket = {
+      deserializeAttachment: () => ({
+        role: "controller",
+        tokenHash: "0".repeat(64),
+        sessionId: oldLease.session_id,
+        leaseExpiresAtMs: oldLease.lease_expires_at_ms,
+        latestFrame: oldFrame,
+        latestFrameReceivedAtMs: oldFrame.timestamp_ms,
+      }),
+      serializeAttachment: () => {
+        throw new Error("stale session cleanup must not rewrite its attachment");
+      },
+    } as unknown as WebSocket;
+    const newCursor = await runInDurableObject(roomStub(), (instance, state) => {
+      instance.webSocketClose(staleSocket, 1000, "delayed old close", true);
+      return state.storage.sql.exec<{
+        [key: string]: SqlStorageValue;
+        session_id: string;
+        last_frame_sequence: number;
+      }>(
+        `SELECT session_id, last_frame_sequence
+           FROM room_frame_sequence
+          WHERE singleton = 1`,
+      ).toArray()[0];
+    });
+    expect(newCursor).toMatchObject({
+      session_id: newLease.session_id,
+      last_frame_sequence: 3,
+    });
+    await expectNoMessage(viewer);
   });
 
   it("sends the controller attachment snapshot to a late viewer", async () => {
@@ -332,6 +539,135 @@ describe("single-room demo relay", () => {
       });
       await release(lease.token);
     }
+  });
+
+  it("rejects identity, count, unavailable, excess, and non-exact batch pose fields", async () => {
+    const variants: Array<(frame: PoseBatchFrame) => unknown> = [
+      (frame) => ({ ...frame, person_count: frame.poses.length }),
+      (frame) => ({ ...frame, person_detected: true }),
+      (frame) => ({ ...frame, poses: [...frame.poses, ...frame.poses, makeBatchPose()] }),
+      (frame) => ({ ...frame, poses: [{ ...frame.poses[0], person_id: "person-1" }] }),
+      (frame) => ({ ...frame, poses: [{ ...frame.poses[0], pose_index: 0 }] }),
+      (frame) => ({
+        ...frame,
+        poses: [{ ...frame.poses[0], landmark_quality: "unavailable" }],
+      }),
+      (frame) => ({
+        ...frame,
+        poses: [{
+          ...frame.poses[0],
+          landmark_quality: "degraded",
+          keypoints: frame.poses[0]?.keypoints.map((point, index) => (
+            [11, 12].includes(index) ? { ...point, score: 0 } : point
+          )),
+        }],
+      }),
+      (frame) => ({
+        ...frame,
+        poses: [{ ...frame.poses[0], keypoints: frame.poses[0]?.keypoints.slice(1) }],
+      }),
+      (frame) => ({
+        ...frame,
+        poses: [{
+          ...frame.poses[0],
+          keypoints: frame.poses[0]?.keypoints.map((point, index) => (
+            index === 0 ? { ...point, evidence: "forbidden" } : point
+          )),
+        }],
+      }),
+    ];
+
+    for (const variant of variants) {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const rejection = nextJson(controller);
+      controller.send(JSON.stringify(variant(makeBatchFrame(lease.session_id, 1, 2))));
+      const expectedError = variants.indexOf(variant) === variants.length - 1
+        ? "media_fields_forbidden"
+        : "invalid_frame";
+      await expect(rejection).resolves.toEqual({ type: "error", error: expectedError });
+      await release(lease.token);
+    }
+  });
+
+  it("an invalid batch neither replaces latest projection nor consumes the frame cursor", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const viewer = await connectViewer();
+    const valid = makeBatchFrame(lease.session_id, 4, 2);
+    const validForViewer = nextJson(viewer);
+    const validAccepted = nextJson(controller);
+    controller.send(JSON.stringify(valid));
+    await expect(validForViewer).resolves.toEqual(valid);
+    await expect(validAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 4 });
+
+    const invalid = {
+      ...makeBatchFrame(lease.session_id, 5, 2),
+      poses: [{ ...makeBatchPose(), person_id: "forbidden" }],
+    };
+    const rejection = nextJson(controller);
+    const unavailableForViewer = nextJson(viewer);
+    controller.send(JSON.stringify(invalid));
+    await expect(rejection).resolves.toEqual({ type: "error", error: "invalid_frame" });
+    await expect(unavailableForViewer).resolves.toEqual(expect.objectContaining({
+      type: "pose_projection_unavailable",
+      session_id: lease.session_id,
+      through_sequence: 4,
+    }));
+    await closeControllerSocket(controller, 1000, "invalid batch rejected");
+
+    const resumed = await connectController(lease.token);
+    await expect(nextJson(resumed)).resolves.toMatchObject({
+      type: "controller_ready",
+      session_id: lease.session_id,
+      last_frame_sequence: 4,
+    });
+    const nextFrame = makeBatchFrame(lease.session_id, 5, 1);
+    const nextForViewer = nextJson(viewer);
+    const nextAccepted = nextJson(resumed);
+    resumed.send(JSON.stringify(nextFrame));
+    await expect(nextForViewer).resolves.toEqual(nextFrame);
+    await expect(nextAccepted).resolves.toEqual({ type: "frame_accepted", sequence: 5 });
+  });
+
+  it("rejects wrong-session batch/reset and controller-forged unavailable messages", async () => {
+    const variants: Array<(sessionId: string) => unknown> = [
+      () => makeBatchFrame("foreign-session", 1, 2),
+      () => makeProjectionReset("foreign-session", 1, "multi"),
+      (sessionId) => ({
+        type: "pose_projection_unavailable",
+        session_id: sessionId,
+        timestamp_ms: Date.now(),
+        through_sequence: 0,
+        pose_mode: "multi",
+      }),
+    ];
+    for (const variant of variants) {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const rejection = nextJson(controller);
+      controller.send(JSON.stringify(variant(lease.session_id)));
+      await expect(rejection).resolves.toEqual({ type: "error", error: "invalid_frame" });
+      await release(lease.token);
+    }
+  });
+
+  it("rejects a batch-shaped text message above the relay size bound", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const rejection = nextJson(controller);
+    const oversized = `${JSON.stringify(makeBatchFrame(lease.session_id, 1, 4))}${" ".repeat(16_385)}`;
+
+    controller.send(oversized);
+
+    await expect(rejection).resolves.toEqual({
+      type: "error",
+      error: "message_too_large",
+    });
   });
 
   it("accepts unavailable landmarks only when no person is detected", async () => {
@@ -3330,20 +3666,42 @@ async function dangerWatchdogSnapshot(
   });
 }
 
-async function demoAuthoritySnapshot(): Promise<Record<string, number>> {
-  return runInDurableObject(roomStub(), (_instance, state) => {
-    const count = (table: string): number => state.storage.sql.exec<{
-      [key: string]: SqlStorageValue;
-      count: number;
-    }>(`SELECT COUNT(*) AS count FROM ${table}`).one().count;
+async function demoAuthoritySnapshot(): Promise<Record<string, unknown>> {
+  return runInDurableObject(roomStub(), async (_instance, state) => {
+    const rows = (sql: string): Array<Record<string, SqlStorageValue>> => (
+      state.storage.sql.exec<Record<string, SqlStorageValue>>(sql).toArray()
+    );
     return {
-      demo_events: count("demo_event_state"),
-      media_grants: count("media_grant"),
-      media_audience: count("media_grant_audience"),
-      activity_evidence: count("activity_recognition_evidence"),
-      danger_watchdogs: count("danger_watchdog"),
-      danger_checkpoints: count("danger_alarm_checkpoint"),
-      danger_voice_attempts: count("danger_voice_attempt"),
+      alarm_at_ms: await state.storage.getAlarm(),
+      control_lease: rows(
+        "SELECT session_id, expires_at_ms FROM control_lease ORDER BY session_id",
+      ),
+      event_sequence: rows(
+        "SELECT session_id, last_event_sequence FROM room_event_sequence ORDER BY session_id",
+      ),
+      demo_events: rows(
+        `SELECT event_type, session_id, event_sequence, event_json
+           FROM demo_event_state ORDER BY event_type`,
+      ),
+      media_grants: rows(
+        `SELECT grant_id, session_id, event_id, scope, expires_at_ms, status
+           FROM media_grant ORDER BY grant_id`,
+      ),
+      media_audience: rows(
+        "SELECT grant_id, viewer_id FROM media_grant_audience ORDER BY grant_id, viewer_id",
+      ),
+      activity_evidence: rows(
+        "SELECT * FROM activity_recognition_evidence ORDER BY session_id",
+      ),
+      danger_watchdogs: rows(
+        "SELECT * FROM danger_watchdog ORDER BY session_id, event_id",
+      ),
+      danger_checkpoints: rows(
+        "SELECT * FROM danger_alarm_checkpoint ORDER BY session_id, event_id",
+      ),
+      danger_voice_attempts: rows(
+        "SELECT * FROM danger_voice_attempt ORDER BY session_id, event_id",
+      ),
     };
   });
 }
@@ -3355,6 +3713,7 @@ async function resetRoomStorage(): Promise<void> {
       state.storage.sql.exec("DELETE FROM media_grant_audience");
       state.storage.sql.exec("DELETE FROM media_grant");
       state.storage.sql.exec("DELETE FROM danger_voice_attempt");
+      state.storage.sql.exec("DELETE FROM scene_recognition_budget");
       state.storage.sql.exec("DELETE FROM activity_recognition_evidence");
       state.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
       state.storage.sql.exec("DELETE FROM danger_watchdog");
@@ -3664,6 +4023,51 @@ function makeFrame(sessionId: string, sequence: number): FrameLandmarks {
       y: index / 20,
       score: 0.9,
     })),
+  };
+}
+
+function makeBatchPose(
+  landmarkQuality: "usable" | "degraded" = "usable",
+): PoseBatchFrame["poses"][number] {
+  const pose = makeFrame("batch-fixture", 0);
+  return {
+    landmark_quality: landmarkQuality,
+    keypoints: pose.keypoints.map((point, index) => ({
+      ...point,
+      score: landmarkQuality === "degraded" && index === 15 ? 0.1 : point.score,
+    })),
+  };
+}
+
+function makeBatchFrame(
+  sessionId: string,
+  sequence: number,
+  poseCount = 2,
+): PoseBatchFrame {
+  return {
+    schema_version: POSE_BATCH_SCHEMA_VERSION,
+    session_id: sessionId,
+    sequence,
+    timestamp_ms: sequence * 100,
+    source_width: 1920,
+    source_height: 1080,
+    poses: Array.from({ length: poseCount }, (_, index) => (
+      makeBatchPose(index === 1 ? "degraded" : "usable")
+    )),
+  };
+}
+
+function makeProjectionReset(
+  sessionId: string,
+  sequence: number,
+  poseMode: "single" | "multi",
+): PoseProjectionReset {
+  return {
+    schema_version: POSE_PROJECTION_RESET_SCHEMA_VERSION,
+    session_id: sessionId,
+    sequence,
+    timestamp_ms: sequence * 100,
+    pose_mode: poseMode,
   };
 }
 

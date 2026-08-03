@@ -6,7 +6,10 @@ import {
   DEMO_EVENT_SCHEMA_VERSION,
   FRAME_SCHEMA_VERSION,
   KEYPOINT_NAMES,
+  MAX_POSES_PER_BATCH,
   MEDIA_SIGNAL_SCHEMA_VERSION,
+  POSE_BATCH_SCHEMA_VERSION,
+  POSE_PROJECTION_RESET_SCHEMA_VERSION,
   advanceControllerEventSequence,
   controllerProtocols,
   createActivityConfirmation,
@@ -14,6 +17,8 @@ import {
   createMediaGrantRequest,
   createMediaGrantRevoke,
   createMediaSignal,
+  createPoseBatchFrame,
+  createPoseProjectionReset,
   createPoseFrame,
   isDemoEvent,
   isControllerReady,
@@ -21,10 +26,16 @@ import {
   isHeartbeatAck,
   isMediaGrantError,
   isMediaSignal,
+  isPoseBatchFrame,
+  isPoseProjectionUnavailable,
+  isPoseProjectionReset,
   isPoseFrame,
   isRelayCapabilities,
+  parsePoseBatchFrame,
   parseDemoEvent,
   parsePoseFrame,
+  parsePoseProjectionUnavailable,
+  parsePoseWireFrame,
   parseForwardedMediaSignal,
   transitionActivityConfirmationCapability,
 } from "./protocol.js";
@@ -52,6 +63,32 @@ function frame(sequence = 1, sessionId = "demo-session", overrides = {}) {
   };
 }
 
+function batchPose(overrides = {}) {
+  return {
+    landmark_quality: "usable",
+    keypoints: KEYPOINT_NAMES.map((name, index) => ({
+      name,
+      x: 0.1 + (index / 100),
+      y: 0.2 + (index / 100),
+      score: 0.9,
+    })),
+    ...overrides,
+  };
+}
+
+function batchFrame(sequence = 1, sessionId = "demo-session", overrides = {}) {
+  return {
+    schema_version: POSE_BATCH_SCHEMA_VERSION,
+    session_id: sessionId,
+    sequence,
+    timestamp_ms: 1000 + sequence,
+    source_width: 1280,
+    source_height: 720,
+    poses: [batchPose(), batchPose()],
+    ...overrides,
+  };
+}
+
 test("pose contract accepts only an exact 17-point frame", () => {
   const valid = frame();
   assert.equal(isPoseFrame(valid), true);
@@ -69,6 +106,155 @@ test("pose contract accepts only an exact 17-point frame", () => {
     }),
     false,
   );
+});
+
+test("pose batch contract accepts only zero to four anonymous detected poses", () => {
+  const valid = batchFrame();
+  assert.equal(isPoseBatchFrame(valid), true);
+  assert.deepEqual(parsePoseBatchFrame(JSON.stringify(valid)), valid);
+  assert.deepEqual(parsePoseWireFrame(JSON.stringify(valid)), valid);
+  assert.deepEqual(parsePoseWireFrame(JSON.stringify(frame())), frame());
+  assert.equal(isPoseFrame(valid), false);
+  assert.equal(isPoseBatchFrame(frame()), false);
+  assert.equal(isPoseBatchFrame(batchFrame(2, "session-a", { poses: [] })), true);
+  assert.equal(
+    isPoseBatchFrame(batchFrame(3, "session-a", {
+      poses: Array.from({ length: MAX_POSES_PER_BATCH }, () => batchPose()),
+    })),
+    true,
+  );
+
+  const noTorso = batchPose({
+    keypoints: batchPose().keypoints.map((point, index) => (
+      [11, 12].includes(index) ? { ...point, score: 0 } : point
+    )),
+    landmark_quality: "degraded",
+  });
+  const invalid = [
+    { ...valid, person_count: valid.poses.length },
+    { ...valid, person_detected: true },
+    { ...valid, poses: Array(1) },
+    { ...valid, poses: [...valid.poses, batchPose(), batchPose(), batchPose()] },
+    { ...valid, poses: [{ ...batchPose(), person_id: "person-1" }] },
+    { ...valid, poses: [{ ...batchPose(), pose_index: 0 }] },
+    { ...valid, poses: [{ ...batchPose(), landmark_quality: "unavailable" }] },
+    { ...valid, poses: [noTorso] },
+    { ...valid, poses: [{ ...batchPose(), keypoints: batchPose().keypoints.slice(1) }] },
+    { ...valid, video: "forbidden" },
+  ];
+  for (const value of invalid) assert.equal(isPoseBatchFrame(value), false);
+
+  const sparsePoses = [];
+  sparsePoses.length = 1;
+  assert.equal(isPoseBatchFrame(batchFrame(4, "session-a", { poses: sparsePoses })), false);
+  const sparseKeypoints = [];
+  sparseKeypoints.length = KEYPOINT_NAMES.length;
+  assert.equal(isPoseBatchFrame(batchFrame(5, "session-a", {
+    poses: [{ ...batchPose(), keypoints: sparseKeypoints }],
+  })), false);
+});
+
+test("pose batch creator maps normalized model output without identity metadata", () => {
+  const modelPose = {
+    landmark_quality: "usable",
+    keypoints: KEYPOINT_NAMES.map((name, index) => ({
+      name,
+      x_norm: index / 20,
+      y_norm: index / 25,
+      score: 0.9,
+    })),
+  };
+  const value = createPoseBatchFrame({
+    sessionId: "session-a",
+    sequence: 7,
+    timestampMs: 1234,
+    sourceWidth: 1080,
+    sourceHeight: 1920,
+    poses: [modelPose],
+  });
+  assert.equal(value.schema_version, POSE_BATCH_SCHEMA_VERSION);
+  assert.equal(value.poses.length, 1);
+  assert.deepEqual(Object.keys(value.poses[0]).sort(), ["keypoints", "landmark_quality"]);
+  assert.equal(value.poses[0].keypoints[1].x, 0.05);
+  assert.equal("person_id" in value.poses[0], false);
+  assert.equal(createPoseBatchFrame({
+    sessionId: "session-a",
+    sequence: 8,
+    timestampMs: 1235,
+    sourceWidth: 1080,
+    sourceHeight: 1920,
+    poses: [{ ...modelPose, person_id: "person-1" }],
+  }), null);
+  assert.equal(createPoseBatchFrame({
+    sessionId: "session-a",
+    sequence: 8,
+    timestampMs: 1235,
+    sourceWidth: 1080,
+    sourceHeight: 1920,
+    poses: [{ ...modelPose, landmark_quality: undefined, landmarkQuality: "usable" }],
+  }), null);
+  assert.equal(createPoseBatchFrame({
+    sessionId: "session-a",
+    sequence: 8,
+    timestampMs: 1235,
+    sourceWidth: 1080,
+    sourceHeight: 1920,
+    poses: Array.from({ length: MAX_POSES_PER_BATCH + 1 }, () => modelPose),
+  }), null);
+  for (const [field, value] of [
+    ["x_norm", "0.25"],
+    ["y_norm", null],
+    ["score", true],
+  ]) {
+    assert.equal(createPoseBatchFrame({
+      sessionId: "session-a",
+      sequence: 9,
+      timestampMs: 1236,
+      sourceWidth: 1080,
+      sourceHeight: 1920,
+      poses: [{
+        ...modelPose,
+        keypoints: modelPose.keypoints.map((point, index) => (
+          index === 0 ? { ...point, [field]: value } : point
+        )),
+      }],
+    }), null);
+  }
+});
+
+test("pose projection reset consumes the shared cursor without inventing a pose", () => {
+  const reset = createPoseProjectionReset({
+    sessionId: "session-a",
+    sequence: 11,
+    timestampMs: 1200,
+    poseMode: "multi",
+  });
+  assert.deepEqual(reset, {
+    schema_version: POSE_PROJECTION_RESET_SCHEMA_VERSION,
+    session_id: "session-a",
+    sequence: 11,
+    timestamp_ms: 1200,
+    pose_mode: "multi",
+  });
+  assert.equal(isPoseProjectionReset(reset), true);
+  assert.deepEqual(parsePoseWireFrame(JSON.stringify(reset)), reset);
+  assert.equal(isPoseProjectionReset({ ...reset, poses: [] }), false);
+  assert.equal(isPoseProjectionReset({ ...reset, pose_mode: "automatic" }), false);
+});
+
+test("controller-loss projection unavailable is exact and never consumes a frame sequence", () => {
+  const unavailable = {
+    type: "pose_projection_unavailable",
+    session_id: "session-a",
+    timestamp_ms: 1201,
+    through_sequence: 11,
+    pose_mode: "multi",
+  };
+  assert.equal(isPoseProjectionUnavailable(unavailable), true);
+  assert.deepEqual(parsePoseProjectionUnavailable(JSON.stringify(unavailable)), unavailable);
+  assert.equal(isPoseProjectionUnavailable({ ...unavailable, sequence: 12 }), false);
+  assert.equal(isPoseProjectionUnavailable({ ...unavailable, pose_mode: "automatic" }), false);
+  assert.equal(parsePoseWireFrame(JSON.stringify(unavailable)), null);
 });
 
 test("estimator output maps x_norm/y_norm into the relay contract", () => {
@@ -165,6 +351,170 @@ test("viewer reducer rejects duplicate and out-of-order sequence numbers", () =>
     receivedAtMs: 5000,
   });
   assert.equal(nextSession.frame.session_id, "session-b");
+});
+
+test("viewer reducer shares one monotonic cursor across single and batch frames", () => {
+  let state = createViewerState();
+  state = reduceViewerState(state, { type: "frame", frame: frame(2), receivedAtMs: 2000 });
+  state = reduceViewerState(state, {
+    type: "frame",
+    frame: batchFrame(3),
+    receivedAtMs: 3000,
+  });
+  assert.equal(state.frame.schema_version, POSE_BATCH_SCHEMA_VERSION);
+  assert.equal(state.frame.sequence, 3);
+  assert.deepEqual(selectViewerPresentation(state, 3100), { kind: "live", ageMs: 100 });
+
+  const duplicateSingle = reduceViewerState(state, {
+    type: "frame",
+    frame: frame(3),
+    receivedAtMs: 4000,
+  });
+  const olderBatch = reduceViewerState(state, {
+    type: "frame",
+    frame: batchFrame(1),
+    receivedAtMs: 5000,
+  });
+  assert.equal(duplicateSingle, state);
+  assert.equal(olderBatch, state);
+
+  state = reduceViewerState(state, {
+    type: "frame",
+    frame: batchFrame(0, "session-b", { poses: [] }),
+    receivedAtMs: 6000,
+  });
+  assert.equal(state.sessionId, "session-b");
+  assert.deepEqual(selectViewerPresentation(state, 6100), { kind: "unavailable", ageMs: 100 });
+
+  state = reduceViewerState(state, {
+    type: "frame",
+    frame: batchFrame(1, "session-b", {
+      poses: [batchPose(), batchPose({
+        landmark_quality: "degraded",
+        keypoints: batchPose().keypoints.map((point, index) => (
+          index === 15 ? { ...point, score: 0.1 } : point
+        )),
+      })],
+    }),
+    receivedAtMs: 6200,
+  });
+  assert.deepEqual(selectViewerPresentation(state, 6300), { kind: "degraded", ageMs: 100 });
+});
+
+test("projection reset and disconnect clear old skeletons immediately", () => {
+  const started = reduceViewerState(createViewerState(), {
+    type: "frame",
+    frame: batchFrame(4, "session-a"),
+    receivedAtMs: 1000,
+  });
+  const reset = createPoseProjectionReset({
+    sessionId: "session-a",
+    sequence: 5,
+    timestampMs: 1001,
+    poseMode: "single",
+  });
+  const cleared = reduceViewerState(started, {
+    type: "frame",
+    frame: reset,
+    receivedAtMs: 1001,
+  });
+  assert.equal(cleared.frame.schema_version, POSE_PROJECTION_RESET_SCHEMA_VERSION);
+  assert.deepEqual(selectViewerPresentation(cleared, 1002), { kind: "waiting", ageMs: 1 });
+  assert.deepEqual(selectViewerPresentation(cleared, 4002), { kind: "stale", ageMs: 3001 });
+
+  const disconnected = reduceViewerState(cleared, { type: "disconnected" });
+  assert.equal(disconnected.frame, null);
+  assert.equal(disconnected.receivedAtMs, null);
+  assert.deepEqual(selectViewerPresentation(disconnected, 1003), {
+    kind: "waiting",
+    ageMs: null,
+  });
+});
+
+test("authoritative controller loss clears the projection without consuming its cursor", () => {
+  const started = reduceViewerState(createViewerState(), {
+    type: "frame",
+    frame: batchFrame(4, "session-a"),
+    receivedAtMs: 1000,
+  });
+  const cleared = reduceViewerState(started, {
+    type: "pose_projection_unavailable",
+    message: {
+      type: "pose_projection_unavailable",
+      session_id: "session-a",
+      timestamp_ms: 1001,
+      through_sequence: 4,
+      pose_mode: "multi",
+    },
+    receivedAtMs: 1001,
+  });
+  assert.equal(cleared.frame, null);
+  assert.equal(cleared.poseMode, "multi");
+  assert.equal(cleared.receivedAtMs, null);
+  assert.deepEqual(selectViewerPresentation(cleared, 1002), {
+    kind: "waiting",
+    ageMs: null,
+  });
+});
+
+test("late controller-loss unavailability cannot clear a newer resumed frame", () => {
+  const resumed = reduceViewerState(createViewerState(), {
+    type: "frame",
+    frame: batchFrame(8, "session-a"),
+    receivedAtMs: 2000,
+  });
+  const unchanged = reduceViewerState(resumed, {
+    type: "pose_projection_unavailable",
+    message: {
+      type: "pose_projection_unavailable",
+      session_id: "session-a",
+      timestamp_ms: 2001,
+      through_sequence: 7,
+      pose_mode: "single",
+    },
+    receivedAtMs: 2001,
+  });
+  assert.equal(unchanged, resumed);
+  assert.equal(unchanged.frame.sequence, 8);
+  assert.equal(unchanged.poseMode, "multi");
+});
+
+test("controller-loss clear keeps the sequence barrier and ignores an old session", () => {
+  const started = reduceViewerState(createViewerState(), {
+    type: "frame",
+    frame: batchFrame(8, "session-new"),
+    receivedAtMs: 2000,
+  });
+  const cleared = reduceViewerState(started, {
+    type: "pose_projection_unavailable",
+    message: {
+      type: "pose_projection_unavailable",
+      session_id: "session-new",
+      timestamp_ms: 2001,
+      through_sequence: 8,
+      pose_mode: "multi",
+    },
+    receivedAtMs: 2001,
+  });
+  const duplicate = reduceViewerState(cleared, {
+    type: "frame",
+    frame: batchFrame(8, "session-new"),
+    receivedAtMs: 2002,
+  });
+  assert.equal(duplicate, cleared);
+  const oldSessionUnavailable = reduceViewerState(cleared, {
+    type: "pose_projection_unavailable",
+    message: {
+      type: "pose_projection_unavailable",
+      session_id: "session-old",
+      timestamp_ms: 2003,
+      through_sequence: 99,
+      pose_mode: "single",
+    },
+    receivedAtMs: 2003,
+  });
+  assert.equal(oldSessionUnavailable, cleared);
+  assert.equal(oldSessionUnavailable.sessionId, "session-new");
 });
 
 test("viewer reducer and presentation keep degraded and unavailable distinct from live", () => {

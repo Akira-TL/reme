@@ -1,9 +1,17 @@
+import {
+  FRAME_SCHEMA_VERSION,
+  POSE_BATCH_SCHEMA_VERSION,
+  POSE_PROJECTION_RESET_SCHEMA_VERSION,
+} from "./protocol.js";
+
 export function createViewerState() {
   return {
     connection: "connecting",
     viewerId: null,
     sessionId: null,
     frame: null,
+    poseMode: null,
+    lastFrameSequence: null,
     receivedAtMs: null,
     eventSequence: null,
     eventReceivedAtMs: null,
@@ -28,6 +36,8 @@ function resetViewerSession(state, sessionId) {
     ...state,
     sessionId,
     frame: null,
+    poseMode: null,
+    lastFrameSequence: null,
     receivedAtMs: null,
     eventSequence: null,
     eventReceivedAtMs: null,
@@ -100,6 +110,16 @@ export function selectViewerPresentation(
   }
   const ageMs = Math.max(0, nowMs - state.receivedAtMs);
   if (ageMs > staleAfterMs) return { kind: "stale", ageMs };
+  if (state.frame.schema_version === POSE_PROJECTION_RESET_SCHEMA_VERSION) {
+    return { kind: "waiting", ageMs };
+  }
+  if (Array.isArray(state.frame.poses)) {
+    if (state.frame.poses.length === 0) return { kind: "unavailable", ageMs };
+    if (state.frame.poses.some((pose) => pose.landmark_quality === "degraded")) {
+      return { kind: "degraded", ageMs };
+    }
+    return { kind: "live", ageMs };
+  }
   if (!state.frame.person_detected || state.frame.landmark_quality === "unavailable") {
     return { kind: "unavailable", ageMs };
   }
@@ -116,7 +136,13 @@ export function reduceViewerState(state, action) {
     case "connected":
       return { ...state, connection: "connected" };
     case "disconnected":
-      return { ...state, connection: "disconnected", mediaGrant: null };
+      return {
+        ...state,
+        connection: "disconnected",
+        frame: null,
+        receivedAtMs: null,
+        mediaGrant: null,
+      };
     case "viewer_ready":
       return { ...state, viewerId: action.viewerId };
     case "invalid_frame":
@@ -125,11 +151,9 @@ export function reduceViewerState(state, action) {
       const base = state.sessionId && state.sessionId !== action.frame.session_id
         ? resetViewerSession(state, action.frame.session_id)
         : { ...state, sessionId: action.frame.session_id };
-      const previous = base.frame;
       if (
-        previous
-        && previous.session_id === action.frame.session_id
-        && action.frame.sequence <= previous.sequence
+        base.lastFrameSequence !== null
+        && action.frame.sequence <= base.lastFrameSequence
       ) {
         return state;
       }
@@ -137,7 +161,32 @@ export function reduceViewerState(state, action) {
         ...base,
         connection: "connected",
         frame: action.frame,
+        lastFrameSequence: action.frame.sequence,
+        poseMode: action.frame.schema_version === POSE_BATCH_SCHEMA_VERSION
+          ? "multi"
+          : action.frame.schema_version === FRAME_SCHEMA_VERSION
+            ? "single"
+            : action.frame.pose_mode,
         receivedAtMs: action.receivedAtMs,
+      };
+    }
+    case "pose_projection_unavailable": {
+      const message = action.message;
+      if (state.sessionId && state.sessionId !== message.session_id) return state;
+      const base = { ...state, sessionId: message.session_id };
+      if (
+        base.frame
+        && base.frame.session_id === message.session_id
+        && base.frame.sequence > message.through_sequence
+      ) {
+        return state;
+      }
+      return {
+        ...base,
+        connection: "connected",
+        frame: null,
+        poseMode: message.pose_mode,
+        receivedAtMs: null,
       };
     }
     case "demo_event": {
