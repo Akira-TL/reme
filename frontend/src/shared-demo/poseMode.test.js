@@ -9,12 +9,18 @@ import {
   POSE_MODE_SINGLE,
   PoseEstimatorPoolClosedError,
   PoseInferenceTimeoutError,
+  canArmManualFallDetection,
+  canPublishPoseFrame,
+  canPublishPoseProjectionReset,
   createPoseEstimatorPool,
   createSourceFrameFreshnessTracker,
   describePoseFrame,
+  isFallArmOperationContextCurrent,
   isFallAuthorityPoseFrame,
   isPoseInferenceContextCurrent,
   isSourceInferenceResultFresh,
+  poseCandidateLabel,
+  posePublishingLabel,
   readSourceFrameMarker,
   releaseOwnedPoseCapture,
   runPoseInferenceWithDeadline,
@@ -45,6 +51,204 @@ test("multi-pose frames are display-only and never feed fall authority", () => {
   assert.equal(shouldArmManualFallDetection("fall", POSE_MODE_MULTI), false);
   assert.equal(shouldArmManualFallDetection("fall", POSE_MODE_SINGLE), true);
   assert.equal(shouldArmManualFallDetection("living", POSE_MODE_SINGLE), false);
+});
+
+test("manual fall authority arms only after the single estimator is ready", () => {
+  assert.equal(canArmManualFallDetection({
+    sceneId: "fall",
+    mode: POSE_MODE_SINGLE,
+    captureActive: false,
+    estimatorReady: false,
+  }), true);
+  assert.equal(canArmManualFallDetection({
+    sceneId: "fall",
+    mode: POSE_MODE_SINGLE,
+    captureActive: true,
+    estimatorReady: true,
+  }), true);
+  assert.equal(canArmManualFallDetection({
+    sceneId: "fall",
+    mode: POSE_MODE_SINGLE,
+    captureActive: true,
+    estimatorReady: false,
+  }), false);
+  assert.equal(canArmManualFallDetection({
+    sceneId: "fall",
+    mode: POSE_MODE_SINGLE,
+    captureActive: true,
+    estimatorReady: true,
+    inferenceUnavailable: true,
+  }), false);
+  assert.equal(canArmManualFallDetection({
+    sceneId: "fall",
+    mode: POSE_MODE_MULTI,
+    captureActive: true,
+    estimatorReady: true,
+  }), false);
+});
+
+test("a deferred single-estimator load cannot arm after a newer scene action", async () => {
+  let resolveLoad;
+  const deferredLoad = new Promise((resolve) => {
+    resolveLoad = resolve;
+  });
+  const estimatorPool = {};
+  const stream = {};
+  const controllerConnection = {};
+  const expected = {
+    operationGeneration: 4,
+    captureGeneration: 2,
+    inferenceGeneration: 7,
+    estimatorPool,
+    stream,
+    controllerConnection,
+  };
+  let current = {
+    ...expected,
+    captureActive: true,
+    visibilityState: "visible",
+    poseMode: POSE_MODE_SINGLE,
+    sceneId: "fall",
+  };
+  const mayArm = deferredLoad.then(() => (
+    isFallArmOperationContextCurrent(expected, current)
+  ));
+
+  current = {
+    ...current,
+    operationGeneration: 5,
+    sceneId: "living",
+  };
+  resolveLoad();
+  assert.equal(await mayArm, false);
+  assert.equal(isFallArmOperationContextCurrent(expected, {
+    ...expected,
+    captureActive: true,
+    visibilityState: "visible",
+    poseMode: POSE_MODE_SINGLE,
+    sceneId: "fall",
+  }), true);
+});
+
+test("rolling Relay compatibility gates only the additive multi-pose wire contract", () => {
+  assert.equal(canPublishPoseFrame(POSE_MODE_SINGLE, "pending"), true);
+  assert.equal(canPublishPoseFrame(POSE_MODE_SINGLE, "unsupported"), true);
+  assert.equal(canPublishPoseFrame(POSE_MODE_MULTI, "pending"), false);
+  assert.equal(canPublishPoseFrame(POSE_MODE_MULTI, "unsupported"), false);
+  assert.equal(canPublishPoseFrame(POSE_MODE_MULTI, "supported"), true);
+  assert.equal(canPublishPoseProjectionReset("pending"), false);
+  assert.equal(canPublishPoseProjectionReset("unsupported"), false);
+  assert.equal(canPublishPoseProjectionReset("supported"), true);
+});
+
+test("pose status labels distinguish waiting, empty, unavailable, and paused", () => {
+  assert.equal(posePublishingLabel({
+    captureLive: true,
+    mode: POSE_MODE_MULTI,
+    frame: null,
+    modelState: "ready",
+    poseProjectionCapability: "supported",
+    publishedFrame: null,
+  }), "LOCAL / WAITING");
+  assert.equal(poseCandidateLabel({
+    mode: POSE_MODE_MULTI,
+    frame: null,
+    modelState: "ready",
+  }), "等待多人首帧");
+  const emptyBatch = {
+    schema_version: POSE_BATCH_SCHEMA_VERSION,
+    session_id: "session-a",
+    sequence: 4,
+    poses: [],
+  };
+  assert.equal(posePublishingLabel({
+    captureLive: true,
+    mode: POSE_MODE_MULTI,
+    frame: emptyBatch,
+    modelState: "ready",
+    poseProjectionCapability: "supported",
+    publishedFrame: null,
+  }), "LOCAL / WAITING");
+  assert.equal(posePublishingLabel({
+    captureLive: true,
+    mode: POSE_MODE_MULTI,
+    frame: emptyBatch,
+    modelState: "ready",
+    poseProjectionCapability: "supported",
+    publishedFrame: {
+      schemaVersion: POSE_BATCH_SCHEMA_VERSION,
+      sessionId: "session-a",
+      sequence: 4,
+    },
+  }), "MULTI PUBLISHING");
+  assert.equal(posePublishingLabel({
+    captureLive: true,
+    mode: POSE_MODE_MULTI,
+    frame: emptyBatch,
+    modelState: "ready",
+    poseProjectionCapability: "pending",
+    publishedFrame: {
+      schemaVersion: POSE_BATCH_SCHEMA_VERSION,
+      sessionId: "session-a",
+      sequence: 4,
+    },
+  }), "LOCAL / WAITING");
+  assert.equal(poseCandidateLabel({
+    mode: POSE_MODE_MULTI,
+    frame: emptyBatch,
+    modelState: "ready",
+  }), "本帧 0 个匿名姿态");
+  assert.equal(posePublishingLabel({
+    captureLive: true,
+    mode: POSE_MODE_MULTI,
+    frame: null,
+    modelState: "unavailable",
+    poseProjectionCapability: "supported",
+    publishedFrame: null,
+  }), "POSE UNAVAILABLE");
+  assert.equal(poseCandidateLabel({
+    mode: POSE_MODE_MULTI,
+    frame: null,
+    modelState: "unavailable",
+  }), "人物层不可用");
+  assert.equal(posePublishingLabel({
+    captureLive: false,
+    mode: POSE_MODE_SINGLE,
+    frame: null,
+    modelState: "ready",
+    poseProjectionCapability: "pending",
+    publishedFrame: null,
+  }), "LOCAL / PAUSED");
+  const singleFrame = {
+    schema_version: FRAME_SCHEMA_VERSION,
+    session_id: "session-a",
+    sequence: 9,
+    person_detected: true,
+  };
+  assert.equal(posePublishingLabel({
+    captureLive: true,
+    mode: POSE_MODE_SINGLE,
+    frame: singleFrame,
+    modelState: "ready",
+    poseProjectionCapability: "pending",
+    publishedFrame: {
+      schemaVersion: FRAME_SCHEMA_VERSION,
+      sessionId: "session-a",
+      sequence: 9,
+    },
+  }), "SINGLE PUBLISHING");
+  assert.equal(posePublishingLabel({
+    captureLive: true,
+    mode: POSE_MODE_SINGLE,
+    frame: singleFrame,
+    modelState: "ready",
+    poseProjectionCapability: "pending",
+    publishedFrame: {
+      schemaVersion: FRAME_SCHEMA_VERSION,
+      sessionId: "session-a",
+      sequence: 8,
+    },
+  }), "LOCAL / WAITING");
 });
 
 test("pose summaries describe anonymous per-frame candidates without identity", () => {

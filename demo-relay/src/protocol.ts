@@ -1,6 +1,7 @@
 export const DEMO_EVENT_SCHEMA_VERSION = "reme-demo-event/v1";
 export const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
 export const ACTIVITY_CONFIRMATION_PROTOCOL = "verified-activity-event/v1";
+export const POSE_PROJECTION_PROTOCOL = "anonymous-pose-batch/v1";
 
 export const DEMO_EVENT_TYPES = [
   "scene_state",

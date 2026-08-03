@@ -78,11 +78,13 @@ MediaPipe `VIDEO` 运行时可能在库内部使用时序优化；Reme 不实现
 - 每次切换增加本地 perception generation，同步清除旧渲染；上一代异步推理结果不得发布。
 - 两个 schema 共用当前 session 的一个单调 frame `sequence`；切换不重置 sequence，Relay/viewer 继续拒绝旧序号。
 - 切换时先发布共享 cursor 上的 `reme-pose-reset/v1-demo` 清场；新模式随后发布有效姿态合同。多人模式即使无人也发布 `poses: []`，让 viewer 显示真实状态。
+- batch/reset 是滚动发布中的增量合同：Relay 必须用独立且 exact 的 `pose_projection_capabilities` 声明 `anonymous-pose-batch/v1`，不能给既有 exact `relay_capabilities` 加字段。控制端只有同一 socket 明确确认后才能开放 `multi` 和发送 batch/reset；超时后该连接代次固定为不支持，单人帧仍保持旧 Relay 兼容。
 - 新模型加载、推理或合同失败时，UI 显示“多人姿态不可用”，不 clone、不回放最后一帧、不静默切换到演示数据。操作者可以明确切回单人模式。
-- 每次推理必须绑定 capture/perception generation、当前 stream、同一个可靠解码计数器和单调起始时间；三秒内未 settle 或返回时已失鲜的结果不得发布、不得进入单人 fall detector。多人失败只清人物层并作废该 estimator，显式重试必须创建新实例，不能排在可能卡死的旧推理队列后。
+- 每次推理必须绑定 capture/perception generation、当前 stream、同一个可靠解码计数器和单调起始时间；异步加载/settlement 超过三秒或返回时已失鲜的结果不得发布、不得进入单人 fall detector。当前 MediaPipe `detectForVideo` 是主线程同步调用，事件循环被底层调用阻塞时 JavaScript 定时器不能抢占，因此自动化不能声称该同步阻塞已被三秒 deadline 硬切断。目标手机必须测量长任务与卡顿；若需要可证明的硬时限，必须迁移到 Worker 或其他可中止的离主线程执行。多人可观察失败只清人物层并作废该 estimator，显式重试必须创建新实例，不能排在可能卡死的旧推理队列后。
 - 切换不得更改、关闭或重新触发现有 authority 状态。已经服务端升级的告警和有效媒体 grant 继续按 ADR-0011 投影。
 - 单人跌倒规则已启用或安全事件仍非 `idle` 时禁止切入 `multi`；展示模式不能成为暂停安全检测或规避既有事件的开关。
-- `multi` 下手动进入跌倒场景只展示匿名骨架，不预授权麦克风、不启动单人跌倒规则；操作者必须另行点击“切为单人并启用真实跌倒规则”，才可同时完成显式模式切换与安全演示启用。
+- `multi` 下手动进入跌倒场景只展示匿名骨架，不预授权麦克风、不启动单人跌倒规则；操作者必须另行点击“切为单人并启用真实跌倒规则”，才可同时完成显式模式切换与安全演示启用。等待单人模型期间以独立 arm-operation generation 绑定当时的 fall 场景、mode、capture/inference generation、stream、controller 和 visibility；任一场景/模式选择、停止、隐藏或连接变化都会使旧请求失效。
+- UI 只有在当前帧已按当前连接 capability 真正调用发送后，才显示 `SINGLE/MULTI PUBLISHING` 和绿色实时点。首帧前、模型不可用、重连 capability pending、旧本地帧或发送失败均显示 waiting/unavailable；连接、模式、停止和隐藏会清除发布回执。
 
 ## 5. `reme-pose-batch-17/v1-demo` 精确合同
 
@@ -169,6 +171,7 @@ MediaPipe 的 `score` 暂直接采用对应 NormalizedLandmark 的 `visibility`�
 - 任一 batch 字段无效时拒绝整帧并保留上一条序列游标；不得广播有效子集或把数组截到四个。
 - reset 精确包含 `schema_version/session_id/sequence/timestamp_ms/pose_mode`，不包含 pose；它消费同一个 frame cursor、替换 latest snapshot，并同步清除现有及晚加入 viewer 的人物层。
 - controller 异常断开时 Relay 发送独立的 exact `pose_projection_unavailable`：`type/session_id/timestamp_ms/through_sequence/pose_mode`。它不消费或重建 frame cursor、不持久化；viewer 只清除 `sequence <= through_sequence` 的旧投影，忽略重连新帧之后才到达的旧 unavailable。
+- controller 断线清理先撤销有效媒体 grant 并清除做饭识别证据，再尝试投影 unavailable；即使投影清理抛错，也不得跳过权威状态的 fail-close。
 - 一个 session 只有一个 frame sequence 和一份 latest projection snapshot。接受更高 sequence 的任一姿态/reset schema 后，旧 snapshot 立即被替换。
 - viewer 对新 sequence 做同样严格解析；切换 schema 时同步清空现有 Canvas，再绘制最新有效帧。
 - late viewer 只收到 Relay 当前 latest projection snapshot，不接收历史、不重建轨迹；controller 已断开时不会回放旧人物层。
@@ -268,7 +271,7 @@ ADR-0011 的投影优先级保持不变：
 - Relay 三个 cursor-bearing schema 共用 sequence/latest snapshot、late join、乱序和旧 session；
 - reset/unavailable 精确清场、旧断线消息不消费/破坏新 session cursor；
 - viewer 0..4 绘制、schema 切换清场、失鲜/隐藏/断线 fail-close；
-- decoded counter 不可用/交替/停滞、推理永不 settle、dispose 永不 settle 仍须有界清场并允许新采集；
+- decoded counter 不可用/交替/停滞、异步推理 promise 永不 settle、dispose 永不 settle 仍须有界清场并允许新采集；主线程同步推理阻塞只能在目标设备 Gate 测量，不能由定时器单测冒充已可抢占；
 - multi 对权威快照零影响，以及 single 的 fall/voice/controller-ready 3/5/6、watchdog/checkpoint 全套回归；
 - frontend tests/lint/build、Relay tests/check、双环境 dry-run 与 diff-check。
 

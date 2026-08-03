@@ -16,7 +16,11 @@ import {
   type PoseProjectionReset,
 } from "../src/index";
 import { handleActivityRecognition } from "../src/activity";
-import { ACTIVITY_CONFIRMATION_PROTOCOL, validateDemoEvent } from "../src/protocol";
+import {
+  ACTIVITY_CONFIRMATION_PROTOCOL,
+  POSE_PROJECTION_PROTOCOL,
+  validateDemoEvent,
+} from "../src/protocol";
 import { handleSceneRecognition } from "../src/scene";
 
 const ORIGIN = "https://reme.maniforld.com";
@@ -1047,6 +1051,15 @@ describe("single-room demo relay", () => {
     const grantAck = readGrantAck(await grantAckPromise, "media_grant_accepted");
     await expect(grantedForViewer).resolves.toEqual(grantAck.grant);
 
+    await runInDurableObject(roomStub(), async (instance) => {
+      const target = instance as unknown as {
+        clearPoseProjectionOnControllerLoss(...args: unknown[]): void;
+      };
+      target.clearPoseProjectionOnControllerLoss = () => {
+        throw new Error("projection cleanup failure");
+      };
+    });
+
     const revokedForViewer = nextJson(viewer);
     await closeControllerSocket(controller, 4001, "controller_network_lost");
     await expect(revokedForViewer).resolves.toMatchObject({
@@ -1057,6 +1070,13 @@ describe("single-room demo relay", () => {
         status: "revoked",
       },
     });
+    const authorityAfterDisconnect = await demoAuthoritySnapshot() as {
+      media_grants: Array<{ status: string }>;
+      activity_evidence: Array<Record<string, unknown>>;
+    };
+    expect(authorityAfterDisconnect.media_grants).toHaveLength(1);
+    expect(authorityAfterDisconnect.media_grants[0]?.status).toBe("revoked");
+    expect(authorityAfterDisconnect.activity_evidence).toEqual([]);
 
     const status = await relayFetch("/api/status");
     await expect(status.json()).resolves.toMatchObject({
@@ -3896,6 +3916,10 @@ async function connectController(token: string): Promise<WebSocket> {
   await expect(nextJson(socket)).resolves.toEqual({
     type: "relay_capabilities",
     activity_confirmation: ACTIVITY_CONFIRMATION_PROTOCOL,
+  });
+  await expect(nextJson(socket)).resolves.toEqual({
+    type: "pose_projection_capabilities",
+    pose_projection: POSE_PROJECTION_PROTOCOL,
   });
   // Keep existing tests and legacy controller expectations focused on the
   // authoritative ready message while asserting the additive capability once.

@@ -21,13 +21,15 @@
 - batch 不含身份、稳定 ID、track、人物编号、图片或媒体字段；viewer 对所有候选使用同一种骨架颜色。
 - batch、按钮和候选数量不会生成或修改 alarm、activity、voice、card、receipt、verified activity、grant、lease、watchdog 或 checkpoint。
 - 单人/多人/reset 共用单调 frame cursor；切换、停止、隐藏和 controller 断线清除人物层，旧 session 或旧 generation 不能恢复最后一帧。
-- 浏览器必须提供严格增长的可靠解码帧计数；无计数、计数冻结、计数 API 交替或推理超过三秒均有界 fail-close，不使用 `currentTime` 给旧帧续命。
+- 浏览器必须提供严格增长的可靠解码帧计数；无计数、计数冻结、计数 API 交替，以及异步推理 promise 超过三秒时会 fail-close，不使用 `currentTime` 给旧帧续命。当前 MediaPipe `detectForVideo` 同步运行于主线程，底层同步阻塞不能被 JavaScript timer 抢占；该长任务风险仍属于目标手机 Gate，自动化结果不声称三秒硬切断同步调用。
 - 多人 estimator 失败后会作废并重新加载；隐藏/恢复、发送失败和资源 dispose 不会把健康 estimator 误判为权威事件，也不会卡住停止采集。
 - 权威厨房/跌倒 grant 的真实视频继续覆盖骨架；完全隐私仍禁止真实像素和家具背景。
 
 ## 尚未关闭的真实设备 Gate
 
 本轮没有用目标手机完成 Pilot/Holdout，因此不能声称多人检出率、可靠人数统计、目标手机帧率/时延、遮挡质量、温升、跨设备稳定性或路演主路径已通过。上线前仍需按规格在指定手机上覆盖 `0/1/2/3/4/5+` 人、交叉遮挡、进出画、竖屏后置摄像头、前后台恢复、至少两个 viewer、断线恢复和连续运行。
+
+还必须在目标手机观测主线程长任务和最坏推理耗时。若同步 `detectForVideo` 造成不可接受的事件循环阻塞，本 Gate 判为 No-go；现有 Promise deadline 不是 Worker 级抢占保证。
 
 ## 发布边界
 

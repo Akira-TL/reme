@@ -175,9 +175,8 @@ export function reduceViewerState(state, action) {
       if (state.sessionId && state.sessionId !== message.session_id) return state;
       const base = { ...state, sessionId: message.session_id };
       if (
-        base.frame
-        && base.frame.session_id === message.session_id
-        && base.frame.sequence > message.through_sequence
+        base.lastFrameSequence !== null
+        && base.lastFrameSequence > message.through_sequence
       ) {
         return state;
       }

@@ -54,19 +54,27 @@ import {
   isForwardedMediaSignal,
   isHeartbeatAck,
   isMediaGrantError,
+  isPoseProjectionCapabilities,
   isRelayCapabilities,
   transitionActivityConfirmationCapability,
+  transitionPoseProjectionCapability,
 } from "./protocol.js";
 import {
   POSE_MODE_MULTI,
   POSE_MODE_SINGLE,
   SOURCE_FRAME_STALE_AFTER_MS,
+  canArmManualFallDetection,
+  canPublishPoseFrame,
+  canPublishPoseProjectionReset,
   createPoseEstimatorPool,
   createSourceFrameFreshnessTracker,
   describePoseFrame,
+  isFallArmOperationContextCurrent,
   isFallAuthorityPoseFrame,
   isPoseInferenceContextCurrent,
   isSourceInferenceResultFresh,
+  poseCandidateLabel,
+  posePublishingLabel,
   readSourceFrameMarker,
   releaseOwnedPoseCapture,
   runPoseInferenceWithDeadline,
@@ -97,6 +105,7 @@ const COOKING_SAMPLE_INTERVAL_MS = 4_000;
 const FALL_REPLY_WINDOW_MS = 8_000;
 const CONTROLLER_READY_TIMEOUT_MS = 5_000;
 const ACTIVITY_CAPABILITY_TIMEOUT_MS = 1_500;
+const POSE_CAPABILITY_TIMEOUT_MS = 1_500;
 const FALL_PROMPT_FALLBACK_MS = 7_000;
 const FALL_PROMPT_WATCHDOG_MS = 9_000;
 const RELEASE_TIMEOUT_MS = 6_000;
@@ -308,6 +317,7 @@ export function MonitorApp() {
   );
   const [controlKey, setControlKey] = useState("");
   const [localFrame, setLocalFrame] = useState(null);
+  const [publishedPoseFrame, setPublishedPoseFrame] = useState(null);
   const [stats, setStats] = useState({ inferenceMs: null, published: 0, quality: "—" });
   const [poseMode, setPoseMode] = useState(POSE_MODE_SINGLE);
   const [poseModelStatus, setPoseModelStatus] = useState({
@@ -321,6 +331,7 @@ export function MonitorApp() {
   const [fallDetectionArmed, setFallDetectionArmed] = useState(false);
   const [activity, setActivity] = useState(createActivityState);
   const [activityConfirmationCapability, setActivityConfirmationCapability] = useState("pending");
+  const [poseProjectionCapability, setPoseProjectionCapability] = useState("pending");
   const [heartCard, setHeartCard] = useState(null);
   const [kitchenLiveEventId, setKitchenLiveEventId] = useState(null);
   const [moment, setMoment] = useState({ status: "idle", size: 0, mimeType: "" });
@@ -387,6 +398,7 @@ export function MonitorApp() {
   const automaticSceneGenerationRef = useRef(0);
   const automaticSceneAbortRef = useRef(null);
   const fallDetectionArmedRef = useRef(false);
+  const fallArmOperationGenerationRef = useRef(0);
 
   const publishEvent = useCallback((eventType, payload, {
     verifiedActivity = false,
@@ -419,7 +431,12 @@ export function MonitorApp() {
     const connection = controllerRef.current;
     const socket = connection?.socket;
     const sessionId = sessionIdRef.current;
-    if (connection?.ready !== true || socket?.readyState !== WebSocket.OPEN || !sessionId) {
+    if (
+      connection?.ready !== true
+      || !canPublishPoseProjectionReset(connection.poseProjectionCapability)
+      || socket?.readyState !== WebSocket.OPEN
+      || !sessionId
+    ) {
       return null;
     }
     const reset = createPoseProjectionReset({
@@ -765,6 +782,7 @@ export function MonitorApp() {
     window.clearInterval(connection.heartbeat);
     window.clearTimeout(connection.readyTimeout);
     window.clearTimeout(connection.activityCapabilityTimeout);
+    window.clearTimeout(connection.poseCapabilityTimeout);
     connection.socket.onopen = null;
     connection.socket.onmessage = null;
     connection.socket.onclose = null;
@@ -921,12 +939,16 @@ export function MonitorApp() {
       readyTimeout: 0,
       activityCapabilityTimeout: 0,
       activityConfirmationCapability: "pending",
+      poseCapabilityTimeout: 0,
+      poseProjectionCapability: "pending",
       ready: false,
     };
     controllerRef.current = connection;
     queueMicrotask(() => {
       if (controllerRef.current === connection) {
         setActivityConfirmationCapability("pending");
+        setPoseProjectionCapability("pending");
+        setPublishedPoseFrame(null);
       }
     });
     const completeKitchenConfirmation = (value) => {
@@ -1076,6 +1098,19 @@ export function MonitorApp() {
             setActivityConfirmationCapability(connection.activityConfirmationCapability);
           }
         }, ACTIVITY_CAPABILITY_TIMEOUT_MS);
+        connection.poseCapabilityTimeout = window.setTimeout(() => {
+          if (
+            controllerRef.current === connection
+            && connection.ready
+            && connection.poseProjectionCapability === "pending"
+          ) {
+            connection.poseProjectionCapability = transitionPoseProjectionCapability(
+              connection.poseProjectionCapability,
+              "timeout",
+            );
+            setPoseProjectionCapability(connection.poseProjectionCapability);
+          }
+        }, POSE_CAPABILITY_TIMEOUT_MS);
         leaseExpiresAtRef.current = value.lease_expires_at_ms;
         const readyFrameSequence = Number.isSafeInteger(value.last_frame_sequence)
           ? value.last_frame_sequence
@@ -1123,6 +1158,19 @@ export function MonitorApp() {
         );
         window.clearTimeout(connection.activityCapabilityTimeout);
         setActivityConfirmationCapability(connection.activityConfirmationCapability);
+        return;
+      }
+      if (isPoseProjectionCapabilities(value)) {
+        // Keep the negotiation monotonic for this socket. A late message after
+        // timeout cannot re-enable a wire contract against a possibly rolled
+        // back Relay; reconnecting starts a fresh capability generation.
+        if (connection.poseProjectionCapability !== "pending") return;
+        connection.poseProjectionCapability = transitionPoseProjectionCapability(
+          connection.poseProjectionCapability,
+          "supported",
+        );
+        window.clearTimeout(connection.poseCapabilityTimeout);
+        setPoseProjectionCapability(connection.poseProjectionCapability);
         return;
       }
       if (
@@ -1301,7 +1349,10 @@ export function MonitorApp() {
       window.clearInterval(connection.heartbeat);
       window.clearTimeout(connection.readyTimeout);
       window.clearTimeout(connection.activityCapabilityTimeout);
+      window.clearTimeout(connection.poseCapabilityTimeout);
       setActivityConfirmationCapability("pending");
+      setPoseProjectionCapability("pending");
+      setPublishedPoseFrame(null);
       controllerRef.current = null;
       const automaticRequest = automaticSceneAbortRef.current;
       if (automaticRequest) {
@@ -1811,6 +1862,7 @@ export function MonitorApp() {
 
   const commitSceneDisplay = useCallback((nextSceneId, source) => {
     if (!DEMO_SCENES.some((scene) => scene.id === nextSceneId)) return false;
+    fallArmOperationGenerationRef.current += 1;
     if (!persistControllerSessionPatch({ sceneId: nextSceneId })) return false;
     sceneIdRef.current = nextSceneId;
     setSceneId(nextSceneId);
@@ -1830,10 +1882,17 @@ export function MonitorApp() {
 
   const applyManualScene = useCallback((nextSceneId) => {
     if (!DEMO_SCENES.some((scene) => scene.id === nextSceneId)) return;
-    const armFallDetection = shouldArmManualFallDetection(
+    const fallArmRequested = shouldArmManualFallDetection(
       nextSceneId,
       poseModeRef.current,
     );
+    const armFallDetection = canArmManualFallDetection({
+      sceneId: nextSceneId,
+      mode: poseModeRef.current,
+      captureActive: captureActiveRef.current,
+      estimatorReady: Boolean(poseEstimatorPoolRef.current?.peek(POSE_MODE_SINGLE)),
+      inferenceUnavailable: poseInferenceUnavailableModeRef.current === POSE_MODE_SINGLE,
+    });
     const exitAction = selectFallExitAction(fallRef.current, {
       persistenceHealthy: sessionPersistenceHealthyRef.current,
     });
@@ -1845,6 +1904,20 @@ export function MonitorApp() {
       setMediaStatus({
         state: "waiting_viewer",
         detail: "请先明确关闭安全事件，并等待 Relay 确认后再切换场景。",
+      });
+      return;
+    }
+    if (fallArmRequested && !armFallDetection) {
+      const inferenceFailed = poseInferenceUnavailableModeRef.current === POSE_MODE_SINGLE;
+      setPoseModelStatus({
+        state: inferenceFailed ? "unavailable" : "loading",
+        detail: inferenceFailed
+          ? "单人 MoveNet 当前不可用；真实跌倒规则保持关闭。请修复模型后重试。"
+          : "单人 MoveNet 尚未就绪；真实跌倒规则保持关闭，模型就绪后可再次启用。",
+      });
+      setMediaStatus({
+        state: "failed",
+        detail: "没有可用的单人姿态权威帧，跌倒问询、麦克风与告警均未启动。",
       });
       return;
     }
@@ -1893,6 +1966,7 @@ export function MonitorApp() {
   ]);
 
   const selectScene = useCallback((nextSceneId) => {
+    fallArmOperationGenerationRef.current += 1;
     cancelAutomaticSceneRecognition("已使用手动场景；此前的 MiMo 结果已取消。可再次点击真实识别。");
     applyManualScene(nextSceneId);
   }, [applyManualScene, cancelAutomaticSceneRecognition]);
@@ -2098,6 +2172,7 @@ export function MonitorApp() {
   }, [fall.phase, fallDetectionArmed, mediaStatus.state, moment.status, sessionPersistenceHealthy, ui.connection]);
 
   const stopCapture = useCallback(async () => {
+    fallArmOperationGenerationRef.current += 1;
     cancelAutomaticSceneRecognition("摄像头已停止；自动识别样本与待返回结果均已取消。");
     const hadPoseProjection = captureActiveRef.current
       || streamRef.current !== null
@@ -2127,6 +2202,7 @@ export function MonitorApp() {
     const estimatorPool = poseEstimatorPoolRef.current;
     poseEstimatorPoolRef.current = null;
     setLocalFrame(null);
+    setPublishedPoseFrame(null);
     setPoseModelStatus({
       state: "idle",
       detail: poseModeRef.current === POSE_MODE_MULTI
@@ -2265,6 +2341,19 @@ export function MonitorApp() {
 
   const selectPoseMode = useCallback((nextMode) => {
     if (![POSE_MODE_SINGLE, POSE_MODE_MULTI].includes(nextMode)) return;
+    fallArmOperationGenerationRef.current += 1;
+    if (
+      nextMode === POSE_MODE_MULTI
+      && controllerRef.current?.poseProjectionCapability !== "supported"
+    ) {
+      setPoseModelStatus({
+        state: "unavailable",
+        detail: controllerRef.current?.poseProjectionCapability === "unsupported"
+          ? "当前 Relay 不支持匿名多人协议；已锁定单人模式。"
+          : "正在确认 Relay 的匿名多人协议；确认前保持单人模式。",
+      });
+      return;
+    }
     if (
       nextMode === POSE_MODE_MULTI
       && (fallDetectionArmedRef.current || fallRef.current.phase !== "idle")
@@ -2283,6 +2372,7 @@ export function MonitorApp() {
       poseSourceUnavailableRef.current = null;
       setPoseMode(nextMode);
       setLocalFrame(null);
+      setPublishedPoseFrame(null);
       if (captureActiveRef.current) publishPoseProjectionReset(nextMode);
       fallDetectorRef.current.reset();
       setStats((current) => ({
@@ -2358,12 +2448,100 @@ export function MonitorApp() {
     });
   }, [publishPoseProjectionReset]);
 
+  useEffect(() => {
+    if (
+      poseProjectionCapability !== "unsupported"
+      || poseModeRef.current !== POSE_MODE_MULTI
+    ) return;
+    selectPoseMode(POSE_MODE_SINGLE);
+  }, [poseProjectionCapability, selectPoseMode]);
+
+  const switchToSingleAndArmFall = useCallback(async () => {
+    if (sceneIdRef.current !== "fall") return;
+    selectPoseMode(POSE_MODE_SINGLE);
+    if (!captureActiveRef.current) {
+      selectScene("fall");
+      return;
+    }
+
+    const estimatorPool = poseEstimatorPoolRef.current;
+    const captureGeneration = captureGenerationRef.current;
+    const inferenceGeneration = poseInferenceGenerationRef.current;
+    const stream = streamRef.current;
+    const controllerConnection = controllerRef.current;
+    const operationGeneration = fallArmOperationGenerationRef.current + 1;
+    fallArmOperationGenerationRef.current = operationGeneration;
+    const expectedContext = {
+      operationGeneration,
+      captureGeneration,
+      inferenceGeneration,
+      estimatorPool,
+      stream,
+      controllerConnection,
+    };
+    const currentContext = () => ({
+      operationGeneration: fallArmOperationGenerationRef.current,
+      captureGeneration: captureGenerationRef.current,
+      inferenceGeneration: poseInferenceGenerationRef.current,
+      estimatorPool: poseEstimatorPoolRef.current,
+      stream: streamRef.current,
+      controllerConnection: controllerRef.current,
+      captureActive: captureActiveRef.current,
+      visibilityState: document.visibilityState,
+      poseMode: poseModeRef.current,
+      sceneId: sceneIdRef.current,
+    });
+    if (!estimatorPool) {
+      setMediaStatus({
+        state: "failed",
+        detail: "单人姿态模型池不可用；跌倒规则保持关闭。",
+      });
+      return;
+    }
+    try {
+      await estimatorPool.load(POSE_MODE_SINGLE);
+    } catch (error) {
+      if (
+        isFallArmOperationContextCurrent(expectedContext, currentContext())
+      ) {
+        poseInferenceUnavailableModeRef.current = POSE_MODE_SINGLE;
+        setPoseModelStatus({
+          state: "unavailable",
+          detail: `单人 MoveNet 不可用：${error instanceof Error ? error.message : "加载失败"}；真实跌倒规则保持关闭。`,
+        });
+        setMediaStatus({
+          state: "failed",
+          detail: "单人模型加载失败，跌倒问询、麦克风与告警均未启动。",
+        });
+      }
+      return;
+    }
+    if (
+      !isFallArmOperationContextCurrent(expectedContext, currentContext())
+      || !estimatorPool.peek(POSE_MODE_SINGLE)
+    ) return;
+
+    poseInferenceUnavailableModeRef.current = null;
+    setPoseModelStatus({
+      state: "ready",
+      detail: "单人 MoveNet 已就绪；正在显式启用真实跌倒演示链路。",
+    });
+    poseLoopRestartRef.current?.();
+    cancelAutomaticSceneRecognition(
+      "已显式启用真实跌倒演示；此前的 MiMo 结果已取消。可再次点击真实识别。",
+    );
+    if (!isFallArmOperationContextCurrent(expectedContext, currentContext())) return;
+    applyManualScene("fall");
+  }, [applyManualScene, cancelAutomaticSceneRecognition, selectPoseMode, selectScene]);
+
   const pausePoseProjectionForVisibility = useCallback(() => {
+    fallArmOperationGenerationRef.current += 1;
     if (!captureActiveRef.current) return;
     poseInferenceGenerationRef.current += 1;
     window.cancelAnimationFrame(animationRef.current);
     animationRef.current = 0;
     setLocalFrame(null);
+    setPublishedPoseFrame(null);
     publishPoseProjectionReset();
     fallDetectorRef.current.reset();
     setStats((current) => ({
@@ -2658,11 +2836,20 @@ export function MonitorApp() {
           const activeSocket = activeConnection?.socket;
           if (
             activeConnection?.ready === true
+            && canPublishPoseFrame(
+              activePoseMode,
+              activeConnection.poseProjectionCapability,
+            )
             && activeSocket?.readyState === WebSocket.OPEN
           ) {
             try {
               activeSocket.send(JSON.stringify(frame));
               sequenceRef.current += 1;
+              setPublishedPoseFrame({
+                schemaVersion: frame.schema_version,
+                sessionId: frame.session_id,
+                sequence: frame.sequence,
+              });
               setStats((current) => ({
                 inferenceMs: result.inference_ms,
                 published: current.published + 1,
@@ -3231,7 +3418,20 @@ export function MonitorApp() {
   const locked = ui.phase === "locked" || (ui.phase === "degraded" && !ui.sessionId);
   const canStart = ui.connection === "connected" && !ui.captureActive && ui.phase !== "starting";
   const activeScene = DEMO_SCENES.find((scene) => scene.id === sceneId) || DEMO_SCENES[0];
-  const poseFrameSummary = describePoseFrame(poseMode, localFrame);
+  const publishingLabel = posePublishingLabel({
+    captureLive: ui.phase === "live",
+    mode: poseMode,
+    frame: localFrame,
+    modelState: poseModelStatus.state,
+    poseProjectionCapability,
+    publishedFrame: publishedPoseFrame,
+  });
+  const poseFramePublishing = publishingLabel.endsWith("PUBLISHING");
+  const candidateLabel = poseCandidateLabel({
+    mode: poseMode,
+    frame: localFrame,
+    modelState: poseModelStatus.state,
+  });
   const fallExitAction = selectFallExitAction(fall, { persistenceHealthy: sessionPersistenceHealthy });
   const automaticSceneBusy = ["capturing", "analyzing"].includes(automaticScene.phase);
   const kitchenOperationActive = Boolean(
@@ -3348,10 +3548,8 @@ export function MonitorApp() {
               )}
               <div className="stage-topline">
                 <span>
-                  <i className={ui.phase === "live" ? "live-dot" : "wait-dot"} />
-                  {ui.phase === "live"
-                    ? poseMode === POSE_MODE_MULTI ? "MULTI PUBLISHING" : "SINGLE PUBLISHING"
-                    : "LOCAL / PAUSED"}
+                  <i className={poseFramePublishing ? "live-dot" : "wait-dot"} />
+                  {publishingLabel}
                 </span>
                 <span>{sceneId === "bathroom" ? "完全隐私 · 画面本机也已遮蔽" : "原始画面默认仅在本机"}</span>
               </div>
@@ -3373,9 +3571,7 @@ export function MonitorApp() {
                   <small>STICK FIGURE</small>
                   <b id="pose-mode-title">火柴人模式</b>
                 </span>
-                <em>{poseMode === POSE_MODE_MULTI
-                  ? `本帧 ${poseFrameSummary.count} 个匿名姿态`
-                  : poseFrameSummary.count > 0 ? "单人姿态可见" : "等待单人姿态"}</em>
+                <em>{candidateLabel}</em>
               </div>
               <div className="pose-mode-segmented" role="group" aria-label="切换单人或多人火柴人模式">
                 <button
@@ -3391,13 +3587,25 @@ export function MonitorApp() {
                   type="button"
                   className={poseMode === POSE_MODE_MULTI ? "is-active" : ""}
                   aria-pressed={poseMode === POSE_MODE_MULTI}
-                  disabled={ui.phase === "starting" || fallDetectionArmed || fall.phase !== "idle"}
+                  disabled={
+                    ui.phase === "starting"
+                    || fallDetectionArmed
+                    || fall.phase !== "idle"
+                    || poseProjectionCapability !== "supported"
+                  }
                   onClick={() => selectPoseMode(POSE_MODE_MULTI)}
                 >
                   多人 · 实验
                 </button>
               </div>
               <p role="status" aria-live="polite">{poseModelStatus.detail}</p>
+              {poseProjectionCapability !== "supported" ? (
+                <small className="pose-mode-boundary">
+                  {poseProjectionCapability === "unsupported"
+                    ? "当前 Relay 未声明匿名多人协议；本连接锁定单人模式，且不会发送 batch/reset。"
+                    : "正在确认 Relay 匿名多人协议；确认前不会发送 batch/reset。"}
+                </small>
+              ) : null}
               {poseMode === POSE_MODE_MULTI ? (
                 <small className="pose-mode-boundary">
                   多人候选只用于本帧匿名投影，不做身份或跨帧跟踪；候选本身不能产生做饭凭证、跌倒告警或原画授权。
@@ -3590,10 +3798,7 @@ export function MonitorApp() {
                   <button
                     type="button"
                     className="secondary-action"
-                    onClick={() => {
-                      selectPoseMode(POSE_MODE_SINGLE);
-                      selectScene("fall");
-                    }}
+                    onClick={() => void switchToSingleAndArmFall()}
                   >切为单人并启用真实跌倒规则</button>
                 )}
                 {fall.eventId && fall.delivery !== "accepted" && (

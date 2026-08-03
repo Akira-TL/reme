@@ -32,6 +32,75 @@ export function shouldArmManualFallDetection(sceneId, mode) {
   return sceneId === "fall" && mode === POSE_MODE_SINGLE;
 }
 
+export function canArmManualFallDetection({
+  sceneId,
+  mode,
+  captureActive,
+  estimatorReady,
+  inferenceUnavailable = false,
+}) {
+  return shouldArmManualFallDetection(sceneId, mode)
+    && (!captureActive || (estimatorReady && !inferenceUnavailable));
+}
+
+export function canPublishPoseFrame(mode, poseProjectionCapability) {
+  return mode === POSE_MODE_SINGLE
+    || (mode === POSE_MODE_MULTI && poseProjectionCapability === "supported");
+}
+
+export function canPublishPoseProjectionReset(poseProjectionCapability) {
+  return poseProjectionCapability === "supported";
+}
+
+export function isFallArmOperationContextCurrent(expected, current) {
+  return expected?.operationGeneration === current?.operationGeneration
+    && expected?.captureGeneration === current?.captureGeneration
+    && expected?.inferenceGeneration === current?.inferenceGeneration
+    && expected?.estimatorPool === current?.estimatorPool
+    && expected?.stream === current?.stream
+    && expected?.controllerConnection === current?.controllerConnection
+    && current?.captureActive === true
+    && current?.visibilityState === "visible"
+    && current?.poseMode === POSE_MODE_SINGLE
+    && current?.sceneId === "fall";
+}
+
+export function posePublishingLabel({
+  captureLive,
+  mode,
+  frame,
+  modelState,
+  poseProjectionCapability,
+  publishedFrame,
+}) {
+  if (!captureLive) return "LOCAL / PAUSED";
+  if (modelState === "unavailable") return "POSE UNAVAILABLE";
+  const hasCurrentFrame = mode === POSE_MODE_MULTI
+    ? frame?.schema_version === POSE_BATCH_SCHEMA_VERSION
+    : frame?.schema_version === FRAME_SCHEMA_VERSION;
+  const currentFramePublished = hasCurrentFrame
+    && publishedFrame?.schemaVersion === frame.schema_version
+    && publishedFrame?.sessionId === frame.session_id
+    && publishedFrame?.sequence === frame.sequence;
+  if (
+    !canPublishPoseFrame(mode, poseProjectionCapability)
+    || !currentFramePublished
+  ) return "LOCAL / WAITING";
+  return mode === POSE_MODE_MULTI ? "MULTI PUBLISHING" : "SINGLE PUBLISHING";
+}
+
+export function poseCandidateLabel({ mode, frame, modelState }) {
+  if (modelState === "unavailable") return "人物层不可用";
+  if (mode === POSE_MODE_MULTI) {
+    return frame?.schema_version === POSE_BATCH_SCHEMA_VERSION
+      ? `本帧 ${frame.poses.length} 个匿名姿态`
+      : "等待多人首帧";
+  }
+  return frame?.schema_version === FRAME_SCHEMA_VERSION && frame.person_detected
+    ? "单人姿态可见"
+    : "等待单人姿态";
+}
+
 export function readSourceFrameMarker(video) {
   if (!video || typeof video !== "object") return null;
   try {

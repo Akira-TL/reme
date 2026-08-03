@@ -9,6 +9,7 @@ import {
   MAX_POSES_PER_BATCH,
   MEDIA_SIGNAL_SCHEMA_VERSION,
   POSE_BATCH_SCHEMA_VERSION,
+  POSE_PROJECTION_PROTOCOL,
   POSE_PROJECTION_RESET_SCHEMA_VERSION,
   advanceControllerEventSequence,
   controllerProtocols,
@@ -28,6 +29,7 @@ import {
   isMediaSignal,
   isPoseBatchFrame,
   isPoseProjectionUnavailable,
+  isPoseProjectionCapabilities,
   isPoseProjectionReset,
   isPoseFrame,
   isRelayCapabilities,
@@ -38,6 +40,7 @@ import {
   parsePoseWireFrame,
   parseForwardedMediaSignal,
   transitionActivityConfirmationCapability,
+  transitionPoseProjectionCapability,
 } from "./protocol.js";
 import { containedContentRect, mapPointIntoContainedContent } from "./geometry.js";
 import {
@@ -515,6 +518,20 @@ test("controller-loss clear keeps the sequence barrier and ignores an old sessio
   });
   assert.equal(oldSessionUnavailable, cleared);
   assert.equal(oldSessionUnavailable.sessionId, "session-new");
+
+  const olderSameSessionUnavailable = reduceViewerState(cleared, {
+    type: "pose_projection_unavailable",
+    message: {
+      type: "pose_projection_unavailable",
+      session_id: "session-new",
+      timestamp_ms: 2004,
+      through_sequence: 7,
+      pose_mode: "single",
+    },
+    receivedAtMs: 2004,
+  });
+  assert.equal(olderSameSessionUnavailable, cleared);
+  assert.equal(olderSameSessionUnavailable.poseMode, "multi");
 });
 
 test("viewer reducer and presentation keep degraded and unavailable distinct from live", () => {
@@ -810,6 +827,42 @@ test("activity confirmation capability is monotonic for one controller connectio
   assert.throws(
     () => transitionActivityConfirmationCapability("pending", "unknown"),
     /invalid activity confirmation capability signal/,
+  );
+});
+
+test("pose projection capability is exact and monotonic for one controller connection", () => {
+  assert.equal(isPoseProjectionCapabilities({
+    type: "pose_projection_capabilities",
+    pose_projection: POSE_PROJECTION_PROTOCOL,
+  }), true);
+  assert.equal(isPoseProjectionCapabilities({
+    type: "pose_projection_capabilities",
+    pose_projection: "legacy-pose-batch",
+  }), false);
+  assert.equal(isPoseProjectionCapabilities({
+    type: "pose_projection_capabilities",
+    pose_projection: POSE_PROJECTION_PROTOCOL,
+    extra: true,
+  }), false);
+  assert.equal(
+    transitionPoseProjectionCapability("pending", "supported"),
+    "supported",
+  );
+  assert.equal(
+    transitionPoseProjectionCapability("pending", "timeout"),
+    "unsupported",
+  );
+  assert.equal(
+    transitionPoseProjectionCapability("unsupported", "supported"),
+    "unsupported",
+  );
+  assert.equal(
+    transitionPoseProjectionCapability("supported", "timeout"),
+    "supported",
+  );
+  assert.throws(
+    () => transitionPoseProjectionCapability("pending", "unknown"),
+    /invalid pose projection capability signal/,
   );
 });
 

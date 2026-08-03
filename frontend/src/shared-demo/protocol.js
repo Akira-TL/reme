@@ -5,6 +5,7 @@ export const POSE_PROJECTION_UNAVAILABLE_TYPE = "pose_projection_unavailable";
 export const DEMO_EVENT_SCHEMA_VERSION = "reme-demo-event/v1";
 export const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
 export const ACTIVITY_CONFIRMATION_PROTOCOL = "verified-activity-event/v1";
+export const POSE_PROJECTION_PROTOCOL = "anonymous-pose-batch/v1";
 export const CONTROLLER_EVENT_SEQUENCE_BLOCK_SIZE = 1024;
 export const VIEWER_PROTOCOL = "reme-viewer-v1";
 export const CONTROLLER_PROTOCOL = "reme-controller-v1";
@@ -152,6 +153,7 @@ const LEGACY_CONTROLLER_READY_KEYS = CONTROLLER_READY_KEYS.filter(
 const PRE_CURSOR_CONTROLLER_READY_KEYS = ["lease_expires_at_ms", "session_id", "type"];
 const HEARTBEAT_ACK_KEYS = ["lease_expires_at_ms", "type"];
 const RELAY_CAPABILITIES_KEYS = ["activity_confirmation", "type"];
+const POSE_PROJECTION_CAPABILITIES_KEYS = ["pose_projection", "type"];
 const SOCKET_ERROR_KEYS = ["error", "type"];
 const MEDIA_GRANT_ERROR_CODES = Object.freeze([
   "media_grant_already_active",
@@ -245,6 +247,23 @@ export function transitionActivityConfirmationCapability(current, signal) {
   }
   if (signal !== "supported" && signal !== "timeout") {
     throw new TypeError("invalid activity confirmation capability signal");
+  }
+  if (current !== "pending") return current;
+  return signal === "supported" ? "supported" : "unsupported";
+}
+
+export function isPoseProjectionCapabilities(value) {
+  return hasExactKeys(value, POSE_PROJECTION_CAPABILITIES_KEYS)
+    && value.type === "pose_projection_capabilities"
+    && value.pose_projection === POSE_PROJECTION_PROTOCOL;
+}
+
+export function transitionPoseProjectionCapability(current, signal) {
+  if (!["pending", "supported", "unsupported"].includes(current)) {
+    throw new TypeError("invalid pose projection capability state");
+  }
+  if (signal !== "supported" && signal !== "timeout") {
+    throw new TypeError("invalid pose projection capability signal");
   }
   if (current !== "pending") return current;
   return signal === "supported" ? "supported" : "unsupported";

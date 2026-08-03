@@ -18,6 +18,7 @@ import {
 } from "./scene";
 import {
   ACTIVITY_CONFIRMATION_PROTOCOL,
+  POSE_PROJECTION_PROTOCOL,
   createForwardedMediaSignal,
   DEMO_EVENT_SCHEMA_VERSION,
   isExactObject,
@@ -984,11 +985,7 @@ export class DemoRoom extends DurableObject<Env> {
   webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): void {
     const attachment = readAttachment(ws);
     if (attachment?.role === "controller") {
-      this.clearPoseProjectionOnControllerLoss(ws, attachment, Date.now());
-      // The lease remains briefly reconnectable, but event-scoped media is
-      // fail-closed immediately when the publishing socket disappears.
-      this.revokeAllActiveGrants(attachment.sessionId, Date.now(), null);
-      this.clearActivityRecognitionEvidence(attachment.sessionId);
+      this.failClosedControllerLoss(ws, attachment, Date.now());
     } else if (attachment?.role === "viewer") {
       this.removeViewerFromActiveAudiences(attachment.viewerId, Date.now());
     }
@@ -997,12 +994,38 @@ export class DemoRoom extends DurableObject<Env> {
   webSocketError(ws: WebSocket, _error: unknown): void {
     const attachment = readAttachment(ws);
     if (attachment?.role === "controller") {
-      this.clearPoseProjectionOnControllerLoss(ws, attachment, Date.now());
-      this.revokeAllActiveGrants(attachment.sessionId, Date.now(), null);
-      this.clearActivityRecognitionEvidence(attachment.sessionId);
+      this.failClosedControllerLoss(ws, attachment, Date.now());
     } else if (attachment?.role === "viewer") {
       this.removeViewerFromActiveAudiences(attachment.viewerId, Date.now());
     }
+  }
+
+  private failClosedControllerLoss(
+    ws: WebSocket,
+    attachment: ControllerAttachment,
+    now: number,
+  ): void {
+    // Event authority is the safety boundary. Projection cleanup is additive
+    // and must never delay or skip grant revocation and cooking-evidence
+    // invalidation if SQL, attachment serialization, or viewer fan-out fails.
+    let authorityError: unknown = null;
+    try {
+      this.revokeAllActiveGrants(attachment.sessionId, now, null);
+    } catch (error) {
+      authorityError = error;
+    }
+    try {
+      this.clearActivityRecognitionEvidence(attachment.sessionId);
+    } catch (error) {
+      authorityError ??= error;
+    }
+    try {
+      this.clearPoseProjectionOnControllerLoss(ws, attachment, now);
+    } catch {
+      // Viewers already have their own freshness watchdog. A projection-only
+      // failure cannot reopen media or preserve verified activity authority.
+    }
+    if (authorityError !== null) throw authorityError;
   }
 
   private clearPoseProjectionOnControllerLoss(
@@ -2673,6 +2696,10 @@ export class DemoRoom extends DurableObject<Env> {
     safeSend(server, JSON.stringify({
       type: "relay_capabilities",
       activity_confirmation: ACTIVITY_CONFIRMATION_PROTOCOL,
+    }));
+    safeSend(server, JSON.stringify({
+      type: "pose_projection_capabilities",
+      pose_projection: POSE_PROJECTION_PROTOCOL,
     }));
 
     return new Response(null, {
