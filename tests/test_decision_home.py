@@ -236,6 +236,7 @@ def test_safety_fields_are_never_modulated_by_any_home_context() -> None:
         adjusted = adjust_trigger_config(base, home)
         assert adjusted.fall_confidence_min == base.fall_confidence_min
         assert adjusted.check_in_timeout_ms == base.check_in_timeout_ms
+        assert adjusted.fall_response_timeout_ms == base.fall_response_timeout_ms
         assert adjusted.family_ack_timeout_ms == base.family_ack_timeout_ms
         assert adjusted.rewind_tolerance_ms == base.rewind_tolerance_ms
         assert adjusted.default_privacy_mode == base.default_privacy_mode

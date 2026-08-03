@@ -22,7 +22,6 @@ from reme.decision.mimo.speech import (
 )
 from reme.decision.records import (
     CareDecision,
-    DecisionState,
     DemoMode,
     InteractionResponse,
     ResponseSource,
@@ -123,11 +122,7 @@ class VoiceDialogueController:
         self, *, scene_id: str, decision_id: str
     ) -> tuple[CareDecision, VoiceAudio]:
         decision = self._require_decision(scene_id, decision_id)
-        if (
-            decision.elder_message is None
-            or decision.state is DecisionState.RESOLVED
-            or decision.alarm is not None
-        ):
+        if decision.elder_message is None or decision.alarm is not None:
             raise VoiceDialogueError("no_elder_message")
         self._service.mark_decision_voice_started(scene_id=scene_id, decision_id=decision_id)
         try:
@@ -164,11 +159,7 @@ class VoiceDialogueController:
         )
         next_decision = self._service.submit_response(response)
         audio = None
-        if (
-            next_decision.elder_message is not None
-            and next_decision.state is not DecisionState.RESOLVED
-            and next_decision.alarm is None
-        ):
+        if next_decision.elder_message is not None and next_decision.alarm is None:
             audio = VoiceAudio.from_result(self._synthesize(next_decision.elder_message))
         return VoiceDialogueResult(
             transcript=recognition.transcript,

@@ -10,11 +10,12 @@ import { Button } from "@mui/material";
 
 const VOICE_STAGE_LABELS = {
   idle: "等待下一次对话",
+  fall_inquiry_wait: "检测到跌倒，1 秒后开始询问…",
   tts_request: "正在准备语音询问…",
   playing: "正在播放关怀语音…",
   playing_fallback: "正在使用备用语音播放…",
   waiting_reply: "播放结束后会自动聆听…",
-  recording: "正在聆听外婆的回复…",
+  recording: "正在播报并聆听外婆的回复…",
   asr_request: "正在理解语音回复…",
   complete: "这一轮对话已完成",
   failed: "语音对话暂时没有完成",

@@ -74,39 +74,53 @@ class TriggerConfig:
     concern_postures: frozenset[Posture] = field(
         default_factory=lambda: frozenset({Posture.SITTING})
     )
-    check_in_timeout_ms: int = 8000
+    check_in_timeout_ms: int = 2500
+    fall_response_timeout_ms: int = 2000
     family_ack_timeout_ms: int = 8000
     rewind_tolerance_ms: float = 3000.0
     default_privacy_mode: PrivacyMode = PrivacyMode.BLURRED
 
 
-def detect_fall_trigger(context: DecisionContext, *, config: TriggerConfig) -> bool:
-    """High-confidence fall-like transition followed by a low, low-motion body state.
+def _lying_trigger_key(context: DecisionContext) -> str | None:
+    posture = context.latest_posture
+    if posture is None or not posture.person_detected:
+        return None
+    if posture.posture is not Posture.LYING:
+        return None
+    start_ms = max(0.0, posture.timestamp_ms - posture.posture_duration_ms)
+    return f"lying:{context.scene_id}:{round(start_ms / 1000.0)}"
 
-    A single lying posture never triggers on its own (contract section 8): the rule
-    requires an explicit fall_like_transition hypothesis from A.
+
+def fall_trigger_event_id(context: DecisionContext, *, config: TriggerConfig) -> str | None:
+    """Return the stable trigger id when posture evidence should open a fall check-in.
+
+    In the live demo, a detected lying posture is enough to start the 2.5s
+    confirmation countdown. A's fall_like transition path remains as a fallback
+    for vanish/occlusion cases.
     """
 
     transition = context.active_transition
-    if transition is None or transition.transition is not Transition.FALL_LIKE:
-        return False
-    if transition.transition_confidence < config.fall_confidence_min:
-        return False
     posture = context.latest_posture
-    if posture is None:
-        return False
-    if posture.timestamp_ms < transition.start_ms:
-        return False
-    if posture.person_detected and posture.posture not in DOWN_POSTURES:
-        return False
-    if not posture.person_detected:
-        # Half-frame cameras: a real fall often drops the person *out of
-        # view* (the "vanish fall" candidate), so absence after a fall-like
-        # transition is corroboration, not missing data. Sensitivity-first
-        # per the danger-link product call — the check-in question, not this
-        # gate, is what filters false positives.
-        return True
-    return posture.motion_level in LOW_MOTION_LEVELS
+    if (
+        transition is not None
+        and transition.transition is Transition.FALL_LIKE
+        and transition.transition_confidence >= config.fall_confidence_min
+        and posture is not None
+        and posture.timestamp_ms >= transition.start_ms
+        and (not posture.person_detected or posture.posture in DOWN_POSTURES)
+        and (not posture.person_detected or posture.motion_level in LOW_MOTION_LEVELS)
+    ):
+        # A's explicit transition id is the canonical identity while present.
+        # The lying key below is only a fallback for posture-only detections.
+        return transition.event_id
+
+    return _lying_trigger_key(context)
+
+
+def detect_fall_trigger(context: DecisionContext, *, config: TriggerConfig) -> bool:
+    """True when the latest posture evidence should open a fall check-in."""
+
+    return fall_trigger_event_id(context, config=config) is not None
 
 
 def detect_concern_trigger(context: DecisionContext, *, config: TriggerConfig) -> bool:

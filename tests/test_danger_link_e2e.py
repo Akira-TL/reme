@@ -368,7 +368,7 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
         assert check_in["dialogue_goal"] == "confirm_safety"
         assert check_in["confirm_channels"] == ["voice"]
         assert check_in["voice_asset"] == "/voice/fall_check_in.m4a"
-        assert check_in["response_timeout_ms"] == TriggerConfig().check_in_timeout_ms
+        assert check_in["response_timeout_ms"] == TriggerConfig().fall_response_timeout_ms
 
         # Hop 4b: C submits the spoken intent through ADR-0007's danger lane.
         status, body = _post(

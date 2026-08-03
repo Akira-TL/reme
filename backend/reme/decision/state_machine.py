@@ -13,10 +13,11 @@ from enum import StrEnum
 
 from reme.decision.context import DecisionContext
 from reme.decision.guardrails import (
+    DOWN_POSTURES,
     TriggerConfig,
     detect_concern_trigger,
-    detect_fall_trigger,
     detect_observe_condition,
+    fall_trigger_event_id,
 )
 from reme.decision.records import (
     ActionCard,
@@ -96,9 +97,9 @@ REJECT_TIMELINE_REWIND = "timeline_rewind"
 REJECT_EPISODE_RESOLVED = "episode_resolved"
 REJECT_DANGER_NOT_APPLICABLE = "danger_not_applicable"
 
-# Keep the elder check-in first: C may listen for an explicit spoken reply, but
-# must not auto-upload a frame and turn the initial question into an immediate
-# visual-confirm alarm.
+# Danger link: keep the elder check-in first.  Visual confirmation is not
+# accepted during the first question, otherwise C's automatic frame upload
+# turns "lying -> ask" into an immediate family alert.
 FALL_CONFIRM_CHANNELS = ("voice",)
 
 
@@ -166,8 +167,7 @@ def _resolved_skeleton(
         state=DecisionState.RESOLVED,
         risk_level=0,
         action=DecisionAction.MARK_RESOLVED,
-        # A resolved episode is terminal UI state, not another spoken turn.
-        need_dialogue=False,
+        need_dialogue=True,
         dialogue_goal=None,
         consent_required=False,
         response_timeout_ms=None,
@@ -240,7 +240,7 @@ def _fall_check_in(
         consent_required=False,
         # Contract: a high-confidence fall check-in must carry a countdown
         # (as must every other awaiting-elder decision, see on_tick).
-        response_timeout_ms=config.check_in_timeout_ms,
+        response_timeout_ms=config.fall_response_timeout_ms,
         template=TemplateId.FALL_CHECK_IN,
         confirm_channels=FALL_CONFIRM_CHANNELS,
     )
@@ -257,16 +257,23 @@ def _fall_check_in(
     return Directive(next_state=next_state, skeleton=skeleton)
 
 
-def _fall_preempts(state: SessionState, context: DecisionContext, config: TriggerConfig) -> bool:
-    if not detect_fall_trigger(context, config=config):
-        return False
-    event = context.active_transition
-    event_id = None if event is None else event.event_id
-    if event_id is not None and event_id == state.handled_fall_event_id:
-        return False
+def _fall_preempt_event_id(
+    state: SessionState, context: DecisionContext, config: TriggerConfig
+) -> str | None:
+    event_id = fall_trigger_event_id(context, config=config)
+    if event_id is None or event_id == state.handled_fall_event_id:
+        return None
+    if state.handled_fall_event_id is not None and event_id.startswith("lying:"):
+        # Once an explicit transition or posture-only key has opened an episode,
+        # a continuously lying person is still that same fall. A's transition
+        # expires before the posture does, and posture duration can jitter; do
+        # not let that fallback identity reopen a resolved safety response.
+        return None
     if state.phase in _FALL_PREEMPTIBLE_PHASES:
-        return True
-    return state.phase is SessionPhase.AWAITING_ELDER and state.escalation is EscalationKind.CONCERN
+        return event_id
+    if state.phase is SessionPhase.AWAITING_ELDER and state.escalation is EscalationKind.CONCERN:
+        return event_id
+    return None
 
 
 def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerConfig) -> Directive:
@@ -277,11 +284,35 @@ def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerCon
     if context.timestamp_ms + config.rewind_tolerance_ms < state.context_high_water_ms:
         return Directive(next_state=state, reject_code=REJECT_TIMELINE_REWIND)
     advanced = _advance_clock(state, context.timestamp_ms)
-    if _fall_preempts(advanced, context, config):
-        # A new high-confidence fall outranks any lower-severity episode and
-        # reopens a resolved one; family-alert states never de-escalate.
-        event = context.active_transition
-        return _fall_check_in(advanced, None if event is None else event.event_id, config=config)
+    posture = context.latest_posture
+    current_fall_event_id = fall_trigger_event_id(context, config=config)
+    if (
+        advanced.handled_fall_event_id is not None
+        and advanced.handled_fall_event_id.startswith("lying:")
+        and current_fall_event_id is not None
+        and not current_fall_event_id.startswith("lying:")
+        and advanced.escalation is EscalationKind.FALL
+    ):
+        # The posture observation can reach B one tick before A publishes its
+        # transition. Upgrade the provisional lying key to A's stable event id
+        # while the episode is active so the same transition cannot reopen it
+        # after a safe reply.
+        advanced = replace(advanced, handled_fall_event_id=current_fall_event_id)
+    if (
+        advanced.handled_fall_event_id is not None
+        and advanced.handled_fall_event_id.startswith("lying:")
+        and posture is not None
+        and posture.person_detected
+        and posture.posture not in DOWN_POSTURES
+    ):
+        # Upright evidence rearms a posture-only episode. Explicit A event ids
+        # remain remembered; a genuinely new transition already has a new id.
+        advanced = replace(advanced, handled_fall_event_id=None)
+    fall_event_id = _fall_preempt_event_id(advanced, context, config)
+    if fall_event_id is not None:
+        # A new lying/fall danger condition outranks any lower-severity episode
+        # and immediately starts the elder check-in countdown for the live demo.
+        return _fall_check_in(advanced, fall_event_id, config=config)
     if advanced.phase is not SessionPhase.MONITORING:
         return Directive(next_state=advanced)
 
@@ -403,7 +434,7 @@ def _kitchen_share_notification(state: SessionState) -> Directive:
         state=DecisionState.RESOLVED,
         risk_level=0,
         action=DecisionAction.NOTIFY_FAMILY,
-        need_dialogue=False,
+        need_dialogue=True,
         dialogue_goal=None,
         consent_required=False,
         response_timeout_ms=None,
@@ -489,9 +520,13 @@ def _on_elder_response(
                 need_dialogue=True,
                 dialogue_goal="confirm_safety" if is_fall else "understand_need",
                 consent_required=False,
-                # The wording differs by trigger; the countdown must not. A
-                # concern clarification left unanswered escalates like a fall's.
-                response_timeout_ms=config.check_in_timeout_ms,
+                # Fall voice turns use the shorter safety window; concern
+                # dialogue keeps its gentler pacing.
+                response_timeout_ms=(
+                    config.fall_response_timeout_ms
+                    if is_fall
+                    else config.check_in_timeout_ms
+                ),
                 template=TemplateId.CLARIFY,
                 # A fall clarification keeps the danger confirm window open:
                 # late frames and a re-spoken reply stay acceptable.

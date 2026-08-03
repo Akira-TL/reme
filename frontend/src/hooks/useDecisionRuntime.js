@@ -22,6 +22,11 @@ import {
   playAssetUrl,
 } from "../utils/audioEngine";
 import { recordVoiceReply } from "../utils/wavRecorder";
+import {
+  getDecisionVoicePlan,
+  getVoiceAlarmDelayMs,
+  isFallCheckInDecision,
+} from "./decisionVoicePolicy";
 
 let pendingSessionStop = Promise.resolve();
 
@@ -31,12 +36,26 @@ function pluckDecision(payload) {
   return null;
 }
 
-function playAudioElement(audio) {
+function playAudioElement(audio, { onPlaying = null, onEnded = null, onError = null } = {}) {
   return new Promise((resolve, reject) => {
-    audio.onended = () => resolve();
-    audio.onerror = () => reject(new Error("音频播放失败"));
+    audio.onended = () => {
+      onEnded?.(audio);
+      resolve();
+    };
+    audio.onerror = () => {
+      onError?.(audio);
+      reject(new Error("音频播放失败"));
+    };
+    let playingNotified = false;
+    const notifyPlaying = () => {
+      if (playingNotified) return;
+      playingNotified = true;
+      onPlaying?.(audio);
+    };
+    audio.onplaying = notifyPlaying;
     try {
       const playing = audio.play();
+      playing?.then?.(notifyPlaying);
       playing?.catch?.(reject);
     } catch (error) {
       reject(error);
@@ -44,11 +63,16 @@ function playAudioElement(audio) {
   });
 }
 
-function playBase64Audio(audioB64, audioFormat = "wav") {
+function playBase64Audio(audioB64, audioFormat = "wav", options = {}) {
   if (!audioB64) return Promise.reject(new Error("语音数据为空"));
   const mimeType = audioFormat === "mp3" ? "audio/mpeg" : "audio/wav";
   const url = `data:${mimeType};base64,${audioB64}`;
-  return playAssetUrl(url).catch(() => playAudioElement(new Audio(url)));
+  return playAudioElement(new Audio(url), options);
+}
+
+function waitForMs(delayMs) {
+  if (!Number.isFinite(delayMs) || delayMs <= 0) return Promise.resolve();
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
 }
 
 function decisionAwaitsReply(payload) {
@@ -254,6 +278,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     let vibrateTimer = 0;
     let ring = null;
     const spokenDecisionIds = new Set();
+    const pendingVoiceDecisionIds = new Set();
+    const expiredFallTimeoutDecisionIds = new Set();
+    let activeFallPrompt = null;
     const voiceCaptureLock = createVoiceCaptureLock();
 
     function stopVoiceCapture(cancel) {
@@ -341,8 +368,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setDeadline(null);
     }
 
-    function armResponseTimeout(payload) {
-      const timeoutMs = payload?.response_timeout_ms;
+    function armResponseTimeout(payload, timeoutMs = payload?.response_timeout_ms) {
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !payload?.decision_id) return;
       const decisionId = payload.decision_id;
       clearCountdown();
@@ -353,6 +379,21 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           countdown = { decisionId: null, timer: 0 };
           setDeadline(null);
           if (respondedDecisionIds.has(decisionId)) return;
+          if (
+            isFallCheckInDecision(payload)
+            && activeFallPrompt
+            && !activeFallPrompt.audio.ended
+          ) {
+            // A live fall prompt owns the next grace period; stale timeouts
+            // must not cross the elder-facing question.
+            return;
+          }
+          if (pendingVoiceDecisionIds.has(decisionId)) {
+            // A recorded reply is already in ASR / intent classification.
+            // Keep the elapsed deadline, but do not race a valid answer.
+            expiredFallTimeoutDecisionIds.add(decisionId);
+            return;
+          }
           // An answer already in progress is allowed to finish. B's independent
           // backstop remains the safety net if recognition or upload stalls.
           const capture = voiceCaptureLock.current();
@@ -375,21 +416,36 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
 
     async function playDecisionVoice(payload, { force = false, autoReply = true } = {}) {
       // Alarm decisions use only the local ring/vibration channel, and a
-      // resolved decision is terminal UI state rather than another TTS turn.
-      if (payload?.alarm || payload?.state === "resolved" || !payload?.elder_message) return false;
+      // resolved safety decision may still carry a short elder acknowledgement.
+      if (payload?.alarm || !payload?.elder_message) return false;
       if (!force && spokenDecisionIds.has(payload.decision_id)) return false;
       spokenDecisionIds.add(payload.decision_id);
+      const plan = getDecisionVoicePlan(payload, { force });
+      const speechRequest = requestDecisionVoice(httpBase, {
+        sceneId: payload.scene_id || sceneRef.current,
+        decisionId: payload.decision_id,
+      }).then(
+        (speech) => ({ speech, error: null }),
+        (error) => ({ speech: null, error }),
+      );
       setVoice((current) => ({
         ...current,
-        stage: "tts_request",
+        stage: plan.delayMs > 0 ? "fall_inquiry_wait" : "tts_request",
         listening: false,
         error: "",
       }));
+      await waitForMs(plan.delayMs);
+      if (
+        disposed
+        || payload.scene_id !== sceneRef.current
+        || latestDecision?.decision_id !== payload.decision_id
+        || respondedDecisionIds.has(payload.decision_id)
+      ) return false;
+      setVoice((current) => ({ ...current, stage: "tts_request", error: "" }));
+      let replyStartedDuringPlayback = false;
       try {
-        const speech = await requestDecisionVoice(httpBase, {
-          sceneId: payload.scene_id || sceneRef.current,
-          decisionId: payload.decision_id,
-        });
+        const { speech, error: speechError } = await speechRequest;
+        if (speechError) throw speechError;
         if (disposed || latestDecision?.decision_id !== payload.decision_id) return false;
         setVoice((current) => ({
           ...current,
@@ -398,10 +454,44 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           ttsLatencyMs: speech.tts_latency_ms ?? null,
           error: "",
         }));
-        await playBase64Audio(speech.audio_b64, speech.audio_format);
+        await playBase64Audio(speech.audio_b64, speech.audio_format, {
+          onPlaying: (audio) => {
+            if (
+              plan.listenDuringPlayback
+              && autoReply
+              && decisionAwaitsReply(payload)
+              && !respondedDecisionIds.has(payload.decision_id)
+            ) {
+              replyStartedDuringPlayback = true;
+              clearCountdown();
+              activeFallPrompt = { decisionId: payload.decision_id, audio };
+              void runVoiceReply(payload, { deferFallTimeout: true });
+            }
+          },
+          onEnded: (audio) => {
+            if (activeFallPrompt?.audio !== audio) return;
+            activeFallPrompt = null;
+            if (
+              latestDecision?.decision_id === payload.decision_id
+              && !respondedDecisionIds.has(payload.decision_id)
+            ) {
+              armResponseTimeout(payload, getVoiceAlarmDelayMs(payload));
+            }
+          },
+          onError: (audio) => {
+            if (activeFallPrompt?.audio !== audio) return;
+            activeFallPrompt = null;
+            if (
+              latestDecision?.decision_id === payload.decision_id
+              && !respondedDecisionIds.has(payload.decision_id)
+            ) {
+              armResponseTimeout(payload, getVoiceAlarmDelayMs(payload));
+            }
+          },
+        });
       } catch (error) {
         if (disposed || latestDecision?.decision_id !== payload.decision_id) return false;
-        if (payload.voice_asset) {
+        if (plan.allowPresetFallback && payload.voice_asset) {
           try {
             const url = `${httpBase}${payload.voice_asset}`;
             await playAssetUrl(url).catch(() => playAudioElement(new Audio(url)));
@@ -428,6 +518,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         }
       }
       if (disposed || latestDecision?.decision_id !== payload.decision_id) return false;
+      if (replyStartedDuringPlayback) return true;
       setVoice((current) => ({
         ...current,
         stage: decisionAwaitsReply(payload) ? "waiting_reply" : "complete",
@@ -439,13 +530,17 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       ) {
         // The response window starts only after the elder has heard the prompt.
         armResponseTimeout(payload);
-        window.setTimeout(() => runVoiceReply(payload), 250);
+        if (isFallCheckInDecision(payload)) {
+          void runVoiceReply(payload);
+        } else {
+          window.setTimeout(() => runVoiceReply(payload), 250);
+        }
         return true;
       }
       return false;
     }
 
-    async function runVoiceReply(target = latestDecision) {
+    async function runVoiceReply(target = latestDecision, { deferFallTimeout = false } = {}) {
       if (
         !target?.decision_id
         || target.scene_id !== sceneRef.current
@@ -460,6 +555,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           stage: "failed",
           error: "当前浏览器无法采集麦克风 WAV",
         }));
+        if (!deferFallTimeout) armResponseTimeout(target);
         return;
       }
       if (!voiceCaptureLock.claim(target.decision_id)) return;
@@ -500,12 +596,29 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           // ADR-0007 fast lane: one MiMo omni hop performs ASR + danger
           // intent. The accepted InteractionResponse and consequent decision
           // arrive over /ws; do not race it with the generic dialogue route.
-          await uploadDangerVoice(httpBase, {
-            sceneId: target.scene_id || sceneRef.current,
-            decisionId: target.decision_id,
-            timestampMs: performance.now(),
-            audioB64,
-          });
+          pendingVoiceDecisionIds.add(target.decision_id);
+          try {
+            await uploadDangerVoice(httpBase, {
+              sceneId: target.scene_id || sceneRef.current,
+              decisionId: target.decision_id,
+              timestampMs: performance.now(),
+              audioB64,
+            });
+          } catch (error) {
+            const fallDeadlineExpired = expiredFallTimeoutDecisionIds.delete(
+              target.decision_id,
+            );
+            pendingVoiceDecisionIds.delete(target.decision_id);
+            if (
+              fallDeadlineExpired
+              && !disposed
+              && activeFallPrompt?.decisionId !== target.decision_id
+              && !respondedDecisionIds.has(target.decision_id)
+            ) {
+              submitFor(target, "none", "timeout");
+            }
+            throw error;
+          }
           return;
         }
 
@@ -525,7 +638,6 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         const next = pluckDecision(result);
         const playReplyAudio = Boolean(
           result.audio_b64
-          && next?.state !== "resolved"
           && !next?.alarm,
         );
         if (next) {
@@ -556,7 +668,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         }));
         if (next) armResponseTimeout(next);
         if (decisionAwaitsReply(next) && !respondedDecisionIds.has(next.decision_id)) {
-          window.setTimeout(() => runVoiceReply(next), 250);
+          if (isFallCheckInDecision(next)) {
+            void runVoiceReply(next);
+          } else {
+            window.setTimeout(() => runVoiceReply(next), 250);
+          }
         }
       } catch (error) {
         if (!disposed && latestDecision?.decision_id === target.decision_id) {
@@ -596,6 +712,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
 
     function markResponded(decisionId) {
       respondedDecisionIds.add(decisionId);
+      pendingVoiceDecisionIds.delete(decisionId);
+      expiredFallTimeoutDecisionIds.delete(decisionId);
       if (countdown.decisionId === decisionId) clearCountdown();
       // 按钮已回答：进行中的录音作废，麦克风立即释放。
       if (voiceCaptureLock.current()?.decisionId === decisionId) stopVoiceCapture(true);
@@ -721,6 +839,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           if (disposed) return;
           stopVoiceCapture(true);
           sceneRef.current = nextSceneId;
+          pendingVoiceDecisionIds.clear();
+          expiredFallTimeoutDecisionIds.clear();
+          activeFallPrompt = null;
           latestDecision = null;
           latestAlarmDecision = null;
           clearAlarmState();
@@ -809,6 +930,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           .then(() => {
             if (disposed) return;
             stopVoiceCapture(true);
+            pendingVoiceDecisionIds.clear();
+            expiredFallTimeoutDecisionIds.clear();
+            activeFallPrompt = null;
             latestDecision = null;
             clearAlarmState();
             clearCountdown();
@@ -890,6 +1014,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       disposed = true;
       apiRef.current = {};
       abortController.abort();
+      activeFallPrompt = null;
+      pendingVoiceDecisionIds.clear();
+      expiredFallTimeoutDecisionIds.clear();
       if (countdown.timer) window.clearTimeout(countdown.timer);
       countdown = { decisionId: null, timer: 0 };
       stopVoiceCapture(true);

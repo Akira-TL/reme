@@ -157,7 +157,8 @@ def test_fall_trigger_enters_awaiting_elder_with_mandatory_timeout() -> None:
     directive = on_tick(_state(), _fall_context(), config=_CONFIG)
     assert directive.skeleton is not None
     assert directive.skeleton.state is DecisionState.CHECK_IN_REQUIRED
-    assert directive.skeleton.response_timeout_ms == _CONFIG.check_in_timeout_ms
+    assert directive.skeleton.response_timeout_ms == _CONFIG.fall_response_timeout_ms
+    assert directive.skeleton.response_timeout_ms == 2000
     assert directive.skeleton.template is TemplateId.FALL_CHECK_IN
     assert directive.skeleton.confirm_channels == ("voice",)
     assert directive.mimo_task is None
@@ -263,7 +264,7 @@ def test_safe_response_resolves_check_in() -> None:
     assert directive.skeleton is not None
     assert directive.skeleton.state is DecisionState.RESOLVED
     assert directive.skeleton.action is DecisionAction.MARK_RESOLVED
-    assert directive.skeleton.need_dialogue is False
+    assert directive.skeleton.need_dialogue is True
     assert directive.next_state.phase is SessionPhase.RESOLVED
     assert directive.next_state.risk_floor == 0
 
@@ -321,14 +322,14 @@ def test_unclear_response_allows_exactly_one_clarification() -> None:
     assert second.skeleton.template is TemplateId.UNCLEAR_FAMILY_ALERT
 
 
-def test_fall_path_countdown_and_wording_are_unchanged() -> None:
-    """Regression guard: widening the countdown must not touch the fall path."""
+def test_fall_path_uses_two_second_voice_response_window() -> None:
+    """Fall voice turns escalate after two silent seconds; concern remains unchanged."""
 
     check_in = on_tick(_state(), _fall_context(), config=_CONFIG)
     assert check_in.skeleton is not None
     assert check_in.skeleton.template is TemplateId.FALL_CHECK_IN
     assert check_in.skeleton.dialogue_goal == "confirm_safety"
-    assert check_in.skeleton.response_timeout_ms == _CONFIG.check_in_timeout_ms
+    assert check_in.skeleton.response_timeout_ms == _CONFIG.fall_response_timeout_ms
     assert check_in.mimo_task is None
 
     clarify = on_response(
@@ -338,9 +339,9 @@ def test_fall_path_countdown_and_wording_are_unchanged() -> None:
     )
     assert clarify.skeleton is not None
     assert clarify.skeleton.template is TemplateId.CLARIFY
-    # The goal still distinguishes the two triggers; only the countdown is shared.
+    # The goal distinguishes the safety path and keeps its shorter window.
     assert clarify.skeleton.dialogue_goal == "confirm_safety"
-    assert clarify.skeleton.response_timeout_ms == _CONFIG.check_in_timeout_ms
+    assert clarify.skeleton.response_timeout_ms == _CONFIG.fall_response_timeout_ms
 
 
 def test_need_help_on_fall_path_notifies_family_immediately() -> None:
@@ -608,6 +609,81 @@ def test_same_fall_event_does_not_retrigger_after_resolution() -> None:
     directive = on_tick(state, _fall_context(), config=_CONFIG)
     assert directive.skeleton is None
     assert directive.next_state.phase is SessionPhase.RESOLVED
+
+
+def test_lingering_lying_posture_does_not_reopen_resolved_fall() -> None:
+    state = _state(
+        phase=SessionPhase.RESOLVED,
+        pending_decision_id="decision-0004",
+        last_emitted_state=DecisionState.RESOLVED,
+        handled_fall_event_id="transition-0003",
+    )
+    context = _context(
+        latest_posture=_posture(
+            posture=Posture.LYING,
+            motion_level=MotionLevel.STILL,
+            posture_duration_ms=900.0,
+        ),
+        active_transition=None,
+    )
+
+    directive = on_tick(state, context, config=_CONFIG)
+
+    assert directive.skeleton is None
+    assert directive.next_state.phase is SessionPhase.RESOLVED
+    assert directive.next_state.handled_fall_event_id == "transition-0003"
+
+
+def test_upright_evidence_rearms_posture_only_fall_detection() -> None:
+    resolved = _state(
+        phase=SessionPhase.RESOLVED,
+        pending_decision_id="decision-0004",
+        last_emitted_state=DecisionState.RESOLVED,
+        handled_fall_event_id="lying:fall_demo_01:11",
+    )
+    upright = on_tick(resolved, _context(), config=_CONFIG)
+    assert upright.next_state.handled_fall_event_id is None
+
+    next_fall = on_tick(upright.next_state, _context(
+        timestamp_ms=16000.0,
+        latest_posture=_posture(
+            timestamp_ms=15900.0,
+            posture=Posture.LYING,
+            motion_level=MotionLevel.STILL,
+            posture_duration_ms=800.0,
+        ),
+    ), config=_CONFIG)
+
+    assert next_fall.skeleton is not None
+    assert next_fall.skeleton.template is TemplateId.FALL_CHECK_IN
+
+
+def test_late_transition_canonicalizes_posture_fall_before_safe_resolution() -> None:
+    posture_first = on_tick(_state(), _context(
+        latest_posture=_posture(posture=Posture.LYING, motion_level=MotionLevel.STILL),
+        active_transition=None,
+    ), config=_CONFIG)
+    assert posture_first.next_state.handled_fall_event_id.startswith("lying:")
+
+    transition_arrives = on_tick(
+        posture_first.next_state,
+        _fall_context(),
+        config=_CONFIG,
+    )
+    assert transition_arrives.skeleton is None
+    assert transition_arrives.next_state.handled_fall_event_id == "transition-0003"
+
+    resolved = on_response(
+        replace(transition_arrives.next_state, pending_decision_id="decision-0001"),
+        _response(ResponseValue.SAFE, ResponseSource.VOICE),
+        config=_CONFIG,
+    )
+    upright = on_tick(resolved.next_state, _context(), config=_CONFIG)
+    assert upright.next_state.handled_fall_event_id == "transition-0003"
+
+    stale_transition = on_tick(upright.next_state, _fall_context(), config=_CONFIG)
+    assert stale_transition.skeleton is None
+    assert stale_transition.next_state.phase is SessionPhase.RESOLVED
 
 
 def test_new_fall_reopens_resolved_episode() -> None:
