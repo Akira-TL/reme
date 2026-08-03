@@ -217,6 +217,30 @@ test("hard duration limit settles silent capture and releases its track", async 
   assert.equal(context.processor.onaudioprocess, null);
 });
 
+test("requireSpeech false keeps low-volume capture uploadable", async () => {
+  const context = new FakeAudioContext();
+  const stream = audioStream();
+  const recorder = recordVoiceReply({
+    audioContext: context,
+    mediaDevices: { getUserMedia: async () => stream },
+    requireSpeech: false,
+    speechRms: 1,
+    maxDurationMs: 1_000,
+  });
+  await waitFor(() => context.processor);
+
+  context.emit(new Float32Array(4_096).fill(0.002));
+  assert.equal(recorder.speechActive(), false);
+  recorder.stop();
+
+  const audioB64 = await recorder.promise;
+  assert.equal(typeof audioB64, "string");
+  const bytes = Buffer.from(audioB64, "base64");
+  assert.equal(bytes.subarray(0, 4).toString("ascii"), "RIFF");
+  assert.equal(bytes.subarray(8, 12).toString("ascii"), "WAVE");
+  assert.equal(stream.track.stopCalls, 1);
+});
+
 test("1.4 seconds of trailing silence finalizes a valid mono WAV", async () => {
   const context = new FakeAudioContext();
   const stream = audioStream();

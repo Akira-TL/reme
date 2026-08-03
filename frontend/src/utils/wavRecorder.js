@@ -135,13 +135,15 @@ export async function ensureAudioContextRunning(context, { timeoutMs = 1_200 } =
 //
 // 默认仍允许由尾部静音自然收尾；公网危险链路会显式传 maxDurationMs，形成
 // 独立于 audioprocess 回调的硬 watchdog。一直没人说话，或 cancel/stop 于开口前，
-// resolve null 表示没有可上传的内容。
+// 默认 resolve null 表示没有可上传的内容。requireSpeech=false 用于危险确认链路：
+// 前端本地音量阈值不能成为“没事”无法送达 MiMo 的理由。
 export function recordVoiceReply({
   sampleRate = 16000,
   silenceMs = 1400,
   speechRms = 0.012,
   maxLeadinSilenceMs = 15000,
   maxDurationMs = null,
+  requireSpeech = true,
   stream: externalStream = null,
   requestOnDemand = true,
   mediaDevices = globalThis.navigator?.mediaDevices,
@@ -240,7 +242,7 @@ export function recordVoiceReply({
       source.disconnect();
       processor.disconnect();
 
-      if (cancelled || !speechDetected) return null;
+      if (cancelled || (requireSpeech && !speechDetected)) return null;
       const recorded = mergeChunks(chunks);
       if (!recorded.length) return null;
       const resampled = resampleLinear(recorded, context.sampleRate, sampleRate);

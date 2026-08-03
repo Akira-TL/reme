@@ -67,6 +67,20 @@ export function voiceReplyTransport(payload) {
   return decisionUsesDangerVoice(payload) ? "danger" : "dialogue";
 }
 
+function createVoiceRecorderForDecision(payload) {
+  if (voiceReplyTransport(payload) !== "danger") return recordVoiceReply();
+  const timeoutMs = Number.isFinite(payload?.response_timeout_ms)
+    ? payload.response_timeout_ms
+    : 6_000;
+  return recordVoiceReply({
+    requireSpeech: false,
+    speechRms: 0.004,
+    silenceMs: 1_000,
+    maxLeadinSilenceMs: timeoutMs,
+    maxDurationMs: timeoutMs,
+  });
+}
+
 export function createVoiceCaptureLock() {
   let decisionId = null;
   let capture = null;
@@ -346,9 +360,12 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             capture
             && capture.decisionId === decisionId
             && capture.pending
-            && capture.recorder.speechActive()
           ) {
-            return;
+            if (voiceReplyTransport(payload) === "danger") {
+              capture.recorder.stop();
+              return;
+            }
+            if (capture.recorder.speechActive()) return;
           }
           stopVoiceCapture(true);
           submitFor(payload, "none", "timeout");
@@ -459,7 +476,10 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       let marked = false;
       let capture = null;
       try {
-        capture = voiceCaptureLock.attach(target.decision_id, recordVoiceReply());
+        capture = voiceCaptureLock.attach(
+          target.decision_id,
+          createVoiceRecorderForDecision(target),
+        );
         const audioB64 = await capture.recorder.promise;
         if (!audioB64 || capture.cancelled || disposed) {
           if (!disposed && latestDecision?.decision_id === target.decision_id) {

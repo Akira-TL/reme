@@ -57,7 +57,7 @@ export const DEMO_SCENES = [
     phoneBody: "夜间守护已开启，暂无需要处理的情况。",
     backgroundImage: "/scenes/living-room.jpg",
     conversationScenario: "proactive_check_in",
-    autoConversation: true,
+    autoConversation: false,
   },
 ];
 
