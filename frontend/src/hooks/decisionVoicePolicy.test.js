@@ -62,11 +62,11 @@ test("non-fall dialogue keeps the existing MiMo-first path", () => {
   });
 });
 
-test("fall alarm waits one second after the prompt has actually ended", () => {
+test("fall alarm waits three seconds after the prompt has actually ended", () => {
   const decision = { ...FALL_CHECK_IN, response_timeout_ms: 2000 };
   assert.equal(getVoiceCaptureWindowMs(decision), 2000);
-  assert.equal(getVoiceAlarmDelayMs(decision), 1000);
-  assert.equal(FALL_POST_PROMPT_GRACE_MS, 1000);
+  assert.equal(getVoiceAlarmDelayMs(decision), 3000);
+  assert.equal(FALL_POST_PROMPT_GRACE_MS, 3000);
 });
 
 test("non-fall recording and deadline keep the configured response window", () => {
