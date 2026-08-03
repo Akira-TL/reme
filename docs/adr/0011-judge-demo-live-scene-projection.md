@@ -5,6 +5,7 @@
 - Owner: C（LBX 公网共享 Demo）
 - Depends on: ADR-0005、ADR-0008、ADR-0010
 - Supersedes in part: ADR-0008 的厨房本人同意 Gate 与静态 audience 两点（仅本 ADR 所述 LBX 路演）
+- Network path clarified by: ADR-0013（grant-bound 短时 TURN 与 fall 显式重新开放）
 
 ## 背景
 
@@ -22,7 +23,7 @@ LBX 双端演示已经能同步骨架、结构化场景、家庭心跳和权威�
 2. 与服务端权威 `alarm_state.phase=escalated` 匹配的有效 `fall_emergency` grant：真实实时视频。
 3. 与真实做饭确认匹配的有效 `kitchen_moment` grant：真实实时视频。
 4. `living`、厨房未确认/不可用状态、以及跌倒 `checking`：固定通用环境背景板与实时骨架。
-5. 数据、媒体或连接不可用：回到当前场景允许的骨架/背景板，并明确显示降级；不得保留最后一帧冒充直播。
+5. 数据、媒体或连接不可用：回到当前场景允许的 fail-closed 投影并明确显示降级；不得保留最后一帧冒充直播。厨房已 verified 且 active grant 正在 credentialing/connecting/failed 时使用中性隐私背景 + 骨架，不再把预制厨房图作为主视觉；没有 active grant 后才恢复厨房抽象。
 
 真实视频有效时，它替代骨架与固定背景板，不在视频上叠加火柴人。页面必须同时显示开放原因、实景状态和剩余时限。固定背景板是预制的通用视觉资产，不是从真实家庭画面重建或复原的家具；目标视口应保留其完整构图，不以严重裁切制造“复原”错觉。
 
@@ -60,6 +61,8 @@ MiMo 失败、媒体连接失败或评委缺席都不能取消、降级或延迟
 
 ADR-0008 的静态 audience 规则在本路演中只对 `fall_emergency` 保持不变：跌倒告警后的晚加入者不继承原画授权，只看到权威告警与隐私化投影。
 
+ADR-0013 允许一个明确的新授权动作，但不改变上述默认：同一 Relay 权威 `escalated` 告警尚未 resolved 且旧 fall grant 已结束时，控制端可选择“向当前在线评委重新开放 30 秒”。Relay 以当前在线 audience、新 `grant_id`、同一 alarm `event_id` 签发新 grant；不得延长/复用旧 grant、自动响应 refresh/replay，或把后续 late viewer 加入新 grant。
+
 对仍在 TTL 内的 `kitchen_moment`，Relay 可以把新加入的只读评委动态加入该 grant 的 audience，并通知当前控制端为该 viewer 建立 WebRTC peer。动态加入不得延长 `expires_at_ms`、改变 `event_id`、创建第二个媒体范围，或允许 viewer 自行声明授权。此例外意味着厨房实景在评委入口内是 demo-only 的公开投影风险；控制端和评委端都必须明确披露，正式产品不得复用为家庭授权模型。
 
 viewer 断开时 Relay 必须立即把它从 active audience 删除并把完整的剩余 audience 回告控制端；旧 peer、offer 或 ICE 不得在短 TTL 内累积。信令缓冲必须保留有效 offer，不能让大量 ICE 把唯一 offer 挤出。
@@ -96,7 +99,7 @@ ADR-0008 的媒体不进 DO、完全隐私 fail-close、跌倒权威升级、短
 ## 风险与验证 Gate
 
 - 厨房实景会让当前人物可识别。路演只能使用知情的演示人员与非敏感环境，不能以老人真实家庭素材做无同意展示。
-- 当前 WebRTC 为 STUN-only 点对点演示路径；不同运营商、企业网或对称 NAT 下可能失败。完成目标手机、目标网络和晚加入真机 Gate 前，不宣称公网普遍可用。
+- ADR-0013 允许 active grant 使用短时 TURN 辅助点对点建链，并冻结本次发布在 TURN 不可用时不自动回退 STUN-only。完成目标手机、两个独立 viewer、目标网络、强制 relay 与晚加入真机 Gate 前，不宣称公网普遍可用；取得 ICE 配置也不等于已经选中 relay candidate 或收到首帧。
 - 做饭确认阈值仍是未校准的实验 guardrail；必须保存真实正/负样本条件、原始结果与失败，不宣称准确率。
 - 固定背景板不构成家具复原、分割或三维重建能力。
 - 自动场景、厨房识别、短片、心跳卡、媒体 grant 与跌倒权威状态必须继续分别测试，不能用一个成功替代另一个 Gate。

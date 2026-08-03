@@ -211,6 +211,34 @@ body {
   background: #111;
 }
 
+.shared-stage.is-media-pending {
+  background: #17191c;
+}
+
+.media-pending-backdrop {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.08), transparent 30%),
+    linear-gradient(145deg, #20242a, #111317);
+}
+
+.media-pending-backdrop span {
+  position: absolute;
+  width: 40%;
+  aspect-ratio: 1;
+  top: 50%;
+  left: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  box-shadow:
+    0 0 0 42px rgba(255, 255, 255, 0.025),
+    0 0 0 84px rgba(255, 255, 255, 0.015);
+}
+
 .shared-stage.is-media-live .authorized-video.is-visible {
   z-index: 5;
   opacity: 1;

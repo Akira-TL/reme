@@ -22,6 +22,7 @@ import {
   validateDemoEvent,
 } from "../src/protocol";
 import { handleSceneRecognition } from "../src/scene";
+import type { BrowserIceServer, TurnCredentialResult } from "../src/turn";
 
 const ORIGIN = "https://reme.maniforld.com";
 const MONITOR_ORIGIN = "https://monitor.reme.maniforld.com";
@@ -37,6 +38,20 @@ const CONTROLLER_PROTOCOL = "reme-controller-v1";
 const ROOM_NAME = "shared-live-demo";
 const MINIMAL_MP4_B64 = "AAAADGZ0eXBpc29t";
 const MINIMAL_JPEG_B64 = "/9j/2Q==";
+const TEST_BROWSER_ICE_SERVERS: BrowserIceServer[] = [
+  { urls: ["stun:stun.cloudflare.com:3478"] },
+  {
+    urls: [
+      "turn:turn.cloudflare.com:3478?transport=udp",
+      "turn:turn.cloudflare.com:3478?transport=tcp",
+      "turn:turn.cloudflare.com:80?transport=tcp",
+      "turns:turn.cloudflare.com:5349?transport=tcp",
+      "turns:turn.cloudflare.com:443?transport=tcp",
+    ],
+    username: "short-lived-user",
+    credential: "short-lived-credential",
+  },
+];
 
 const sockets: WebSocket[] = [];
 const issuedTokens: string[] = [];
@@ -45,6 +60,7 @@ const socketInboxes = new WeakMap<WebSocket, SocketInbox>();
 
 interface SocketInbox {
   messages: Array<{ value?: unknown; error?: Error }>;
+  mediaIceCapabilities: unknown[];
   waiters: Array<{
     resolve(value: unknown): void;
     reject(error: Error): void;
@@ -857,6 +873,9 @@ describe("single-room demo relay", () => {
     expect(viewerAAck.viewer_ids).toEqual([viewerId(viewerA)]);
     expect(viewerAAck.grant.event_sequence).toBe(5);
     await expect(nextJson(viewerA)).resolves.toEqual(viewerAAck.grant);
+    const viewerACapability = readMediaIceCapability(await nextMediaIceCapability(viewerA));
+    expect(viewerACapability.grant_id).toBe(mediaGrantId(viewerAAck.grant));
+    expect(viewerACapability.expires_at_ms).toBe(grantAck.grant.payload.expires_at_ms);
 
     const viewerBAckPromise = nextJson(controller);
     const viewerB = await connectViewer();
@@ -866,6 +885,9 @@ describe("single-room demo relay", () => {
     expect(viewerBAck.viewer_ids).toEqual([viewerId(viewerA), viewerId(viewerB)].sort());
     expect(viewerBAck.grant.event_sequence).toBe(6);
     await expect(nextJson(viewerB)).resolves.toEqual(viewerBAck.grant);
+    const viewerBCapability = readMediaIceCapability(await nextMediaIceCapability(viewerB));
+    expect(viewerBCapability.grant_id).toBe(mediaGrantId(viewerBAck.grant));
+    expect(viewerBCapability.bearer_token).not.toBe(viewerACapability.bearer_token);
 
     const localCard = makeCareCardEvent(lease.session_id, 7, "local_only", "activity-3");
     await publishEvent(controller, localCard, [viewerA, viewerB]);
@@ -885,6 +907,9 @@ describe("single-room demo relay", () => {
     ].sort());
     expect(lateGrantAck.grant.event_sequence).toBe(8);
     await expect(nextJson(lateViewer)).resolves.toEqual(lateGrantAck.grant);
+    const lateCapability = readMediaIceCapability(await nextMediaIceCapability(lateViewer));
+    expect(lateCapability.grant_id).toBe(mediaGrantId(lateGrantAck.grant));
+    expect(lateCapability.expires_at_ms).toBe(grantAck.grant.payload.expires_at_ms);
 
     const grantId = mediaGrantId(grantAck.grant);
     const offer: MediaSignal = {
@@ -1344,6 +1369,592 @@ describe("single-room demo relay", () => {
     expect(revokeAck.grant.event_sequence).toBe(5);
     expect(revokeAck.grant.payload).toMatchObject({ status: "revoked" });
     expect(revokedForViewer).toEqual(revokeAck.grant);
+  });
+
+  it("keeps viewer_ready first and sends the active grant before its ICE capability", async () => {
+    const lease = await unlock();
+    const controller = await connectController(lease.token);
+    await nextJson(controller);
+    const response = await relayFetch("/ws/viewer", {
+      headers: {
+        Upgrade: "websocket",
+        "Sec-WebSocket-Protocol": VIEWER_PROTOCOL,
+      },
+    });
+    expect(response.status).toBe(101);
+    if (response.webSocket === null) throw new Error("expected viewer WebSocket");
+    const viewer = response.webSocket;
+    const rawMessages: unknown[] = [];
+    viewer.addEventListener("message", (event) => {
+      if (typeof event.data === "string") rawMessages.push(JSON.parse(event.data) as unknown);
+    });
+    viewer.accept();
+    sockets.push(viewer);
+    await vi.waitFor(() => expect(rawMessages).toHaveLength(1));
+    const ready = rawMessages[0];
+    expect(ready).toEqual({
+      type: "viewer_ready",
+      viewer_id: expect.stringMatching(/^viewer-[a-f0-9]{24}$/),
+    });
+
+    const scene = makeSceneEvent(lease.session_id, 0, "fall", Date.now());
+    controller.send(JSON.stringify(scene));
+    await nextJson(controller);
+    const alarm = makeAlarmEvent(lease.session_id, 1, "escalated", Date.now());
+    controller.send(JSON.stringify(alarm));
+    await nextJson(controller);
+    controller.send(JSON.stringify({
+      type: "media_grant_request",
+      event_id: "fall-1",
+      scope: "fall_emergency",
+      expires_in_ms: 30_000,
+    }));
+    const accepted = readGrantAck(await nextJson(controller), "media_grant_accepted");
+    await vi.waitFor(() => expect(rawMessages).toHaveLength(5));
+
+    expect(rawMessages.slice(0, 3)).toEqual([ready, scene, alarm]);
+    expect(rawMessages[3]).toEqual(accepted.grant);
+    expect(readMediaIceCapability(rawMessages[4])).toMatchObject({
+      grant_id: accepted.grant.payload.grant_id,
+      expires_at_ms: accepted.grant.payload.expires_at_ms,
+    });
+  });
+
+  it("disconnects an audience viewer before forwarding a 65th ICE candidate", async () => {
+    const active = await prepareFallGrant(Date.now(), 30_000);
+    const signalFor = (index: number): MediaSignal => ({
+      schema_version: MEDIA_SIGNAL_SCHEMA_VERSION,
+      grant_id: active.grantId,
+      target_id: "controller",
+      signal_type: "ice_candidate",
+      signal: {
+        candidate: `candidate:viewer-${index}`,
+        sdp_mid: "0",
+        sdp_mline_index: 0,
+      },
+    });
+
+    for (let index = 0; index < 64; index += 1) {
+      const forwarded = nextJson(active.controller);
+      active.viewer.send(JSON.stringify(signalFor(index)));
+      await expect(forwarded).resolves.toEqual({
+        ...signalFor(index),
+        from_id: viewerId(active.viewer),
+      });
+    }
+
+    const overflowError = nextJson(active.viewer);
+    const audienceUpdate = nextJson(active.controller);
+    active.viewer.send(JSON.stringify(signalFor(64)));
+    await expect(overflowError).resolves.toEqual({
+      type: "error",
+      error: "media_signal_budget_exceeded",
+    });
+    expect(readGrantAck(await audienceUpdate, "media_grant_accepted").viewer_ids).toEqual([]);
+    await waitForViewerCount(0);
+    await expectNoMessage(active.controller);
+
+    const authority = await demoAuthoritySnapshot() as {
+      media_signal_budgets: Array<Record<string, unknown>>;
+      media_signal_grant_budgets: Array<Record<string, unknown>>;
+      media_audience: unknown[];
+    };
+    expect(authority.media_audience).toEqual([]);
+    expect(authority.media_signal_budgets).toEqual([{
+      grant_id: active.grantId,
+      socket_id: expect.stringMatching(/^socket-[a-f0-9]{32}$/),
+      answers: 0,
+      ice_candidates: 64,
+    }]);
+    expect(authority.media_signal_grant_budgets).toEqual([{
+      grant_id: active.grantId,
+      signals: 64,
+    }]);
+  });
+
+  it("does not refund the grant-wide viewer signaling budget across reconnects", async () => {
+    const active = await prepareKitchenGrant(30_000);
+    const first = await connectLateKitchenViewer(active);
+    const signal: MediaSignal = {
+      schema_version: MEDIA_SIGNAL_SCHEMA_VERSION,
+      grant_id: active.grantId,
+      target_id: "controller",
+      signal_type: "ice_candidate",
+      signal: {
+        candidate: "candidate:first-viewer",
+        sdp_mid: "0",
+        sdp_mline_index: 0,
+      },
+    };
+
+    const forwarded = nextJson(active.controller);
+    first.viewer.send(JSON.stringify(signal));
+    await expect(forwarded).resolves.toEqual({
+      ...signal,
+      from_id: viewerId(first.viewer),
+    });
+
+    const audienceUpdate = nextJson(active.controller);
+    first.viewer.close(1000, "viewer_reconnect");
+    expect(readGrantAck(await audienceUpdate, "media_grant_accepted").viewer_ids).toEqual([]);
+    await waitForViewerCount(0);
+
+    const afterDisconnect = await demoAuthoritySnapshot() as {
+      media_signal_grant_budgets: Array<Record<string, unknown>>;
+    };
+    expect(afterDisconnect.media_signal_grant_budgets).toEqual([{
+      grant_id: active.grantId,
+      signals: 1,
+    }]);
+
+    await runInDurableObject(roomStub(), async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE media_signal_grant_budget SET signals = 340 WHERE grant_id = ?",
+        active.grantId,
+      );
+    });
+
+    const second = await connectLateKitchenViewer(active);
+    const overflowError = nextJson(second.viewer);
+    const overflowAudienceUpdate = nextJson(active.controller);
+    second.viewer.send(JSON.stringify({
+      ...signal,
+      signal: {
+        ...signal.signal,
+        candidate: "candidate:second-viewer",
+      },
+    }));
+    await expect(overflowError).resolves.toEqual({
+      type: "error",
+      error: "media_signal_budget_exceeded",
+    });
+    expect(
+      readGrantAck(await overflowAudienceUpdate, "media_grant_accepted").viewer_ids,
+    ).toEqual([]);
+    await waitForViewerCount(0);
+    await expectNoMessage(active.controller);
+
+    const afterOverflow = await demoAuthoritySnapshot() as {
+      media_signal_grant_budgets: Array<Record<string, unknown>>;
+      media_audience: unknown[];
+    };
+    expect(afterOverflow.media_audience).toEqual([]);
+    expect(afterOverflow.media_signal_grant_budgets).toEqual([{
+      grant_id: active.grantId,
+      signals: 340,
+    }]);
+  });
+
+  it("issues exact cached TURN ICE configs to the controller and initial viewer", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const active = await prepareFallGrant(baseTime, 30_000);
+      expect(active.capability).toEqual({
+        type: "media_ice_capability",
+        grant_id: active.grantId,
+        bearer_token: expect.stringMatching(/^[a-f0-9]{64}$/),
+        expires_at_ms: baseTime + 30_000,
+      });
+
+      const provider = vi.fn(async (ttlSeconds: number): Promise<TurnCredentialResult> => {
+        expect(ttlSeconds).toBe(45);
+        return { ok: true, ice_servers: TEST_BROWSER_ICE_SERVERS };
+      });
+      await stubTurnGenerator(provider);
+
+      const controllerResponse = await requestMediaIce(active.lease.token, active.grantId);
+      expect(controllerResponse.status).toBe(200);
+      expect(controllerResponse.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+      expect(controllerResponse.headers.get("Cache-Control")).toBe("no-store");
+      const controllerBody = await controllerResponse.json<Record<string, unknown>>();
+      expect(Object.keys(controllerBody).sort()).toEqual([
+        "expires_at_ms",
+        "ice_servers",
+        "ttl_ms",
+      ]);
+      expect(controllerBody).toEqual({
+        ice_servers: TEST_BROWSER_ICE_SERVERS,
+        expires_at_ms: baseTime + 30_000,
+        ttl_ms: 30_000,
+      });
+      expect(JSON.stringify(controllerBody)).not.toContain("a".repeat(64));
+
+      await expect(requestMediaIce(active.lease.token, active.grantId).then((response) => (
+        response.json()
+      ))).resolves.toEqual(controllerBody);
+      expect(provider).toHaveBeenCalledTimes(1);
+
+      const viewerResponse = await requestMediaIce(
+        active.capability.bearer_token,
+        active.grantId,
+      );
+      expect(viewerResponse.status).toBe(200);
+      await expect(viewerResponse.json()).resolves.toEqual(controllerBody);
+      await expect(requestMediaIce(
+        active.capability.bearer_token,
+        active.grantId,
+      ).then((response) => response.json())).resolves.toEqual(controllerBody);
+      expect(provider).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("rejects malformed ICE requests and exposes exact CORS/method behavior", async () => {
+    const getResponse = await relayFetch("/api/media/ice");
+    expect(getResponse.status).toBe(405);
+    await expect(getResponse.json()).resolves.toEqual({
+      ok: false,
+      error: "method_not_allowed",
+    });
+    expect(getResponse.headers.get("Cache-Control")).toBe("no-store");
+    expect(getResponse.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+
+    const preflight = await relayFetch("/api/media/ice", { method: "OPTIONS" });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("Cache-Control")).toBe("no-store");
+    expect(preflight.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(preflight.headers.get("Access-Control-Allow-Headers"))
+      .toBe("Authorization, Content-Type");
+
+    const malformed = await relayFetch("/api/media/ice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant_id: "grant-unknown", role: "viewer" }),
+    });
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toEqual({
+      ok: false,
+      error: "invalid_media_ice_request",
+    });
+
+    const missing = await relayFetch("/api/media/ice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant_id: "grant-unknown" }),
+    });
+    expect(missing.status).toBe(401);
+    await expect(missing.json()).resolves.toEqual({
+      ok: false,
+      error: "missing_media_ice_token",
+    });
+
+    const invalid = await requestMediaIce("not-a-token", "grant-unknown");
+    expect(invalid.status).toBe(401);
+    await expect(invalid.json()).resolves.toEqual({
+      ok: false,
+      error: "invalid_media_ice_token",
+    });
+  });
+
+  it.each([30_001, 60_000])(
+    "rejects a fall media grant longer than 30 seconds (%i ms)",
+    async (expiresInMs) => {
+      const lease = await unlock();
+      const controller = await connectController(lease.token);
+      await nextJson(controller);
+      const viewer = await connectViewer();
+      await publishEvent(
+        controller,
+        makeSceneEvent(lease.session_id, 0, "fall"),
+        [viewer],
+      );
+      await publishEvent(
+        controller,
+        makeAlarmEvent(lease.session_id, 1, "escalated"),
+        [viewer],
+      );
+
+      const rejected = nextJson(controller);
+      controller.send(JSON.stringify({
+        type: "media_grant_request",
+        event_id: "fall-1",
+        scope: "fall_emergency",
+        expires_in_ms: expiresInMs,
+      }));
+      await expect(rejected).resolves.toEqual({
+        type: "error",
+        error: "invalid_media_grant_request",
+      });
+    },
+  );
+
+  it("fails closed on TURN provider errors and rate-limits repeated issuance", async () => {
+    const active = await prepareFallGrant(Date.now(), 30_000);
+    const provider = vi.fn<(ttlSeconds: number) => Promise<TurnCredentialResult>>()
+      .mockResolvedValueOnce({ ok: false, error: "turn_provider_unavailable" })
+      .mockResolvedValueOnce({ ok: false, error: "turn_provider_invalid_response" })
+      .mockResolvedValueOnce({ ok: false, error: "turn_provider_invalid_response" });
+    await stubTurnGenerator(provider);
+
+    const unavailable = await requestMediaIce(active.lease.token, active.grantId);
+    expect(unavailable.status).toBe(502);
+    await expect(unavailable.json()).resolves.toEqual({
+      ok: false,
+      error: "turn_provider_unavailable",
+    });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const invalid = await requestMediaIce(active.lease.token, active.grantId);
+      expect(invalid.status).toBe(502);
+      await expect(invalid.json()).resolves.toEqual({
+        ok: false,
+        error: "turn_provider_invalid_response",
+      });
+    }
+
+    const limited = await requestMediaIce(active.lease.token, active.grantId);
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toMatch(/^\d+$/);
+    await expect(limited.json()).resolves.toEqual({
+      ok: false,
+      error: "media_ice_rate_limited",
+    });
+    expect(provider).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not refund TURN attempts when kitchen viewers reconnect", async () => {
+    const active = await prepareKitchenGrant(30_000);
+    const provider = vi.fn(async (): Promise<TurnCredentialResult> => ({
+      ok: false,
+      error: "turn_provider_unavailable",
+    }));
+    await stubTurnGenerator(provider);
+
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      const late = await connectLateKitchenViewer(active);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const response = await requestMediaIce(late.capability.bearer_token, active.grantId);
+        expect(response.status).toBe(502);
+        await expect(response.json()).resolves.toEqual({
+          ok: false,
+          error: "turn_provider_unavailable",
+        });
+      }
+      const audienceUpdate = nextJson(active.controller);
+      late.viewer.close(1000, "viewer_reconnect_cycle");
+      expect(readGrantAck(await audienceUpdate, "media_grant_accepted").viewer_ids).toEqual([]);
+    }
+    expect(provider).toHaveBeenCalledTimes(18);
+
+    const blocked = await connectLateKitchenViewer(active);
+    const limited = await requestMediaIce(
+      blocked.capability.bearer_token,
+      active.grantId,
+    );
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toMatch(/^\d+$/);
+    await expect(limited.json()).resolves.toEqual({
+      ok: false,
+      error: "media_ice_rate_limited",
+    });
+    expect(provider).toHaveBeenCalledTimes(18);
+
+    const beforeRevoke = await demoAuthoritySnapshot() as {
+      media_ice_budgets: Array<Record<string, unknown>>;
+      media_ice_grant_budgets: Array<Record<string, unknown>>;
+    };
+    expect(beforeRevoke.media_ice_budgets).toHaveLength(6);
+    expect(beforeRevoke.media_ice_grant_budgets).toEqual([{
+      grant_id: active.grantId,
+      attempts: 18,
+    }]);
+
+    const revokedForViewer = nextJson(blocked.viewer);
+    const revokedForController = nextJson(active.controller);
+    active.controller.send(JSON.stringify({
+      type: "media_grant_revoke",
+      grant_id: active.grantId,
+    }));
+    await revokedForViewer;
+    await revokedForController;
+    const afterRevoke = await demoAuthoritySnapshot() as {
+      media_ice_budgets: unknown[];
+      media_ice_grant_budgets: unknown[];
+    };
+    expect(afterRevoke.media_ice_budgets).toEqual([]);
+    expect(afterRevoke.media_ice_grant_budgets).toEqual([]);
+  });
+
+  it("returns 503 when TURN secrets are unavailable", async () => {
+    const active = await prepareFallGrant(Date.now(), 30_000);
+    await runInDurableObject(roomStub(), async (instance) => {
+      const roomEnv = (instance as unknown as {
+        env: { TURN_KEY_ID: string; TURN_KEY_API_TOKEN: string };
+      }).env;
+      roomEnv.TURN_KEY_ID = "";
+      roomEnv.TURN_KEY_API_TOKEN = "";
+    });
+    const response = await requestMediaIce(active.lease.token, active.grantId);
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: "turn_not_configured",
+    });
+  });
+
+  it("rejects a second TURN request while the same actor issuance is in flight", async () => {
+    const active = await prepareFallGrant(Date.now(), 30_000);
+    const deferred = deferredTurnResult();
+    const provider = vi.fn(() => deferred.promise);
+    await stubTurnGenerator(provider);
+
+    const first = requestMediaIce(active.lease.token, active.grantId);
+    await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1));
+    const concurrent = await requestMediaIce(active.lease.token, active.grantId);
+    expect(concurrent.status).toBe(409);
+    await expect(concurrent.json()).resolves.toEqual({
+      ok: false,
+      error: "media_ice_request_in_progress",
+    });
+    deferred.resolve({ ok: true, ice_servers: TEST_BROWSER_ICE_SERVERS });
+    expect((await first).status).toBe(200);
+  });
+
+  it("rechecks grant authority after TURN generation and clears capability on revoke", async () => {
+    const active = await prepareFallGrant(Date.now(), 30_000);
+    const deferred = deferredTurnResult();
+    const provider = vi.fn(() => deferred.promise);
+    await stubTurnGenerator(provider);
+
+    const pending = requestMediaIce(active.capability.bearer_token, active.grantId);
+    await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1));
+    const revokedForViewer = nextJson(active.viewer);
+    const revokedForController = nextJson(active.controller);
+    active.controller.send(JSON.stringify({
+      type: "media_grant_revoke",
+      grant_id: active.grantId,
+    }));
+    await revokedForViewer;
+    await revokedForController;
+    deferred.resolve({ ok: true, ice_servers: TEST_BROWSER_ICE_SERVERS });
+
+    const stale = await pending;
+    expect(stale.status).toBe(403);
+    await expect(stale.json()).resolves.toEqual({
+      ok: false,
+      error: "media_ice_not_authorized",
+    });
+    const replay = await requestMediaIce(active.capability.bearer_token, active.grantId);
+    expect(replay.status).toBe(403);
+    expect(provider).toHaveBeenCalledTimes(1);
+
+    const attachment = await viewerAttachmentSnapshot(viewerId(active.viewer));
+    expect(attachment).toMatchObject({
+      mediaIceGrantId: null,
+      mediaIceTokenHash: null,
+      mediaIceExpiresAtMs: null,
+    });
+    const authority = await demoAuthoritySnapshot() as { media_ice_budgets: unknown[] };
+    expect(authority.media_ice_budgets).toEqual([]);
+  });
+
+  it("rejects a generated credential when the lease expires during the provider await", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const active = await prepareFallGrant(baseTime, 30_000);
+      const deferred = deferredTurnResult();
+      const provider = vi.fn(() => deferred.promise);
+      await stubTurnGenerator(provider);
+
+      const pending = requestMediaIce(active.lease.token, active.grantId);
+      await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1));
+      now.mockReturnValue(baseTime + 30_001);
+      deferred.resolve({ ok: true, ice_servers: TEST_BROWSER_ICE_SERVERS });
+      const response = await pending;
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: "media_ice_not_authorized",
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("invalidates viewer ICE on disconnect and keeps a fall grant static for late viewers", async () => {
+    const active = await prepareFallGrant(Date.now(), 30_000);
+    const audienceUpdate = nextJson(active.controller);
+    active.viewer.close(1000, "viewer_hidden");
+    const remaining = readGrantAck(await audienceUpdate, "media_grant_accepted");
+    expect(remaining.viewer_ids).toEqual([]);
+
+    const provider = vi.fn(async (): Promise<TurnCredentialResult> => ({
+      ok: true,
+      ice_servers: TEST_BROWSER_ICE_SERVERS,
+    }));
+    await stubTurnGenerator(provider);
+    const stale = await requestMediaIce(active.capability.bearer_token, active.grantId);
+    expect(stale.status).toBe(403);
+    await expect(stale.json()).resolves.toEqual({
+      ok: false,
+      error: "media_ice_not_authorized",
+    });
+    expect(provider).not.toHaveBeenCalled();
+
+    const lateViewer = await connectViewer();
+    await expect(nextJson(lateViewer)).resolves.toEqual(
+      makeSceneEvent(active.lease.session_id, 0, "fall", active.timestampMs),
+    );
+    await expect(nextJson(lateViewer)).resolves.toEqual(
+      makeAlarmEvent(active.lease.session_id, 1, "escalated", active.timestampMs),
+    );
+    await expectNoMessage(lateViewer);
+    expect(ensureSocketInbox(lateViewer).mediaIceCapabilities).toEqual([]);
+  });
+
+  it("rejects both controller and viewer ICE tokens after lease expiry", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      const active = await prepareFallGrant(baseTime, 30_000);
+      now.mockReturnValue(baseTime + 30_001);
+      const provider = vi.fn(async (): Promise<TurnCredentialResult> => ({
+        ok: true,
+        ice_servers: TEST_BROWSER_ICE_SERVERS,
+      }));
+      await stubTurnGenerator(provider);
+
+      for (const token of [active.lease.token, active.capability.bearer_token]) {
+        const response = await requestMediaIce(token, active.grantId);
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toEqual({
+          ok: false,
+          error: "media_ice_not_authorized",
+        });
+      }
+      expect(provider).not.toHaveBeenCalled();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("limits the room to five concurrent viewers and frees a closed slot", async () => {
+    const viewers: WebSocket[] = [];
+    for (let index = 0; index < 5; index += 1) viewers.push(await connectViewer());
+
+    const full = await relayFetch("/ws/viewer", {
+      headers: {
+        Upgrade: "websocket",
+        "Sec-WebSocket-Protocol": VIEWER_PROTOCOL,
+      },
+    });
+    expect(full.status).toBe(429);
+    expect(full.headers.get("Retry-After")).toBe("1");
+    expect(full.headers.get("Cache-Control")).toBe("no-store");
+    await expect(full.json()).resolves.toEqual({
+      ok: false,
+      error: "viewer_capacity_reached",
+    });
+
+    const firstViewer = viewers[0];
+    if (firstViewer === undefined) throw new Error("expected an open viewer");
+    firstViewer.close(1000, "viewer_capacity_test");
+    await waitForViewerCount(4);
+    await connectViewer();
+    await waitForViewerCount(5);
   });
 
   it("expires an idle media grant from the Durable Object clock and reschedules the lease", async () => {
@@ -1994,9 +2605,13 @@ describe("single-room demo relay", () => {
   it("single-flights concurrent voice requests without a second MiMo call", async () => {
     const lease = await unlock();
     await prepareDangerChecking(lease);
+    let releaseProvider!: () => void;
+    const providerBlocked = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
     const outbound = vi.fn(
       async (..._args: Parameters<typeof fetch>): Promise<Response> => {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await providerBlocked;
         return mimoVoiceResponse("safe", "我没事");
       },
     );
@@ -2005,6 +2620,7 @@ describe("single-room demo relay", () => {
     const firstPromise = recognizeDangerVoice(lease.token);
     await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
     const concurrent = await recognizeDangerVoice(lease.token);
+    releaseProvider();
     expect(concurrent.status).toBe(409);
     await expect(concurrent.json()).resolves.toEqual({
       ok: false,
@@ -3458,8 +4074,12 @@ describe("single-room demo relay", () => {
 
   it("single-flights scene recognition and limits each session to six paid attempts per minute", async () => {
     const lease = await unlock();
+    let releaseProvider!: () => void;
+    const providerBlocked = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
     const outbound = vi.fn(async (..._args: Parameters<typeof fetch>): Promise<Response> => {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await providerBlocked;
       return mimoSceneResponse("living", false, "普通居家活动");
     });
     vi.stubGlobal("fetch", outbound);
@@ -3469,6 +4089,7 @@ describe("single-room demo relay", () => {
       const first = recognizeScene(lease.token, sceneKeyframeBody());
       await vi.waitFor(() => expect(outbound).toHaveBeenCalledTimes(1));
       const concurrent = await recognizeScene(lease.token, sceneKeyframeBody());
+      releaseProvider();
       expect(concurrent.status).toBe(409);
       await expect(concurrent.json()).resolves.toEqual({
         ok: false,
@@ -3710,6 +4331,22 @@ async function demoAuthoritySnapshot(): Promise<Record<string, unknown>> {
       media_audience: rows(
         "SELECT grant_id, viewer_id FROM media_grant_audience ORDER BY grant_id, viewer_id",
       ),
+      media_ice_budgets: rows(
+        `SELECT grant_id, actor_key, window_started_at_ms, attempts, inflight_started_at_ms
+           FROM media_ice_budget ORDER BY grant_id, actor_key`,
+      ),
+      media_ice_grant_budgets: rows(
+        `SELECT grant_id, attempts
+           FROM media_ice_grant_budget ORDER BY grant_id`,
+      ),
+      media_signal_budgets: rows(
+        `SELECT grant_id, socket_id, answers, ice_candidates
+           FROM media_signal_budget ORDER BY grant_id, socket_id`,
+      ),
+      media_signal_grant_budgets: rows(
+        `SELECT grant_id, signals
+           FROM media_signal_grant_budget ORDER BY grant_id`,
+      ),
       activity_evidence: rows(
         "SELECT * FROM activity_recognition_evidence ORDER BY session_id",
       ),
@@ -3732,6 +4369,10 @@ async function resetRoomStorage(): Promise<void> {
     state.storage.transactionSync(() => {
       state.storage.sql.exec("DELETE FROM media_grant_audience");
       state.storage.sql.exec("DELETE FROM media_grant");
+      state.storage.sql.exec("DELETE FROM media_ice_budget");
+      state.storage.sql.exec("DELETE FROM media_ice_grant_budget");
+      state.storage.sql.exec("DELETE FROM media_signal_budget");
+      state.storage.sql.exec("DELETE FROM media_signal_grant_budget");
       state.storage.sql.exec("DELETE FROM danger_voice_attempt");
       state.storage.sql.exec("DELETE FROM scene_recognition_budget");
       state.storage.sql.exec("DELETE FROM activity_recognition_evidence");
@@ -3761,6 +4402,10 @@ async function seedLegacyAlarmState(
     state.storage.transactionSync(() => {
       state.storage.sql.exec("DELETE FROM media_grant_audience");
       state.storage.sql.exec("DELETE FROM media_grant");
+      state.storage.sql.exec("DELETE FROM media_ice_budget");
+      state.storage.sql.exec("DELETE FROM media_ice_grant_budget");
+      state.storage.sql.exec("DELETE FROM media_signal_budget");
+      state.storage.sql.exec("DELETE FROM media_signal_grant_budget");
       state.storage.sql.exec("DELETE FROM danger_voice_attempt");
       state.storage.sql.exec("DELETE FROM activity_recognition_evidence");
       state.storage.sql.exec("DELETE FROM danger_alarm_checkpoint");
@@ -3973,6 +4618,16 @@ function nextJson(socket: WebSocket): Promise<unknown> {
   });
 }
 
+async function nextMediaIceCapability(socket: WebSocket): Promise<unknown> {
+  const inbox = ensureSocketInbox(socket);
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const capability = inbox.mediaIceCapabilities.shift();
+    if (capability !== undefined) return capability;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("timed out waiting for media ICE capability");
+}
+
 function nextJsonBatch(socket: WebSocket, count: number): Promise<unknown[]> {
   return Promise.all(Array.from({ length: count }, () => nextJson(socket)));
 }
@@ -3987,7 +4642,7 @@ async function expectNoMessage(socket: WebSocket, waitMs = 75): Promise<void> {
 function ensureSocketInbox(socket: WebSocket): SocketInbox {
   const existing = socketInboxes.get(socket);
   if (existing !== undefined) return existing;
-  const inbox: SocketInbox = { messages: [], waiters: [] };
+  const inbox: SocketInbox = { messages: [], mediaIceCapabilities: [], waiters: [] };
   socketInboxes.set(socket, inbox);
   socket.addEventListener("message", (event) => {
     let message: { value?: unknown; error?: Error };
@@ -3999,6 +4654,17 @@ function ensureSocketInbox(socket: WebSocket): SocketInbox {
       } catch {
         message = { error: new Error("expected valid JSON WebSocket message") };
       }
+    }
+    if (
+      message.error === undefined
+      && message.value !== null
+      && typeof message.value === "object"
+      && !Array.isArray(message.value)
+      && "type" in message.value
+      && message.value.type === "media_ice_capability"
+    ) {
+      inbox.mediaIceCapabilities.push(message.value);
+      return;
     }
     const waiter = inbox.waiters.shift();
     if (waiter === undefined) {
@@ -4238,7 +4904,10 @@ async function publishActivityConfirmation(
 function readGrantAck(
   value: unknown,
   expectedType: "media_grant_accepted" | "media_grant_revoked",
-): { grant: DemoEvent; viewer_ids: string[] } {
+): {
+  grant: Extract<DemoEvent, { event_type: "media_grant" }>;
+  viewer_ids: string[];
+} {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("grant ack must be an object");
   }
@@ -4264,6 +4933,36 @@ function readGrantAck(
   return { grant, viewer_ids: ids };
 }
 
+function readMediaIceCapability(value: unknown): {
+  type: "media_ice_capability";
+  grant_id: string;
+  bearer_token: string;
+  expires_at_ms: number;
+} {
+  if (
+    value === null
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || Object.keys(value).sort().join(",")
+      !== "bearer_token,expires_at_ms,grant_id,type"
+    || !("type" in value)
+    || value.type !== "media_ice_capability"
+    || !("grant_id" in value)
+    || typeof value.grant_id !== "string"
+    || !("bearer_token" in value)
+    || typeof value.bearer_token !== "string"
+    || !/^[a-f0-9]{64}$/.test(value.bearer_token)
+    || !("expires_at_ms" in value)
+    || typeof value.expires_at_ms !== "number"
+  ) throw new Error("invalid media ICE capability");
+  return value as {
+    type: "media_ice_capability";
+    grant_id: string;
+    bearer_token: string;
+    expires_at_ms: number;
+  };
+}
+
 function mediaGrantId(event: DemoEvent): string {
   if (event.event_type !== "media_grant") throw new Error("expected media grant event");
   return event.payload.grant_id;
@@ -4278,6 +4977,174 @@ async function recognize(token: string, imageB64: string): Promise<Response> {
     },
     body: JSON.stringify({ image_b64: imageB64 }),
   });
+}
+
+async function requestMediaIce(token: string, grantId: string): Promise<Response> {
+  return relayFetch("/api/media/ice", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ grant_id: grantId }),
+  });
+}
+
+async function prepareKitchenGrant(expiresInMs: number): Promise<{
+  lease: UnlockSuccess;
+  controller: WebSocket;
+  grantId: string;
+  scene: DemoEvent;
+  activity: DemoEvent;
+}> {
+  const lease = await unlock();
+  const controller = await connectController(lease.token);
+  await nextJson(controller);
+  const scene = makeSceneEvent(lease.session_id, 0, "kitchen");
+  await publishEvent(controller, scene, []);
+
+  vi.stubGlobal("fetch", vi.fn(async () => mimoActivityResponse("cooking", 0.87)));
+  const first = await recognize(lease.token, MINIMAL_JPEG_B64);
+  await expect(first.json()).resolves.toMatchObject({
+    consecutive: 1,
+    receipt_id: null,
+  });
+  await publishEvent(
+    controller,
+    makeActivityEvent(lease.session_id, 1, "candidate"),
+    [],
+  );
+  const second = await recognize(lease.token, MINIMAL_JPEG_B64);
+  await expect(second.json()).resolves.toMatchObject({
+    consecutive: 2,
+    receipt_id: expect.stringMatching(/^activity-receipt-[a-f0-9]{32}$/),
+  });
+  const activity = makeActivityEvent(lease.session_id, 2);
+  await publishActivityConfirmation(controller, activity, []);
+
+  const acceptedPromise = nextJson(controller);
+  controller.send(JSON.stringify({
+    type: "media_grant_request",
+    event_id: "activity-2",
+    scope: "kitchen_moment",
+    expires_in_ms: expiresInMs,
+  }));
+  const accepted = readGrantAck(await acceptedPromise, "media_grant_accepted");
+  expect(accepted.viewer_ids).toEqual([]);
+  return {
+    lease,
+    controller,
+    grantId: accepted.grant.payload.grant_id,
+    scene,
+    activity,
+  };
+}
+
+async function connectLateKitchenViewer(
+  active: Awaited<ReturnType<typeof prepareKitchenGrant>>,
+): Promise<{
+  viewer: WebSocket;
+  capability: ReturnType<typeof readMediaIceCapability>;
+}> {
+  const controllerUpdate = nextJson(active.controller);
+  const viewer = await connectViewer();
+  await expect(nextJson(viewer)).resolves.toEqual(active.scene);
+  await expect(nextJson(viewer)).resolves.toEqual(active.activity);
+  const accepted = readGrantAck(await controllerUpdate, "media_grant_accepted");
+  expect(accepted.viewer_ids).toEqual([viewerId(viewer)]);
+  await expect(nextJson(viewer)).resolves.toEqual(accepted.grant);
+  const capability = readMediaIceCapability(await nextMediaIceCapability(viewer));
+  expect(capability.grant_id).toBe(active.grantId);
+  return { viewer, capability };
+}
+
+async function prepareFallGrant(
+  timestampMs: number,
+  expiresInMs: number,
+): Promise<{
+  lease: UnlockSuccess;
+  controller: WebSocket;
+  viewer: WebSocket;
+  timestampMs: number;
+  grantId: string;
+  capability: ReturnType<typeof readMediaIceCapability>;
+}> {
+  const lease = await unlock();
+  const controller = await connectController(lease.token);
+  await nextJson(controller);
+  const viewer = await connectViewer();
+  await publishEvent(
+    controller,
+    makeSceneEvent(lease.session_id, 0, "fall", timestampMs),
+    [viewer],
+  );
+  await publishEvent(
+    controller,
+    makeAlarmEvent(lease.session_id, 1, "escalated", timestampMs),
+    [viewer],
+  );
+  const grantForViewer = nextJson(viewer);
+  const grantForController = nextJson(controller);
+  controller.send(JSON.stringify({
+    type: "media_grant_request",
+    event_id: "fall-1",
+    scope: "fall_emergency",
+    expires_in_ms: expiresInMs,
+  }));
+  const accepted = readGrantAck(await grantForController, "media_grant_accepted");
+  await expect(grantForViewer).resolves.toEqual(accepted.grant);
+  const capability = readMediaIceCapability(await nextMediaIceCapability(viewer));
+  return {
+    lease,
+    controller,
+    viewer,
+    timestampMs,
+    grantId: accepted.grant.payload.grant_id,
+    capability,
+  };
+}
+
+async function waitForViewerCount(expected: number): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const status = await relayFetch("/api/status");
+    const payload = await status.json<{ viewer_count: number }>();
+    if (payload.viewer_count === expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${expected} open viewers`);
+}
+
+async function viewerAttachmentSnapshot(viewerIdValue: string): Promise<Record<string, unknown>> {
+  return runInDurableObject(roomStub(), async (instance) => {
+    const context = (instance as unknown as { ctx: DurableObjectState }).ctx;
+    for (const socket of context.getWebSockets("viewer")) {
+      const attachment = socket.deserializeAttachment() as Record<string, unknown> | null;
+      if (attachment?.viewerId === viewerIdValue) return attachment;
+    }
+    throw new Error("viewer attachment not found");
+  });
+}
+
+async function stubTurnGenerator(
+  generate: (ttlSeconds: number) => Promise<TurnCredentialResult>,
+): Promise<void> {
+  await runInDurableObject(roomStub(), async (instance) => {
+    const room = instance as unknown as {
+      generateMediaIceCredentials(ttlSeconds: number): Promise<TurnCredentialResult>;
+    };
+    room.generateMediaIceCredentials = generate;
+  });
+}
+
+function deferredTurnResult(): {
+  promise: Promise<TurnCredentialResult>;
+  resolve(result: TurnCredentialResult): void;
+} {
+  let resolvePromise!: (result: TurnCredentialResult) => void;
+  const promise = new Promise<TurnCredentialResult>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
 }
 
 function mimoActivityResponse(

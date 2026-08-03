@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createMediaSignal } from "./protocol.js";
 import {
   createViewerState,
   reduceViewerState,
@@ -8,8 +9,12 @@ import {
   selectViewerScene,
 } from "./state.js";
 import {
+  canStartViewerSocketConnection,
   createForwardedMediaSignalBuffer,
+  isCurrentViewerSocket,
   parseViewerReady,
+  sendViewerSignal,
+  suspendViewerRelayConnection,
 } from "./useViewerRelay.js";
 
 function event(eventSequence, eventType, payload, sessionId = "session-a") {
@@ -288,4 +293,72 @@ test("forwarded signal buffer preserves the only offer when ICE reaches capacity
   assert.equal(signals[0], offer);
   assert.equal(signals.filter((signal) => signal.signal_type === "offer").length, 1);
   assert.equal(signals.filter((signal) => signal.signal_type === "ice_candidate").length, 63);
+});
+
+test("pagehide synchronously clears viewer signaling authority before closing the socket", () => {
+  const buffer = createForwardedMediaSignalBuffer(3);
+  buffer.push({ grant_id: "grant-1", signal_type: "offer" });
+  const calls = [];
+  const socket = {
+    close(code, reason) {
+      calls.push({ code, reason, buffered: buffer.size() });
+    },
+  };
+  let capability = { grant_id: "grant-1" };
+  let exposedSocket = socket;
+
+  suspendViewerRelayConnection({
+    signalBuffer: buffer,
+    socket,
+    clearCapability: () => { capability = null; },
+    clearSocket: () => { exposedSocket = null; },
+    reason: "viewer_pagehide",
+  });
+
+  assert.equal(buffer.size(), 0);
+  assert.equal(capability, null);
+  assert.equal(exposedSocket, null);
+  assert.deepEqual(calls, [{ code: 1000, reason: "viewer_pagehide", buffered: 0 }]);
+});
+
+test("stale viewer socket events cannot affect a replacement connection", () => {
+  const oldSocket = { readyState: 3 };
+  const newSocket = { readyState: 0 };
+  assert.equal(isCurrentViewerSocket(newSocket, oldSocket), false);
+  assert.equal(isCurrentViewerSocket(newSocket, newSocket), true);
+  assert.equal(canStartViewerSocketConnection({
+    active: true,
+    pageSuspended: false,
+    visibilityState: "visible",
+    currentSocket: newSocket,
+  }), false, "pageshow must not open an orphan while the replacement is connecting");
+  newSocket.readyState = 1;
+  assert.equal(canStartViewerSocketConnection({
+    active: true,
+    pageSuspended: false,
+    visibilityState: "visible",
+    currentSocket: newSocket,
+  }), false, "an open replacement also blocks retry connect");
+  assert.equal(canStartViewerSocketConnection({
+    active: true,
+    pageSuspended: false,
+    visibilityState: "visible",
+    currentSocket: null,
+  }), true);
+});
+
+test("viewer signaling returns false when an OPEN socket send throws", () => {
+  const signal = createMediaSignal({
+    grantId: "grant-1",
+    targetId: "controller-1",
+    signalType: "ice_candidate",
+    signal: { candidate: "candidate:1", sdp_mid: "0", sdp_mline_index: 0 },
+  });
+  const socket = {
+    readyState: 1,
+    send() {
+      throw new Error("socket closed between readyState and send");
+    },
+  };
+  assert.equal(sendViewerSignal(socket, signal), false);
 });

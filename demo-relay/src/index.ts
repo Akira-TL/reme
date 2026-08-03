@@ -17,6 +17,13 @@ import {
   type SceneRecognitionAttemptStart,
 } from "./scene";
 import {
+  type BrowserIceServer,
+  generateTurnCredentials,
+  isBrowserIceServers,
+  providerTurnTtlSeconds,
+  type TurnCredentialResult,
+} from "./turn";
+import {
   ACTIVITY_CONFIRMATION_PROTOCOL,
   POSE_PROJECTION_PROTOCOL,
   createForwardedMediaSignal,
@@ -62,6 +69,19 @@ const ACTIVITY_COOKING_MIN_CONFIDENCE = 0.65;
 const ACTIVITY_EVIDENCE_MAX_GAP_MS = 10_000;
 const ACTIVITY_RECEIPT_TTL_MS = 15_000;
 const ACTIVITY_RECOGNITION_INFLIGHT_STALE_MS = 10_000;
+const MEDIA_ICE_MIN_REMAINING_MS = 1_000;
+const MEDIA_ICE_RATE_WINDOW_MS = 10_000;
+const MEDIA_ICE_MAX_ATTEMPTS_PER_WINDOW = 3;
+const MEDIA_ICE_INFLIGHT_STALE_MS = 8_000;
+const MAX_OPEN_VIEWERS = 5;
+const MEDIA_ICE_MAX_PROVIDER_ATTEMPTS_PER_GRANT =
+  (MAX_OPEN_VIEWERS + 1) * MEDIA_ICE_MAX_ATTEMPTS_PER_WINDOW;
+const MAX_VIEWER_ICE_SIGNALS_PER_SOCKET_GRANT = 64;
+const MAX_VIEWER_ANSWER_SIGNALS_PER_SOCKET_GRANT = 4;
+const MAX_VIEWER_SIGNALS_PER_GRANT = MAX_OPEN_VIEWERS * (
+  MAX_VIEWER_ICE_SIGNALS_PER_SOCKET_GRANT
+  + MAX_VIEWER_ANSWER_SIGNALS_PER_SOCKET_GRANT
+);
 
 function kitchenActivityEventId(eventSequence: number): string {
   return `activity-${eventSequence}`;
@@ -152,6 +172,10 @@ interface LeaseRow {
 interface ViewerAttachment {
   role: "viewer";
   viewerId: string;
+  socketId: string;
+  mediaIceGrantId: string | null;
+  mediaIceTokenHash: string | null;
+  mediaIceExpiresAtMs: number | null;
 }
 
 interface ControllerAttachment {
@@ -201,6 +225,41 @@ interface GrantRow {
 interface GrantViewerRow {
   [key: string]: SqlStorageValue;
   viewer_id: string;
+}
+
+interface MediaIceBudgetRow {
+  [key: string]: SqlStorageValue;
+  grant_id: string;
+  actor_key: string;
+  window_started_at_ms: number;
+  attempts: number;
+  inflight_started_at_ms: number | null;
+}
+
+interface MediaIceGrantBudgetRow {
+  [key: string]: SqlStorageValue;
+  grant_id: string;
+  attempts: number;
+}
+
+interface MediaIceActor {
+  actorKey: string;
+  grant: GrantRow;
+  authorizationExpiresAtMs: number;
+}
+
+interface MediaSignalBudgetRow {
+  [key: string]: SqlStorageValue;
+  grant_id: string;
+  socket_id: string;
+  answers: number;
+  ice_candidates: number;
+}
+
+interface MediaSignalGrantBudgetRow {
+  [key: string]: SqlStorageValue;
+  grant_id: string;
+  signals: number;
 }
 
 interface DangerVoiceAttemptRow {
@@ -277,6 +336,10 @@ export class DemoRoom extends DurableObject<Env> {
     string,
     { windowStartedAtMs: number; attempts: number }
   >();
+  private readonly mediaIceCache = new Map<
+    string,
+    { grantId: string; iceServers: BrowserIceServer[]; expiresAtMs: number }
+  >();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -321,6 +384,29 @@ export class DemoRoom extends DurableObject<Env> {
           ON media_grant (session_id, status, expires_at_ms);
         CREATE INDEX IF NOT EXISTS media_grant_audience_viewer_idx
           ON media_grant_audience (viewer_id, grant_id);
+        CREATE TABLE IF NOT EXISTS media_ice_budget (
+          grant_id TEXT NOT NULL,
+          actor_key TEXT NOT NULL,
+          window_started_at_ms INTEGER NOT NULL,
+          attempts INTEGER NOT NULL CHECK (attempts >= 1),
+          inflight_started_at_ms INTEGER,
+          PRIMARY KEY (grant_id, actor_key)
+        );
+        CREATE TABLE IF NOT EXISTS media_ice_grant_budget (
+          grant_id TEXT PRIMARY KEY,
+          attempts INTEGER NOT NULL CHECK (attempts >= 1)
+        );
+        CREATE TABLE IF NOT EXISTS media_signal_budget (
+          grant_id TEXT NOT NULL,
+          socket_id TEXT NOT NULL,
+          answers INTEGER NOT NULL CHECK (answers >= 0),
+          ice_candidates INTEGER NOT NULL CHECK (ice_candidates >= 0),
+          PRIMARY KEY (grant_id, socket_id)
+        );
+        CREATE TABLE IF NOT EXISTS media_signal_grant_budget (
+          grant_id TEXT PRIMARY KEY,
+          signals INTEGER NOT NULL CHECK (signals >= 1)
+        );
         CREATE TABLE IF NOT EXISTS danger_voice_attempt (
           session_id TEXT NOT NULL,
           event_id TEXT NOT NULL,
@@ -382,6 +468,9 @@ export class DemoRoom extends DurableObject<Env> {
     }
     if (url.pathname === "/api/release" && request.method === "POST") {
       return this.release(request);
+    }
+    if (url.pathname === "/api/media/ice" && request.method === "POST") {
+      return this.mediaIce(request);
     }
     if (url.pathname === "/ws/viewer" && request.method === "GET") {
       return this.openViewer(request);
@@ -987,7 +1076,7 @@ export class DemoRoom extends DurableObject<Env> {
     if (attachment?.role === "controller") {
       this.failClosedControllerLoss(ws, attachment, Date.now());
     } else if (attachment?.role === "viewer") {
-      this.removeViewerFromActiveAudiences(attachment.viewerId, Date.now());
+      this.removeViewerFromActiveAudiences(attachment, Date.now());
     }
   }
 
@@ -996,7 +1085,7 @@ export class DemoRoom extends DurableObject<Env> {
     if (attachment?.role === "controller") {
       this.failClosedControllerLoss(ws, attachment, Date.now());
     } else if (attachment?.role === "viewer") {
-      this.removeViewerFromActiveAudiences(attachment.viewerId, Date.now());
+      this.removeViewerFromActiveAudiences(attachment, Date.now());
     }
   }
 
@@ -1417,10 +1506,66 @@ export class DemoRoom extends DurableObject<Env> {
     });
 
     this.broadcastToViewerIds(uniqueViewerIds, event);
+    const audience = new Set(uniqueViewerIds);
+    await Promise.all(this.openSockets("viewer").map(async (viewer) => {
+      const viewerAttachment = readAttachment(viewer);
+      if (viewerAttachment?.role === "viewer" && audience.has(viewerAttachment.viewerId)) {
+        await this.issueViewerMediaIceCapability(viewer, {
+          grant_id: grantId,
+          session_id: attachment.sessionId,
+          event_id: request.event_id,
+          scope: request.scope,
+          expires_at_ms: expiresAtMs,
+          status: "active",
+        }, now);
+      }
+    }));
     safeSend(ws, JSON.stringify({
       type: "media_grant_accepted",
       grant: event,
       viewer_ids: uniqueViewerIds,
+    }));
+  }
+
+  private async issueViewerMediaIceCapability(
+    viewer: WebSocket,
+    grant: GrantRow,
+    now: number,
+  ): Promise<void> {
+    const attachment = readAttachment(viewer);
+    if (
+      attachment?.role !== "viewer"
+      || viewer.readyState !== WebSocket.OPEN
+      || this.activeGrant(grant.grant_id, grant.session_id, now) === null
+      || !this.grantIncludesViewer(grant.grant_id, attachment.viewerId)
+    ) return;
+
+    const bearerToken = randomHex(32);
+    const tokenHash = await sha256Hex(bearerToken);
+    const current = readAttachment(viewer);
+    if (
+      current?.role !== "viewer"
+      || current.viewerId !== attachment.viewerId
+      || current.socketId !== attachment.socketId
+      || viewer.readyState !== WebSocket.OPEN
+      || this.activeGrant(grant.grant_id, grant.session_id, Date.now()) === null
+      || !this.grantIncludesViewer(grant.grant_id, current.viewerId)
+    ) return;
+
+    viewer.serializeAttachment({
+      ...current,
+      socketId: current.socketId.startsWith("legacy-")
+        ? `socket-${randomHex(16)}`
+        : current.socketId,
+      mediaIceGrantId: grant.grant_id,
+      mediaIceTokenHash: tokenHash,
+      mediaIceExpiresAtMs: grant.expires_at_ms,
+    } satisfies ViewerAttachment);
+    safeSend(viewer, JSON.stringify({
+      type: "media_ice_capability",
+      grant_id: grant.grant_id,
+      bearer_token: bearerToken,
+      expires_at_ms: grant.expires_at_ms,
     }));
   }
 
@@ -1489,10 +1634,78 @@ export class DemoRoom extends DurableObject<Env> {
       sendSocketError(ws, "media_signal_target_unavailable");
       return;
     }
+    if (!this.consumeViewerMediaSignalBudget(grant.grant_id, attachment, signal.signal_type)) {
+      ws.serializeAttachment({
+        ...attachment,
+        mediaIceGrantId: null,
+        mediaIceTokenHash: null,
+        mediaIceExpiresAtMs: null,
+      } satisfies ViewerAttachment);
+      this.removeViewerFromActiveAudiences(attachment, now);
+      rejectSocket(ws, "media_signal_budget_exceeded", 1008);
+      return;
+    }
     safeSend(
       controller,
       JSON.stringify(createForwardedMediaSignal(signal, attachment.viewerId)),
     );
+  }
+
+  private consumeViewerMediaSignalBudget(
+    grantId: string,
+    attachment: ViewerAttachment,
+    signalType: MediaSignal["signal_type"],
+  ): boolean {
+    if (signalType !== "answer" && signalType !== "ice_candidate") return false;
+    return this.ctx.storage.transactionSync(() => {
+      const existing = this.ctx.storage.sql.exec<MediaSignalBudgetRow>(
+        `SELECT grant_id, socket_id, answers, ice_candidates
+           FROM media_signal_budget
+          WHERE grant_id = ? AND socket_id = ?`,
+        grantId,
+        attachment.socketId,
+      ).toArray()[0];
+      const answers = existing?.answers ?? 0;
+      const iceCandidates = existing?.ice_candidates ?? 0;
+      if (
+        (signalType === "answer"
+          && answers >= MAX_VIEWER_ANSWER_SIGNALS_PER_SOCKET_GRANT)
+        || (signalType === "ice_candidate"
+          && iceCandidates >= MAX_VIEWER_ICE_SIGNALS_PER_SOCKET_GRANT)
+      ) return false;
+
+      const grantBudget = this.ctx.storage.sql.exec<MediaSignalGrantBudgetRow>(
+        `SELECT grant_id, signals
+           FROM media_signal_grant_budget
+          WHERE grant_id = ?`,
+        grantId,
+      ).toArray()[0];
+      if (grantBudget !== undefined && grantBudget.signals >= MAX_VIEWER_SIGNALS_PER_GRANT) {
+        return false;
+      }
+
+      const nextAnswers = answers + (signalType === "answer" ? 1 : 0);
+      const nextIceCandidates = iceCandidates + (signalType === "ice_candidate" ? 1 : 0);
+      this.ctx.storage.sql.exec(
+        `INSERT INTO media_signal_budget
+           (grant_id, socket_id, answers, ice_candidates)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(grant_id, socket_id) DO UPDATE SET
+           answers = excluded.answers,
+           ice_candidates = excluded.ice_candidates`,
+        grantId,
+        attachment.socketId,
+        nextAnswers,
+        nextIceCandidates,
+      );
+      this.ctx.storage.sql.exec(
+        `INSERT INTO media_signal_grant_budget (grant_id, signals)
+         VALUES (?, 1)
+         ON CONFLICT(grant_id) DO UPDATE SET signals = signals + 1`,
+        grantId,
+      );
+      return true;
+    });
   }
 
   private revokeInvalidatedGrants(
@@ -1535,6 +1748,7 @@ export class DemoRoom extends DurableObject<Env> {
       "UPDATE media_grant SET status = 'revoked' WHERE grant_id = ? AND status = 'active'",
       grant.grant_id,
     );
+    this.clearMediaIceForGrant(grant.grant_id);
     const event: DemoEvent = {
       schema_version: DEMO_EVENT_SCHEMA_VERSION,
       session_id: grant.session_id,
@@ -2289,6 +2503,7 @@ export class DemoRoom extends DurableObject<Env> {
       grant.grant_id,
     );
     if (changed.rowsWritten === 0) return;
+    this.clearMediaIceForGrant(grant.grant_id);
     const event: DemoEvent = {
       schema_version: DEMO_EVENT_SCHEMA_VERSION,
       session_id: grant.session_id,
@@ -2330,7 +2545,12 @@ export class DemoRoom extends DurableObject<Env> {
     ).toArray().map((row) => row.viewer_id);
   }
 
-  private removeViewerFromActiveAudiences(viewerId: string, now: number): void {
+  private removeViewerFromActiveAudiences(
+    attachment: ViewerAttachment,
+    now: number,
+  ): void {
+    const { viewerId } = attachment;
+    this.clearMediaIceForViewer(attachment);
     const grants = this.ctx.storage.sql.exec<GrantRow>(
       `SELECT grant.grant_id, grant.session_id, grant.event_id, grant.scope,
               grant.expires_at_ms, grant.status
@@ -2368,6 +2588,42 @@ export class DemoRoom extends DurableObject<Env> {
         viewer_ids: this.grantViewerIds(grant.grant_id),
       }));
     }
+  }
+
+  private clearMediaIceForGrant(grantId: string): void {
+    for (const viewer of this.openSockets("viewer")) {
+      const attachment = readAttachment(viewer);
+      if (attachment?.role !== "viewer" || attachment.mediaIceGrantId !== grantId) continue;
+      viewer.serializeAttachment({
+        ...attachment,
+        mediaIceGrantId: null,
+        mediaIceTokenHash: null,
+        mediaIceExpiresAtMs: null,
+      } satisfies ViewerAttachment);
+    }
+    for (const key of this.mediaIceCache.keys()) {
+      if (key.startsWith(`${grantId}|`)) this.mediaIceCache.delete(key);
+    }
+    this.ctx.storage.sql.exec("DELETE FROM media_ice_budget WHERE grant_id = ?", grantId);
+    this.ctx.storage.sql.exec(
+      "DELETE FROM media_ice_grant_budget WHERE grant_id = ?",
+      grantId,
+    );
+    this.ctx.storage.sql.exec("DELETE FROM media_signal_budget WHERE grant_id = ?", grantId);
+    this.ctx.storage.sql.exec(
+      "DELETE FROM media_signal_grant_budget WHERE grant_id = ?",
+      grantId,
+    );
+  }
+
+  private clearMediaIceForViewer(attachment: ViewerAttachment): void {
+    const actorKey = `viewer:${attachment.viewerId}:${attachment.socketId}`;
+    for (const key of this.mediaIceCache.keys()) {
+      if (key.endsWith(`|${actorKey}`)) this.mediaIceCache.delete(key);
+    }
+    // Provider attempts are a non-refundable per-grant budget. A public
+    // viewer must not be able to rotate identities by reconnecting and erase
+    // the cost already incurred for the still-active grant.
   }
 
   private viewerSocket(viewerId: string): WebSocket | null {
@@ -2478,6 +2734,10 @@ export class DemoRoom extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec("DELETE FROM media_grant_audience");
       this.ctx.storage.sql.exec("DELETE FROM media_grant");
+      this.ctx.storage.sql.exec("DELETE FROM media_ice_budget");
+      this.ctx.storage.sql.exec("DELETE FROM media_ice_grant_budget");
+      this.ctx.storage.sql.exec("DELETE FROM media_signal_budget");
+      this.ctx.storage.sql.exec("DELETE FROM media_signal_grant_budget");
       this.ctx.storage.sql.exec("DELETE FROM danger_voice_attempt");
       this.ctx.storage.sql.exec("DELETE FROM scene_recognition_budget");
       this.ctx.storage.sql.exec("DELETE FROM activity_recognition_evidence");
@@ -2518,6 +2778,7 @@ export class DemoRoom extends DurableObject<Env> {
         this.persistDangerAlarmCheckpoint(currentAlarm);
       }
     });
+    this.mediaIceCache.clear();
     if (currentAlarm !== null) this.broadcastToAllViewers(currentAlarm);
     await this.scheduleNextAuthorityAlarm();
 
@@ -2549,13 +2810,279 @@ export class DemoRoom extends DurableObject<Env> {
     return json({ ok: true });
   }
 
-  private openViewer(request: Request): Response {
+  private async mediaIce(request: Request): Promise<Response> {
+    const decoded = await readBoundedJson(request, 4_096);
+    if (
+      !isExactObject(decoded, ["grant_id"])
+      || !isOpaqueId(decoded.grant_id)
+    ) return json({ ok: false, error: "invalid_media_ice_request" }, 400);
+
+    const authorization = request.headers.get("Authorization");
+    if (authorization === null || !authorization.startsWith("Bearer ")) {
+      return json({ ok: false, error: "missing_media_ice_token" }, 401);
+    }
+    const bearerToken = authorization.slice("Bearer ".length);
+    if (!/^[a-f0-9]{64}$/.test(bearerToken)) {
+      return json({ ok: false, error: "invalid_media_ice_token" }, 401);
+    }
+
+    const now = Date.now();
+    const tokenHash = await sha256Hex(bearerToken);
+    const actor = this.authorizeMediaIceActor(tokenHash, decoded.grant_id, now);
+    if (
+      actor === null
+      || actor.authorizationExpiresAtMs - now < MEDIA_ICE_MIN_REMAINING_MS
+    ) return json({ ok: false, error: "media_ice_not_authorized" }, 403);
+
+    const cacheKey = `${actor.grant.grant_id}|${actor.actorKey}`;
+    const cached = this.mediaIceCache.get(cacheKey);
+    if (
+      cached !== undefined
+      && cached.grantId === actor.grant.grant_id
+      && cached.expiresAtMs > now
+      && isBrowserIceServers(cached.iceServers)
+    ) {
+      return this.mediaIceSuccess(cached.iceServers, actor.authorizationExpiresAtMs, now);
+    }
+    this.mediaIceCache.delete(cacheKey);
+
+    const budgetError = this.beginMediaIceAttempt(
+      actor.grant.grant_id,
+      actor.actorKey,
+      actor.grant.expires_at_ms,
+      now,
+    );
+    if (budgetError !== null) return budgetError;
+
+    const providerTtlSeconds = providerTurnTtlSeconds(actor.grant.expires_at_ms - now);
+    let generated: TurnCredentialResult;
+    try {
+      generated = await this.generateMediaIceCredentials(providerTtlSeconds);
+    } catch {
+      generated = { ok: false, error: "turn_provider_unavailable" };
+    }
+    const finishedAt = Date.now();
+    this.finishMediaIceAttempt(actor.grant.grant_id, actor.actorKey, now);
+    if (!generated.ok) {
+      const status = generated.error === "turn_not_configured" ? 503 : 502;
+      return json({ ok: false, error: generated.error }, status);
+    }
+
+    // External generation can race a scene switch, grant revoke, viewer hide,
+    // controller loss, or lease expiry. Re-authorize the exact attachment and
+    // grant after the await before any credential becomes observable.
+    const currentActor = this.authorizeMediaIceActor(tokenHash, decoded.grant_id, finishedAt);
+    if (
+      currentActor === null
+      || currentActor.actorKey !== actor.actorKey
+      || currentActor.authorizationExpiresAtMs - finishedAt < MEDIA_ICE_MIN_REMAINING_MS
+    ) return json({ ok: false, error: "media_ice_not_authorized" }, 403);
+
+    this.mediaIceCache.set(cacheKey, {
+      grantId: currentActor.grant.grant_id,
+      iceServers: generated.ice_servers,
+      expiresAtMs: currentActor.authorizationExpiresAtMs,
+    });
+    return this.mediaIceSuccess(
+      generated.ice_servers,
+      currentActor.authorizationExpiresAtMs,
+      finishedAt,
+    );
+  }
+
+  private authorizeMediaIceActor(
+    tokenHash: string,
+    grantId: string,
+    now: number,
+  ): MediaIceActor | null {
+    const lease = this.currentLease(now);
+    if (lease === null) return null;
+    const grant = this.activeGrant(grantId, lease.session_id, now);
+    if (
+      grant === null
+      || !this.isGrantEligible(grant.session_id, grant.event_id, grant.scope, now)
+    ) return null;
+
+    if (
+      constantTimeHexEqual(lease.token_hash, tokenHash)
+      && this.controllerSocket(lease.session_id) !== null
+    ) {
+      return {
+        actorKey: `controller:${lease.session_id}`,
+        grant,
+        authorizationExpiresAtMs: Math.min(grant.expires_at_ms, lease.expires_at_ms),
+      };
+    }
+
+    for (const socket of this.openSockets("viewer")) {
+      const attachment = readAttachment(socket);
+      if (
+        attachment?.role !== "viewer"
+        || attachment.mediaIceGrantId !== grant.grant_id
+        || attachment.mediaIceTokenHash === null
+        || attachment.mediaIceExpiresAtMs === null
+        || attachment.mediaIceExpiresAtMs <= now
+        || !constantTimeHexEqual(attachment.mediaIceTokenHash, tokenHash)
+        || !this.grantIncludesViewer(grant.grant_id, attachment.viewerId)
+      ) continue;
+      return {
+        actorKey: `viewer:${attachment.viewerId}:${attachment.socketId}`,
+        grant,
+        authorizationExpiresAtMs: Math.min(
+          grant.expires_at_ms,
+          lease.expires_at_ms,
+          attachment.mediaIceExpiresAtMs,
+        ),
+      };
+    }
+    return null;
+  }
+
+  private generateMediaIceCredentials(ttlSeconds: number): Promise<TurnCredentialResult> {
+    return generateTurnCredentials(this.env, ttlSeconds);
+  }
+
+  private mediaIceSuccess(
+    iceServers: BrowserIceServer[],
+    expiresAtMs: number,
+    now: number,
+  ): Response {
+    return json({
+      ice_servers: iceServers,
+      expires_at_ms: expiresAtMs,
+      ttl_ms: Math.max(0, expiresAtMs - now),
+    });
+  }
+
+  private beginMediaIceAttempt(
+    grantId: string,
+    actorKey: string,
+    grantExpiresAtMs: number,
+    now: number,
+  ): Response | null {
+    return this.ctx.storage.transactionSync((): Response | null => {
+      const existing = this.ctx.storage.sql.exec<MediaIceBudgetRow>(
+        `SELECT grant_id, actor_key, window_started_at_ms, attempts, inflight_started_at_ms
+           FROM media_ice_budget
+          WHERE grant_id = ? AND actor_key = ?`,
+        grantId,
+        actorKey,
+      ).toArray()[0];
+      if (
+        existing !== undefined
+        && existing.inflight_started_at_ms !== null
+        && now - existing.inflight_started_at_ms < MEDIA_ICE_INFLIGHT_STALE_MS
+      ) {
+        return json(
+          { ok: false, error: "media_ice_request_in_progress" },
+          409,
+          { "Retry-After": "1" },
+        );
+      }
+      if (
+        existing !== undefined
+        && now - existing.window_started_at_ms < MEDIA_ICE_RATE_WINDOW_MS
+        && existing.attempts >= MEDIA_ICE_MAX_ATTEMPTS_PER_WINDOW
+      ) {
+        return json(
+          { ok: false, error: "media_ice_rate_limited" },
+          429,
+          {
+            "Retry-After": String(Math.max(
+              1,
+              Math.ceil(
+                (MEDIA_ICE_RATE_WINDOW_MS - (now - existing.window_started_at_ms)) / 1_000,
+              ),
+            )),
+          },
+        );
+      }
+
+      const grantBudget = this.ctx.storage.sql.exec<MediaIceGrantBudgetRow>(
+        `SELECT grant_id, attempts
+           FROM media_ice_grant_budget
+          WHERE grant_id = ?`,
+        grantId,
+      ).toArray()[0];
+      if (
+        grantBudget !== undefined
+        && grantBudget.attempts >= MEDIA_ICE_MAX_PROVIDER_ATTEMPTS_PER_GRANT
+      ) {
+        return json(
+          { ok: false, error: "media_ice_rate_limited" },
+          429,
+          {
+            "Retry-After": String(Math.max(
+              1,
+              Math.ceil((grantExpiresAtMs - now) / 1_000),
+            )),
+          },
+        );
+      }
+
+      if (
+        existing === undefined
+        || now - existing.window_started_at_ms >= MEDIA_ICE_RATE_WINDOW_MS
+      ) {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO media_ice_budget
+             (grant_id, actor_key, window_started_at_ms, attempts, inflight_started_at_ms)
+           VALUES (?, ?, ?, 1, ?)
+           ON CONFLICT(grant_id, actor_key) DO UPDATE SET
+             window_started_at_ms = excluded.window_started_at_ms,
+             attempts = 1,
+             inflight_started_at_ms = excluded.inflight_started_at_ms`,
+          grantId,
+          actorKey,
+          now,
+          now,
+        );
+      } else {
+        this.ctx.storage.sql.exec(
+          `UPDATE media_ice_budget
+              SET attempts = attempts + 1,
+                  inflight_started_at_ms = ?
+            WHERE grant_id = ? AND actor_key = ?`,
+          now,
+          grantId,
+          actorKey,
+        );
+      }
+      this.ctx.storage.sql.exec(
+        `INSERT INTO media_ice_grant_budget (grant_id, attempts)
+         VALUES (?, 1)
+         ON CONFLICT(grant_id) DO UPDATE SET attempts = attempts + 1`,
+        grantId,
+      );
+      return null;
+    });
+  }
+
+  private finishMediaIceAttempt(grantId: string, actorKey: string, startedAt: number): void {
+    this.ctx.storage.sql.exec(
+      `UPDATE media_ice_budget
+          SET inflight_started_at_ms = NULL
+        WHERE grant_id = ? AND actor_key = ? AND inflight_started_at_ms = ?`,
+      grantId,
+      actorKey,
+      startedAt,
+    );
+  }
+
+  private async openViewer(request: Request): Promise<Response> {
     if (!isWebSocketUpgrade(request)) {
       return json({ ok: false, error: "websocket_upgrade_required" }, 426);
     }
     const protocols = requestedProtocols(request);
     if (protocols.length !== 1 || protocols[0] !== VIEWER_PROTOCOL) {
       return json({ ok: false, error: "invalid_websocket_protocol" }, 400);
+    }
+    if (this.openSockets("viewer").length >= MAX_OPEN_VIEWERS) {
+      return json(
+        { ok: false, error: "viewer_capacity_reached" },
+        429,
+        { "Retry-After": "1" },
+      );
     }
 
     const now = Date.now();
@@ -2567,8 +3094,16 @@ export class DemoRoom extends DurableObject<Env> {
     do {
       viewerId = `viewer-${randomHex(12)}`;
     } while (this.viewerSocket(viewerId) !== null);
+    const socketId = `socket-${randomHex(16)}`;
     this.ctx.acceptWebSocket(server, ["viewer"]);
-    server.serializeAttachment({ role: "viewer", viewerId } satisfies ViewerAttachment);
+    server.serializeAttachment({
+      role: "viewer",
+      viewerId,
+      socketId,
+      mediaIceGrantId: null,
+      mediaIceTokenHash: null,
+      mediaIceExpiresAtMs: null,
+    } satisfies ViewerAttachment);
 
     // This must be the first server message so the browser can address later
     // grant-bound WebRTC signalling to this exact hibernating connection.
@@ -2578,7 +3113,7 @@ export class DemoRoom extends DurableObject<Env> {
       for (const event of this.replayableEvents(lease.session_id)) {
         safeSend(server, JSON.stringify(event));
       }
-      this.attachLateViewerToKitchenGrant(server, viewerId, lease.session_id, now);
+      await this.attachLateViewerToKitchenGrant(server, viewerId, lease.session_id, now);
     } else {
       const unresolvedEscalation = this.authoritativeEscalatedAlarm();
       if (unresolvedEscalation !== null) {
@@ -2597,12 +3132,12 @@ export class DemoRoom extends DurableObject<Env> {
     });
   }
 
-  private attachLateViewerToKitchenGrant(
+  private async attachLateViewerToKitchenGrant(
     viewer: WebSocket,
     viewerId: string,
     sessionId: string,
     now: number,
-  ): void {
+  ): Promise<void> {
     const controller = this.controllerSocket(sessionId);
     if (controller === null) return;
     const grant = this.activeGrants(sessionId, now).find((candidate) => (
@@ -2631,6 +3166,7 @@ export class DemoRoom extends DurableObject<Env> {
       },
     };
     safeSend(viewer, JSON.stringify(event));
+    await this.issueViewerMediaIceCapability(viewer, grant, now);
     safeSend(controller, JSON.stringify({
       type: "media_grant_accepted",
       grant: event,
@@ -2855,6 +3391,7 @@ const worker = {
       url.pathname === "/api/status" ||
       url.pathname === "/api/unlock" ||
       url.pathname === "/api/release" ||
+      url.pathname === "/api/media/ice" ||
       url.pathname === "/api/activity/recognize" ||
       url.pathname === "/api/danger/voice" ||
       url.pathname === "/api/scene/recognize" ||
@@ -2870,11 +3407,14 @@ const worker = {
     }
 
     if (request.method === "OPTIONS") {
-      return withCors(new Response(null, { status: 204 }), origin);
+      return withCors(withNoStore(new Response(null, { status: 204 })), origin);
     }
 
     const stub = env.DEMO_ROOM.getByName(ROOM_NAME);
     try {
+      if (url.pathname === "/api/media/ice" && request.method !== "POST") {
+        return withCors(json({ ok: false, error: "method_not_allowed" }, 405), origin);
+      }
       if (url.pathname === "/api/activity/recognize") {
         if (request.method !== "POST") {
           return withCors(json({ ok: false, error: "method_not_allowed" }, 405), origin);
@@ -3213,7 +3753,52 @@ function readAttachment(ws: WebSocket): SocketAttachment | null {
     && typeof value.viewerId === "string"
     && /^viewer-[a-f0-9]{24}$/.test(value.viewerId)
   ) {
-    return { role: "viewer", viewerId: value.viewerId };
+    // Rolling compatibility for hibernated sockets created by the STUN-only
+    // Relay. The existing viewer ID is already unique to that exact socket;
+    // the next grant rotates it into the new attachment shape.
+    return {
+      role: "viewer",
+      viewerId: value.viewerId,
+      socketId: `legacy-${value.viewerId}`,
+      mediaIceGrantId: null,
+      mediaIceTokenHash: null,
+      mediaIceExpiresAtMs: null,
+    };
+  }
+  if (
+    isExactObject(value, [
+      "mediaIceExpiresAtMs",
+      "mediaIceGrantId",
+      "mediaIceTokenHash",
+      "role",
+      "socketId",
+      "viewerId",
+    ])
+    && value.role === "viewer"
+    && typeof value.viewerId === "string"
+    && /^viewer-[a-f0-9]{24}$/.test(value.viewerId)
+    && typeof value.socketId === "string"
+    && /^socket-[a-f0-9]{32}$/.test(value.socketId)
+    && (
+      (value.mediaIceGrantId === null
+        && value.mediaIceTokenHash === null
+        && value.mediaIceExpiresAtMs === null)
+      || (
+        isOpaqueId(value.mediaIceGrantId)
+        && typeof value.mediaIceTokenHash === "string"
+        && /^[a-f0-9]{64}$/.test(value.mediaIceTokenHash)
+        && isFiniteNonNegativeNumber(value.mediaIceExpiresAtMs)
+      )
+    )
+  ) {
+    return {
+      role: "viewer",
+      viewerId: value.viewerId,
+      socketId: value.socketId,
+      mediaIceGrantId: value.mediaIceGrantId,
+      mediaIceTokenHash: value.mediaIceTokenHash,
+      mediaIceExpiresAtMs: value.mediaIceExpiresAtMs,
+    };
   }
   if (
     isExactObject(value, [
@@ -3340,6 +3925,17 @@ function withCors(response: Response, allowedOrigin: string): Response {
     return new Response(null, { ...init, webSocket: response.webSocket });
   }
   return new Response(response.body, init);
+}
+
+function withNoStore(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store");
+  headers.set("X-Content-Type-Options", "nosniff");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function withVaryOrigin(response: Response): Response {

@@ -14,6 +14,7 @@ import {
 } from "./state.js";
 import { useViewerMedia } from "./useViewerMedia.js";
 import { useViewerRelay } from "./useViewerRelay.js";
+import { selectViewerMediaStage } from "./viewerMediaPresentation.js";
 
 const SCENE_COPY = Object.freeze({
   living: {
@@ -258,20 +259,27 @@ function MediaStatus({ grant, media, nowMs, alarmActive }) {
       </div>
     );
   }
-  const waiting = ["idle", "waiting", "connecting"].includes(media.status);
+  const statusCopy = {
+    idle: "实景授权已生效，正在准备媒体会话",
+    authorized: "实景授权已生效，等待匹配的短时网络凭证",
+    credentialing: "正在取得短时 TURN 网络配置",
+    waiting: "可靠网络已就绪，等待监控端发送实景",
+    connecting: "实景轨道传输中，正在验证首个真实画面",
+  }[media.status];
+  const waiting = Boolean(statusCopy);
   return (
     <div className={`media-status-card ${media.status === "failed" ? "is-failed" : ""}`} role="status">
       <b>
         {waiting
-          ? kitchenLive ? "做饭已确认，正在接通实景" : "告警已升级，正在接通实景"
+          ? statusCopy
           : "临时实景暂不可用"}
       </b>
       <span>
         {waiting
-          ? `连接完成前继续显示隐私骨架，授权还剩 ${remaining} 秒。`
+          ? `真实画面播出前保留抽象骨架，不显示假厨房背景；授权还剩 ${remaining} 秒。`
           : media.error || (alarmActive
-            ? "告警保持有效，画面已回到家具示意与骨架。"
-            : "家庭心跳保持有效，画面已回到厨房示意与骨架。")}
+            ? "告警保持有效；当前使用中性降级画面与骨架，授权结束后回到家具示意。"
+            : "家庭心跳保持有效；当前使用中性降级画面与骨架，授权结束后回到厨房示意。")}
       </span>
       {media.status === "failed" && media.stream ? (
         <button type="button" onClick={media.retryPlayback}>重试播放</button>
@@ -305,13 +313,19 @@ export function ViewerApp() {
     drainSignals: relay.drainMediaSignals,
     viewerId: relay.viewerId,
     grant: activeGrant,
+    iceCapability: relay.mediaIceCapability,
   });
   const alarmEffects = useAlarmEffects(relay.alarm);
   const { ageMs } = presentation;
   const poseFrameView = selectPoseFrameView(relay.frame, relay.poseMode);
-  const videoVisible = Boolean(
-    activeGrant && mediaStream && mediaStatus === "live",
-  );
+  const mediaStage = selectViewerMediaStage({
+    grant: activeGrant,
+    status: mediaStatus,
+    stream: mediaStream,
+  });
+  const videoVisible = mediaStage.videoVisible;
+  const authorizedVideoPending = mediaStage.neutralBackdrop;
+  const authorizedVideoFailed = mediaStage.kind === "failed";
   const realVideoMode = videoVisible ? activeGrant.scope : null;
   const showsSkeleton = !videoVisible
     && (presentation.kind === "live" || presentation.kind === "degraded");
@@ -328,6 +342,10 @@ export function ViewerApp() {
       label: realVideoMode === "kitchen_moment" ? "COOKING LIVE" : "ALERT LIVE",
       dot: "live-dot",
     }
+    : authorizedVideoPending
+      ? authorizedVideoFailed
+        ? { label: "MEDIA FAILED", dot: "no-person-dot" }
+        : { label: "MEDIA PENDING", dot: "wait-dot" }
     : {
       live: { label: "LIVE", dot: "live-dot" },
       degraded: { label: "DEGRADED", dot: "degraded-dot" },
@@ -338,6 +356,18 @@ export function ViewerApp() {
   const stageModeCopy = (() => {
     if (realVideoMode === "kitchen_moment") return "真实做饭已确认 · 临时实时实景";
     if (realVideoMode === "fall_emergency") return "权威告警已升级 · 临时实时实景";
+    if (authorizedVideoFailed && activeGrant.scope === "kitchen_moment") {
+      return "做饭实景暂不可用 · 中性降级与骨架";
+    }
+    if (authorizedVideoFailed && activeGrant.scope === "fall_emergency") {
+      return "告警实景暂不可用 · 中性降级与骨架";
+    }
+    if (authorizedVideoPending && activeGrant.scope === "kitchen_moment") {
+      return "真实做饭已确认 · 实景授权接通中";
+    }
+    if (authorizedVideoPending && activeGrant.scope === "fall_emergency") {
+      return "权威告警已升级 · 实景授权接通中";
+    }
     if (scene.scene_id === "bathroom") return `完全隐私 · ${poseModeCopy}`;
     if (scene.scene_id === "kitchen") return `厨房固定示意 · ${poseModeCopy}`;
     return `固定家具示意 · ${poseModeCopy}`;
@@ -349,9 +379,11 @@ export function ViewerApp() {
         label: "紧急告警：请立即关注",
         detail: videoVisible
           ? "短期授权现场画面已接通；授权到期后会自动回到抽象骨架。"
+          : authorizedVideoFailed
+            ? "告警保持有效；实景网络失败，当前明确显示中性降级画面与骨架。"
           : activeGrant
-            ? "告警已升级，正在建立短期授权点对点视频；连接失败时仍保持骨架。"
-            : "告警已升级；只有短期授权有效且点对点视频接通后才会开放现场画面。",
+            ? "告警实景授权已生效，正在建立短期可靠视频；连接失败时仍保持骨架。"
+            : "告警已升级；只有短期授权有效且 WebRTC 短期加密通道接通后才会开放现场画面。",
         Icon: EmergencyRoundedIcon,
       };
     }
@@ -383,9 +415,13 @@ export function ViewerApp() {
       }
       if (activeGrant) {
         return {
-          tone: "pending",
-          label: "已识别做饭，正在接通实景",
-          detail: "视频接通前保持厨房示意与抽象骨架；失败或到期也会回到该隐私视图。",
+          tone: authorizedVideoFailed ? "warning" : "pending",
+          label: authorizedVideoFailed
+            ? "已识别做饭，实景网络失败"
+            : "已识别做饭，正在接通实景",
+          detail: authorizedVideoFailed
+            ? "家庭心跳保持有效；当前明确显示中性降级画面与骨架，授权结束后才回到厨房示意。"
+            : "实景授权已生效；播出首帧前使用中性连接画面与抽象骨架，不再以假厨房背景代替现场。",
           Icon: RestaurantRoundedIcon,
         };
       }
@@ -450,11 +486,16 @@ export function ViewerApp() {
 
       <main className="viewer-layout">
         <section
-          className={`shared-stage ${videoVisible ? "is-media-live" : ""}`}
+          className={`shared-stage ${videoVisible ? "is-media-live" : ""} ${authorizedVideoPending ? "is-media-pending" : ""}`}
           aria-label={`${sceneCopy.name}实时隐私画面`}
         >
-          {!videoVisible ? <SceneEnvironment sceneId={scene.scene_id} /> : null}
-          {!videoVisible ? <div className="stage-grid" /> : null}
+          {!videoVisible && !authorizedVideoPending ? <SceneEnvironment sceneId={scene.scene_id} /> : null}
+          {!videoVisible && !authorizedVideoPending ? <div className="stage-grid" /> : null}
+          {authorizedVideoPending ? (
+            <div className="media-pending-backdrop" aria-hidden="true">
+              <span />
+            </div>
+          ) : null}
           <video
             ref={videoRef}
             className={`authorized-video ${videoVisible ? "is-visible" : ""}`}
@@ -519,9 +560,17 @@ export function ViewerApp() {
           <div className="privacy-ribbon">
             <ShieldRoundedIcon aria-hidden="true" />
             {realVideoMode === "kitchen_moment"
-              ? "已确认做饭活动：临时实景经 WebRTC 点对点接收"
+              ? "已确认做饭活动：临时实景经 WebRTC 短期加密通道接收（必要时经 TURN 中转）"
               : realVideoMode === "fall_emergency"
-                ? "权威跌倒告警：临时实景经 WebRTC 点对点接收"
+                ? "权威跌倒告警：临时实景经 WebRTC 短期加密通道接收（必要时经 TURN 中转）"
+              : authorizedVideoPending && activeGrant.scope === "kitchen_moment"
+                ? authorizedVideoFailed
+                  ? "做饭实景授权有效但网络失败：当前为中性降级与骨架"
+                  : "做饭实景授权已生效：可靠网络接通中，尚未播出真实画面"
+                : authorizedVideoPending && activeGrant.scope === "fall_emergency"
+                  ? authorizedVideoFailed
+                    ? "告警实景授权有效但网络失败：当前为中性降级与骨架"
+                    : "告警实景授权已生效：可靠网络接通中，尚未播出真实画面"
               : scene.scene_id === "bathroom"
                 ? `完全隐私：${poseModeCopy}`
                 : `手机本地识别：${poseModeCopy}`}
@@ -580,7 +629,11 @@ export function ViewerApp() {
               <dd>
                 {realVideoMode === "kitchen_moment"
                   ? "做饭活动临时实景"
-                  : realVideoMode === "fall_emergency" ? "跌倒告警临时实景" : "17 点骨架"}
+                  : realVideoMode === "fall_emergency"
+                    ? "跌倒告警临时实景"
+                    : activeGrant
+                      ? authorizedVideoFailed ? "实景失败 · 中性降级骨架" : "实景授权 · 待首帧"
+                      : "17 点骨架"}
               </dd>
             </div>
           </dl>

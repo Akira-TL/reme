@@ -3,20 +3,57 @@ import {
   createMediaSignal,
   parseForwardedMediaSignal,
 } from "./protocol.js";
-
-export const VIEWER_RTC_CONFIGURATION = Object.freeze({
-  iceServers: Object.freeze([
-    Object.freeze({ urls: "stun:stun.cloudflare.com:3478" }),
-  ]),
-});
+import {
+  fetchMediaIceServers,
+  selectMediaIceCapability,
+} from "./mediaIce.js";
 
 const ID_PATTERN = /^[a-z0-9_-]{1,128}$/i;
 export const VIEWER_VIDEO_FRAME_TIMEOUT_MS = 3_000;
+export const VIEWER_ICE_CAPABILITY_WAIT_MS = 2_000;
+export const MAX_VIEWER_MEDIA_ICE_CANDIDATES = 64;
 const INITIAL_MEDIA_STATE = Object.freeze({
   status: "idle",
   error: null,
   stream: null,
 });
+
+function mediaOwner({ socket, viewerId, grant, iceCapability }) {
+  const grantId = grant?.grant_id || null;
+  return {
+    socket,
+    viewerId,
+    grantId,
+    capabilityToken: iceCapability?.grant_id === grantId
+      ? iceCapability.bearer_token
+      : null,
+  };
+}
+
+function sameMediaOwner(left, right) {
+  return Boolean(
+    left
+    && right
+    && left.socket === right.socket
+    && left.viewerId === right.viewerId
+    && left.grantId === right.grantId
+    && left.capabilityToken === right.capabilityToken,
+  );
+}
+
+export function selectViewerMediaForOwner(media, current) {
+  if (
+    !current?.socket
+    || !current.viewerId
+    || !current.grantId
+    || !sameMediaOwner(media?.owner, current)
+  ) return INITIAL_MEDIA_STATE;
+  return {
+    status: media.status,
+    error: media.error,
+    stream: media.stream,
+  };
+}
 
 function errorCopy(error, fallback) {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -105,6 +142,21 @@ export function closeViewerMediaImmediately({
 }) {
   detachViewerVideo(video, { stopTracks: true });
   session?.close(status, error);
+}
+
+export function suspendViewerMediaImmediately({
+  session,
+  video,
+  abortController,
+  reason = "viewer_suspended",
+  error = "评委页面已暂停，授权视频已立即关闭；告警与结构化信息仍然有效。",
+}) {
+  abortController?.abort(reason);
+  if (session) {
+    closeViewerMediaImmediately({ session, video, error });
+  } else {
+    detachViewerVideo(video, { stopTracks: true });
+  }
 }
 
 export function viewerGrantFallbackMs(grant, nowMs = Date.now()) {
@@ -321,6 +373,7 @@ export function createViewerVideoGuard({
 export function createViewerMediaSession({
   grant,
   viewerId,
+  iceServers,
   sendSignal,
   onState,
   peerConnectionFactory = (configuration) => new RTCPeerConnection(configuration),
@@ -332,6 +385,9 @@ export function createViewerMediaSession({
   if (!viewerId || !ID_PATTERN.test(viewerId)) {
     throw new TypeError("a valid viewer id is required");
   }
+  if (!Array.isArray(iceServers) || iceServers.length === 0) {
+    throw new TypeError("reliable ICE servers are required");
+  }
   if (typeof sendSignal !== "function" || typeof onState !== "function") {
     throw new TypeError("media session callbacks are required");
   }
@@ -342,6 +398,7 @@ export function createViewerMediaSession({
   let remoteStream = null;
   let remoteId = null;
   let pendingIce = [];
+  let receivedIceCandidates = 0;
   let transportConnected = false;
   let videoFrameConfirmed = false;
   let livePublished = false;
@@ -413,7 +470,10 @@ export function createViewerMediaSession({
 
   const createPeer = () => {
     const nextPeer = peerConnectionFactory({
-      iceServers: VIEWER_RTC_CONFIGURATION.iceServers.map((server) => ({ ...server })),
+      iceServers: iceServers.map((server) => ({
+        ...server,
+        urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+      })),
     });
     peer = nextPeer;
 
@@ -423,9 +483,12 @@ export function createViewerMediaSession({
     };
     nextPeer.ontrack = (event) => {
       if (closed || peer !== nextPeer) return;
-      if (event.track?.kind && event.track.kind !== "video") return;
+      if (event.track?.kind !== "video") {
+        stopTrack(event.track);
+        return;
+      }
       try {
-        remoteStream = event.streams?.[0] || mediaStreamFactory([event.track]);
+        remoteStream = mediaStreamFactory([event.track]);
       } catch (error) {
         fail(`无法接收授权视频：${errorCopy(error, "媒体流不可用")}`);
         return;
@@ -503,17 +566,23 @@ export function createViewerMediaSession({
   };
 
   const handleIce = async (message) => {
-    if (remoteId && message.from_id !== remoteId) return;
+    receivedIceCandidates += 1;
+    if (receivedIceCandidates > MAX_VIEWER_MEDIA_ICE_CANDIDATES) {
+      fail("授权视频网络候选超出安全上限，已立即回到隐私骨架。");
+      return false;
+    }
+    if (remoteId && message.from_id !== remoteId) return false;
     if (!peer || !peer.remoteDescription) {
       pendingIce.push({ fromId: message.from_id, signal: message.signal });
-      return;
+      return true;
     }
     const activePeer = peer;
     const operationGeneration = generation;
     try {
-      await addIce(activePeer, message.signal, operationGeneration);
+      return await addIce(activePeer, message.signal, operationGeneration);
     } catch (error) {
       fail(`视频网络候选不可用：${errorCopy(error, "ICE 协商失败")}`);
+      return false;
     }
   };
 
@@ -526,8 +595,7 @@ export function createViewerMediaSession({
       return true;
     }
     if (message.signal_type === "ice_candidate") {
-      await handleIce(message);
-      return true;
+      return handleIce(message);
     }
     return false;
   };
@@ -563,40 +631,27 @@ export function useViewerMedia({
   drainSignals,
   viewerId,
   grant,
+  iceCapability,
+  fetchIceServers = fetchMediaIceServers,
 }) {
   const videoRef = useRef(null);
   const sessionRef = useRef(null);
   const [media, setMedia] = useState(INITIAL_MEDIA_STATE);
   const enabled = Boolean(socket && viewerId && grant);
+  const currentOwner = mediaOwner({ socket, viewerId, grant, iceCapability });
 
   useEffect(() => {
     if (!socket || !viewerId || !grant) return undefined;
 
+    const owner = mediaOwner({ socket, viewerId, grant, iceCapability });
+    const publishMedia = (next) => setMedia({ ...next, owner });
     let active = true;
-    let session;
-    try {
-      session = createViewerMediaSession({
-        grant,
-        viewerId,
-        sendSignal,
-        onState: (next) => {
-          if (["failed", "expired"].includes(next.status)) {
-            detachViewerVideo(videoRef.current, { stopTracks: true });
-          }
-          if (active) setMedia(next);
-        },
-      });
-      sessionRef.current = session;
-    } catch (error) {
-      const message = `无法初始化授权视频：${errorCopy(error, "WebRTC 不可用")}`;
-      queueMicrotask(() => {
-        if (active) setMedia({ status: "failed", error: message, stream: null });
-      });
-      return () => {
-        active = false;
-      };
-    }
-
+    let expired = false;
+    let session = null;
+    let capabilityTimer = 0;
+    let messageListenerAttached = false;
+    let suspended = false;
+    const iceAbort = new AbortController();
     let signalWork = Promise.resolve();
     const queueSignals = (messages) => {
       if (!messages.length) return;
@@ -623,28 +678,132 @@ export function useViewerMedia({
       const message = parseForwardedMediaSignal(event.data);
       if (message) queueSignals([message]);
     };
-    socket.addEventListener("message", onMessage);
-    drainBufferedSignals();
     const expiresInMs = viewerGrantFallbackMs(grant);
-    const expiryTimer = window.setTimeout(() => session.close("expired"), expiresInMs);
+    const expiryTimer = window.setTimeout(() => {
+      expired = true;
+      iceAbort.abort("grant_expired");
+      detachViewerVideo(videoRef.current, { stopTracks: true });
+      if (session) session.close("expired");
+      else if (active) publishMedia({ status: "expired", error: null, stream: null });
+    }, expiresInMs);
+    const suspend = (reason, error) => {
+      if (suspended) return;
+      suspended = true;
+      window.clearTimeout(capabilityTimer);
+      window.clearTimeout(expiryTimer);
+      suspendViewerMediaImmediately({
+        session,
+        video: videoRef.current,
+        abortController: iceAbort,
+        reason,
+        error,
+      });
+      if (!session && active) {
+        publishMedia({ status: "failed", error, stream: null });
+      }
+    };
     const onVisibilityChange = () => {
       if (document.visibilityState !== "hidden") return;
-      closeViewerMediaImmediately({ session, video: videoRef.current });
+      suspend(
+        "viewer_hidden",
+        "评委页面已隐藏，授权视频已立即关闭；告警与结构化信息仍然有效。",
+      );
     };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    onVisibilityChange();
-
-    return () => {
+    const onPageHide = () => suspend(
+      "viewer_pagehide",
+      "评委页面已离开，授权视频已立即关闭；告警与结构化信息仍然有效。",
+    );
+    const onSocketClose = () => suspend(
+      "viewer_socket_closed",
+      "评委连接已断开，授权视频已立即关闭；告警与结构化信息仍然有效。",
+    );
+    const onSocketError = () => suspend(
+      "viewer_socket_error",
+      "评委连接发生错误，授权视频已立即关闭；告警与结构化信息仍然有效。",
+    );
+    const cleanup = () => {
       active = false;
+      iceAbort.abort("media_effect_cleanup");
+      window.clearTimeout(capabilityTimer);
       window.clearTimeout(expiryTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
-      socket.removeEventListener("message", onMessage);
+      window.removeEventListener("pagehide", onPageHide);
+      socket.removeEventListener("close", onSocketClose);
+      socket.removeEventListener("error", onSocketError);
+      if (messageListenerAttached) socket.removeEventListener("message", onMessage);
       if (sessionRef.current === session) sessionRef.current = null;
-      session.close();
+      session?.close();
     };
-  }, [drainSignals, grant, sendSignal, socket, viewerId]);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pagehide", onPageHide);
+    socket.addEventListener("close", onSocketClose);
+    socket.addEventListener("error", onSocketError);
+    onVisibilityChange();
 
-  const exposedMedia = enabled ? media : INITIAL_MEDIA_STATE;
+    if (suspended) return cleanup;
+
+    const matchingCapability = selectMediaIceCapability(iceCapability, grant);
+    if (!matchingCapability) {
+      queueMicrotask(() => {
+        if (active && !expired && !suspended) {
+          publishMedia({ status: "authorized", error: null, stream: null });
+        }
+      });
+      capabilityTimer = window.setTimeout(() => {
+        if (!active || expired || suspended) return;
+        publishMedia({
+          status: "failed",
+          error: "实景授权已生效，但未收到与本授权匹配的可靠网络凭证；已保持隐私骨架。",
+          stream: null,
+        });
+      }, Math.min(VIEWER_ICE_CAPABILITY_WAIT_MS, Math.max(0, expiresInMs)));
+    } else {
+      queueMicrotask(() => {
+        if (active && !expired && !suspended) {
+          publishMedia({ status: "credentialing", error: null, stream: null });
+        }
+      });
+      void (async () => {
+        try {
+          const result = await fetchIceServers({
+            bearerToken: matchingCapability.bearer_token,
+            grantId: grant.grant_id,
+            signal: iceAbort.signal,
+          });
+          if (!active || expired || suspended || iceAbort.signal.aborted) return;
+          session = createViewerMediaSession({
+            grant,
+            viewerId,
+            iceServers: result.iceServers,
+            sendSignal,
+            onState: (next) => {
+              if (["failed", "expired"].includes(next.status)) {
+                detachViewerVideo(videoRef.current, { stopTracks: true });
+              }
+              if (active) publishMedia(next);
+            },
+          });
+          sessionRef.current = session;
+          socket.addEventListener("message", onMessage);
+          messageListenerAttached = true;
+          drainBufferedSignals();
+        } catch (error) {
+          if (!active || expired || suspended || iceAbort.signal.aborted) return;
+          publishMedia({
+            status: "failed",
+            error: errorCopy(error, "无法取得可靠实景网络配置；已保持隐私骨架。"),
+            stream: null,
+          });
+        }
+      })();
+    }
+
+    return cleanup;
+  }, [drainSignals, fetchIceServers, grant, iceCapability, sendSignal, socket, viewerId]);
+
+  const exposedMedia = enabled
+    ? selectViewerMediaForOwner(media, currentOwner)
+    : INITIAL_MEDIA_STATE;
 
   useEffect(() => {
     const video = videoRef.current;

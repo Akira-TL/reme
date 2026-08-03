@@ -17,7 +17,12 @@
     "MIMO_MODEL": "mimo-v2.5"
   },
   "secrets": {
-    "required": ["CONTROL_KEY_SHA256", "MIMO_API_KEY"]
+    "required": [
+      "CONTROL_KEY_SHA256",
+      "MIMO_API_KEY",
+      "TURN_KEY_ID",
+      "TURN_KEY_API_TOKEN"
+    ]
   },
   "durable_objects": {
     "bindings": [
@@ -58,7 +63,12 @@
         "MIMO_MODEL": "mimo-v2.5"
       },
       "secrets": {
-        "required": ["CONTROL_KEY_SHA256", "MIMO_API_KEY"]
+        "required": [
+          "CONTROL_KEY_SHA256",
+          "MIMO_API_KEY",
+          "TURN_KEY_ID",
+          "TURN_KEY_API_TOKEN"
+        ]
       },
       "durable_objects": {
         "bindings": [

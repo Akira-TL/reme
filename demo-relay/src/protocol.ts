@@ -199,7 +199,9 @@ export function validateMediaGrantRequest(value: unknown): value is MediaGrantRe
     && isMediaGrantScope(value.scope)
     && Number.isSafeInteger(value.expires_in_ms)
     && (value.expires_in_ms as number) >= 5_000
-    && (value.expires_in_ms as number) <= 60_000;
+    && (value.scope === "fall_emergency"
+      ? (value.expires_in_ms as number) <= 30_000
+      : (value.expires_in_ms as number) <= 60_000);
 }
 
 export function validateMediaGrantRevoke(value: unknown): value is MediaGrantRevoke {

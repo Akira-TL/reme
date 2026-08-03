@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  VIEWER_RTC_CONFIGURATION,
+  MAX_VIEWER_MEDIA_ICE_CANDIDATES,
   VIEWER_VIDEO_FRAME_TIMEOUT_MS,
   closeViewerMediaImmediately,
   createViewerVideoGuard,
@@ -10,8 +10,19 @@ import {
   detachViewerVideo,
   isRenderableViewerVideoFrame,
   isSignalForViewer,
+  selectViewerMediaForOwner,
+  suspendViewerMediaImmediately,
   viewerGrantFallbackMs,
 } from "./useViewerMedia.js";
+
+const RELIABLE_ICE_SERVERS = Object.freeze([
+  Object.freeze({ urls: ["stun:stun.cloudflare.com:3478"] }),
+  Object.freeze({
+    urls: ["turn:turn.cloudflare.com:3478?transport=udp"],
+    username: "short-user",
+    credential: "short-secret",
+  }),
+]);
 
 class FakeTrack {
   constructor() {
@@ -146,6 +157,7 @@ test("viewer media answers offers, flushes queued ICE, and stops all resources",
   const session = createViewerMediaSession({
     grant: { grant_id: "grant-1" },
     viewerId: "viewer-1",
+    iceServers: RELIABLE_ICE_SERVERS,
     sendSignal: (message) => {
       sent.push(message);
       return true;
@@ -167,8 +179,7 @@ test("viewer media answers offers, flushes queued ICE, and stops all resources",
   await session.handleSignal(forwarded("offer", { sdp: "offer-sdp" }));
 
   assert.equal(peers.length, 1);
-  assert.equal(peers[0].configuration.iceServers[0].urls, "stun:stun.cloudflare.com:3478");
-  assert.equal(VIEWER_RTC_CONFIGURATION.iceServers[0].urls, "stun:stun.cloudflare.com:3478");
+  assert.deepEqual(peers[0].configuration.iceServers, RELIABLE_ICE_SERVERS);
   assert.deepEqual(peers[0].addedIce, [{
     candidate: "candidate:1",
     sdpMid: "0",
@@ -192,12 +203,15 @@ test("viewer media answers offers, flushes queued ICE, and stops all resources",
   const stream = new FakeStream([track]);
   peers[0].receivers = [{ track }];
   peers[0].ontrack({ track, streams: [stream] });
+  const receivedStream = states.at(-1).stream;
+  assert.notEqual(receivedStream, stream);
+  assert.deepEqual(receivedStream.getTracks(), [track]);
   peers[0].connectionState = "connected";
   peers[0].onconnectionstatechange();
   assert.equal(states.at(-1).status, "connecting");
-  assert.equal(session.confirmVideoFrame(stream), true);
+  assert.equal(session.confirmVideoFrame(receivedStream), true);
   assert.equal(states.at(-1).status, "live");
-  assert.equal(states.at(-1).stream, stream);
+  assert.equal(states.at(-1).stream, receivedStream);
 
   session.close("expired");
   assert.equal(peers[0].closed, true);
@@ -210,6 +224,7 @@ test("viewer media failure is local and remains explicit", async () => {
   const session = createViewerMediaSession({
     grant: { grant_id: "grant-1" },
     viewerId: "viewer-1",
+    iceServers: RELIABLE_ICE_SERVERS,
     sendSignal: () => false,
     onState: (state) => states.push(state),
     peerConnectionFactory: (configuration) => new FakePeerConnection(configuration),
@@ -220,11 +235,119 @@ test("viewer media failure is local and remains explicit", async () => {
   assert.match(states.at(-1).error, /告警与结构化信息仍然有效/);
 });
 
+test("viewer media bounds all incoming ICE candidates for one grant", async () => {
+  const states = [];
+  const session = createViewerMediaSession({
+    grant: { grant_id: "grant-1" },
+    viewerId: "viewer-1",
+    iceServers: RELIABLE_ICE_SERVERS,
+    sendSignal: () => true,
+    onState: (state) => states.push(state),
+    peerConnectionFactory: (configuration) => new FakePeerConnection(configuration),
+  });
+
+  for (let index = 0; index < MAX_VIEWER_MEDIA_ICE_CANDIDATES; index += 1) {
+    assert.equal(await session.handleSignal(forwarded("ice_candidate", {
+      candidate: `candidate:${index}`,
+      sdp_mid: "0",
+      sdp_mline_index: 0,
+    })), true);
+  }
+  assert.equal(await session.handleSignal(forwarded("ice_candidate", {
+    candidate: "candidate:overflow",
+    sdp_mid: "0",
+    sdp_mline_index: 0,
+  })), false);
+  assert.equal(states.at(-1).status, "failed");
+  assert.match(states.at(-1).error, /安全上限/);
+});
+
+test("viewer media stops non-video tracks without admitting them into the live stream", async () => {
+  const peers = [];
+  const states = [];
+  const session = createViewerMediaSession({
+    grant: { grant_id: "grant-1" },
+    viewerId: "viewer-1",
+    iceServers: RELIABLE_ICE_SERVERS,
+    sendSignal: () => true,
+    onState: (state) => states.push(state),
+    peerConnectionFactory: (configuration) => {
+      const peer = new FakePeerConnection(configuration);
+      peers.push(peer);
+      return peer;
+    },
+    mediaStreamFactory: (tracks) => new FakeStream(tracks),
+  });
+  await session.handleSignal(forwarded("offer", { sdp: "offer-sdp" }));
+
+  const audioTrack = new FakeTrack();
+  audioTrack.kind = "audio";
+  peers[0].ontrack({ track: audioTrack, streams: [new FakeStream([audioTrack])] });
+  assert.equal(audioTrack.stopCount, 1);
+  assert.equal(states.some((state) => state.stream?.getTracks?.().includes(audioTrack)), false);
+  assert.notEqual(states.at(-1).status, "live");
+
+  const videoTrack = new FakeTrack();
+  peers[0].ontrack({ track: videoTrack, streams: [new FakeStream([audioTrack, videoTrack])] });
+  const videoOnlyStream = states.at(-1).stream;
+  assert.deepEqual(videoOnlyStream.getTracks(), [videoTrack]);
+  peers[0].connectionState = "connected";
+  peers[0].onconnectionstatechange();
+  assert.equal(session.confirmVideoFrame(videoOnlyStream), true);
+  assert.equal(states.at(-1).status, "live");
+});
+
+test("a new grant never exposes the previous grant's LIVE stream before a new first frame", () => {
+  const socket = {};
+  const oldStream = new FakeStream([new FakeTrack()]);
+  const oldLive = {
+    owner: {
+      socket,
+      viewerId: "viewer-1",
+      grantId: "grant-old",
+      capabilityToken: "old-token",
+    },
+    status: "live",
+    error: null,
+    stream: oldStream,
+  };
+  assert.equal(selectViewerMediaForOwner(oldLive, oldLive.owner).status, "live");
+  assert.deepEqual(selectViewerMediaForOwner(oldLive, {
+    socket,
+    viewerId: "viewer-1",
+    grantId: null,
+    capabilityToken: null,
+  }), { status: "idle", error: null, stream: null });
+  assert.deepEqual(selectViewerMediaForOwner(oldLive, {
+    socket,
+    viewerId: "viewer-1",
+    grantId: "grant-new",
+    capabilityToken: "new-token",
+  }), { status: "idle", error: null, stream: null });
+  assert.deepEqual(selectViewerMediaForOwner({
+    owner: {
+      socket,
+      viewerId: "viewer-1",
+      grantId: "grant-new",
+      capabilityToken: "new-token",
+    },
+    status: "authorized",
+    error: null,
+    stream: null,
+  }, {
+    socket,
+    viewerId: "viewer-1",
+    grantId: "grant-new",
+    capabilityToken: "new-token",
+  }), { status: "authorized", error: null, stream: null });
+});
+
 test("unsupported WebRTC becomes an explicit media-only failure", async () => {
   const states = [];
   const session = createViewerMediaSession({
     grant: { grant_id: "grant-1" },
     viewerId: "viewer-1",
+    iceServers: RELIABLE_ICE_SERVERS,
     sendSignal: () => true,
     onState: (state) => states.push(state),
     peerConnectionFactory: () => {
@@ -547,6 +670,7 @@ test("viewer media fails closed as soon as a remote track mutes or ends", async 
       const session = createViewerMediaSession({
         grant: { grant_id: "grant-1" },
         viewerId: "viewer-1",
+        iceServers: RELIABLE_ICE_SERVERS,
         sendSignal: () => true,
         onState: (state) => states.push(state),
         peerConnectionFactory: (configuration) => {
@@ -561,9 +685,10 @@ test("viewer media fails closed as soon as a remote track mutes or ends", async 
       const stream = new FakeStream([track]);
       peers[0].receivers = [{ track }];
       peers[0].ontrack({ track, streams: [stream] });
+      const receivedStream = states.at(-1).stream;
       peers[0].connectionState = "connected";
       peers[0].onconnectionstatechange();
-      session.confirmVideoFrame(stream);
+      session.confirmVideoFrame(receivedStream);
       assert.equal(states.at(-1).status, "live");
 
       const failTrack = track[eventName];
@@ -574,6 +699,16 @@ test("viewer media fails closed as soon as a remote track mutes or ends", async 
       assert.ok(track.stopCount > 0);
     });
   }
+});
+
+test("viewer media refuses to create a peer without reliable ICE servers", () => {
+  assert.throws(() => createViewerMediaSession({
+    grant: { grant_id: "grant-1" },
+    viewerId: "viewer-1",
+    iceServers: [],
+    sendSignal: () => true,
+    onState: () => {},
+  }), /reliable ICE servers are required/);
 });
 
 test("visibility fail-close detaches video and stops tracks before closing the session", () => {
@@ -601,4 +736,55 @@ test("visibility fail-close detaches video and stops tracks before closing the s
   assert.equal(closes[0].srcObject, null);
   assert.ok(closes[0].stopCount > 0);
   assert.match(closes[0].error, /页面已隐藏/);
+});
+
+test("pagehide aborts pending media and synchronously detaches the remote track", () => {
+  const track = new FakeTrack();
+  const video = new FakeVideo(new FakeStream([track]));
+  const abortController = new AbortController();
+  const closes = [];
+  const session = {
+    close(status, error) {
+      closes.push({ status, error, srcObject: video.srcObject });
+    },
+  };
+
+  suspendViewerMediaImmediately({
+    session,
+    video,
+    abortController,
+    reason: "viewer_pagehide",
+    error: "评委页面已离开，授权视频已立即关闭。",
+  });
+
+  assert.equal(abortController.signal.aborted, true);
+  assert.equal(abortController.signal.reason, "viewer_pagehide");
+  assert.equal(video.srcObject, null);
+  assert.ok(track.stopCount > 0);
+  assert.deepEqual(closes, [{
+    status: "failed",
+    error: "评委页面已离开，授权视频已立即关闭。",
+    srcObject: null,
+  }]);
+});
+
+test("viewer socket close and error use the same synchronous media fail-close", async (t) => {
+  for (const reason of ["viewer_socket_closed", "viewer_socket_error"]) {
+    await t.test(reason, () => {
+      const track = new FakeTrack();
+      const video = new FakeVideo(new FakeStream([track]));
+      const abortController = new AbortController();
+      let closed = false;
+      suspendViewerMediaImmediately({
+        session: { close: () => { closed = true; } },
+        video,
+        abortController,
+        reason,
+      });
+      assert.equal(abortController.signal.reason, reason);
+      assert.equal(video.srcObject, null);
+      assert.ok(track.stopCount > 0);
+      assert.equal(closed, true);
+    });
+  }
 });

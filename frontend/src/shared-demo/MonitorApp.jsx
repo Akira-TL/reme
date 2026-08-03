@@ -24,9 +24,16 @@ import {
 } from "./automaticSceneRecognition.js";
 import { getRelayBase, relayHttpUrl, relayWebSocketUrl } from "./config.js";
 import {
+  canStartKitchenRecognition,
+  canAutomaticallyOpenInitialFallMedia,
   createControllerMediaBridge,
   createMediaGrantRequestTracker,
+  selectAutomaticFallMediaAction,
+  selectFallMediaActionAfterAlarmAck,
+  selectFallMediaRegrantAction,
+  selectKitchenRecognitionAction,
 } from "./controllerMedia.js";
+import { fetchMediaIceServers } from "./mediaIce.js";
 import {
   clearPendingFallRecovery,
   clearControllerSession,
@@ -328,6 +335,7 @@ export function MonitorApp() {
   const [sceneSelectionSource, setSceneSelectionSource] = useState(
     () => restoredControllerSession ? "restored" : "manual",
   );
+  const [kitchenRecognitionEnabled, setKitchenRecognitionEnabled] = useState(false);
   const [fallDetectionArmed, setFallDetectionArmed] = useState(false);
   const [activity, setActivity] = useState(createActivityState);
   const [activityConfirmationCapability, setActivityConfirmationCapability] = useState("pending");
@@ -338,6 +346,7 @@ export function MonitorApp() {
   const [fall, setFall] = useState(authoritativeRestoredFall);
   const [voice, setVoice] = useState(createVoiceState);
   const [mediaStatus, setMediaStatus] = useState({ state: "idle", detail: "" });
+  const [activeMediaGrantId, setActiveMediaGrantId] = useState(null);
   const [sessionPersistenceHealthy, setSessionPersistenceHealthy] = useState(true);
   const [automaticScene, setAutomaticScene] = useState(createAutomaticSceneState);
 
@@ -369,6 +378,7 @@ export function MonitorApp() {
   const fallDetectorRef = useRef(createFallTransitionDetector());
   const fallRef = useRef(authoritativeRestoredFall);
   const fallTimerRef = useRef(0);
+  const fallInitialMediaEligibleEventRef = useRef(null);
   const pendingAlarmAckRef = useRef(null);
   const sessionPersistenceHealthyRef = useRef(true);
   const cookingTrackerRef = useRef(createCookingConfirmationTracker());
@@ -399,6 +409,37 @@ export function MonitorApp() {
   const automaticSceneAbortRef = useRef(null);
   const fallDetectionArmedRef = useRef(false);
   const fallArmOperationGenerationRef = useRef(0);
+
+  const currentInitialFallMediaContext = useCallback(() => {
+    const connection = controllerRef.current;
+    let streamActive;
+    try {
+      streamActive = Boolean(streamRef.current?.getVideoTracks?.().some((track) => (
+        track?.readyState === "live" && track.enabled !== false
+      )));
+    } catch {
+      streamActive = false;
+    }
+    return {
+      captureActive: captureActiveRef.current,
+      streamActive,
+      sessionActive: Boolean(tokenRef.current && sessionIdRef.current),
+      connectionReady: Boolean(
+        connection?.ready === true
+        && connection.socket?.readyState === WebSocket.OPEN
+      ),
+    };
+  }, []);
+
+  const clearInitialFallMediaAuthority = useCallback(() => {
+    fallInitialMediaEligibleEventRef.current = null;
+    if (pendingAlarmAckRef.current?.allowInitialMedia === true) {
+      pendingAlarmAckRef.current = {
+        ...pendingAlarmAckRef.current,
+        allowInitialMedia: false,
+      };
+    }
+  }, []);
 
   const publishEvent = useCallback((eventType, payload, {
     verifiedActivity = false,
@@ -539,7 +580,9 @@ export function MonitorApp() {
     return persisted;
   }, [persistFallRecoveryState, setSessionPersistenceStatus]);
 
-  const publishAlarmState = useCallback((payload) => {
+  const publishAlarmState = useCallback((payload, {
+    allowInitialMedia = false,
+  } = {}) => {
     pendingAlarmAckRef.current = null;
     const event = publishEvent("alarm_state", payload);
     if (event) {
@@ -547,6 +590,7 @@ export function MonitorApp() {
         eventId: payload.event_id,
         phase: payload.phase,
         eventSequence: event.event_sequence,
+        allowInitialMedia,
       };
     }
     return event;
@@ -559,17 +603,29 @@ export function MonitorApp() {
     if (!accepted) return false;
     pendingAlarmAckRef.current = null;
     if (accepted !== current) commitFallState(accepted);
-    if (current.phase === "escalated") {
-      const requested = requestMediaGrant(current.eventId, "fall_emergency", 30_000);
+    const mediaAction = selectFallMediaActionAfterAlarmAck({
+      fall: accepted,
+      pending,
+      eventSequence,
+      visibilityState: document.visibilityState,
+      ...currentInitialFallMediaContext(),
+    });
+    if (mediaAction.action === "request") {
+      const requested = requestMediaGrant(mediaAction.eventId, "fall_emergency", 30_000);
       setMediaStatus({
         state: requested ? "authorizing" : "waiting_viewer",
         detail: requested
           ? "告警已由 Relay 确认，正在签发 30 秒事件视频授权。"
           : "告警已由 Relay 确认；当前控制链路无法签发视频，告警仍保持有效。",
       });
+    } else if (mediaAction.action === "wait_explicit") {
+      setMediaStatus({
+        state: "waiting_viewer",
+        detail: "告警已恢复并由 Relay 确认；旧实景授权不会自动恢复，请显式重新开放 30 秒。",
+      });
     }
     return true;
-  }, [commitFallState, requestMediaGrant]);
+  }, [commitFallState, currentInitialFallMediaContext, requestMediaGrant]);
 
   const stopLocalMoment = useCallback(() => {
     momentRecorderRef.current?.cancel?.();
@@ -596,6 +652,7 @@ export function MonitorApp() {
       mediaBridgeRef.current?.stopGrant(grantId, reason);
     }
     activeGrantRef.current = null;
+    setActiveMediaGrantId(null);
     activeGrantContextRef.current = null;
     window.clearTimeout(grantExpiryRef.current);
     grantExpiryRef.current = 0;
@@ -750,15 +807,25 @@ export function MonitorApp() {
     const bridge = createControllerMediaBridge({
       getSocket: () => controllerRef.current?.socket ?? null,
       getStream: () => streamRef.current,
-      onStatus: ({ state, viewerId }) => {
+      getIceServers: (grant, { signal }) => fetchMediaIceServers({
+        bearerToken: tokenRef.current,
+        grantId: grant.payload.grant_id,
+        signal,
+      }),
+      onStatus: ({ state, viewerId, error }) => {
         const copy = {
-          connected: viewerId ? `评委 ${viewerId.slice(-6)} 已接入短期原画` : "短期原画已连接",
-          connecting: "正在建立事件视频通道…",
-          failed: "视频连接失败，告警仍保持有效",
+          credentialing: "实景授权已生效，正在取得短时 TURN 网络配置…",
+          waiting_viewer: "实景授权已生效，等待评委端进入后再建立可靠视频。",
+          connected: viewerId
+            ? `评委 ${viewerId.slice(-6)} 的实景传输已建立；评委端仍会独立验证首帧后才播出。`
+            : "实景传输已建立；评委端仍会独立验证首帧后才播出。",
+          connecting: "可靠网络配置已就绪，正在建立实景传输…",
+          failed: "实景网络连接失败，告警与结构化信息仍保持有效",
           offer_failed: "无法创建视频连接，已回落骨架",
           signal_unavailable: "信令中断，已回落骨架",
           unsupported: "当前浏览器不支持 WebRTC，已回落骨架",
           stream_unavailable: "摄像头轨道不可用，已回落骨架",
+          ice_unavailable: error || "可靠实景网络配置不可用，评委端继续显示骨架",
         };
         if (copy[state]) setMediaStatus({ state, detail: copy[state] });
       },
@@ -776,6 +843,7 @@ export function MonitorApp() {
   }, []);
 
   const closeControllerSocket = useCallback(() => {
+    clearInitialFallMediaAuthority();
     const connection = controllerRef.current;
     controllerRef.current = null;
     if (!connection) return;
@@ -789,11 +857,12 @@ export function MonitorApp() {
     connection.socket.onerror = null;
     connection.socket.close();
     mediaBridgeRef.current?.stopGrant(null, "socket_closed");
-  }, []);
+  }, [clearInitialFallMediaAuthority]);
 
   const invalidateControllerSession = useCallback((error) => {
     clearReconnectTimer();
     intentionalCloseRef.current = true;
+    clearInitialFallMediaAuthority();
     failClosedFallRef.current?.();
     closeControllerSocket();
     clearControllerSession();
@@ -809,7 +878,7 @@ export function MonitorApp() {
       type: "session_expired",
       error: error || "短期控制会话已到期，请重新输入密钥。",
     });
-  }, [clearReconnectTimer, closeControllerSocket]);
+  }, [clearInitialFallMediaAuthority, clearReconnectTimer, closeControllerSocket]);
 
   const scheduleControllerReconnect = useCallback(() => {
     clearReconnectTimer();
@@ -837,7 +906,12 @@ export function MonitorApp() {
     }, delayMs);
   }, [clearReconnectTimer, invalidateControllerSession]);
 
-  const presentAuthoritativeFall = useCallback((next) => {
+  const presentAuthoritativeFall = useCallback((next, {
+    allowInitialMedia = false,
+  } = {}) => {
+    if (next.phase !== "checking" || !allowInitialMedia) {
+      fallInitialMediaEligibleEventRef.current = null;
+    }
     pendingAlarmAckRef.current = null;
     clearFallTimer();
     if (next.phase === "checking") {
@@ -856,12 +930,19 @@ export function MonitorApp() {
         phase: "fallback",
         detail: "Relay 已按绝对截止时间确认升级；迟到的安全回应不会自动撤销告警。",
       }));
-      const requested = requestMediaGrant(next.eventId, "fall_emergency", 30_000);
+      const mediaAction = selectAutomaticFallMediaAction({
+        fall: next,
+        allowInitialMedia,
+        visibilityState: document.visibilityState,
+        ...currentInitialFallMediaContext(),
+      });
+      const requested = mediaAction.action === "request"
+        && requestMediaGrant(mediaAction.eventId, "fall_emergency", 30_000);
       setMediaStatus({
         state: requested ? "authorizing" : "waiting_viewer",
         detail: requested
-          ? "Relay 已确认规则告警，正在签发 30 秒事件视频授权…"
-          : "Relay 已确认规则告警；当前控制链路无法签发视频，告警仍保持有效。",
+          ? "首次在线告警已由 Relay 确认，正在签发 30 秒事件视频授权。"
+          : "Relay 已恢复权威告警；旧实景授权不会自动恢复，请显式重新开放 30 秒。",
       });
       return;
     }
@@ -873,7 +954,13 @@ export function MonitorApp() {
       }));
       revokeActiveGrant("resolved");
     }
-  }, [cancelVoiceInteraction, clearFallTimer, requestMediaGrant, revokeActiveGrant]);
+  }, [
+    cancelVoiceInteraction,
+    clearFallTimer,
+    currentInitialFallMediaContext,
+    requestMediaGrant,
+    revokeActiveGrant,
+  ]);
 
   const acceptAuthoritativeAlarmEvent = useCallback((event) => {
     const sessionId = sessionIdRef.current;
@@ -890,6 +977,14 @@ export function MonitorApp() {
     const reconciliation = reconcileFallWithAuthoritativeAlarm(current, event.payload);
     if (reconciliation.action !== "adopt") return reconciliation.action;
     if (reconciliation.fall === current) return "adopt";
+    const allowInitialMedia = current.phase === "checking"
+      && current.eventId === reconciliation.fall.eventId
+      && canAutomaticallyOpenInitialFallMedia({
+        eligibleEventId: fallInitialMediaEligibleEventRef.current,
+        eventId: current.eventId,
+        visibilityState: document.visibilityState,
+        ...currentInitialFallMediaContext(),
+      });
 
     if (sceneIdRef.current !== "fall") {
       sceneIdRef.current = "fall";
@@ -905,10 +1000,11 @@ export function MonitorApp() {
     } else {
       commitFallState(reconciliation.fall);
     }
-    presentAuthoritativeFall(reconciliation.fall);
+    presentAuthoritativeFall(reconciliation.fall, { allowInitialMedia });
     return "adopt";
   }, [
     commitFallState,
+    currentInitialFallMediaContext,
     persistControllerSessionPatch,
     persistFallRecoveryState,
     presentAuthoritativeFall,
@@ -1285,6 +1381,7 @@ export function MonitorApp() {
           activeGrantContextRef.current = mediaRequestTrackerRef.current.accept();
         }
         activeGrantRef.current = value.grant;
+        setActiveMediaGrantId(value.grant.payload.grant_id);
         const viewerIds = Array.isArray(value.viewer_ids) ? value.viewer_ids : [];
         setMediaStatus({
           state: viewerIds.length ? "connecting" : "waiting_viewer",
@@ -1308,6 +1405,7 @@ export function MonitorApp() {
         grantExpiryRef.current = window.setTimeout(() => {
           mediaBridgeRef.current?.stopGrant(value.grant.payload.grant_id, "expired");
           activeGrantRef.current = null;
+          setActiveMediaGrantId(null);
           activeGrantContextRef.current = null;
           setMediaStatus({
             state: "expired",
@@ -1331,6 +1429,7 @@ export function MonitorApp() {
         if (!activeGrantId || grantId !== activeGrantId) return;
         mediaBridgeRef.current?.stopGrant(grantId, "revoked");
         activeGrantRef.current = null;
+        setActiveMediaGrantId(null);
         activeGrantContextRef.current = null;
         mediaRequestTrackerRef.current.invalidate();
         window.clearTimeout(grantExpiryRef.current);
@@ -1346,6 +1445,7 @@ export function MonitorApp() {
     };
     socket.onclose = () => {
       if (controllerRef.current !== connection) return;
+      clearInitialFallMediaAuthority();
       window.clearInterval(connection.heartbeat);
       window.clearTimeout(connection.readyTimeout);
       window.clearTimeout(connection.activityCapabilityTimeout);
@@ -1365,6 +1465,7 @@ export function MonitorApp() {
       }
       mediaBridgeRef.current?.stopGrant(null, "socket_closed");
       activeGrantRef.current = null;
+      setActiveMediaGrantId(null);
       activeGrantContextRef.current = null;
       mediaRequestTrackerRef.current.invalidate();
       clearKitchenCaptureEvidence("控制链路中断，旧做饭确认已失效；重连后需要重新取得真实证据。");
@@ -1377,6 +1478,7 @@ export function MonitorApp() {
   }, [
     acceptAuthoritativeAlarmEvent,
     acceptAlarmEvent,
+    clearInitialFallMediaAuthority,
     clearKitchenCaptureEvidence,
     clearReconnectTimer,
     closeControllerSocket,
@@ -1412,9 +1514,19 @@ export function MonitorApp() {
     connectController(restored.token);
   }, [authoritativeRestoredScene, connectController, restoredControllerSession]);
 
-  const escalateFall = useCallback((eventId, trigger = "check_in_timeout") => {
+  const escalateFall = useCallback((eventId, trigger = "check_in_timeout", {
+    allowInitialMedia = null,
+  } = {}) => {
     if (!eventId || fallRef.current.eventId !== eventId) return;
     if (["escalated", "resolved"].includes(fallRef.current.phase)) return;
+    const canOpenInitialMedia = canAutomaticallyOpenInitialFallMedia({
+      eligibleEventId: fallInitialMediaEligibleEventRef.current,
+      eventId,
+      visibilityState: document.visibilityState,
+      allowInitialMedia,
+      ...currentInitialFallMediaContext(),
+    });
+    fallInitialMediaEligibleEventRef.current = null;
     clearFallTimer();
     const voiceTriggered = trigger === "voice_intent";
     const manuallyTriggered = trigger === "elder_need_help";
@@ -1445,11 +1557,15 @@ export function MonitorApp() {
       message: next.message,
       response_deadline_ms: null,
       media_scope: "fall_emergency",
+    }, {
+      allowInitialMedia: canOpenInitialMedia,
     });
     setMediaStatus({
-      state: published ? "authorizing" : "waiting_viewer",
-      detail: published
-        ? "告警正在同步，Relay 确认后将签发 30 秒事件视频授权…"
+      state: published && canOpenInitialMedia ? "authorizing" : "waiting_viewer",
+      detail: published && canOpenInitialMedia
+        ? "首次实时告警正在同步，Relay 确认后将签发 30 秒事件视频授权…"
+        : published
+          ? "恢复的告警正在同步；旧实景授权不会自动恢复，确认后可显式重新开放。"
         : "控制链路离线，告警尚未送达；重连后会自动同步。",
     });
     try {
@@ -1457,7 +1573,13 @@ export function MonitorApp() {
     } catch {
       // 振动不可用不影响规则告警。
     }
-  }, [cancelVoiceInteraction, clearFallTimer, commitFallState, publishAlarmState]);
+  }, [
+    cancelVoiceInteraction,
+    clearFallTimer,
+    commitFallState,
+    currentInitialFallMediaContext,
+    publishAlarmState,
+  ]);
 
   const resolveFallSafe = useCallback((requestedEventId = null, {
     trigger = null,
@@ -1479,6 +1601,7 @@ export function MonitorApp() {
     }
     if (action !== "resolve") return;
 
+    fallInitialMediaEligibleEventRef.current = null;
     clearFallTimer();
     cancelVoiceInteraction(preserveVoice ? null : createVoiceState({
       phase: "result",
@@ -1536,13 +1659,13 @@ export function MonitorApp() {
       visibilityState: document.visibilityState,
     });
     if (plan.action === "escalate") {
-      escalateFall(current.eventId, "check_in_timeout");
+      escalateFall(current.eventId, "check_in_timeout", { allowInitialMedia: false });
       return undefined;
     }
     if (plan.action !== "schedule") return undefined;
     clearFallTimer();
     fallTimerRef.current = window.setTimeout(
-      () => escalateFall(current.eventId, "check_in_timeout"),
+      () => escalateFall(current.eventId, "check_in_timeout", { allowInitialMedia: false }),
       plan.delayMs,
     );
     return clearFallTimer;
@@ -1553,7 +1676,7 @@ export function MonitorApp() {
     const action = selectFallReconnectAction(current, Date.now());
     if (action === "none") return false;
     if (action === "escalate") {
-      escalateFall(current.eventId, "check_in_timeout");
+      escalateFall(current.eventId, "check_in_timeout", { allowInitialMedia: false });
       return true;
     }
 
@@ -1570,20 +1693,26 @@ export function MonitorApp() {
         : "本次安全事件状态已恢复。"),
       response_deadline_ms: syncing.phase === "checking" ? syncing.deadlineMs : null,
       media_scope: syncing.phase === "escalated" ? "fall_emergency" : "none",
+    }, {
+      allowInitialMedia: false,
     });
 
     if (action === "republish_checking") {
       clearFallTimer();
       fallTimerRef.current = window.setTimeout(
-        () => escalateFall(current.eventId, "check_in_timeout"),
+        () => escalateFall(current.eventId, "check_in_timeout", { allowInitialMedia: false }),
         Math.max(0, current.deadlineMs - Date.now()),
       );
-    } else if (action === "republish_escalated" && published) {
-      setMediaStatus({ state: "authorizing", detail: "告警正在重新同步，并重签 30 秒事件视频授权…" });
-      requestMediaGrant(current.eventId, "fall_emergency", 30_000);
+    } else if (action === "republish_escalated") {
+      setMediaStatus({
+        state: "waiting_viewer",
+        detail: published
+          ? "告警正在重新同步；旧实景授权不会自动恢复，Relay 确认后可显式重新开放 30 秒。"
+          : "告警仍待同步；恢复连接后也不会自动开放旧实景授权。",
+      });
     }
     return Boolean(published);
-  }, [clearFallTimer, commitFallState, escalateFall, publishAlarmState, requestMediaGrant]);
+  }, [clearFallTimer, commitFallState, escalateFall, publishAlarmState]);
 
   useEffect(() => {
     fallSyncRef.current = synchronizeFallAfterReconnect;
@@ -1748,6 +1877,7 @@ export function MonitorApp() {
     }));
     const generation = voiceGenerationRef.current;
     const eventId = randomId("fall");
+    fallInitialMediaEligibleEventRef.current = eventId;
     const audio = checkInAudioRef.current;
     const promptLeadMs = estimatePromptLeadMs(audio?.duration, FALL_PROMPT_FALLBACK_MS);
     const deadlineMs = Date.now() + promptLeadMs + FALL_REPLY_WINDOW_MS;
@@ -1853,6 +1983,47 @@ export function MonitorApp() {
     });
   }, [requestMediaGrant]);
 
+  const beginKitchenRecognition = useCallback(() => {
+    if (!canStartKitchenRecognition({
+      sceneId: sceneIdRef.current,
+      captureActive: captureActiveRef.current,
+      connectionReady: controllerRef.current?.socket?.readyState === WebSocket.OPEN,
+      visibilityState: document.visibilityState,
+      automaticScenePhase: automaticScene.phase,
+      kitchenEventId: kitchenLiveEventIdRef.current,
+      pendingKitchenGrant: pendingKitchenGrantRef.current,
+    })) return;
+    clearKitchenCaptureEvidence(
+      "已由操作者显式启动独立做饭识别；将从 0/2 重新累计真实 MiMo 证据。",
+    );
+    setKitchenRecognitionEnabled(true);
+    setActivity({
+      ...createActivityState(),
+      reason: "已显式启动独立做饭识别；下一张最小视觉样本将从 0/2 开始累计。",
+    });
+  }, [automaticScene.phase, clearKitchenCaptureEvidence]);
+
+  const reopenFallLive = useCallback(() => {
+    const current = fallRef.current;
+    const plan = selectFallMediaRegrantAction({
+      fall: current,
+      sceneId: sceneIdRef.current,
+      captureActive: captureActiveRef.current,
+      connectionReady: controllerRef.current?.socket?.readyState === WebSocket.OPEN,
+      visibilityState: document.visibilityState,
+      mediaStatus: mediaStatus.state,
+      activeGrant: activeGrantRef.current,
+    });
+    if (plan.action === "block") return;
+    const requested = requestMediaGrant(plan.eventId, "fall_emergency", 30_000);
+    setMediaStatus({
+      state: requested ? "authorizing" : "failed",
+      detail: requested
+        ? "正在为当前在线评委签发新的 30 秒告警实景授权；晚加入者不会继承旧授权。"
+        : "当前控制链路无法重新开放告警实景；权威告警仍保持有效。",
+    });
+  }, [mediaStatus.state, requestMediaGrant]);
+
   const cancelAutomaticSceneRecognition = useCallback((reason) => {
     automaticSceneGenerationRef.current += 1;
     automaticSceneAbortRef.current?.abort();
@@ -1867,10 +2038,11 @@ export function MonitorApp() {
     sceneIdRef.current = nextSceneId;
     setSceneId(nextSceneId);
     setSceneSelectionSource(source);
+    setKitchenRecognitionEnabled(nextSceneId === "kitchen" && source === "manual");
     setActivity(source === "automatic" && nextSceneId === "kitchen"
       ? {
         ...createActivityState(),
-        reason: "MiMo 只切换到做饭展示；为兑现单次样本承诺，本次不会级联第二次 cooking 视觉请求。手动点击“做饭”可启动独立活动识别。",
+        reason: "MiMo 只切换到做饭展示；本次不会级联第二次 cooking 视觉请求。可点击下方按钮显式启动独立做饭识别。",
       }
       : createActivityState());
     publishEvent("scene_state", {
@@ -1944,6 +2116,7 @@ export function MonitorApp() {
     fallDetectionArmedRef.current = armFallDetection;
     setFallDetectionArmed(armFallDetection);
     setSceneSelectionSource("manual");
+    setKitchenRecognitionEnabled(nextSceneId === "kitchen");
     sceneIdRef.current = nextSceneId;
     setSceneId(nextSceneId);
     setActivity(createActivityState());
@@ -2172,6 +2345,7 @@ export function MonitorApp() {
   }, [fall.phase, fallDetectionArmed, mediaStatus.state, moment.status, sessionPersistenceHealthy, ui.connection]);
 
   const stopCapture = useCallback(async () => {
+    clearInitialFallMediaAuthority();
     fallArmOperationGenerationRef.current += 1;
     cancelAutomaticSceneRecognition("摄像头已停止；自动识别样本与待返回结果均已取消。");
     const hadPoseProjection = captureActiveRef.current
@@ -2218,6 +2392,7 @@ export function MonitorApp() {
     }
   }, [
     cancelAutomaticSceneRecognition,
+    clearInitialFallMediaAuthority,
     clearKitchenCaptureEvidence,
     failClosedFallCheckIn,
     publishPoseProjectionReset,
@@ -2321,7 +2496,9 @@ export function MonitorApp() {
       clearFallTimer();
       if (initialFall.phase === "checking") {
         fallTimerRef.current = window.setTimeout(
-          () => escalateFall(initialFall.eventId, "check_in_timeout"),
+          () => escalateFall(initialFall.eventId, "check_in_timeout", {
+            allowInitialMedia: false,
+          }),
           Math.max(0, initialFall.deadlineMs - Date.now()),
         );
       }
@@ -3034,6 +3211,7 @@ export function MonitorApp() {
   }, [stopCapture]);
 
   const releaseControl = useCallback(async () => {
+    clearInitialFallMediaAuthority();
     const exitAction = selectFallExitAction(fallRef.current, {
       persistenceHealthy: sessionPersistenceHealthyRef.current,
     });
@@ -3105,6 +3283,7 @@ export function MonitorApp() {
     intentionalCloseRef.current = false;
     dispatch({ type: "released" });
   }, [
+    clearInitialFallMediaAuthority,
     clearReconnectTimer,
     closeControllerSocket,
     commitFallState,
@@ -3124,7 +3303,7 @@ export function MonitorApp() {
   useEffect(() => {
     if (
       sceneId !== "kitchen"
-      || sceneSelectionSource !== "manual"
+      || !kitchenRecognitionEnabled
       || ["capturing", "analyzing"].includes(automaticScene.phase)
       || !ui.captureActive
       || ui.connection !== "connected"
@@ -3324,7 +3503,7 @@ export function MonitorApp() {
     automaticScene.phase,
     publishEvent,
     sceneId,
-    sceneSelectionSource,
+    kitchenRecognitionEnabled,
     stopLocalMoment,
     ui.captureActive,
     ui.connection,
@@ -3334,6 +3513,7 @@ export function MonitorApp() {
     const suspendController = () => {
       intentionalCloseRef.current = true;
       clearReconnectTimer();
+      clearInitialFallMediaAuthority();
       if (selectFallInterruptionAction({
         kind: "pagehide",
         fall: fallRef.current,
@@ -3353,6 +3533,7 @@ export function MonitorApp() {
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
+        clearInitialFallMediaAuthority();
         pausePoseProjectionForVisibility();
         cancelAutomaticSceneRecognition(
           "页面已隐藏；自动识别样本与待返回结果均已取消。",
@@ -3403,6 +3584,7 @@ export function MonitorApp() {
     };
   }, [
     cancelAutomaticSceneRecognition,
+    clearInitialFallMediaAuthority,
     clearKitchenCaptureEvidence,
     clearReconnectTimer,
     closeControllerSocket,
@@ -3468,6 +3650,12 @@ export function MonitorApp() {
   const recognizedScene = DEMO_SCENES.find(
     (scene) => scene.id === automaticScene.classification,
   );
+  const kitchenRecognitionAction = selectKitchenRecognitionAction({
+    sceneId,
+    recognitionEnabled: kitchenRecognitionEnabled,
+    activityPhase: activity.phase,
+    kitchenEventId: kitchenLiveEventId,
+  });
 
   return (
     <div className="demo-shell monitor-role">
@@ -3745,6 +3933,19 @@ export function MonitorApp() {
                   <div><dt>连续证据</dt><dd>{activity.consecutive}/2</dd></div>
                   <div><dt>延迟</dt><dd>{Number.isFinite(activity.latencyMs) ? `${Math.round(activity.latencyMs)} ms` : "—"}</dd></div>
                 </dl>
+                {kitchenRecognitionAction && (
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      onClick={beginKitchenRecognition}
+                      disabled={
+                        !ui.captureActive
+                        || ui.connection !== "connected"
+                        || automaticSceneBusy
+                        || activityConfirmationCapability !== "supported"
+                      }
+                    >{kitchenRecognitionAction === "retry" ? "重新识别做饭" : "开始独立做饭识别"}</button>
+                  )}
                 {heartCard && (
                   <div className="consent-card" role="status">
                     <b>{heartCard.title}</b>
@@ -3840,12 +4041,28 @@ export function MonitorApp() {
                   </>
                 )}
                 {fall.phase === "escalated" && (
-                  <button
-                    type="button"
-                    className="secondary-action"
-                    onClick={resolveFallSafe}
-                    disabled={fall.delivery !== "accepted"}
-                  >{fall.delivery === "accepted" ? "本人已确认安全，关闭事件" : "等待 Relay 确认告警后再关闭"}</button>
+                  <div className="consent-actions">
+                    <button
+                      type="button"
+                      className="primary-action danger-action"
+                      onClick={reopenFallLive}
+                      disabled={
+                        fall.delivery !== "accepted"
+                        || !ui.captureActive
+                        || ui.connection !== "connected"
+                        || Boolean(activeMediaGrantId)
+                        || ["authorizing", "credentialing", "connecting"].includes(mediaStatus.state)
+                      }
+                    >{activeMediaGrantId
+                      ? "当前 30 秒授权进行中，结束后可重新开放"
+                      : "向当前在线评委重新开放 30 秒"}</button>
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      onClick={resolveFallSafe}
+                      disabled={fall.delivery !== "accepted"}
+                    >{fall.delivery === "accepted" ? "本人已确认安全，关闭事件" : "等待 Relay 确认告警后再关闭"}</button>
+                  </div>
                 )}
               </div>
             )}

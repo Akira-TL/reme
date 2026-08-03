@@ -5,6 +5,7 @@
 - Owner: C（跨设备演示）
 - Depends on: ADR-0003、ADR-0005、ADR-0007
 - Superseded-in-part by: ADR-0011（仅 LBX 路演：厨房本人同意 Gate 与静态 audience 两点）
+- Network path clarified by: ADR-0013（grant-bound 短时 TURN，不改变媒体不进 DO）
 
 ## 背景
 
@@ -27,7 +28,8 @@ LBX 的跨设备演示拆成三个互不替代的数据平面：
 - `media_grant` 绑定 `session_id / event_id / scope / audience / expires_at_ms / grant_id`，只授权签发时已经连接的 viewer WebSocket。新加入的旁观者不继承正在进行的原画授权。
 - 授权到期、场景切换、事件解决、控制租约释放或控制端断线时，前端必须停止全部媒体轨道并撤销授权。
 - WebRTC 信令可经 Durable Object 转发；SDP/ICE 不是媒体。DO 不接收视频帧、音频帧、Base64 图片或录像 Blob。
-- 该能力是单房间路演授权，不是生产账户系统。正式产品需要独立的身份、审计、撤销、TURN/SFU 和保留策略 ADR。
+- ADR-0013 允许在 active grant 内由 Cloudflare TURN 转发加密 WebRTC 媒体包。TURN credential 与 ICE metadata 仍不是媒体帧；长期 key 只在 Worker secret。该路径不能被描述为“授权视频从未经过第三方网络”，但 Reme DO 仍不得接收、解码或持久化媒体正文。
+- 该能力是单房间路演授权，不是生产账户系统。正式产品需要独立的身份、审计、撤销、抗滥用/计费、TURN/SFU 容量和保留策略 ADR；ADR-0013 的 demo credential broker 不满足这些要求。
 
 ## 场景视觉决议
 

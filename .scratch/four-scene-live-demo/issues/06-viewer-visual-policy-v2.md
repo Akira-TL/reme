@@ -3,7 +3,7 @@
 - Type: task
 - Status: ready-for-human
 - Owner: C / Monitor + Viewer + Relay
-- Related: ADR-0005、ADR-0008、ADR-0010、ADR-0011
+- Related: ADR-0005、ADR-0008、ADR-0010、ADR-0011、ADR-0013
 - Replaces for current work: issue 03 已完成实现中的旧厨房同意视觉语义，不改写其历史记录
 
 ## What to change
@@ -36,7 +36,7 @@
 ## Viewer requirements
 
 - [x] 日常和跌倒 `checking` 显示完整构图的固定通用家具背景板 + 骨架；文案只称“通用环境抽象”，不称“家具已复原”。
-- [x] 厨房未确认、识别不可用或视频失败时显示固定通用厨房背景板 + 骨架；confirmed grant 有有效远端 track 时显示无骨架叠层的真实视频。
+- [ ] 厨房未确认、识别不可用或无 active grant 时显示固定通用厨房背景板 + 骨架；verified + active grant 的 credentialing/connecting/failed/首帧前改用中性隐私背景 + 骨架 + 实景状态，不再用预制厨房图作主视觉；fresh 远端 track 才显示无骨架叠层的真实视频。该增量由 issue 07 验证。
 - [x] 完全隐私在任何事件顺序、恢复状态或非法 grant 下都只显示纯色背景 + 骨架。
 - [x] 权威跌倒 grant 有有效远端 track 时显示真实视频；连接失败不撤销告警，回到家具背景板 + 骨架并显示失败。
 - [x] 实景状态显示原因、剩余 TTL 与明确的连接/降级状态；不能出现“已连接”但视频尺寸、轨道或帧不可用的假成功。
@@ -64,7 +64,7 @@
 - [x] 390×844、430×932 和桌面评委端检查背景板完整构图、实景无骨架叠层、隐私纯骨架、告警卡和 TTL 状态。
 - [x] 前端完整 tests/lint/build、Relay tests/typecheck，以及 staging/production Wrangler dry-run 通过；本票不得自行推送或部署。
 - [ ] 至少一台目标监控手机与两个评委设备实测：已有 viewer + 厨房 late join、厨房过期、fall late join、页面隐藏/恢复、断网和租约释放。
-- [ ] 跨网络只用 STUN 失败时显示降级并记录网络条件；TURN/SFU 未实现前不宣称公网普遍可用。
+- [ ] 公网实景 Gate 已移至 issue 07/ADR-0013：生产不自动回退 STUN-only；两个跨网 Holdout、强制 relay、late viewer/regrant 与故障 fail-close 通过前不宣称公网普遍可用。
 - [ ] 真实做饭/非做饭各记录连续 MiMo 原始结果、条件和失败；Gate 前不宣称准确率，也不把固定背景称为家具复原。
 
 ## No-go conditions
@@ -75,4 +75,4 @@
 - 完全隐私出现固定环境或任何真实像素。
 - 跌倒 `checking`、客户端场景或 late join 绕过服务端权威告警 Gate。
 - grant 到期、页面隐藏、停止、断线或租约释放后仍有媒体轨道存活。
-- 为本票破坏 voice 滚动兼容、watchdog/checkpoint 权威语义，或把 STUN-only 演示包装成生产媒体能力。
+- 为本票破坏 voice 滚动兼容、watchdog/checkpoint 权威语义，或把 ICE config/同网/STUN-only 成功包装成公网媒体能力。

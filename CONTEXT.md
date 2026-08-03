@@ -9,7 +9,7 @@ The team has confirmed two constraints:
 - Source video may be decoded locally, but judge/family-facing output must not make the person easily identifiable.
 - A usable MiMo API is available.
 
-The current core feasibility question is whether the current CUDA development computer can sustain a single-person live-camera pipeline from MoveNet 2D landmarks to posture observations and a complete event-triggered MiMo interaction loop. Recorded video remains a later stability and playback path. In parallel, ADR-0012 permits a demo-only, display-only MediaPipe experiment for zero to four anonymous pose candidates; its target-phone capability Gate is still pending and it cannot feed fall, cooking, voice, care-card, or media-authority decisions. The final classifier, transition capability, Raspberry Pi role, and competition story remain open until measured.
+The current core feasibility question is whether the current CUDA development computer can sustain a single-person live-camera pipeline from MoveNet 2D landmarks to posture observations and a complete event-triggered MiMo interaction loop. Recorded video remains a later stability and playback path. In parallel, ADR-0012 permits a demo-only, display-only MediaPipe experiment for zero to four anonymous pose candidates; its target-phone capability Gate is still pending and it cannot feed fall, cooking, voice, care-card, or media-authority decisions. ADR-0013 permits a separate demo-only public-media reachability experiment: only a verified cooking event or Relay-authoritative escalated fall grant may expose a bounded live WebRTC track, assisted by short-lived TURN credentials; its target-network Gate is also pending. The final classifier, transition capability, Raspberry Pi role, and competition story remain open until measured.
 
 ## Primary user story
 
@@ -29,6 +29,12 @@ The current boundary is:
 - visual transmission must be explicit, minimal, and observable in the demo rather than continuous background upload;
 - presentation should still prefer skeletons, silhouettes, strongly abstracted views, or structured classifications;
 - no additional raw-frame files are exported unless explicitly enabled for debugging.
+
+### Judge-demo event media
+
+The default judge/family-facing view remains privacy-preserving. The LBX judge demo has two narrow, identifiable-video exceptions defined by ADR-0011: a Relay-verified cooking activity under a bounded `kitchen_moment` grant, and a Relay-authoritative escalated fall under a matching bounded `fall_emergency` grant. Daily and fall-checking states remain abstract furniture plus skeleton; the fully private state remains skeleton-only and overrides every late grant or signal.
+
+Authorized live media stays on WebRTC and never enters the Reme Durable Object, event store, KV, or application logs. When direct ICE is unavailable, ADR-0013 permits Cloudflare TURN to relay encrypted WebRTC packets using server-issued short-lived credentials. That means the project must not claim that an authorized live track never traverses a third-party relay; the defensible claim is that Reme's Relay does not receive, decode, or persist media frames. Long-lived TURN keys remain Worker secrets, and TURN availability does not create or extend a media grant.
 
 ### Pose extraction
 
@@ -76,6 +82,8 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 - **Care decision**: the decision layer's current recommendation about observation, check-in, family notification, privacy presentation, or degradation. It is distinct from perception output.
 - **Interaction response**: the older adult's explicit, scripted, unclear, or absent response to a check-in. The response is an input to the next care decision, not a decision by itself.
 - **Privacy mode**: the presentation instruction that determines whether source imagery is visible, blurred, replaced by a skeleton, or hidden. It does not change the underlying perception result.
+- **Event-scoped media grant**: a Relay-authoritative, session/event/scope/audience-bound permission for a short live WebRTC track. It is independent from scene selection, ICE reachability, local clips, cards, and model confidence.
+- **TURN credential**: a short-lived transport credential issued only after a matching active media grant. Its provider TTL may include bounded ICE setup headroom, but it never extends the application grant or permits media in the fully private state.
 
 ## Feasibility gates
 
@@ -88,6 +96,7 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 7. Evaluate normal versus fall-like transitions separately from static posture.
 8. Define the smallest structured result MiMo needs only after the classification gate passes.
 9. Evaluate Raspberry Pi deployment separately; failure on Pi must not invalidate laptop results.
+10. Evaluate event-scoped public media separately on recorded target devices and network pairs; an ICE configuration response, same-Wi-Fi success, or an active grant without a fresh remote frame cannot pass the public-media Gate.
 
 ## Current non-goals
 
@@ -98,6 +107,7 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 - Identity or emotion recognition.
 - A fixed JSON schema before model and classifier comparison.
 - A fixed staged-alert policy before posture and transition classification are validated.
+- Production-grade family identity, audit, adversarial media authorization, universal public-network reachability, SFU scaling, or medical-grade live monitoring.
 
 ## Open decisions
 
@@ -109,6 +119,7 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 6. Which exact prerecorded videos and competition story should be produced after the live pipeline is stable?
 7. Is Raspberry Pi 4B deployment worth the time and risk?
 8. Does the isolated anonymous multi-pose projection pass its frozen target-phone Pilot and Holdout Gate without weakening the single-person authority path?
+9. Does the grant-bound TURN path pass its frozen target-phone and cross-network Pilot/Holdout without weakening the four-scene privacy matrix or moving media into the Reme Relay?
 
 ## Repository status
 

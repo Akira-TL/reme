@@ -5,6 +5,8 @@ This isolated Cloudflare Worker provides the single-room data plane for the demo
 - `GET /api/status`
 - `POST /api/unlock` with `{ "key": "..." }`
 - `POST /api/release` with `Authorization: Bearer <token>`
+- `POST /api/media/ice` with exact `{ "grant_id": "..." }` and either the
+  active controller token or the current viewer socket's grant-bound token
 - `POST /api/activity/recognize` with the active Bearer token and exact
   `{ "image_b64": "<plain JPEG base64>" }`
 - `POST /api/danger/voice` with the active Bearer token and exact
@@ -30,9 +32,10 @@ the latest persisted non-media `reme-demo-event/v1` state in event-sequence orde
 and finally a fresh pose snapshot when available. Event and frame sequence state,
 the latest scene/activity/card/alarm events, grant metadata, and the grant's fixed
 viewer ID audience live in Durable Object SQLite. WebSocket attachments carry the
-viewer ID or controller lease/frame snapshot across hibernation. No SDP, ICE
-candidate, image, audio, video frame, or Blob is written to SQLite or an
-attachment.
+viewer ID, a non-secret socket ID, a hash of the current grant-bound ICE bearer,
+or the controller lease/frame snapshot across hibernation. The raw viewer bearer
+and returned short-lived TURN credentials are never persisted. No SDP, ICE
+candidate, image, audio, video frame, or Blob is written to SQLite or an attachment.
 
 The first controller message is an authoritative resume cursor:
 
@@ -93,13 +96,38 @@ monotonically reconciles any writes made while an older Worker version was activ
 an already authoritative escalation cannot be reopened or have its trigger
 rewritten by a higher client sequence.
 
-`media_grant_request` is accepted only for a matching consented kitchen care card
-or matching escalated fall alarm. The generated short-lived grant includes only
-viewers connected at issuance; a late viewer never inherits it. Strict
-`reme-media-signal/v1` SDP/ICE messages are then forwarded only between the
+`media_grant_request` is accepted only for a server-verified cooking activity or
+matching escalated fall alarm. The generated short-lived grant includes viewers
+connected at issuance; the accepted demo-only kitchen policy may add a late viewer
+without extending the original grant, while fall grants keep a static audience. The
+Relay itself caps each fall grant at 30 seconds and each kitchen grant at 60 seconds,
+including requests from older or custom controllers. Strict `reme-media-signal/v1`
+SDP/ICE messages are then forwarded only between the
 controller and those viewer IDs. Revocation, resolving the source event, leaving
 its scene, releasing the lease, or losing the controller socket closes the grant;
 the browser also enforces the published expiry timestamp.
+
+Each authorized viewer receives a separate exact `media_ice_capability` message
+after its active grant event. Its 64-hex bearer is hashed only inside that viewer's
+hibernatable socket attachment and is bound to the socket, viewer, session, grant,
+audience, and expiry. The controller uses its existing bearer. Both roles call
+`POST /api/media/ice`; Relay revalidates the active grant before and after the
+provider request, rate-limits failed issuance, and caches returned credentials
+only in live Worker memory. A room admits at most five simultaneously open viewer
+sockets. Each actor is limited to three provider attempts per 10 seconds, and a
+grant has a non-refundable lifetime ceiling of 18 provider attempts (the controller
+plus five viewers, three each), so reconnecting with new public viewer identities
+cannot create unbounded provider cost. Closing a viewer clears its capability and
+live cache but does not refund its grant budget; revoking/expiring the grant or
+ending the session clears that non-secret accounting state. Losing controller
+authority invalidates every capability.
+
+The Worker calls Cloudflare Realtime's server-side
+`credentials/generate-ice-servers` endpoint with a provider TTL of the rounded-up
+grant remainder plus 15 seconds of ICE setup grace, capped at 75 seconds. Browser-
+blocked port 53 URLs are removed, and a response without at least one remaining
+Cloudflare STUN URL and one authenticated TURN URL fails closed. Missing provider
+configuration and upstream failures never silently fall back to STUN-only.
 
 Activity recognition is an independent bounded HTTP path. It accepts at most
 900 KiB of JSON containing one JPEG, sends that one sample to the configured MiMo
@@ -193,7 +221,9 @@ CONTROL_KEY_SHA256=<64-character-test-digest> npm run dry-run
 For local `wrangler dev`, place `CONTROL_KEY_SHA256` in an ignored `.dev.vars` file.
 The value is the lowercase SHA-256 hex digest of the human-entered control key.
 Place `MIMO_API_KEY` there as well when exercising activity, scene, or danger voice
-recognition.
+recognition. `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` are also required to exercise
+cross-network media; both stay server-side and must never be exposed to frontend
+code.
 
 ## Deployment inputs
 
@@ -202,6 +232,8 @@ Before a real deployment, set the production digest as a Worker secret:
 ```sh
 npx wrangler secret put CONTROL_KEY_SHA256
 npx wrangler secret put MIMO_API_KEY
+npx wrangler secret put TURN_KEY_ID
+npx wrangler secret put TURN_KEY_API_TOKEN
 ```
 
 `MIMO_BASE_URL` and `MIMO_MODEL` are non-secret Wrangler vars and default to
