@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from reme.pose.review import PoseReviewError, build_pose_review_page
+from reme.runtime.perception.review import PoseReviewError, build_pose_review_page
 
 
 def _write_manifest(bundle_dir: Path) -> Path:

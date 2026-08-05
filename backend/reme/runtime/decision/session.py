@@ -21,7 +21,7 @@ from __future__ import annotations
 import threading
 from dataclasses import replace
 
-from reme.pose.runtime import (
+from reme.runtime.perception.runtime import (
     Component,
     RuntimeSessionError,
     RuntimeSessionRequest,

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from reme.pose.posture_runtime import POSTURE_SCHEMA_VERSION
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType
-from reme.pose.transitions import TRANSITION_SCHEMA_VERSION
+from reme.runtime.perception.posture_runtime import POSTURE_SCHEMA_VERSION
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
+from reme.runtime.perception.transitions import TRANSITION_SCHEMA_VERSION
 
 DEBUG_SCENARIOS = ("fall", "long_sit", "normal")
 

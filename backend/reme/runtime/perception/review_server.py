@@ -14,7 +14,7 @@ from socket import socket
 from socketserver import BaseServer
 from urllib.parse import urlparse
 
-from reme.pose.scene_bundle import SceneBundleError, load_scene_manifest
+from reme.runtime.perception.scene_bundle import SceneBundleError, load_scene_manifest
 
 
 class PoseReviewServerError(ValueError):

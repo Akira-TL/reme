@@ -8,7 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
-from reme.pose.scene_bundle import SceneManifest, load_scene_manifest
+from reme.runtime.perception.scene_bundle import SceneManifest, load_scene_manifest
 
 POSTURE_SCHEMA_VERSION = "reme-posture/v0-experiment"
 TRANSITION_SCHEMA_VERSION = "reme-transition/v0-experiment"

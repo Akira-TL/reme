@@ -23,7 +23,7 @@ from reme.decision.guardrails import (
     violates_risk_floor,
 )
 from reme.decision.records import DecisionState
-from reme.pose.transitions import TransitionDetectorConfig
+from reme.runtime.perception.transitions import TransitionDetectorConfig
 
 
 def _posture(**overrides: Any) -> PostureObservation:

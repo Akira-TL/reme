@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlparse
 
-from reme.pose.demo_scenarios import DEBUG_SCENARIOS, DemoScenarioCommand
-from reme.pose.runtime import RuntimeSessionRequest
+from reme.runtime.perception.demo_scenarios import DEBUG_SCENARIOS, DemoScenarioCommand
+from reme.runtime.perception.runtime import RuntimeSessionRequest
 
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 

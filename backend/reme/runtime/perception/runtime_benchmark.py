@@ -21,24 +21,27 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from reme.pose.camera import (
+from reme.runtime.perception.camera import (
     CameraConfig,
     FrameSource,
     LiveMoveNetStream,
     OpenCVCameraSource,
     PoseEstimator,
 )
-from reme.pose.movenet import MoveNetEstimator, MoveNetResult
-from reme.pose.posture import StaticPostureModel
-from reme.pose.posture_runtime import PostureRuntimeConfig, RealtimePostureTracker
-from reme.pose.runtime import (
+from reme.runtime.perception.movenet import MoveNetEstimator, MoveNetResult
+from reme.runtime.perception.posture import StaticPostureModel
+from reme.runtime.perception.posture_runtime import (
+    PostureRuntimeConfig,
+    RealtimePostureTracker,
+)
+from reme.runtime.perception.runtime import (
     ModeProfile,
     RuntimeEvent,
     RuntimeEventType,
     RuntimeSessionRequest,
     RuntimeSessionState,
 )
-from reme.pose.runtime_server import (
+from reme.runtime.perception.runtime_server import (
     DEFAULT_MOVENET_MODEL,
     DEFAULT_POSTURE_MODEL,
     EventBroker,

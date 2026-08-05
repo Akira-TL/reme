@@ -31,22 +31,28 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from reme.pose.c_stream import (
+from reme.runtime.perception.c_stream import (
     CStreamDecoder,
     CStreamError,
     CStreamMessage,
     CVideoFrame,
 )
-from reme.pose.demo_scenarios import DemoScenarioCommand, build_demo_runtime_events
-from reme.pose.posture import PosturePrediction
-from reme.pose.posture_runtime import PostureRuntimeConfig, RealtimePostureTracker
-from reme.pose.runtime import (
+from reme.runtime.perception.demo_scenarios import (
+    DemoScenarioCommand,
+    build_demo_runtime_events,
+)
+from reme.runtime.perception.posture import PosturePrediction
+from reme.runtime.perception.posture_runtime import (
+    PostureRuntimeConfig,
+    RealtimePostureTracker,
+)
+from reme.runtime.perception.runtime import (
     ModeProfile,
     RuntimeEvent,
     RuntimeEventType,
     RuntimeSessionRequest,
 )
-from reme.pose.transitions import (
+from reme.runtime.perception.transitions import (
     FRAME_LANDMARKS_SCHEMA_VERSION,
     TransitionDetector,
     TransitionDetectorConfig,

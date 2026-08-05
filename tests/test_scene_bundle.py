@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from reme.pose.scene_bundle import (
+from reme.runtime.perception.scene_bundle import (
     MOVENET_KEYPOINT_NAMES,
     SceneBundleError,
     build_scene_bundle,

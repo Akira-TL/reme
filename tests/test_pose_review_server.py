@@ -5,7 +5,7 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from reme.pose.review_server import build_review_handler
+from reme.runtime.perception.review_server import build_review_handler
 
 
 def test_review_server_supports_video_byte_ranges(tmp_path: Path) -> None:

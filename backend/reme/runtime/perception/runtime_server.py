@@ -17,26 +17,36 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
-from reme.pose.browser_input import (
+from reme.runtime.perception.browser_input import (
     BrowserGatewayPerceptionWorker,
     GeometricPostureModel,
     parse_input_text,
     read_ws_messages,
     websocket_accept_value,
 )
-from reme.pose.c_stream import (
+from reme.runtime.perception.c_stream import (
     CCameraMessageSource,
     CCameraWebSocketSource,
     CDebugScenario,
     CSceneSignal,
 )
-from reme.pose.camera import CameraConfig, LiveMoveNetStream, OpenCVCameraSource
-from reme.pose.demo_scenarios import build_demo_runtime_events
-from reme.pose.fall_runtime import DEFAULT_FALL_MIL_MODEL, FallMILTransitionEnhancer
-from reme.pose.movenet import MoveNetEstimator
-from reme.pose.posture import PosturePrediction, StaticPostureModel
-from reme.pose.posture_runtime import PostureRuntimeConfig, RealtimePostureTracker
-from reme.pose.runtime import (
+from reme.runtime.perception.camera import (
+    CameraConfig,
+    LiveMoveNetStream,
+    OpenCVCameraSource,
+)
+from reme.runtime.perception.demo_scenarios import build_demo_runtime_events
+from reme.runtime.perception.fall_runtime import (
+    DEFAULT_FALL_MIL_MODEL,
+    FallMILTransitionEnhancer,
+)
+from reme.runtime.perception.movenet import MoveNetEstimator
+from reme.runtime.perception.posture import PosturePrediction, StaticPostureModel
+from reme.runtime.perception.posture_runtime import (
+    PostureRuntimeConfig,
+    RealtimePostureTracker,
+)
+from reme.runtime.perception.runtime import (
     Component,
     ModeProfile,
     RuntimeEvent,
@@ -47,8 +57,8 @@ from reme.pose.runtime import (
     RuntimeSessionStatus,
     ensure_new_session,
 )
-from reme.pose.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
-from reme.pose.transitions import TransitionDetector
+from reme.runtime.perception.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
+from reme.runtime.perception.transitions import TransitionDetector
 
 DEFAULT_MOVENET_MODEL = Path("models/movenet/movenet_lightning_f16_v4.tflite")
 DEFAULT_POSTURE_MODEL = Path(

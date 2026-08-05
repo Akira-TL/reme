@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from reme.pose.scene_bundle import CORE_KEYPOINT_NAMES, MOVENET_KEYPOINT_NAMES
+from reme.runtime.perception.scene_bundle import (
+    CORE_KEYPOINT_NAMES,
+    MOVENET_KEYPOINT_NAMES,
+)
 
 LandmarkQuality = Literal["usable", "degraded", "unavailable"]
 TORSO_SHOULDERS = (5, 6)

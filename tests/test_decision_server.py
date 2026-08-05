@@ -21,7 +21,7 @@ from reme.decision.server import build_decision_handler, build_server
 from reme.decision.session import RuntimeSessionRegistry, SessionRegistryError
 from reme.decision.stream import EventIngest, IngestError
 from reme.decision.websocket import DecisionEventHub
-from reme.pose.runtime import (
+from reme.runtime.perception.runtime import (
     Component,
     ModeProfile,
     RuntimeEvent,

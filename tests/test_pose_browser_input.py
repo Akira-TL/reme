@@ -6,7 +6,7 @@ import io
 import struct
 from typing import Any
 
-from reme.pose.browser_input import (
+from reme.runtime.perception.browser_input import (
     KEYPOINT_NAMES,
     BrowserGatewayPerceptionWorker,
     GeometricPostureModel,
@@ -14,7 +14,12 @@ from reme.pose.browser_input import (
     parse_input_text,
     read_ws_messages,
 )
-from reme.pose.runtime import ModeProfile, RuntimeEvent, RuntimeEventType, RuntimeSessionRequest
+from reme.runtime.perception.runtime import (
+    ModeProfile,
+    RuntimeEvent,
+    RuntimeEventType,
+    RuntimeSessionRequest,
+)
 
 SESSION = "live-camera-test"
 SCENE = "living_room"

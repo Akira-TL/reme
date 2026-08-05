@@ -7,7 +7,7 @@ from reme.decision.context import (
     build_decision_context,
 )
 from reme.decision.stream import EVENT_SCHEMA_VERSION, EventIngest, IngestError
-from reme.pose.runtime import RuntimeEventType
+from reme.runtime.perception.runtime import RuntimeEventType
 
 SESSION_ID = "session-1"
 SCENE_ID = "live-camera-1"

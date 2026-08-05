@@ -10,7 +10,7 @@ from reme.decision.session import (
     SessionRegistryError,
     parse_session_request,
 )
-from reme.pose.runtime import (
+from reme.runtime.perception.runtime import (
     Component,
     ModeProfile,
     RuntimeSessionRequest,

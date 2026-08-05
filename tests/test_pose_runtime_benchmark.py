@@ -5,13 +5,13 @@ import time
 from collections.abc import Callable
 from typing import cast
 
-from reme.pose.runtime import (
+from reme.runtime.perception.runtime import (
     ModeProfile,
     RuntimeEvent,
     RuntimeEventType,
     RuntimeSessionRequest,
 )
-from reme.pose.runtime_benchmark import (
+from reme.runtime.perception.runtime_benchmark import (
     AcceptanceThresholds,
     MetricSeries,
     SessionRecorder,
@@ -19,7 +19,7 @@ from reme.pose.runtime_benchmark import (
     evaluate_acceptance,
     render_markdown,
 )
-from reme.pose.runtime_server import (
+from reme.runtime.perception.runtime_server import (
     EventBroker,
     RuntimeHTTPServer,
     RuntimePerceptionController,

@@ -30,11 +30,11 @@ from reme.decision.session import RuntimeSessionRegistry
 from reme.decision.state_machine import TemplateId
 from reme.decision.stream import EventIngest
 from reme.decision.websocket import DecisionEventHub
-from reme.pose.browser_input import (
+from reme.runtime.perception.browser_input import (
     KEYPOINT_NAMES,
     BrowserGatewayPerceptionWorker,
 )
-from reme.pose.runtime_server import (
+from reme.runtime.perception.runtime_server import (
     RuntimeHTTPServer,
     RuntimePerceptionController,
     build_runtime_handler,

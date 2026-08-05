@@ -1,6 +1,6 @@
 """Compatibility entrypoint for the A-owned pose scene-bundle module."""
 
-from reme.pose.scene_bundle import (
+from reme.runtime.perception.scene_bundle import (
     FRAME_LANDMARKS_SCHEMA_VERSION,
     MOVENET_KEYPOINT_NAMES,
     SCENE_SCHEMA_VERSION,

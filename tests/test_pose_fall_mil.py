@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from reme.pose.fall_mil import (
+from reme.runtime.perception.fall_mil import (
     FALL_WINDOW_FEATURE_NAMES,
     FallBag,
     FallMILModel,
@@ -13,7 +13,7 @@ from reme.pose.fall_mil import (
     save_fall_mil_model,
     train_fall_mil,
 )
-from reme.pose.fall_weak_labels import FallPoseSample
+from reme.runtime.perception.fall_weak_labels import FallPoseSample
 
 
 def _sample(

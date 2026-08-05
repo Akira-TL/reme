@@ -35,7 +35,11 @@ from reme.decision.context import (
     _parse_posture_observation,
     _parse_transition_event,
 )
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType, RuntimeSessionError
+from reme.runtime.perception.runtime import (
+    RuntimeEvent,
+    RuntimeEventType,
+    RuntimeSessionError,
+)
 
 DEFAULT_MAX_EVENTS_PER_SCENE = 2000
 EVENT_SCHEMA_VERSION = "reme-runtime-event/v0-experiment"

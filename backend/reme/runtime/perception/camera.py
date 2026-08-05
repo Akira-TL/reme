@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from reme.pose.movenet import MoveNetEstimator, MoveNetResult
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType
-from reme.pose.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
+from reme.runtime.perception.movenet import MoveNetEstimator, MoveNetResult
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
+from reme.runtime.perception.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
 
 
 class CameraStreamError(RuntimeError):

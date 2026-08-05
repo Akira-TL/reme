@@ -49,7 +49,7 @@ from reme.decision.websocket import (
     Frame,
     compute_accept,
 )
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
 
 DEFAULT_INITIAL_BACKOFF_S = 0.5
 DEFAULT_RECV_TIMEOUT_S = 30.0  # A pings every 12s while idle, so silence means dead

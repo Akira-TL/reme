@@ -18,8 +18,8 @@ from reme.decision.policy import DecisionService
 from reme.decision.runtime_glue import spawn_post_ingest_evaluation
 from reme.decision.session import RuntimeSessionRegistry
 from reme.decision.stream import EventIngest, IngestError
-from reme.pose.runtime import RuntimeEvent
-from reme.pose.runtime_server import EventBroker, EventSubscription
+from reme.runtime.perception.runtime import RuntimeEvent
+from reme.runtime.perception.runtime_server import EventBroker, EventSubscription
 
 EventEvaluator = Callable[..., None]
 

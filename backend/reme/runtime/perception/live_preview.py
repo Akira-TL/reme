@@ -15,12 +15,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from reme.pose.camera import CameraConfig, LiveMoveNetStream, OpenCVCameraSource
-from reme.pose.movenet import MoveNetEstimator
-from reme.pose.posture import StaticPostureModel
-from reme.pose.posture_runtime import PostureRuntimeConfig, RealtimePostureTracker
-from reme.pose.review import THREE_VENDOR_FILES
-from reme.pose.runtime import RuntimeEvent
+from reme.runtime.perception.camera import (
+    CameraConfig,
+    LiveMoveNetStream,
+    OpenCVCameraSource,
+)
+from reme.runtime.perception.movenet import MoveNetEstimator
+from reme.runtime.perception.posture import StaticPostureModel
+from reme.runtime.perception.posture_runtime import (
+    PostureRuntimeConfig,
+    RealtimePostureTracker,
+)
+from reme.runtime.perception.review import THREE_VENDOR_FILES
+from reme.runtime.perception.runtime import RuntimeEvent
 
 DEFAULT_MOVENET_MODEL = Path("models/movenet/movenet_lightning_f16_v4.tflite")
 DEFAULT_POSTURE_MODEL = Path(

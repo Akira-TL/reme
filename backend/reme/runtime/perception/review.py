@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from reme.pose.scene_bundle import SceneBundleError, load_scene_manifest
+from reme.runtime.perception.scene_bundle import SceneBundleError, load_scene_manifest
 
 POSE_3D_SCHEMA_VERSION = "reme-keypoints-3d/v0-experiment"
 MOTIONBERT_SOURCE_SCHEMA = "motionbert-h36m-17/offline-demo-v1"

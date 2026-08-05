@@ -17,17 +17,17 @@ from pathlib import Path
 from typing import Protocol
 
 import pytest
-import reme.pose.runtime_server as runtime_server_module
-from reme.pose.c_stream import CSceneSignal, CVideoFrame
-from reme.pose.posture import PosturePrediction
-from reme.pose.runtime import (
+import reme.runtime.perception.runtime_server as runtime_server_module
+from reme.runtime.perception.c_stream import CSceneSignal, CVideoFrame
+from reme.runtime.perception.posture import PosturePrediction
+from reme.runtime.perception.runtime import (
     ModeProfile,
     RuntimeEvent,
     RuntimeEventType,
     RuntimeSessionRequest,
     RuntimeSessionState,
 )
-from reme.pose.runtime_server import (
+from reme.runtime.perception.runtime_server import (
     CCameraWebSocketPerceptionWorker,
     EventBroker,
     HybridPostureModel,
@@ -37,7 +37,7 @@ from reme.pose.runtime_server import (
     derive_live_perception_events,
     encode_websocket_frame,
 )
-from reme.pose.scene_bundle import MOVENET_KEYPOINT_NAMES
+from reme.runtime.perception.scene_bundle import MOVENET_KEYPOINT_NAMES
 
 
 class Publish(Protocol):

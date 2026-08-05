@@ -1,14 +1,14 @@
 from collections import deque
 
 import pytest
-from reme.pose.posture import PosturePrediction
-from reme.pose.posture_runtime import (
+from reme.runtime.perception.posture import PosturePrediction
+from reme.runtime.perception.posture_runtime import (
     PostureRuntimeConfig,
     PostureRuntimeError,
     RealtimePostureTracker,
 )
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType
-from reme.pose.scene_bundle import MOVENET_KEYPOINT_NAMES
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
+from reme.runtime.perception.scene_bundle import MOVENET_KEYPOINT_NAMES
 
 
 class StubPredictor:

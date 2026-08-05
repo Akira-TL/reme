@@ -19,7 +19,7 @@ from typing import Any
 
 from reme.decision.mimo.adapter import build_video_part
 from reme.decision.records import VisualContext, VisualContextType
-from reme.pose.scene_bundle import SceneBundleError, load_scene_manifest
+from reme.runtime.perception.scene_bundle import SceneBundleError, load_scene_manifest
 
 VISUAL_CLIP_NAME = "visual_context.mp4"
 VISUAL_META_NAME = "visual_context.json"

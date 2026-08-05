@@ -1,13 +1,13 @@
 from collections.abc import Iterator
 
 import pytest
-from reme.pose.camera import (
+from reme.runtime.perception.camera import (
     CameraConfig,
     CameraStreamError,
     LiveMoveNetStream,
     _opencv_camera_backend,
 )
-from reme.pose.movenet import MoveNetKeypoint, MoveNetResult
+from reme.runtime.perception.movenet import MoveNetKeypoint, MoveNetResult
 
 
 class FakeFrameSource:

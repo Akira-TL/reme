@@ -26,14 +26,17 @@ from io import BufferedIOBase
 from typing import Any
 
 import pytest
-from reme.pose.runtime import (
+from reme.runtime.debug_ws_client import PerceptionEventClient, WebSocketClientError
+from reme.runtime.perception.runtime import (
     ModeProfile,
     RuntimeEvent,
     RuntimeEventType,
     RuntimeSessionRequest,
 )
-from reme.pose.runtime_server import RuntimePerceptionController, build_runtime_handler
-from reme.runtime.debug_ws_client import PerceptionEventClient, WebSocketClientError
+from reme.runtime.perception.runtime_server import (
+    RuntimePerceptionController,
+    build_runtime_handler,
+)
 
 _OPCODE_CONTINUATION = 0x0
 _OPCODE_TEXT = 0x1

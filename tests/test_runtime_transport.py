@@ -3,8 +3,8 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType
-from reme.pose.runtime_server import EventBroker
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
+from reme.runtime.perception.runtime_server import EventBroker
 from reme.runtime.transport import InProcessPerceptionBridge
 
 

@@ -8,7 +8,7 @@ import socket
 import threading
 
 import pytest
-from reme.pose.c_stream import (
+from reme.runtime.perception.c_stream import (
     CCameraWebSocketSource,
     CDebugScenario,
     CSceneSignal,
@@ -16,8 +16,8 @@ from reme.pose.c_stream import (
     CStreamError,
     CVideoFrame,
 )
-from reme.pose.runtime import ModeProfile, RuntimeSessionRequest
-from reme.pose.runtime_server import encode_websocket_frame
+from reme.runtime.perception.runtime import ModeProfile, RuntimeSessionRequest
+from reme.runtime.perception.runtime_server import encode_websocket_frame
 
 
 def _live_request() -> RuntimeSessionRequest:

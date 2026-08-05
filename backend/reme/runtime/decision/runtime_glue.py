@@ -17,7 +17,7 @@ from reme.decision.records import CareDecision, DecisionState
 from reme.decision.session import RuntimeSessionRegistry, SessionRegistryError
 from reme.decision.stream import EventIngest, LiveStreams
 from reme.decision.websocket import DecisionEventHub
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
 
 _EVALUATED_EVENT_TYPES = {
     RuntimeEventType.POSTURE_OBSERVATION,

@@ -53,7 +53,7 @@ from reme.decision.state_machine import DemoConversationKind
 from reme.decision.stream import EventIngest, IngestError
 from reme.decision.voice_dialogue import VoiceDialogueController, VoiceDialogueError
 from reme.decision.websocket import DecisionEventHub, WebSocketError
-from reme.pose.runtime import ModeProfile, RuntimeSessionStatus
+from reme.runtime.perception.runtime import ModeProfile, RuntimeSessionStatus
 
 _REJECT_STATUS: dict[str, HTTPStatus] = {
     "stale_decision": HTTPStatus.CONFLICT,
