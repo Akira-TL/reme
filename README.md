@@ -70,6 +70,7 @@ macOS 仍可双击根目录的 `启动Reme全链路演示.command`。旧入口�
 ├── scripts/            # 演示、环境配置和平台启动器
 ├── docs/               # 产品、方案、调研、ADR 和启动文档
 ├── examples/           # 联调与合同示例
+├── experiments/        # 可复现但未进入产品运行时的实验
 ├── tests/              # Python 确定性测试
 ├── .scratch/           # 规格、任务、实验过程、结果和交接记录
 ├── AGENTS.md           # Agent 工程规则
