@@ -1,3 +1,4 @@
+import importlib.util
 import json
 from pathlib import Path
 
@@ -11,11 +12,8 @@ from reme.runtime.perception.scene_bundle import (
 )
 
 
-def test_legacy_scene_bundle_entrypoint_reexports_pose_module() -> None:
-    from reme import scene_bundle as legacy_scene_bundle
-
-    assert legacy_scene_bundle.load_scene_manifest is load_scene_manifest
-    assert legacy_scene_bundle.build_scene_bundle is build_scene_bundle
+def test_legacy_scene_bundle_entrypoint_is_removed() -> None:
+    assert importlib.util.find_spec("reme.scene_bundle") is None
 
 
 def test_load_scene_manifest_rejects_unknown_schema_version(tmp_path: Path) -> None:

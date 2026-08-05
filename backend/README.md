@@ -13,7 +13,6 @@ backend/reme/
 │   ├── transport.py       # 进程内感知到决策事件传输
 │   ├── debug_ws_client.py # 外部联调观察器，不参与内部传输
 │   └── server.py          # 唯一后端 HTTP/WS 服务入口
-├── scene_bundle.py   # 场景包兼容入口
 ├── care.py           # 早期动作 JSONL 关怀原型
 ├── motion.py         # 早期动作数据规则
 ├── motion_io.py      # 早期动作数据读取

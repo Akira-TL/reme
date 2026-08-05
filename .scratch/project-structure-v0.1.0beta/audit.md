@@ -160,5 +160,6 @@ e36ff41 feat(runtime): 删除旧本地演示兼容入口
 - 感知实现统一使用 `reme.runtime.perception.*`；
 - 决策实现统一使用 `reme.runtime.decision.*`；
 - 全量测试保持 `563 passed, 25 failed` 的既有产品合同基线；
-- 顶层 `reme.pose` 和 `reme.decision` 兼容包已无仓库内部调用方，可以删除；
+- 顶层 `reme.pose` 和 `reme.decision` 兼容包已删除；
+- `reme.scene_bundle` 兼容导出已无调用方并删除，正式路径为 `reme.runtime.perception.scene_bundle`；
 - 历史 ADR、实验结果和交接记录中的旧模块名仅在其仍代表历史事实时保留。

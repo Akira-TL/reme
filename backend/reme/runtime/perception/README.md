@@ -40,7 +40,7 @@ reme.runtime.perception
 
 跨角色字段必须遵循 `.scratch/abc-interface/spec.md`。恢复的训练数据位于 `data/training/pose/`，新实验产物写入被 Git 忽略的 `artifacts/training/`；不得将大型视频、模型或逐帧结果提交到 Git。
 
-兼容入口 `reme.scene_bundle` 暂时保留；新代码和新测试应直接使用 `reme.runtime.perception.*`。
+场景包实现位于 `reme.runtime.perception.scene_bundle`，代码和测试统一使用正式路径。
 
 ## 实时摄像头与 MoveNet
 
