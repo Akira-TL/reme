@@ -1,6 +1,6 @@
-# A 姿态感知工作目录
+# 姿态感知模块
 
-`backend/reme/pose/` 是成员 A 的正式后端实现目录，负责从实时摄像头或预录视频中生成可验证、可复现的动作事实。
+`backend/reme/runtime/perception/` 是统一后端中的感知实现目录，负责从实时摄像头或预录视频中生成可验证、可复现的动作事实。它不是独立执行端，由 `reme.runtime.server` 在同一进程内创建并连接决策模块。
 
 ## 负责范围
 
@@ -11,7 +11,8 @@
 - 姿态标注读取与数据划分；
 - 静态姿态特征、基线和分类器；
 - 静止状态与动作转变候选；
-- A 向 B/C 的实时事件流、离线结果生成与验收。
+- 向进程内决策模块和浏览器调试流发布实时事件；
+- 离线结果生成与验收。
 
 ## 不负责范围
 
@@ -23,7 +24,7 @@
 ## 模块规划
 
 ```text
-reme.pose
+reme.runtime.perception
 ├── runtime.py           # C控制的实时/预录会话和事件信封
 ├── camera.py            # 摄像头采集、实时事件流和性能统计
 ├── movenet.py           # MoveNet Lightning LiteRT推理与跟踪裁剪
@@ -180,24 +181,24 @@ http://127.0.0.1:8765/live
 
 左侧通过本机 MJPEG 显示内存中的摄像头帧；右侧将同一帧的 MoveNet 2D 关键点映射到可旋转的浅深度 Three.js 空间。该页面明确标记为“展示型3D”，不声称实时 MotionBERT 三维推断。停止服务使用 `Ctrl+C`。
 
-## C控制的实时事件服务
+## 统一后端中的实时感知
 
-正式链路由C采集视频和音频。A复用C已有的摄像头WebSocket，只处理视频帧与场景信号；音频由C/B链路处理：
+正式链路由浏览器采集视频和音频。统一后端接收视频帧与场景信号；感知事件通过 `reme.runtime.transport` 直接进入决策模块。音频继续由前端与决策接口处理。
+
+浏览器输入模式：
 
 ```bash
-.venv/bin/python -m reme.pose.runtime_server \
+uv run --extra pose python -m reme.runtime.server \
   --host 0.0.0.0 \
   --port 8770 \
-  --input-adapter c_ws \
-  --c-camera-ws-url ws://<C_HOST>:<C_PORT>/<CAMERA_PATH> \
-  --movenet-model models/movenet/movenet_lightning_f16_v4.tflite \
-  --posture-model artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json
+  --input-adapter c_ws_server \
+  --browser-input-mode auto
 ```
 
-A本地摄像头只用于开发测试：
+本地摄像头只用于开发测试：
 
 ```bash
-.venv/bin/python -m reme.pose.runtime_server \
+uv run --extra pose python -m reme.runtime.server \
   --host 127.0.0.1 \
   --port 8770 \
   --input-adapter local_camera \
@@ -215,9 +216,9 @@ GET  /api/health
 WS   /ws/events?session_id=<session_id>
 ```
 
-`POST /api/runtime/start`只接受共享合同中的`live_camera`请求。HTTP响应先返回`starting`；正式`c_ws`模式连接C摄像头WS并收到首个有效帧后，`GET /api/runtime/status`才返回`running`。WebSocket发送同一`session_id`下的`FrameLandmarks`、`PostureObservation`和确定性`TransitionEvent`候选。每帧先更新姿态上下文，再分析转变，最后按关键点、姿态、转变的顺序发布。`fall_like_transition`只是待验证候选，不代表已证明的跌倒识别。替换session时旧连接收到关闭帧，旧事件不会进入新会话。
+`POST /api/runtime/start` 只接受共享合同中的 `live_camera` 请求。HTTP 响应先返回 `starting`；收到首个有效帧后，`GET /api/runtime/status` 才返回 `running`。浏览器可通过 `/ws/events` 观察同一 `session_id` 下的 `FrameLandmarks`、`PostureObservation` 和确定性 `TransitionEvent` 候选；决策模块不订阅该 Socket，而是直接消费进程内 Broker。每帧先更新姿态上下文，再分析转变，最后按关键点、姿态、转变的顺序发布。`fall_like_transition` 只是待验证候选，不代表已证明的跌倒识别。
 
-C摄像头WS在一个session内保持连接并复用多个场景。`scene_signal`的`activate`、`switch`或`reuse`会切换当前`scene_id`，同时清空A的姿态平滑、持续时间和转变窗口；不会重启session或重连摄像头WS。A的事件`sequence`在整个session内单调递增，即使C按场景重置自己的`frame_index`。默认监听`0.0.0.0:8770`，允许同一局域网内的B/C访问；CORS和Private Network预检已开放。`GET /api/runtime/capabilities`返回当前输入所有权、事件类型、schema与端点。
+摄像头 WebSocket 在一个 session 内保持连接并复用多个场景。`scene_signal` 的 `activate`、`switch` 或 `reuse` 会切换当前 `scene_id`，同时清空姿态平滑、持续时间和转变窗口；不会重启 session。事件 `sequence` 在整个 session 内单调递增，即使前端按场景重置自己的 `frame_index`。统一后端默认监听 `127.0.0.1:8770`；需要局域网访问时显式指定 `--host 0.0.0.0`。`GET /api/runtime/capabilities` 返回当前输入所有权、事件类型、schema 与端点。
 
 ## MotionBERT 可重复重建
 

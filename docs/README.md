@@ -6,7 +6,7 @@ Reme 的长期文档统一放在 `docs/`；临时规格、任务、实验过程�
 
 - [快速启动](快速启动.md)：统一后端单机演示、依赖和故障排查。
 - [前端说明](../frontend/README.md)：React/Vite 页面、运行时接入和构建方式。
-- [姿态模块说明](../backend/reme/pose/README.md)：A 侧模型、训练与运行时工具。
+- [姿态模块说明](../backend/reme/runtime/perception/README.md)：统一后端中的模型、训练与感知工具。
 
 ## 产品文档
 
