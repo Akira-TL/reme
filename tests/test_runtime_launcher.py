@@ -8,8 +8,8 @@ import time
 from pathlib import Path
 
 import pytest
-import reme.local_demo as local_demo_module
-from reme.local_demo import (
+import reme.runtime.launcher as local_demo_module
+from reme.runtime.launcher import (
     LocalDemoConfig,
     LocalDemoError,
     assert_port_available,

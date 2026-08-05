@@ -4,7 +4,7 @@
 
 - `test_pose_*`：感知、姿态、转变、模型适配和运行时兼容接口；
 - `test_decision_*`：决策、状态机、MiMo、会话和危险确认；
-- `test_local_demo.py`：统一后端与前端启动器；
+- `test_runtime_launcher.py`：统一后端与前端启动器；
 - `test_runtime_transport.py`：进程内感知到决策传输；
 - `test_runtime_debug_ws_client.py`：仅供外部联调的 WebSocket 观察客户端；
 - `test_demo_cli.py`、`test_motion_*`：早期兼容原型；
