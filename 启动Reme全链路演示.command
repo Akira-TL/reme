@@ -1,2 +1,3 @@
 #!/bin/zsh
-exec zsh "$(dirname "$0")/scripts/start-demo.sh"
+ROOT="${0:A:h}"
+exec zsh "$ROOT/scripts/launchers/macos/start-full-demo.command"

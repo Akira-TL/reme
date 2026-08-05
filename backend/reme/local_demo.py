@@ -25,7 +25,7 @@ DEFAULT_FRONTEND_PORT = 4174
 DEFAULT_PERCEPTION_PORT = 8770
 DEFAULT_DECISION_PORT = 8100
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 30.0
-DEFAULT_MIMO_ENV = Path.home() / ".config" / "reme" / "mimo.env"
+DEFAULT_MIMO_ENV = Path(".env")
 FRONTEND_NATIVE_CHECK = Path("scripts/check-native-deps.mjs")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -50,6 +50,14 @@ class LocalDemoConfig:
     @property
     def frontend_dir(self) -> Path:
         return self.root / "frontend"
+
+    @property
+    def mimo_env_path(self) -> Path:
+        """Resolve the repository-local MiMo environment file."""
+
+        if self.mimo_env.is_absolute():
+            return self.mimo_env
+        return self.root / self.mimo_env
 
     @property
     def acceptance_url(self) -> str:
@@ -325,7 +333,7 @@ def run_local_demo(config: LocalDemoConfig) -> int:
         assert_port_available(config.host, port)
 
     env = os.environ.copy()
-    for name, value in load_env_file(config.mimo_env).items():
+    for name, value in load_env_file(config.mimo_env_path).items():
         env.setdefault(name, value)
     env["PYTHONUNBUFFERED"] = "1"
     env["VITE_REME_PERCEPTION_HTTP_URL"] = config.perception_http_url
@@ -402,7 +410,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_STARTUP_TIMEOUT_SECONDS,
         help="seconds allowed for each local service to become ready",
     )
-    parser.add_argument("--mimo-env", type=Path, default=DEFAULT_MIMO_ENV)
+    parser.add_argument(
+        "--mimo-env",
+        type=Path,
+        default=DEFAULT_MIMO_ENV,
+        help="MiMo environment file; relative paths resolve from the repository root",
+    )
     return parser
 
 

@@ -58,6 +58,7 @@ def test_build_child_commands_connects_a_b_and_vite(tmp_path: Path) -> None:
     assert commands["B"][-1] == "ws://127.0.0.1:18770/ws/events"
     assert commands["C"][-3:] == ["--port", "14174", "--strictPort"]
     assert config.acceptance_url == "http://127.0.0.1:14174/typical-demo.html"
+    assert config.mimo_env_path == tmp_path / ".env"
 
 
 def test_assert_port_available_rejects_occupied_listener() -> None:
