@@ -15,7 +15,29 @@ build/
 .DS_Store
 
 # Local models, recordings, and generated data
-models/
+# Model binaries remain local by default. Directory placeholders and the model
+# layout document are tracked so runtime/training assets have stable targets.
+models/*
+!models/README.md
+!models/runtime/
+!models/trained/
+!models/vendor/
+models/runtime/*
+!models/runtime/movenet/
+!models/runtime/mediapipe/
+models/trained/*
+!models/trained/posture/
+!models/trained/fall/
+models/vendor/*
+!models/vendor/.gitkeep
+models/runtime/movenet/*
+!models/runtime/movenet/.gitkeep
+models/runtime/mediapipe/*
+!models/runtime/mediapipe/.gitkeep
+models/trained/posture/*
+!models/trained/posture/.gitkeep
+models/trained/fall/*
+!models/trained/fall/.gitkeep
 recordings/
 data/raw/
 artifacts/
