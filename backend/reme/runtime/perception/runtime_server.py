@@ -52,7 +52,7 @@ from reme.pose.transitions import TransitionDetector
 
 DEFAULT_MOVENET_MODEL = Path("models/movenet/movenet_lightning_f16_v4.tflite")
 DEFAULT_POSTURE_MODEL = Path(
-    "artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json"
+    "models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json"
 )
 _WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 FRONTEND_API_SCHEMA_VERSION = "reme-perception-frontend/v0-experiment"

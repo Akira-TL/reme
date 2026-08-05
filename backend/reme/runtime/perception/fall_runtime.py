@@ -13,7 +13,7 @@ from reme.pose.posture import PosturePrediction
 from reme.pose.runtime import RuntimeEvent, RuntimeEventType
 from reme.pose.transitions import TransitionDetector, TransitionDetectorConfig
 
-DEFAULT_FALL_MIL_MODEL = Path("artifacts/pose-classification/fall-50/mil-v3/model.json")
+DEFAULT_FALL_MIL_MODEL = Path("models/trained/fall/mil-v3/model.json")
 
 
 class FallRuntimeError(RuntimeError):

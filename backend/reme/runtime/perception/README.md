@@ -154,7 +154,7 @@ artifacts/pose-classification/raw/downloads6/
   --scene-id live-camera-001 \
   --camera 0 \
   --model models/movenet/movenet_lightning_f16_v4.tflite \
-  --posture-model artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json \
+  --posture-model models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json \
   --posture-hz 7.5
 ```
 
@@ -170,7 +170,7 @@ artifacts/pose-classification/raw/downloads6/
   --port 8765 \
   --camera 0 \
   --movenet-model models/movenet/movenet_lightning_f16_v4.tflite \
-  --posture-model artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json
+  --posture-model models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json
 ```
 
 浏览器打开：

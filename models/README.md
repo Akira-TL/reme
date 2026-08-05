@@ -24,14 +24,14 @@ models/
 
 这些模型只存在于本地工作区，并受 `.gitignore` 管理。完整 SHA-256 台账见 `docs/assets/training-models.sha256`。
 
-当前运行时默认路径尚未切换，仍使用：
+当前运行时默认路径：
 
 - `models/movenet/movenet_lightning_f16_v4.tflite`
 - `frontend/public/mediapipe/pose_landmarker_lite.task`
-- `artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json`
-- `artifacts/pose-classification/fall-50/mil-v3/model.json`
+- `models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json`
+- `models/trained/fall/mil-v3/model.json`
 
-后续修改运行时模型路径时，必须同时更新：
+后续修改或替换运行时模型时，必须同时更新：
 
 1. 后端或前端默认路径；
 2. 构建复制脚本；
