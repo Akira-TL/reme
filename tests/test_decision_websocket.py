@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from typing import Any, BinaryIO
 
 import pytest
-from reme.decision.websocket import (
+from reme.runtime.decision.websocket import (
     MAX_MESSAGE_BYTES,
     OPCODE_BINARY,
     OPCODE_CLOSE,

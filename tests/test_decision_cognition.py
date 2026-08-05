@@ -13,27 +13,27 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from reme.decision.config import (
+from reme.runtime.decision.config import (
     ServerConfig,
     ServerConfigError,
     build_home_provider,
     build_policy_config,
     server_config_from_args,
 )
-from reme.decision.context import load_scene_streams
-from reme.decision.home import HomeContext, RoomLabel, StaticHomeProvider
-from reme.decision.memory import BehaviorMemoryStore, MemoryEventKind
-from reme.decision.mimo.adapter import MimoCallResult
-from reme.decision.mimo.prompts import build_user_prompt
-from reme.decision.policy import DecisionService, PolicyConfig
-from reme.decision.records import (
+from reme.runtime.decision.context import load_scene_streams
+from reme.runtime.decision.home import HomeContext, RoomLabel, StaticHomeProvider
+from reme.runtime.decision.memory import BehaviorMemoryStore, MemoryEventKind
+from reme.runtime.decision.mimo.adapter import MimoCallResult
+from reme.runtime.decision.mimo.prompts import build_user_prompt
+from reme.runtime.decision.policy import DecisionService, PolicyConfig
+from reme.runtime.decision.records import (
     DecisionState,
     DemoMode,
     InteractionResponse,
     ResponseSource,
     ResponseValue,
 )
-from reme.decision.state_machine import MimoTask
+from reme.runtime.decision.state_machine import MimoTask
 
 
 def _posture_record(**overrides: Any) -> dict[str, Any]:

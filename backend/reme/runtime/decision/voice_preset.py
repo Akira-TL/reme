@@ -24,8 +24,8 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from reme.decision.mimo.prompts import PersonaConfig
-from reme.decision.state_machine import TemplateId
+from reme.runtime.decision.mimo.prompts import PersonaConfig
+from reme.runtime.decision.state_machine import TemplateId
 
 VOICE_PRESET_SCHEMA_VERSION = "reme-voice-preset/v0-experiment"
 DEFAULT_VOICE = "Tingting"

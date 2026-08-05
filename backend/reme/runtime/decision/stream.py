@@ -28,7 +28,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
-from reme.decision.context import (
+from reme.runtime.decision.context import (
     PostureObservation,
     SceneStreamError,
     TransitionEvent,

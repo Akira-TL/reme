@@ -1,12 +1,12 @@
 from typing import Any
 
 import pytest
-from reme.decision.context import (
+from reme.runtime.decision.context import (
     POSTURE_SCHEMA_VERSION,
     TRANSITION_SCHEMA_VERSION,
     build_decision_context,
 )
-from reme.decision.stream import EVENT_SCHEMA_VERSION, EventIngest, IngestError
+from reme.runtime.decision.stream import EVENT_SCHEMA_VERSION, EventIngest, IngestError
 from reme.runtime.perception.runtime import RuntimeEventType
 
 SESSION_ID = "session-1"

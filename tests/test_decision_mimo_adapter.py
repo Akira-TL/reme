@@ -8,7 +8,7 @@ import urllib.request
 from typing import Any
 
 import pytest
-from reme.decision.mimo.adapter import (
+from reme.runtime.decision.mimo.adapter import (
     MimoCallResult,
     MimoClient,
     MimoClientConfig,

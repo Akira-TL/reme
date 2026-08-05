@@ -19,8 +19,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol
 
-from reme.decision.context import Posture
-from reme.decision.guardrails import TriggerConfig
+from reme.runtime.decision.context import Posture
+from reme.runtime.decision.guardrails import TriggerConfig
 
 HOME_SCHEMA_VERSION = "reme-home-context/v0-experiment"
 NIGHT_HOURS = frozenset({22, 23, 0, 1, 2, 3, 4, 5})

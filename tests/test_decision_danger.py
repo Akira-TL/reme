@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from reme.decision.context import load_scene_streams
-from reme.decision.danger import (
+from reme.runtime.decision.context import load_scene_streams
+from reme.runtime.decision.danger import (
     REJECT_BAD_MEDIA,
     REJECT_CONFIRM_BUDGET,
     REJECT_CONFIRM_UNAVAILABLE,
@@ -18,18 +18,18 @@ from reme.decision.danger import (
     DangerConfirmController,
     DangerRejectedError,
 )
-from reme.decision.guardrails import TriggerConfig
-from reme.decision.mimo.adapter import MimoCallResult, MimoTransportError
-from reme.decision.mimo.confirm import (
+from reme.runtime.decision.guardrails import TriggerConfig
+from reme.runtime.decision.mimo.adapter import MimoCallResult, MimoTransportError
+from reme.runtime.decision.mimo.confirm import (
     VoiceIntent,
     classify_reply_text,
     guard_voice_intent,
     parse_vision_verdict,
     parse_voice_intent,
 )
-from reme.decision.mimo.schema import MimoSchemaError
-from reme.decision.policy import DecisionService, PolicyConfig
-from reme.decision.records import (
+from reme.runtime.decision.mimo.schema import MimoSchemaError
+from reme.runtime.decision.policy import DecisionService, PolicyConfig
+from reme.runtime.decision.records import (
     AlarmSignal,
     AlarmTrigger,
     CareDecision,
@@ -41,7 +41,7 @@ from reme.decision.records import (
     ResponseValue,
     parse_care_decision,
 )
-from reme.decision.state_machine import (
+from reme.runtime.decision.state_machine import (
     REJECT_DANGER_NOT_APPLICABLE,
     EscalationKind,
     SessionPhase,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from reme.decision.context import (
+from reme.runtime.decision.context import (
     DecisionContext,
     LandmarkQuality,
     MotionLevel,
@@ -14,7 +14,7 @@ from reme.decision.context import (
     Transition,
     TransitionEvent,
 )
-from reme.decision.guardrails import (
+from reme.runtime.decision.guardrails import (
     FALL_LIKE_CONFIDENCE_FLOOR,
     TriggerConfig,
     detect_concern_trigger,
@@ -22,7 +22,7 @@ from reme.decision.guardrails import (
     detect_observe_condition,
     violates_risk_floor,
 )
-from reme.decision.records import DecisionState
+from reme.runtime.decision.records import DecisionState
 from reme.runtime.perception.transitions import TransitionDetectorConfig
 
 

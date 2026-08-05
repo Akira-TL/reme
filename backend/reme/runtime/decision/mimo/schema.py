@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeVar
 
-from reme.decision.records import (
+from reme.runtime.decision.records import (
     ActionCard,
     CardStatus,
     DecisionRecordError,
@@ -22,7 +22,7 @@ from reme.decision.records import (
     Uncertainty,
     parse_action_card,
 )
-from reme.decision.state_machine import MimoTask
+from reme.runtime.decision.state_machine import MimoTask
 
 
 class MimoSchemaError(ValueError):

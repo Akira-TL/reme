@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from reme.decision.context import (
+from reme.runtime.decision.context import (
     DecisionContext,
     LandmarkQuality,
     MotionLevel,
@@ -14,8 +14,8 @@ from reme.decision.context import (
     Transition,
     TransitionEvent,
 )
-from reme.decision.guardrails import TriggerConfig
-from reme.decision.records import (
+from reme.runtime.decision.guardrails import TriggerConfig
+from reme.runtime.decision.records import (
     ActionCard,
     CardStatus,
     DecisionAction,
@@ -25,7 +25,7 @@ from reme.decision.records import (
     ResponseSource,
     ResponseValue,
 )
-from reme.decision.state_machine import (
+from reme.runtime.decision.state_machine import (
     REJECT_EPISODE_RESOLVED,
     REJECT_INVALID_RESPONSE,
     REJECT_NO_PENDING,

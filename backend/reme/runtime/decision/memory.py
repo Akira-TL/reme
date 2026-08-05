@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from reme.decision.behavior import BehaviorFeatures
+from reme.runtime.decision.behavior import BehaviorFeatures
 
 MEMORY_SCHEMA_VERSION = "reme-behavior-memory/v0-experiment"
 # None of these four have literature backing — they are demo-scale choices

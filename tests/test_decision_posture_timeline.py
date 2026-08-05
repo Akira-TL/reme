@@ -6,8 +6,13 @@ import json
 from pathlib import Path
 
 import pytest
-from reme.decision.context import LandmarkQuality, MotionLevel, Posture, PostureObservation
-from reme.decision.posture_timeline import (
+from reme.runtime.decision.context import (
+    LandmarkQuality,
+    MotionLevel,
+    Posture,
+    PostureObservation,
+)
+from reme.runtime.decision.posture_timeline import (
     DOWN_POSTURES,
     PostureTimeline,
     PostureTimelineError,

@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from reme.decision.behavior import BehaviorFeatures
-from reme.decision.context import Posture
-from reme.decision.memory import (
+from reme.runtime.decision.behavior import BehaviorFeatures
+from reme.runtime.decision.context import Posture
+from reme.runtime.decision.memory import (
     MAX_EVENTS,
     MEMORY_SCHEMA_VERSION,
     BehaviorMemoryStore,

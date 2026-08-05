@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from reme.decision.context import Posture
-from reme.decision.guardrails import TriggerConfig
-from reme.decision.home import (
+from reme.runtime.decision.context import Posture
+from reme.runtime.decision.guardrails import TriggerConfig
+from reme.runtime.decision.home import (
     MAX_STILL_SCALE,
     MIN_STILL_SCALE,
     HomeContext,

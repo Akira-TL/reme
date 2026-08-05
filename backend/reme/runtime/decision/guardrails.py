@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from reme.decision.context import DecisionContext, LandmarkQuality, MotionLevel, Posture, Transition
-from reme.decision.records import DecisionState, PrivacyMode
+from reme.runtime.decision.context import (
+    DecisionContext,
+    LandmarkQuality,
+    MotionLevel,
+    Posture,
+    Transition,
+)
+from reme.runtime.decision.records import DecisionState, PrivacyMode
 
 LOW_MOTION_LEVELS = frozenset({MotionLevel.STILL, MotionLevel.LOW})
 DOWN_POSTURES = frozenset({Posture.LYING, Posture.UNKNOWN})

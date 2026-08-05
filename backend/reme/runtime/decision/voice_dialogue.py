@@ -12,15 +12,15 @@ import binascii
 from dataclasses import dataclass
 from typing import Protocol
 
-from reme.decision.mimo.confirm import classify_reply_text
-from reme.decision.mimo.speech import (
+from reme.runtime.decision.mimo.confirm import classify_reply_text
+from reme.runtime.decision.mimo.speech import (
     SUPPORTED_ASR_FORMATS,
     MimoSpeechClient,
     MimoSpeechError,
     SpeechRecognitionResult,
     SpeechSynthesisResult,
 )
-from reme.decision.records import (
+from reme.runtime.decision.records import (
     CareDecision,
     DecisionState,
     DemoMode,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from reme.decision.behavior import (
+from reme.runtime.decision.behavior import (
     EVIDENCE_DESCENT_KEY,
     EVIDENCE_DROP_RATIO_KEY,
     EVIDENCE_POST_IMPACT_KEY,
@@ -19,7 +19,7 @@ from reme.decision.behavior import (
     parse_spatial_hints,
     plausible_fall_dynamics,
 )
-from reme.decision.context import (
+from reme.runtime.decision.context import (
     LandmarkQuality,
     MotionLevel,
     Posture,

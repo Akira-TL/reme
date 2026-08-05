@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from reme.decision.session import (
+from reme.runtime.decision.session import (
     RuntimeSessionRegistry,
     SessionRegistryError,
     parse_session_request,

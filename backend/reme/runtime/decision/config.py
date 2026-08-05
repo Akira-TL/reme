@@ -9,10 +9,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from reme.decision.audit import AuditLog
-from reme.decision.danger import DangerConfig, DangerConfirmController
-from reme.decision.guardrails import TriggerConfig
-from reme.decision.home import (
+from reme.runtime.decision.audit import AuditLog
+from reme.runtime.decision.danger import DangerConfig, DangerConfirmController
+from reme.runtime.decision.guardrails import TriggerConfig
+from reme.runtime.decision.home import (
     NIGHT_HOURS,
     HomeContext,
     HomeContextProvider,
@@ -21,20 +21,23 @@ from reme.decision.home import (
     ScriptedHomeProvider,
     StaticHomeProvider,
 )
-from reme.decision.memory import BehaviorMemoryStore
-from reme.decision.mimo.adapter import MimoClient, config_from_environment
-from reme.decision.mimo.prompts import PersonaConfig
-from reme.decision.mimo.speech import MimoSpeechClient, speech_config_from_environment
-from reme.decision.policy import (
+from reme.runtime.decision.memory import BehaviorMemoryStore
+from reme.runtime.decision.mimo.adapter import MimoClient, config_from_environment
+from reme.runtime.decision.mimo.prompts import PersonaConfig
+from reme.runtime.decision.mimo.speech import (
+    MimoSpeechClient,
+    speech_config_from_environment,
+)
+from reme.runtime.decision.policy import (
     DecisionService,
     LiveMimoDecisionClient,
     MimoDecisionClient,
     MockMimoClient,
     PolicyConfig,
 )
-from reme.decision.records import DemoMode
-from reme.decision.state_machine import TemplateId
-from reme.decision.voice_preset import load_voice_assets
+from reme.runtime.decision.records import DemoMode
+from reme.runtime.decision.state_machine import TemplateId
+from reme.runtime.decision.voice_preset import load_voice_assets
 
 DEFAULT_PORT = 8100
 DEFAULT_MOCK_SCRIPT_DIR = Path("examples/decision/mimo_mock")

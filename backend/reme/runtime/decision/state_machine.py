@@ -11,14 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-from reme.decision.context import DecisionContext
-from reme.decision.guardrails import (
+from reme.runtime.decision.context import DecisionContext
+from reme.runtime.decision.guardrails import (
     TriggerConfig,
     detect_concern_trigger,
     detect_observe_condition,
     fall_trigger_event_id,
 )
-from reme.decision.records import (
+from reme.runtime.decision.records import (
     ActionCard,
     AlarmTrigger,
     CardStatus,

@@ -6,14 +6,18 @@ import json
 from typing import Any
 
 import pytest
-from reme.decision.mimo.prompts import PersonaConfig, build_system_prompt, build_user_prompt
-from reme.decision.mimo.schema import (
+from reme.runtime.decision.mimo.prompts import (
+    PersonaConfig,
+    build_system_prompt,
+    build_user_prompt,
+)
+from reme.runtime.decision.mimo.schema import (
     MimoSchemaError,
     extract_json_object,
     parse_mimo_proposal,
 )
-from reme.decision.records import DecisionState, Uncertainty
-from reme.decision.state_machine import MimoTask
+from reme.runtime.decision.records import DecisionState, Uncertainty
+from reme.runtime.decision.state_machine import MimoTask
 
 
 def _proposal_payload(**overrides: Any) -> dict[str, Any]:

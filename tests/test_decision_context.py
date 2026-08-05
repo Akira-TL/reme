@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from reme.decision.context import (
+from reme.runtime.decision.context import (
     LandmarkQuality,
     Posture,
     SceneStreamError,

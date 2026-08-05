@@ -19,9 +19,9 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from reme.decision.mimo.adapter import build_audio_part, build_image_part
-from reme.decision.mimo.schema import MimoSchemaError
-from reme.decision.records import ResponseValue
+from reme.runtime.decision.mimo.adapter import build_audio_part, build_image_part
+from reme.runtime.decision.mimo.schema import MimoSchemaError
+from reme.runtime.decision.records import ResponseValue
 
 VISION_CONFIRM_SYSTEM_PROMPT = (
     "你是居家安全画面确认器。你会看到一张家中摄像头画面。"

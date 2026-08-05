@@ -36,7 +36,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from reme.decision.context import (
+from reme.runtime.decision.context import (
     MotionLevel,
     Posture,
     PostureObservation,

@@ -26,13 +26,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from reme.decision.audit import AuditLog
-from reme.decision.mimo.adapter import (
+from reme.runtime.decision.audit import AuditLog
+from reme.runtime.decision.mimo.adapter import (
     SUPPORTED_AUDIO_FORMATS,
     MimoCallResult,
     MimoTransportError,
 )
-from reme.decision.mimo.confirm import (
+from reme.runtime.decision.mimo.confirm import (
     VISION_CONFIRM_SYSTEM_PROMPT,
     VOICE_INTENT_SYSTEM_PROMPT,
     VoiceIntent,
@@ -43,8 +43,8 @@ from reme.decision.mimo.confirm import (
     parse_vision_verdict,
     parse_voice_intent,
 )
-from reme.decision.mimo.schema import MimoSchemaError
-from reme.decision.records import (
+from reme.runtime.decision.mimo.schema import MimoSchemaError
+from reme.runtime.decision.records import (
     CareDecision,
     DemoMode,
     InteractionResponse,

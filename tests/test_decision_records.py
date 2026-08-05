@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from reme.decision.records import (
+from reme.runtime.decision.records import (
     ActionCard,
     CardStatus,
     CareDecision,

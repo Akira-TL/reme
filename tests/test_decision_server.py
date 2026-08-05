@@ -13,14 +13,14 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from reme.decision.config import ServerConfig
-from reme.decision.context import load_scene_streams
-from reme.decision.policy import DecisionService, PolicyConfig
-from reme.decision.records import parse_care_decision
-from reme.decision.server import build_decision_handler, build_server
-from reme.decision.session import RuntimeSessionRegistry, SessionRegistryError
-from reme.decision.stream import EventIngest, IngestError
-from reme.decision.websocket import DecisionEventHub
+from reme.runtime.decision.config import ServerConfig
+from reme.runtime.decision.context import load_scene_streams
+from reme.runtime.decision.policy import DecisionService, PolicyConfig
+from reme.runtime.decision.records import parse_care_decision
+from reme.runtime.decision.server import build_decision_handler, build_server
+from reme.runtime.decision.session import RuntimeSessionRegistry, SessionRegistryError
+from reme.runtime.decision.stream import EventIngest, IngestError
+from reme.runtime.decision.websocket import DecisionEventHub
 from reme.runtime.perception.runtime import (
     Component,
     ModeProfile,

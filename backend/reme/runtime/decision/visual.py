@@ -17,8 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from reme.decision.mimo.adapter import build_video_part
-from reme.decision.records import VisualContext, VisualContextType
+from reme.runtime.decision.mimo.adapter import build_video_part
+from reme.runtime.decision.records import VisualContext, VisualContextType
 from reme.runtime.perception.scene_bundle import SceneBundleError, load_scene_manifest
 
 VISUAL_CLIP_NAME = "visual_context.mp4"

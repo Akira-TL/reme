@@ -7,7 +7,7 @@ import json
 import urllib.request
 from typing import Any
 
-from reme.decision.mimo.speech import MimoSpeechClient, MimoSpeechConfig
+from reme.runtime.decision.mimo.speech import MimoSpeechClient, MimoSpeechConfig
 
 
 def _payload(request: urllib.request.Request) -> dict[str, Any]:

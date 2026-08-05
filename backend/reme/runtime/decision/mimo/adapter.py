@@ -20,9 +20,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from reme.decision.mimo.prompts import PersonaConfig, build_system_prompt, build_user_prompt
-from reme.decision.mimo.schema import MimoSchemaError, parse_mimo_proposal
-from reme.decision.state_machine import MimoTask
+from reme.runtime.decision.mimo.prompts import (
+    PersonaConfig,
+    build_system_prompt,
+    build_user_prompt,
+)
+from reme.runtime.decision.mimo.schema import MimoSchemaError, parse_mimo_proposal
+from reme.runtime.decision.state_machine import MimoTask
 
 DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1"
 DEFAULT_MODEL = "mimo-v2.5"

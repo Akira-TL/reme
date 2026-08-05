@@ -15,7 +15,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from reme.decision.context import (
+from reme.runtime.decision.context import (
     MotionLevel,
     PerceptionStreams,
     Posture,

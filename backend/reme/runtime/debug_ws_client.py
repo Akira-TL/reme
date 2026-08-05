@@ -38,7 +38,7 @@ from io import BufferedIOBase
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
-from reme.decision.websocket import (
+from reme.runtime.decision.websocket import (
     MAX_MESSAGE_BYTES,
     OPCODE_BINARY,
     OPCODE_CLOSE,

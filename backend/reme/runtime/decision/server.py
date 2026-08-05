@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from reme.decision.audit import AuditLog
-from reme.decision.config import (
+from reme.runtime.decision.audit import AuditLog
+from reme.runtime.decision.config import (
     ServerConfig,
     ServerConfigError,
     build_danger_controller,
@@ -30,29 +30,36 @@ from reme.decision.config import (
     build_policy_config,
     build_speech_client,
 )
-from reme.decision.context import discover_scenes
-from reme.decision.danger import DangerConfirmController, DangerRejectedError
-from reme.decision.policy import (
+from reme.runtime.decision.context import discover_scenes
+from reme.runtime.decision.danger import DangerConfirmController, DangerRejectedError
+from reme.runtime.decision.policy import (
     DecisionRejectedError,
     DecisionService,
     UnknownSceneError,
 )
-from reme.decision.records import DecisionRecordError, DemoMode, parse_interaction_response
-from reme.decision.runtime_glue import (
+from reme.runtime.decision.records import (
+    DecisionRecordError,
+    DemoMode,
+    parse_interaction_response,
+)
+from reme.runtime.decision.runtime_glue import (
     PerceptionBridgeLike,
     RuntimeDecisionPublisher,
     live_streams_resolver,
     spawn_post_ingest_evaluation,
 )
-from reme.decision.session import (
+from reme.runtime.decision.session import (
     RuntimeSessionRegistry,
     SessionRegistryError,
     parse_session_request,
 )
-from reme.decision.state_machine import DemoConversationKind
-from reme.decision.stream import EventIngest, IngestError
-from reme.decision.voice_dialogue import VoiceDialogueController, VoiceDialogueError
-from reme.decision.websocket import DecisionEventHub, WebSocketError
+from reme.runtime.decision.state_machine import DemoConversationKind
+from reme.runtime.decision.stream import EventIngest, IngestError
+from reme.runtime.decision.voice_dialogue import (
+    VoiceDialogueController,
+    VoiceDialogueError,
+)
+from reme.runtime.decision.websocket import DecisionEventHub, WebSocketError
 from reme.runtime.perception.runtime import ModeProfile, RuntimeSessionStatus
 
 _REJECT_STATUS: dict[str, HTTPStatus] = {

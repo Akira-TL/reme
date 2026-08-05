@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from reme.decision.mimo import experiment
-from reme.decision.mimo.adapter import MimoClient, MimoClientConfig
-from reme.decision.mimo.experiment import (
+from reme.runtime.decision.mimo import experiment
+from reme.runtime.decision.mimo.adapter import MimoClient, MimoClientConfig
+from reme.runtime.decision.mimo.experiment import (
     SCENARIOS,
     VARIANTS,
     ExperimentReport,
@@ -22,9 +22,9 @@ from reme.decision.mimo.experiment import (
     render_report_md,
     run_experiment,
 )
-from reme.decision.mimo.prompts import PersonaConfig
-from reme.decision.mimo.schema import TASK_STATE_ALLOWLIST
-from reme.decision.state_machine import MimoTask
+from reme.runtime.decision.mimo.prompts import PersonaConfig
+from reme.runtime.decision.mimo.schema import TASK_STATE_ALLOWLIST
+from reme.runtime.decision.state_machine import MimoTask
 
 _PERCEPTION_KEYS = {
     "timestamp_ms",

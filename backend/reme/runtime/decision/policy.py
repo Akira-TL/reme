@@ -21,31 +21,43 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
-from reme.decision.audit import AuditLog
-from reme.decision.behavior import (
+from reme.runtime.decision.audit import AuditLog
+from reme.runtime.decision.behavior import (
     DEFAULT_WINDOW_MS,
     behavior_summary_zh,
     extract_behavior_features,
 )
-from reme.decision.context import (
+from reme.runtime.decision.context import (
     DecisionContext,
     PerceptionStreams,
     SceneStreams,
     build_decision_context,
 )
-from reme.decision.guardrails import TriggerConfig, violates_risk_floor
-from reme.decision.home import (
+from reme.runtime.decision.guardrails import TriggerConfig, violates_risk_floor
+from reme.runtime.decision.home import (
     HomeContext,
     HomeContextProvider,
     adjust_trigger_config,
     default_home_context,
     home_summary_zh,
 )
-from reme.decision.memory import BehaviorMemoryStore, MemoryEventKind
-from reme.decision.mimo.adapter import MimoCallResult, MimoClient, MimoTransportError
-from reme.decision.mimo.prompts import PersonaConfig, build_system_prompt, build_user_prompt
-from reme.decision.mimo.schema import MimoProposal, MimoSchemaError, parse_mimo_proposal
-from reme.decision.records import (
+from reme.runtime.decision.memory import BehaviorMemoryStore, MemoryEventKind
+from reme.runtime.decision.mimo.adapter import (
+    MimoCallResult,
+    MimoClient,
+    MimoTransportError,
+)
+from reme.runtime.decision.mimo.prompts import (
+    PersonaConfig,
+    build_system_prompt,
+    build_user_prompt,
+)
+from reme.runtime.decision.mimo.schema import (
+    MimoProposal,
+    MimoSchemaError,
+    parse_mimo_proposal,
+)
+from reme.runtime.decision.records import (
     ALARM_CHANNELS,
     ActionCard,
     AlarmSignal,
@@ -65,7 +77,7 @@ from reme.decision.records import (
     as_recorded,
     load_recorded_decisions,
 )
-from reme.decision.state_machine import (
+from reme.runtime.decision.state_machine import (
     DecisionSkeleton,
     DemoConversationKind,
     Directive,
@@ -77,7 +89,11 @@ from reme.decision.state_machine import (
     on_response,
     on_tick,
 )
-from reme.decision.visual import load_visual_asset, visual_context_record, visual_payload
+from reme.runtime.decision.visual import (
+    load_visual_asset,
+    visual_context_record,
+    visual_payload,
+)
 
 
 class DecisionRejectedError(ValueError):

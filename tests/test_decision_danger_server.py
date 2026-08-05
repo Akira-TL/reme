@@ -10,13 +10,13 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from reme.decision.context import load_scene_streams
-from reme.decision.danger import DangerConfig, DangerConfirmController
-from reme.decision.guardrails import TriggerConfig
-from reme.decision.mimo.adapter import MimoCallResult
-from reme.decision.policy import DecisionService, PolicyConfig
-from reme.decision.records import DemoMode
-from reme.decision.server import build_decision_handler
+from reme.runtime.decision.context import load_scene_streams
+from reme.runtime.decision.danger import DangerConfig, DangerConfirmController
+from reme.runtime.decision.guardrails import TriggerConfig
+from reme.runtime.decision.mimo.adapter import MimoCallResult
+from reme.runtime.decision.policy import DecisionService, PolicyConfig
+from reme.runtime.decision.records import DemoMode
+from reme.runtime.decision.server import build_decision_handler
 
 JPEG_B64 = base64.b64encode(b"\xff\xd8\xff\xe0reme").decode("ascii")
 

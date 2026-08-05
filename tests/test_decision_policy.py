@@ -8,17 +8,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import reme.decision.policy as policy_module
-from reme.decision.context import load_scene_streams
-from reme.decision.mimo.adapter import MimoCallResult, MimoTransportError
-from reme.decision.policy import (
+import reme.runtime.decision.policy as policy_module
+from reme.runtime.decision.context import load_scene_streams
+from reme.runtime.decision.mimo.adapter import MimoCallResult, MimoTransportError
+from reme.runtime.decision.policy import (
     DecisionRejectedError,
     DecisionService,
     MockMimoClient,
     PolicyConfig,
     UnknownSceneError,
 )
-from reme.decision.records import (
+from reme.runtime.decision.records import (
     CardStatus,
     CareDecision,
     DecisionSource,
@@ -30,7 +30,7 @@ from reme.decision.records import (
     ResponseValue,
     load_recorded_decisions,
 )
-from reme.decision.state_machine import MimoTask
+from reme.runtime.decision.state_machine import MimoTask
 
 
 def _posture_record(**overrides: Any) -> dict[str, Any]:

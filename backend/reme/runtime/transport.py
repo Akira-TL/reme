@@ -13,11 +13,11 @@ import sys
 import threading
 from collections.abc import Callable
 
-from reme.decision.danger import DangerConfirmController
-from reme.decision.policy import DecisionService
-from reme.decision.runtime_glue import spawn_post_ingest_evaluation
-from reme.decision.session import RuntimeSessionRegistry
-from reme.decision.stream import EventIngest, IngestError
+from reme.runtime.decision.danger import DangerConfirmController
+from reme.runtime.decision.policy import DecisionService
+from reme.runtime.decision.runtime_glue import spawn_post_ingest_evaluation
+from reme.runtime.decision.session import RuntimeSessionRegistry
+from reme.runtime.decision.stream import EventIngest, IngestError
 from reme.runtime.perception.runtime import RuntimeEvent
 from reme.runtime.perception.runtime_server import EventBroker, EventSubscription
 

@@ -12,16 +12,16 @@ import threading
 from http.server import ThreadingHTTPServer
 from typing import Any
 
-from reme.decision.policy import DecisionService, PolicyConfig
-from reme.decision.runtime_glue import (
+from reme.runtime.decision.policy import DecisionService, PolicyConfig
+from reme.runtime.decision.runtime_glue import (
     RuntimeDecisionPublisher,
     live_streams_resolver,
     spawn_post_ingest_evaluation,
 )
-from reme.decision.server import build_decision_handler
-from reme.decision.session import RuntimeSessionRegistry
-from reme.decision.stream import EventIngest
-from reme.decision.websocket import DecisionEventHub
+from reme.runtime.decision.server import build_decision_handler
+from reme.runtime.decision.session import RuntimeSessionRegistry
+from reme.runtime.decision.stream import EventIngest
+from reme.runtime.decision.websocket import DecisionEventHub
 
 SCENE_ID = "live-camera-001"
 SESSION_ID = "session-live-001"

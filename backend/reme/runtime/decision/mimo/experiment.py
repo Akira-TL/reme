@@ -20,15 +20,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TypeVar
 
-from reme.decision.mimo.adapter import (
+from reme.runtime.decision.mimo.adapter import (
     MimoCallResult,
     MimoClient,
     MimoTransportError,
     config_from_environment,
 )
-from reme.decision.mimo.prompts import PersonaConfig, build_system_prompt, build_user_prompt
-from reme.decision.mimo.schema import MimoSchemaError, parse_mimo_proposal
-from reme.decision.state_machine import MimoTask
+from reme.runtime.decision.mimo.prompts import (
+    PersonaConfig,
+    build_system_prompt,
+    build_user_prompt,
+)
+from reme.runtime.decision.mimo.schema import MimoSchemaError, parse_mimo_proposal
+from reme.runtime.decision.state_machine import MimoTask
 
 DEFAULT_SAMPLES_PER_CELL = 10
 DEFAULT_PACE_SECONDS = 0.7
