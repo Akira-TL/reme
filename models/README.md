@@ -17,16 +17,17 @@ models/
 
 ## 当前迁移状态
 
-2026-08-05 已从 `akira@192.168.100.102:/home/akira/Projects/reme` 恢复训练模型到规范目录：
+2026-08-05 已完成运行时与训练模型归档：
 
+- `models/runtime/movenet/`：比赛仓库跟踪的 MoveNet Lightning 权重及来源说明；
 - `models/trained/posture/`：4 个姿态 Softmax 版本，以及 12 组 `posture-sweep-20260801` 训练组合；
 - `models/trained/fall/`：MIL v1、v2、v3 模型与对应训练报告。
 
-这些模型只存在于本地工作区，并受 `.gitignore` 管理。完整 SHA-256 台账见 `docs/assets/training-models.sha256`。
+MoveNet 的大小、张量合同和 SHA-256 见 `models/runtime/movenet/README.md`。训练模型只存在于本地工作区并受 `.gitignore` 管理，其完整 SHA-256 台账见 `docs/assets/training-models.sha256`。
 
 当前运行时默认路径：
 
-- `models/movenet/movenet_lightning_f16_v4.tflite`
+- `models/runtime/movenet/movenet_lightning_f16_v4.tflite`
 - `frontend/public/mediapipe/pose_landmarker_lite.task`
 - `models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json`
 - `models/trained/fall/mil-v3/model.json`
@@ -41,4 +42,4 @@ models/
 
 ## Git 规则
 
-目录结构和说明文件进入 Git；模型二进制、训练检查点、逐帧数据及大型派生产物默认不进入 Git。已经被明确纳入演示版本的历史模型，在完成迁移决策前保持原状，不擅自删除或重新提交。
+目录结构和说明文件进入 Git；训练检查点、逐帧数据及大型派生产物默认不进入 Git。比赛演示已经明确纳入的 MoveNet 权重和浏览器 MediaPipe `.task` 文件继续由 Git 跟踪，移动或替换时必须保留来源记录并重新校验哈希。

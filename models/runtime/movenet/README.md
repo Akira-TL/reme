@@ -42,7 +42,7 @@ chain before redistributing the weight outside the team owner's competition deli
 Verify the packaged artifact after clone:
 
 ```bash
-shasum -a 256 models/movenet/movenet_lightning_f16_v4.tflite
+shasum -a 256 models/runtime/movenet/movenet_lightning_f16_v4.tflite
 ```
 
 This model estimates a single person's 17 pose keypoints. It does not include Reme's

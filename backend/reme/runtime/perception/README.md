@@ -70,7 +70,7 @@ numpy 2.4.6
 将已验证模型放到 Git 忽略目录，例如：
 
 ```text
-models/movenet/movenet_lightning_f16_v4.tflite
+models/runtime/movenet/movenet_lightning_f16_v4.tflite
 ```
 
 持续运行并向标准输出写 RuntimeEvent JSONL：
@@ -80,7 +80,7 @@ uv run --extra pose python -m reme.runtime.perception.camera \
   --session-id live-camera-001 \
   --scene-id live-camera-001 \
   --camera 0 \
-  --model models/movenet/movenet_lightning_f16_v4.tflite \
+  --model models/runtime/movenet/movenet_lightning_f16_v4.tflite \
   --width 1280 \
   --height 720 \
   --fps 30 \
@@ -130,7 +130,7 @@ uv run --extra pose python -m reme.runtime.perception.video_dataset validate \
 ```bash
 uv run --extra pose python -m reme.runtime.perception.video_dataset extract \
   .scratch/pose-classification-owner-a/datasets/downloads6-catalog.json \
-  --model models/movenet/movenet_lightning_f16_v4.tflite \
+  --model models/runtime/movenet/movenet_lightning_f16_v4.tflite \
   --output-dir artifacts/training/pose/datasets/downloads6
 ```
 
@@ -153,7 +153,7 @@ uv run --extra pose python -m reme.runtime.perception.camera \
   --session-id live-camera-001 \
   --scene-id live-camera-001 \
   --camera 0 \
-  --model models/movenet/movenet_lightning_f16_v4.tflite \
+  --model models/runtime/movenet/movenet_lightning_f16_v4.tflite \
   --posture-model models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json \
   --posture-hz 7.5
 ```
@@ -169,7 +169,7 @@ uv run --extra pose python -m reme.runtime.perception.live_preview \
   --host 127.0.0.1 \
   --port 8765 \
   --camera 0 \
-  --movenet-model models/movenet/movenet_lightning_f16_v4.tflite \
+  --movenet-model models/runtime/movenet/movenet_lightning_f16_v4.tflite \
   --posture-model models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json
 ```
 

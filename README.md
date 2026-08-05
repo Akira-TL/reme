@@ -73,7 +73,7 @@ macOS 可双击根目录的 `启动Reme全链路演示.command`。该快捷方�
 2026-08-05 已从团队开发机恢复训练模型和数据。当前运行时默认资产：
 
 ```text
-models/movenet/movenet_lightning_f16_v4.tflite
+models/runtime/movenet/movenet_lightning_f16_v4.tflite
 frontend/public/mediapipe/pose_landmarker_lite.task
 models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json
 models/trained/fall/mil-v3/model.json

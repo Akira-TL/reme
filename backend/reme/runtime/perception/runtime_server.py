@@ -60,7 +60,9 @@ from reme.runtime.perception.runtime import (
 from reme.runtime.perception.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
 from reme.runtime.perception.transitions import TransitionDetector
 
-DEFAULT_MOVENET_MODEL = Path("models/movenet/movenet_lightning_f16_v4.tflite")
+DEFAULT_MOVENET_MODEL = Path(
+    "models/runtime/movenet/movenet_lightning_f16_v4.tflite"
+)
 DEFAULT_POSTURE_MODEL = Path(
     "models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json"
 )
