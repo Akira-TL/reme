@@ -44,13 +44,7 @@ cp .env.example .env
 http://127.0.0.1:4174/typical-demo.html
 ```
 
-兼容入口：
-
-```bash
-scripts/start-demo.sh
-```
-
-macOS 仍可双击根目录的 `启动Reme全链路演示.command`。旧入口只是兼容包装，实际逻辑统一位于 `scripts/`。
+macOS 可双击根目录的 `启动Reme全链路演示.command`。该快捷方式统一转发到 `scripts/launchers/macos/`，实际启动逻辑位于 `scripts/demo/`。
 
 完整说明见 [docs/快速启动.md](docs/快速启动.md)。
 
