@@ -9,7 +9,7 @@ Can the repository run an official MoveNet SinglePose Lightning `.tflite` model 
 
 ## Answer
 
-Yes for the execution path. `.scratch/litert-movenet-feasibility/run.py` loads the model with `ai_edge_litert.interpreter.Interpreter`, decodes video locally, writes a black-background skeleton MP4, writes 17-keypoint JSONL, and records latency/resource measurements.
+Yes for the execution path. `experiments/litert-movenet-feasibility/run.py` loads the model with `ai_edge_litert.interpreter.Interpreter`, decodes video locally, writes a black-background skeleton MP4, writes 17-keypoint JSONL, and records latency/resource measurements.
 
 A 12-frame smoke test using the official model completed successfully. This does not answer whether the team's target video is suitable or whether posture/fall classification works.
 
@@ -23,4 +23,4 @@ A 12-frame smoke test using the official model completed successfully. This does
 
 ## Comments
 
-The runner is deliberately kept under `.scratch/` and is not an accepted product adapter or schema.
+The runner is deliberately kept under `experiments/` and is not an accepted product adapter or schema.

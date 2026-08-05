@@ -73,7 +73,7 @@ curl -L \
 运行。视频模式应默认使用逐帧跟踪裁剪；简单整帧 letterbox 仅保留为对照基线：
 
 ```bash
-.venv/bin/python .scratch/litert-movenet-feasibility/run.py \
+.venv/bin/python experiments/litert-movenet-feasibility/run.py \
   --model /path/to/movenet_lightning_f16.tflite \
   --video /path/to/input.mp4 \
   --output-dir /tmp/reme-litert-result \
@@ -83,10 +83,10 @@ curl -L \
 快速抽样：
 
 ```bash
-.venv/bin/python .scratch/litert-movenet-feasibility/run.py \
+.venv/bin/python experiments/litert-movenet-feasibility/run.py \
   --model /path/to/movenet_lightning_f16.tflite \
   --video /path/to/input.mp4 \
-  --output-dir .scratch/litert-movenet-feasibility/results/smoke \
+  --output-dir experiments/litert-movenet-feasibility/results/smoke \
   --sample-every 5 \
   --max-frames 300
 ```
