@@ -10,4 +10,4 @@ if [ -f .env ]; then
   . ./.env
   set +a
 fi
-exec uv run python -m reme.decision.voice_preset "$@"
+exec uv run python -m reme.runtime.decision.voice_preset "$@"

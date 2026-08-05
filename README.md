@@ -63,7 +63,7 @@ macOS 仍可双击根目录的 `启动Reme全链路演示.command`。旧入口�
 
 ```text
 .
-├── backend/reme/       # Python 后端实现；不直接提供 .venv/bin 程序入口
+├── backend/reme/       # 统一后端运行时：perception、decision、transport、server
 ├── frontend/           # React/Vite 演示页面
 ├── models/             # 模型目录约定与待迁移占位
 ├── scripts/            # 演示、环境配置和平台启动器

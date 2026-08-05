@@ -4,4 +4,4 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$ROOT"
-exec uv run python -m reme.decision.visual "$@"
+exec uv run python -m reme.runtime.decision.visual "$@"

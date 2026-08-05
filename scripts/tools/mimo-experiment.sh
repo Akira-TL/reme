@@ -10,4 +10,4 @@ if [ -f .env ]; then
   . ./.env
   set +a
 fi
-exec uv run python -m reme.decision.mimo.experiment "$@"
+exec uv run python -m reme.runtime.decision.mimo.experiment "$@"
