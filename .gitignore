@@ -39,7 +39,10 @@ models/trained/posture/*
 models/trained/fall/*
 !models/trained/fall/.gitkeep
 recordings/
-data/raw/
+# Training/reference datasets are local assets. Keep only the root inventory
+# document in Git; videos, keypoints, annotations and source archives remain local.
+data/*
+!data/README.md
 artifacts/
 Downloads*.zip
 
