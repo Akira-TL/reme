@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from reme.runtime.perception.fall_weak_labels import FallPoseSample, infer_weak_fall_candidate
+from reme.pose.fall_weak_labels import FallPoseSample, infer_weak_fall_candidate
 
 
 def _sample(

@@ -13,9 +13,9 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 
-from reme.runtime.perception.fall_training_data import derive_fall_pose_sample
-from reme.runtime.perception.fall_weak_labels import FallPoseSample
-from reme.runtime.perception.posture import PosturePrediction, StaticPostureModel
+from reme.pose.fall_training_data import derive_fall_pose_sample
+from reme.pose.fall_weak_labels import FallPoseSample
+from reme.pose.posture import PosturePrediction, StaticPostureModel
 
 FALL_MIL_MODEL_SCHEMA_VERSION = "reme-fall-mil/v2-experiment"
 FALL_MIL_REPORT_SCHEMA_VERSION = "reme-fall-mil-report/v2-experiment"

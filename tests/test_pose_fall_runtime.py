@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from reme.runtime.perception.fall_mil import FallMILModel, FallMILScore, score_fall_samples
-from reme.runtime.perception.fall_runtime import FallMILTransitionEnhancer
-from reme.runtime.perception.fall_weak_labels import FallPoseSample
-from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
+from reme.pose.fall_mil import FallMILModel, FallMILScore, score_fall_samples
+from reme.pose.fall_runtime import FallMILTransitionEnhancer
+from reme.pose.fall_weak_labels import FallPoseSample
+from reme.pose.runtime import RuntimeEvent, RuntimeEventType
 
 _MODEL_PATH = Path("models/trained/fall/mil-v3/model.json")
 _SAMPLES_PATH = Path("data/training/fall/bootstrap/pose-samples.jsonl")

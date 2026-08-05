@@ -12,11 +12,11 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
-from reme.runtime.perception.fall_bootstrap import FALL_BOOTSTRAP_SCHEMA_VERSION
-from reme.runtime.perception.fall_weak_labels import FallPoseSample, infer_weak_fall_candidate
-from reme.runtime.perception.movenet import MoveNetEstimator
-from reme.runtime.perception.posture import PosturePrediction, StaticPostureModel
-from reme.runtime.perception.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
+from reme.pose.fall_bootstrap import FALL_BOOTSTRAP_SCHEMA_VERSION
+from reme.pose.fall_weak_labels import FallPoseSample, infer_weak_fall_candidate
+from reme.pose.movenet import MoveNetEstimator
+from reme.pose.posture import PosturePrediction, StaticPostureModel
+from reme.pose.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
 
 FALL_TRAINING_DATA_SCHEMA_VERSION = "reme-fall-training-data/v0-experiment"
 _SHOULDERS = ("left_shoulder", "right_shoulder")

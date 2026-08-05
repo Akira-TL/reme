@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from statistics import median
 from typing import Any
 
-from reme.runtime.perception.annotations import POSTURE_LABELS, TRANSITION_LABELS
-from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType, RuntimeSessionError
+from reme.pose.annotations import POSTURE_LABELS, TRANSITION_LABELS
+from reme.pose.runtime import RuntimeEvent, RuntimeEventType, RuntimeSessionError
 
 TRANSITION_SCHEMA_VERSION = "reme-transition/v0-experiment"
 POSTURE_SCHEMA_VERSION = "reme-posture/v0-experiment"

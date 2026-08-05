@@ -9,8 +9,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
-from reme.runtime.perception.transitions import TransitionDetector, TransitionError
+from reme.pose.runtime import RuntimeEvent, RuntimeEventType
+from reme.pose.transitions import TransitionDetector, TransitionError
 
 
 class TransitionEvalError(ValueError):
