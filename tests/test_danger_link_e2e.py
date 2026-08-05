@@ -1,20 +1,10 @@
-"""Whole-chain danger link E2E: C→A→B→C over real sockets.
+"""Whole-chain danger E2E through the unified backend.
 
-One test walks the six hops with real servers on loopback ports:
-
-1. a scripted C pushes MoveNet-17 landmark frames of a synthetic fall over
-   A's hosted ``/ws/camera-input`` (hop 1);
-2. A's browser gateway classifies posture and emits a fall transition
-   (hop 2) on its ``/ws/events`` stream;
-3. B's PerceptionBridge pulls those events and evaluates them (hop 3);
-4. B opens the fall check-in (preset voice + confirm channels), receives the
-   raw-frame upload, and the fake vision verdict confirms the fall (hop 4);
-5. the resulting family alert with ``alarm`` reaches C over B's ``/ws``
-   (hop 5) — rendering it on a device is C's browser code (hop 6), covered
-   by the frontend build, not this test.
-
-MiMo is faked at the transport seam only; every other component is the real
-implementation bound to real sockets.
+A scripted browser pushes synthetic fall landmarks through ``/ws/camera-input``.
+The perception worker publishes into the in-process bridge, the decision module
+opens a safety check-in, and the family alert returns through the public ``/ws``.
+Only browser-facing boundaries use sockets; perception-to-decision delivery is
+directly in process. MiMo vision is faked at its transport seam.
 """
 
 from __future__ import annotations
@@ -27,7 +17,6 @@ import socket
 import struct
 import threading
 import time
-from http.server import ThreadingHTTPServer
 from typing import Any
 
 from reme.decision.danger import DangerConfig, DangerConfirmController
@@ -35,11 +24,7 @@ from reme.decision.guardrails import TriggerConfig
 from reme.decision.mimo.adapter import MimoCallResult
 from reme.decision.policy import DecisionService, PolicyConfig
 from reme.decision.records import DemoMode
-from reme.decision.runtime_glue import (
-    PerceptionBridge,
-    RuntimeDecisionPublisher,
-    live_streams_resolver,
-)
+from reme.decision.runtime_glue import RuntimeDecisionPublisher, live_streams_resolver
 from reme.decision.server import build_decision_handler
 from reme.decision.session import RuntimeSessionRegistry
 from reme.decision.state_machine import TemplateId
@@ -54,6 +39,8 @@ from reme.pose.runtime_server import (
     RuntimePerceptionController,
     build_runtime_handler,
 )
+from reme.runtime.server import build_unified_handler
+from reme.runtime.transport import InProcessPerceptionBridge
 
 SESSION_ID = "live-camera-e2e-001"
 SCENE_ID = "living_room"
@@ -268,17 +255,9 @@ def _session_payload() -> dict[str, Any]:
 def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
     os.environ["REME_DEMO_QUIET"] = "1"
 
-    # -- A: perception server with the hosted browser-input lane ------------
+    # -- unified backend components ------------------------------------------
     gateway = BrowserGatewayPerceptionWorker()
-    a_controller = RuntimePerceptionController(worker=gateway)
-    a_server = RuntimeHTTPServer(
-        ("127.0.0.1", 0), build_runtime_handler(a_controller, input_gateway=gateway)
-    )
-    a_thread = threading.Thread(target=a_server.serve_forever, daemon=True)
-    a_thread.start()
-    a_port = a_server.server_address[1]
-
-    # -- B: decision server bridging to A ------------------------------------
+    perception_controller = RuntimePerceptionController(worker=gateway)
     registry = RuntimeSessionRegistry()
     hub = DecisionEventHub()
     ingest = EventIngest()
@@ -296,14 +275,14 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
     danger = DangerConfirmController(
         service=service, client=_FakeVisionClient(), config=DangerConfig()
     )
-    bridge = PerceptionBridge(
-        events_url=f"ws://127.0.0.1:{a_port}/ws/events",
+    bridge = InProcessPerceptionBridge(
+        broker=perception_controller.broker,
         ingest=ingest,
         registry=registry,
         service=service,
         danger=danger,
     )
-    b_handler = build_decision_handler(
+    decision_handler = build_decision_handler(
         service=service,
         static_dir=None,
         registry=registry,
@@ -312,23 +291,30 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
         bridge=bridge,
         danger=danger,
     )
-    b_server = ThreadingHTTPServer(("127.0.0.1", 0), b_handler)
-    b_thread = threading.Thread(target=b_server.serve_forever, daemon=True)
-    b_thread.start()
-    b_port = b_server.server_address[1]
+    perception_handler = build_runtime_handler(
+        perception_controller,
+        input_gateway=gateway,
+    )
+    server = RuntimeHTTPServer(
+        ("127.0.0.1", 0),
+        build_unified_handler(perception_handler, decision_handler),
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    port = server.server_address[1]
 
     decision_ws: _WsClient | None = None
     camera_ws: _WsClient | None = None
     try:
-        # C starts the runtime on A, then the decision session on B.
-        status, body = _post(a_port, "/api/runtime/start", _session_payload())
+        # The browser starts perception and decision sessions on one server.
+        status, body = _post(port, "/api/runtime/start", _session_payload())
         assert status == 202, body
-        status, body = _post(b_port, "/api/session", _session_payload())
+        status, body = _post(port, "/api/session", _session_payload())
         assert status == 200, body
         assert body["component"] == "decision" and body["state"] == "running"
 
-        # A advertises the hosted input lane; C would probe this first.
-        connection = http.client.HTTPConnection("127.0.0.1", a_port, timeout=10)
+        # The unified backend advertises the hosted browser input lane.
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
         connection.request("GET", "/api/runtime/capabilities")
         capabilities = json.loads(connection.getresponse().read().decode("utf-8"))
         connection.close()
@@ -336,20 +322,20 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
         assert capabilities["input"]["landmarks_inference"] is True
         assert capabilities["schemas"]["runtime_event"] == "reme-runtime-event/v0-experiment"
 
-        decision_ws = _WsClient(b_port, "/ws")
+        decision_ws = _WsClient(port, "/ws")
 
-        # Wait until A's gateway actually owns the session intake.
+        # Wait until the perception gateway owns the session intake.
         deadline = time.time() + 5
         while gateway.get_intake(SESSION_ID) is None:
             assert time.time() < deadline, "A never registered the session intake"
             time.sleep(0.02)
 
-        camera_ws = _WsClient(a_port, "/ws/camera-input")
+        camera_ws = _WsClient(port, "/ws/camera-input")
         started = time.time()
         for frame in _fall_frames():
             camera_ws.send_text(json.dumps(frame, separators=(",", ":")))
 
-        # Hop 1-3-4a: the fall check-in must reach C over B's /ws.
+        # The fall check-in must reach the browser-facing decision stream.
         check_in = None
         deadline = time.time() + 15
         while time.time() < deadline:
@@ -363,7 +349,7 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
             if decision["state"] == "check_in_required":
                 check_in = decision
                 break
-        assert check_in is not None, "fall check-in never reached B's decision stream"
+        assert check_in is not None, "fall check-in never reached the decision stream"
         check_in_latency = time.time() - started
         assert check_in["dialogue_goal"] == "confirm_safety"
         assert check_in["confirm_channels"] == ["frame", "voice"]
@@ -376,7 +362,7 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
 
         jpeg_b64 = _b64.b64encode(b"\xff\xd8\xff\xe0reme-e2e-frame").decode()
         status, body = _post(
-            b_port,
+            port,
             "/api/danger/frame",
             {
                 "scene_id": SCENE_ID,
@@ -398,7 +384,7 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
             if decision["state"] == "family_notification_required":
                 alert = decision
                 break
-        assert alert is not None, "family alert never reached B's decision stream"
+        assert alert is not None, "family alert never reached the decision stream"
         total_latency = time.time() - started
         assert alert["alarm"] == {
             "channels": ["vibrate", "ring", "flash"],
@@ -420,10 +406,7 @@ def test_danger_link_six_hops_end_to_end(tmp_path: Any) -> None:
             decision_ws.close()
         bridge.stop()
         hub.close_all()
-        b_server.shutdown()
-        b_server.server_close()
-        b_thread.join(timeout=5)
-        a_controller.shutdown()
-        a_server.shutdown()
-        a_server.server_close()
-        a_thread.join(timeout=5)
+        perception_controller.shutdown()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5)

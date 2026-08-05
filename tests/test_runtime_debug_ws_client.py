@@ -26,7 +26,7 @@ from io import BufferedIOBase
 from typing import Any
 
 import pytest
-from reme.decision.ws_client import PerceptionEventClient, WebSocketClientError
+from reme.runtime.debug_ws_client import PerceptionEventClient, WebSocketClientError
 from reme.pose.runtime import (
     ModeProfile,
     RuntimeEvent,

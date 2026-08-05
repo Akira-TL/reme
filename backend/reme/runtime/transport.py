@@ -27,9 +27,8 @@ EventEvaluator = Callable[..., None]
 class InProcessPerceptionBridge:
     """Own one direct perception-event subscription for the active session.
 
-    The public methods intentionally match the old socket-backed
-    ``PerceptionBridge`` surface used by the decision HTTP handler. That keeps
-    session policy unchanged while replacing only the internal transport.
+    The public methods implement the decision handler's bridge protocol. This
+    keeps session policy unchanged while the internal delivery remains direct.
     """
 
     def __init__(

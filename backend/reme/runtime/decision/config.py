@@ -35,7 +35,6 @@ from reme.decision.policy import (
 from reme.decision.records import DemoMode
 from reme.decision.state_machine import TemplateId
 from reme.decision.voice_preset import load_voice_assets
-from reme.decision.ws_client import WebSocketClientError, _split_ws_url
 
 DEFAULT_PORT = 8100
 DEFAULT_MOCK_SCRIPT_DIR = Path("examples/decision/mimo_mock")
@@ -77,9 +76,6 @@ class ServerConfig:
     home_room: str | None = None
     local_hour: int | None = None
     memory_file: Path | None = None
-    # Set = pull mode: B subscribes to A's event stream itself.  Unset = push
-    # mode: something else POSTs to /api/events (replays, fixtures).
-    a_events_url: str | None = None
     # Danger link: preset voice assets directory and the confirmation paths.
     voice_dir: Path = DEFAULT_VOICE_DIR
     danger_enabled: bool = True
@@ -149,15 +145,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="behavior-memory JSON path; omit to run without longitudinal memory",
     )
     parser.add_argument(
-        "--a-events-url",
-        default=None,
-        help=(
-            "A's perception stream, e.g. ws://127.0.0.1:8200/ws/events. "
-            "Given it, B subscribes itself and POST /api/events is refused; "
-            "omit it to keep the push entry open for replays and fixtures."
-        ),
-    )
-    parser.add_argument(
         "--voice-dir",
         type=Path,
         default=DEFAULT_VOICE_DIR,
@@ -191,14 +178,6 @@ def server_config_from_namespace(args: argparse.Namespace) -> ServerConfig:
         raise ServerConfigError("--local-hour must be within 0..23")
     if args.scenes_dir is None and DemoMode(args.mode) is DemoMode.RECORD:
         raise ServerConfigError("record mode needs a scenes_dir to replay from")
-    if args.a_events_url is not None:
-        # Validate at boot, not at the first session start (Codex R4): a bad
-        # URL discovered mid-start leaves the registry running with no bridge
-        # and every retry then 409s on the already-active session.
-        try:
-            _split_ws_url(args.a_events_url, "probe")
-        except WebSocketClientError as exc:
-            raise ServerConfigError(f"--a-events-url is unusable: {exc}") from exc
     if (
         args.home_script is not None
         and args.memory_file is not None
@@ -225,7 +204,6 @@ def server_config_from_namespace(args: argparse.Namespace) -> ServerConfig:
         home_room=args.home_room,
         local_hour=args.local_hour,
         memory_file=args.memory_file,
-        a_events_url=args.a_events_url,
         voice_dir=args.voice_dir,
         danger_enabled=not args.no_danger,
     )

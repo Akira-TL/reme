@@ -17,7 +17,6 @@ from reme.decision.config import ServerConfig
 from reme.decision.context import load_scene_streams
 from reme.decision.policy import DecisionService, PolicyConfig
 from reme.decision.records import parse_care_decision
-from reme.decision.runtime_glue import PerceptionBridge
 from reme.decision.server import build_decision_handler, build_server
 from reme.decision.session import RuntimeSessionRegistry, SessionRegistryError
 from reme.decision.stream import EventIngest, IngestError
@@ -958,43 +957,52 @@ def test_session_start_rejects_profile_mismatched_with_demo_mode(tmp_path: Path)
         _stop_server(server, thread)
 
 
-# --- P0-2 收口：A→B 事件桥的会话生命周期与 push 互斥 -------------------------
+# --- 进程内事件桥：会话生命周期与 push 互斥 -------------------------------
 
 
-class _FakeClient:
-    """Stand-in for PerceptionEventClient: records start/stop, never sockets."""
+class _FakeBridge:
+    """Decision-handler bridge fake with no network transport."""
 
-    instances: list[_FakeClient] = []
+    events_url = "in-process://perception/events"
+    safe_url = events_url
 
-    def __init__(self, *, url: str, session_id: str, on_event: object) -> None:
-        self.url = url
-        self.session_id = session_id
-        self.on_event = on_event
-        self.started = False
-        self.stopped = False
-        self.connected = False
-        _FakeClient.instances.append(self)
+    def __init__(self, ingest: EventIngest, *, fail_start: bool = False) -> None:
+        self._ingest = ingest
+        self._fail_start = fail_start
+        self.started_sessions: list[str] = []
+        self.stopped_sessions: list[str] = []
+        self.is_attached = False
+        self.is_connected = False
 
-    def start(self) -> None:
-        self.started = True
-        self.connected = True
+    def attached(self) -> bool:
+        return self.is_attached
+
+    def connected(self) -> bool:
+        return self.is_connected
+
+    def start_for(self, session_id: str) -> None:
+        if self._fail_start:
+            raise OSError("perception runtime unavailable")
+        if self.is_attached and self.started_sessions:
+            self.stopped_sessions.append(self.started_sessions[-1])
+        self._ingest.claim_pull(session_id)
+        self.started_sessions.append(session_id)
+        self.is_attached = True
+        self.is_connected = True
 
     def stop(self) -> None:
-        self.stopped = True
-        self.connected = False
+        if self.is_attached and self.started_sessions:
+            self.stopped_sessions.append(self.started_sessions[-1])
+        self._ingest.release_pull()
+        self.is_attached = False
+        self.is_connected = False
 
 
 def _bridge_with_fake_clients(
     service: DecisionService, registry: object, ingest: object
-) -> PerceptionBridge:
-    _FakeClient.instances = []
-    return PerceptionBridge(
-        events_url="ws://127.0.0.1:9/ws/events",
-        ingest=cast("EventIngest", ingest),
-        registry=cast("RuntimeSessionRegistry", registry),
-        service=service,
-        client_factory=_FakeClient,  # type: ignore[arg-type]
-    )
+) -> _FakeBridge:
+    del service, registry
+    return _FakeBridge(cast("EventIngest", ingest))
 
 
 def test_session_start_subscribes_and_stop_unsubscribes(tmp_path: Path) -> None:
@@ -1013,15 +1021,13 @@ def test_session_start_subscribes_and_stop_unsubscribes(tmp_path: Path) -> None:
         assert isinstance(port, int)
         status, _ = _post(port, "/api/session", _session_body())
         assert status == 200
-        assert len(_FakeClient.instances) == 1
-        client = _FakeClient.instances[0]
-        assert client.started is True
-        assert client.session_id == "session-0001"
+        assert bridge.started_sessions == ["session-0001"]
         assert bridge.attached() is True
+        assert bridge.connected() is True
 
         status, _ = _post(port, "/api/session/stop", {"session_id": "session-0001"})
         assert status == 200
-        assert client.stopped is True
+        assert bridge.stopped_sessions == ["session-0001"]
         assert bridge.attached() is False
     finally:
         server.shutdown()
@@ -1081,17 +1087,12 @@ def test_stopping_a_foreign_session_leaves_the_live_bridge_alone(tmp_path: Path)
         status, _ = _post(port, "/api/session/stop", {"session_id": "someone-elses-session"})
         assert status == 404
         assert bridge.attached() is True
-        assert _FakeClient.instances[0].stopped is False
+        assert bridge.stopped_sessions == []
         assert registry.active_session_id() == "session-0001"
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
-
-
-class _ExplodingClient(_FakeClient):
-    def start(self) -> None:
-        raise OSError("A refused the connection")
 
 
 def test_failed_subscription_rolls_the_session_back(tmp_path: Path) -> None:
@@ -1100,14 +1101,7 @@ def test_failed_subscription_rolls_the_session_back(tmp_path: Path) -> None:
     service = _service(tmp_path)
     registry = RuntimeSessionRegistry()
     ingest = EventIngest()
-    _FakeClient.instances = []
-    bridge = PerceptionBridge(
-        events_url="ws://127.0.0.1:9/ws/events",
-        ingest=ingest,
-        registry=registry,
-        service=service,
-        client_factory=_ExplodingClient,  # type: ignore[arg-type]
-    )
+    bridge = _FakeBridge(ingest, fail_start=True)
     handler = build_decision_handler(
         service=service, static_dir=None, registry=registry, ingest=ingest, bridge=bridge
     )
@@ -1137,11 +1131,10 @@ def test_bridge_start_replaces_the_previous_subscription(tmp_path: Path) -> None
     bridge = _bridge_with_fake_clients(service, registry, ingest)
     bridge.start_for("session-a")
     bridge.start_for("session-b")
-    assert len(_FakeClient.instances) == 2
-    assert _FakeClient.instances[0].stopped is True
-    assert _FakeClient.instances[1].started is True
+    assert bridge.started_sessions == ["session-a", "session-b"]
+    assert bridge.stopped_sessions == ["session-a"]
     bridge.stop()
-    assert _FakeClient.instances[1].stopped is True
+    assert bridge.stopped_sessions == ["session-a", "session-b"]
     assert bridge.attached() is False
 
 
@@ -1167,8 +1160,8 @@ def test_health_reports_degraded_when_the_perception_stream_is_down(tmp_path: Pa
         assert body["status"] == "ok"
         assert body["perception"]["connected"] is True
 
-        # A drops the socket; the client stays attached and keeps retrying.
-        _FakeClient.instances[0].connected = False
+        # Perception worker stops producing while the session remains attached.
+        bridge.is_connected = False
         status, body = _get(port, "/api/health")
         assert body["status"] == "degraded"
         assert body["perception"]["attached"] is True
@@ -1181,18 +1174,11 @@ def test_health_reports_degraded_when_the_perception_stream_is_down(tmp_path: Pa
         thread.join(timeout=5)
 
 
-def test_health_never_leaks_the_stream_url_query(tmp_path: Path) -> None:
+def test_health_reports_in_process_transport_url(tmp_path: Path) -> None:
     service = _service(tmp_path)
     registry = RuntimeSessionRegistry()
     ingest = EventIngest()
-    _FakeClient.instances = []
-    bridge = PerceptionBridge(
-        events_url="ws://127.0.0.1:9/ws/events?token=SECRET",
-        ingest=ingest,
-        registry=registry,
-        service=service,
-        client_factory=_FakeClient,  # type: ignore[arg-type]
-    )
+    bridge = _FakeBridge(ingest)
     handler = build_decision_handler(
         service=service, static_dir=None, registry=registry, ingest=ingest, bridge=bridge
     )
@@ -1203,8 +1189,7 @@ def test_health_never_leaks_the_stream_url_query(tmp_path: Path) -> None:
         port = server.server_address[1]
         assert isinstance(port, int)
         _, body = _get(port, "/api/health")
-        assert "SECRET" not in json.dumps(body)
-        assert body["perception"]["url"].endswith("?<redacted>")
+        assert body["perception"]["url"] == "in-process://perception/events"
     finally:
         server.shutdown()
         server.server_close()

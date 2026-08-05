@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = build_decision_parser()
     parser.description = "Reme unified local backend"
-    parser.set_defaults(host="127.0.0.1", port=DEFAULT_BACKEND_PORT, a_events_url=None)
+    parser.set_defaults(host="127.0.0.1", port=DEFAULT_BACKEND_PORT)
     add_perception_arguments(parser, include_network=False)
     return parser
 
@@ -107,9 +107,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the single Reme backend process."""
 
     args = build_parser().parse_args(argv)
-    if args.a_events_url is not None:
-        print("error: --a-events-url is removed; unified runtime uses in-process transport")
-        return 2
     try:
         decision_config = server_config_from_namespace(args)
         perception = build_perception_runtime(args)

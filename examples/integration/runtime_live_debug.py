@@ -51,12 +51,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 try:
-    from reme.decision.ws_client import PerceptionEventClient
+    from reme.runtime.debug_ws_client import PerceptionEventClient
     from reme.pose.browser_input import KEYPOINT_NAMES
     from reme.pose.runtime import RuntimeEvent, RuntimeEventType
 except ImportError:  # 允许在未安装 editable 包的解释器里直接运行
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
-    from reme.decision.ws_client import PerceptionEventClient
+    from reme.runtime.debug_ws_client import PerceptionEventClient
     from reme.pose.browser_input import KEYPOINT_NAMES
     from reme.pose.runtime import RuntimeEvent, RuntimeEventType
 

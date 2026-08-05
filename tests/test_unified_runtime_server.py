@@ -12,7 +12,7 @@ def test_unified_parser_uses_one_backend_port_and_in_process_transport() -> None
 
     assert args.host == "127.0.0.1"
     assert args.port == DEFAULT_BACKEND_PORT
-    assert args.a_events_url is None
+    assert not hasattr(args, "a_events_url")
     assert args.input_adapter == "c_ws_server"
 
 

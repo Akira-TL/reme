@@ -1,20 +1,16 @@
-"""RFC 6455 WebSocket *client* that subscribes B to A's perception events.
+"""Minimal RFC 6455 client for external runtime diagnostics.
 
-A (``reme.pose.runtime_server``) serves ``ws://<host>/ws/events?session_id=<id>``
-and pushes one JSON ``RuntimeEvent`` envelope per text frame. Nothing in the
-repo ever dialled that socket: A has no outbound HTTP and B only had the
-passive ``POST /api/events`` route, so the A -> B link was never connected.
-This module is the missing half.
+The unified backend uses :mod:`reme.runtime.transport` for perception-to-
+decision delivery. This client is intentionally outside that path: examples
+and diagnostics use it to observe browser-facing ``/ws/events`` or ``/ws``
+streams without adding a third-party WebSocket dependency.
 
-Injectable on purpose: the integration lane owns the wiring (``on_event``
-typically funnels into ``EventIngest.submit`` + post-ingest evaluation), this
-module owns only the transport. Nothing here imports the decision service.
+It owns only WebSocket transport and RuntimeEvent envelope parsing. Production
+components must not use this module for internal event delivery.
 
-Role note: ``reme.decision.websocket`` is B's *server* implementation and its
-``read_frame`` demands masked frames. The roles are mirrored, so only the
-constants, the ``Frame`` record and ``compute_accept`` are reused; framing is
-rewritten for the client role — everything sent is masked, and a masked frame
-arriving from the server is a protocol error.
+The client role mirrors the server implementation in
+``reme.runtime.decision.websocket``: outbound frames are masked, while masked
+server frames are protocol errors.
 
 Delivery contract:
 - Every event type A publishes is forwarded (``frame_landmarks`` included);
