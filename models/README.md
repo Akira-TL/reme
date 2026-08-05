@@ -17,15 +17,21 @@ models/
 
 ## 当前迁移状态
 
-本轮只预留目录，不移动现有模型，也不修改运行时默认路径。
+2026-08-05 已从 `akira@192.168.100.102:/home/akira/Projects/reme` 恢复训练模型到规范目录：
 
-当前仍在使用的已知位置：
+- `models/trained/posture/`：4 个姿态 Softmax 版本，以及 12 组 `posture-sweep-20260801` 训练组合；
+- `models/trained/fall/`：MIL v1、v2、v3 模型与对应训练报告。
+
+这些模型只存在于本地工作区，并受 `.gitignore` 管理。完整 SHA-256 台账见 `docs/assets/training-models.sha256`。
+
+当前运行时默认路径尚未切换，仍使用：
 
 - `models/movenet/movenet_lightning_f16_v4.tflite`
 - `frontend/public/mediapipe/pose_landmarker_lite.task`
-- `artifacts/pose-classification/` 下的本地训练模型与数据产物
+- `artifacts/pose-classification/models/posture-sweep-20260801/seed-42-lr-0.04/model.json`
+- `artifacts/pose-classification/fall-50/mil-v3/model.json`
 
-后续由项目负责人手动确认并移动模型文件。每次迁移必须同时更新：
+后续修改运行时模型路径时，必须同时更新：
 
 1. 后端或前端默认路径；
 2. 构建复制脚本；
