@@ -3,7 +3,7 @@
   "dataset_id": "downloads6-animation-bootstrap-v2",
   "label_source": "filename_inference",
   "evidence_level": "weak_label_bootstrap",
-  "root": "artifacts/pose-classification/raw/downloads6",
+  "root": "data/training/pose/raw/downloads6",
   "sample_fps": 10.0,
   "clips": [
     {"scene_id":"d6-standing-stretch-01","file":"01 - 【日常动作】[伸懒腰][伸展运动].mp4","split":"train","label":"standing","start_ratio":0.15,"end_ratio":0.85,"notes":"站立伸展，中段弱标签。"},
