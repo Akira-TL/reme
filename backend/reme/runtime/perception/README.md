@@ -38,9 +38,9 @@ reme.runtime.perception
 └── transitions.py       # 静止与动作转变（后续 Ticket）
 ```
 
-跨角色字段必须遵循 `.scratch/abc-interface/spec.md`。实验产物放入被 Git 忽略的 `artifacts/pose-classification/`，不得将大型视频、模型或逐帧结果提交到 Git。
+跨角色字段必须遵循 `.scratch/abc-interface/spec.md`。恢复的训练数据位于 `data/training/pose/`，新实验产物写入被 Git 忽略的 `artifacts/training/`；不得将大型视频、模型或逐帧结果提交到 Git。
 
-兼容入口 `reme.scene_bundle` 暂时保留；新代码和新测试应直接使用 `reme.pose.*`。
+兼容入口 `reme.scene_bundle` 暂时保留；新代码和新测试应直接使用 `reme.runtime.perception.*`。
 
 ## 实时摄像头与 MoveNet
 
@@ -76,7 +76,7 @@ models/movenet/movenet_lightning_f16_v4.tflite
 持续运行并向标准输出写 RuntimeEvent JSONL：
 
 ```bash
-.venv/bin/python -m reme.pose.camera \
+uv run --extra pose python -m reme.runtime.perception.camera \
   --session-id live-camera-001 \
   --scene-id live-camera-001 \
   --camera 0 \
@@ -109,7 +109,7 @@ models/movenet/movenet_lightning_f16_v4.tflite
 动作参考视频直接放在：
 
 ```text
-artifacts/pose-classification/raw/downloads6/
+data/training/pose/raw/downloads6/
 ```
 
 选择清单：
@@ -121,26 +121,26 @@ artifacts/pose-classification/raw/downloads6/
 清单只选择代表视频，不会默认处理目录中的全部文件。验证文件存在：
 
 ```bash
-.venv/bin/python -m reme.pose.video_dataset validate \
+uv run --extra pose python -m reme.runtime.perception.video_dataset validate \
   .scratch/pose-classification-owner-a/datasets/downloads6-catalog.json
 ```
 
 提取 10Hz MoveNet 关键点；已有场景默认复用，只处理新增视频或重写标注：
 
 ```bash
-.venv/bin/python -m reme.pose.video_dataset extract \
+uv run --extra pose python -m reme.runtime.perception.video_dataset extract \
   .scratch/pose-classification-owner-a/datasets/downloads6-catalog.json \
   --model models/movenet/movenet_lightning_f16_v4.tflite \
-  --output-dir artifacts/pose-classification/datasets/downloads6
+  --output-dir artifacts/training/pose/datasets/downloads6
 ```
 
 训练四类已知姿态，并以置信度和特征距离输出 `unknown`：
 
 ```bash
-.venv/bin/python -m reme.pose.posture train \
-  artifacts/pose-classification/datasets/downloads6/dataset-index.json \
-  --model-output artifacts/pose-classification/models/posture-softmax-v3/model.json \
-  --metrics-output artifacts/pose-classification/models/posture-softmax-v3/metrics.json \
+uv run --extra pose python -m reme.runtime.perception.posture train \
+  data/training/pose/processed/downloads6/dataset-index.json \
+  --model-output artifacts/training/posture/posture-softmax-v3/model.json \
+  --metrics-output artifacts/training/posture/posture-softmax-v3/metrics.json \
   --max-samples-per-scene 400
 ```
 
@@ -149,7 +149,7 @@ artifacts/pose-classification/raw/downloads6/
 实时同时输出关键点和姿态观察：
 
 ```bash
-.venv/bin/python -m reme.pose.camera \
+uv run --extra pose python -m reme.runtime.perception.camera \
   --session-id live-camera-001 \
   --scene-id live-camera-001 \
   --camera 0 \
@@ -165,7 +165,7 @@ artifacts/pose-classification/raw/downloads6/
 使用同一个后端摄像头流展示左侧原始画面、右侧 Three.js 节点骨架和姿态分类：
 
 ```bash
-.venv/bin/python -m reme.pose.live_preview \
+uv run --extra pose python -m reme.runtime.perception.live_preview \
   --host 127.0.0.1 \
   --port 8765 \
   --camera 0 \
@@ -262,4 +262,4 @@ d80af32396c60cf66fa5afb7ef7f7c869ae0851afd3d91a75d55e76c5a62cb23
   --batch-size 4
 ```
 
-再由 `reme.pose.review` 校验、转换并安装为共享接口的 `derived/poses3d.json`。CPU 降级时使用 `--device cpu --no-amp`，但必须重新记录运行时间，不能沿用 CUDA 性能数据。
+再由 `reme.runtime.perception.review` 校验、转换并安装为共享接口的 `derived/poses3d.json`。CPU 降级时使用 `--device cpu --no-amp`，但必须重新记录运行时间，不能沿用 CUDA 性能数据。

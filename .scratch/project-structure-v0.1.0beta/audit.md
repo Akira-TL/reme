@@ -139,3 +139,16 @@ e36ff41 feat(runtime): 删除旧本地演示兼容入口
 3. `reme.scene_bundle` 仍是兼容导出，删除前需再次全仓确认调用方。
 4. Python 主测试原冻结基线为 `556 passed, 28 failed`；本轮统一验证需在全部整理提交完成后执行，并区分既有合同失败与新增结构回归。
 5. `.venv/bin` 中可能残留旧安装生成物；重新执行 `uv sync` 后应确认 `reme-*` 文件不再存在。该目录不属于 Git 内容。
+
+## 9. 后续状态更新
+
+本审计记录的是统一运行时整理完成时的现场。其后已完成本地资产恢复和运行路径切换，以下旧结论不再代表当前状态：
+
+- 姿态与跌倒训练模型已迁入 `models/trained/posture/` 和 `models/trained/fall/`；
+- 姿态训练数据已迁入 `data/training/pose/`，跌倒数据已迁入 `data/training/fall/`；
+- 当前默认姿态模型为 `models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json`；
+- 当前默认跌倒模型为 `models/trained/fall/mil-v3/model.json`；
+- 完整 Python 测试基线更新为 `563 passed, 25 failed`；
+- 整理分支已从 `refactor/project-structure-v0.1.0beta` 缩短为 `refactor/structure`。
+
+模型与数据的当前事实分别以 `models/README.md`、`data/README.md` 和 `docs/assets/training-models.sha256` 为准。历史训练报告和 manifest 中的旧机器路径继续保留作为训练证据，不批量改写。
