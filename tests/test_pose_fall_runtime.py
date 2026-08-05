@@ -9,7 +9,7 @@ from reme.pose.fall_weak_labels import FallPoseSample
 from reme.pose.runtime import RuntimeEvent, RuntimeEventType
 
 _MODEL_PATH = Path("models/trained/fall/mil-v3/model.json")
-_SAMPLES_PATH = Path("artifacts/pose-classification/fall-50/bootstrap/pose-samples.jsonl")
+_SAMPLES_PATH = Path("data/training/fall/bootstrap/pose-samples.jsonl")
 
 
 def _fall_002_samples() -> tuple[FallPoseSample, ...]:
