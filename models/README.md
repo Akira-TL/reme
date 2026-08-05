@@ -7,8 +7,7 @@
 ```text
 models/
 ├── runtime/
-│   ├── movenet/      # A 侧运行时 MoveNet / LiteRT 权重
-│   └── mediapipe/    # C 侧浏览器运行时 MediaPipe 模型
+│   └── movenet/      # 后端运行时 MoveNet / LiteRT 权重
 ├── trained/
 │   ├── posture/      # 姿态分类训练产物
 │   └── fall/         # 跌倒与转变分类训练产物
@@ -28,7 +27,7 @@ MoveNet 的大小、张量合同和 SHA-256 见 `models/runtime/movenet/README.m
 当前运行时默认路径：
 
 - `models/runtime/movenet/movenet_lightning_f16_v4.tflite`
-- `frontend/public/mediapipe/pose_landmarker_lite.task`
+- `frontend/public/mediapipe/pose_landmarker_lite.task`（由 Vite 直接提供，不在 `models/runtime/` 重复保存）
 - `models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json`
 - `models/trained/fall/mil-v3/model.json`
 

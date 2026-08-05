@@ -166,4 +166,5 @@ e36ff41 feat(runtime): 删除旧本地演示兼容入口
 - `scripts/start-demo.sh` 与 `scripts/setup-mimo-env.sh` 旧路径包装已删除，正式入口分别位于 `scripts/demo/` 与 `scripts/setup/`；
 - 中文 `.command` 文件作为比赛现场快捷方式保留，并统一转发到 `scripts/launchers/macos/`；
 - MoveNet 权重已通过 `git mv` 迁入 `models/runtime/movenet/`，迁移前后 SHA-256 保持 `0fac2226112d0371903ca86e3853cec24ef603a0b2f96f589b180f0ebdd135ab`；
+- 浏览器 MediaPipe 模型继续由 `frontend/public/mediapipe/` 直接提供，已删除未使用的 `models/runtime/mediapipe/` 占位目录；
 - 历史 ADR、实验结果和交接记录中的旧模块名仅在其仍代表历史事实时保留。

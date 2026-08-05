@@ -24,7 +24,6 @@ models/*
 !models/vendor/
 models/runtime/*
 !models/runtime/movenet/
-!models/runtime/mediapipe/
 models/trained/*
 !models/trained/posture/
 !models/trained/fall/
@@ -33,8 +32,6 @@ models/vendor/*
 models/runtime/movenet/*
 !models/runtime/movenet/README.md
 !models/runtime/movenet/movenet_lightning_f16_v4.tflite
-models/runtime/mediapipe/*
-!models/runtime/mediapipe/.gitkeep
 models/trained/posture/*
 !models/trained/posture/.gitkeep
 models/trained/fall/*
