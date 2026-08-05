@@ -14,6 +14,7 @@ from reme.runtime.launcher import (
     LocalDemoError,
     assert_port_available,
     build_child_commands,
+    build_parser,
     ensure_frontend_dependencies,
     load_env_file,
     start_process,
@@ -40,6 +41,11 @@ def test_load_env_file_rejects_shell_commands(tmp_path: Path) -> None:
 
     with pytest.raises(LocalDemoError, match="one shell word"):
         load_env_file(env_file)
+
+
+def test_launcher_defaults_to_browser_gpu_landmarks() -> None:
+    assert LocalDemoConfig(root=Path("/tmp/reme")).browser_input_mode == "landmarks"
+    assert build_parser().parse_args([]).browser_input_mode == "landmarks"
 
 
 def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> None:

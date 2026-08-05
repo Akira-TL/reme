@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { assertHardwareWebGl, inspectWebGlRenderer } from "../utils/gpu";
 import { createDemoLandmarks, drawSkeleton, mapLandmarks } from "../utils/pose";
 
 // 本地资产（predev 拷贝 wasm、模型已入库）：演示现场零 CDN 依赖。
@@ -110,6 +111,8 @@ export function useLiveDemoCamera({
   const [backendSkeletonActive, setBackendSkeletonActive] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [modelError, setModelError] = useState("");
+  const [inferenceBackend, setInferenceBackend] = useState("loading");
+  const [gpuRenderer, setGpuRenderer] = useState("detecting");
 
   useEffect(() => {
     onLandmarksRef.current = onLandmarks;
@@ -180,44 +183,42 @@ export function useLiveDemoCamera({
     async function loadModel() {
       modelFallbackRef.current = false;
       try {
+        const rendererInfo = inspectWebGlRenderer();
+        if (!cancelled) setGpuRenderer(rendererInfo.renderer);
+        assertHardwareWebGl(rendererInfo);
+
         const { FilesetResolver, PoseLandmarker } = await import("@mediapipe/tasks-vision");
         const vision = await withTimeout(
           FilesetResolver.forVisionTasks(MP_WASM_URL),
           MODEL_LOAD_TIMEOUT_MS,
           "wasm 加载超时",
         );
-        const options = {
-          baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
-          runningMode: "VIDEO",
-          numPoses: 1,
-          minPoseDetectionConfidence: 0.5,
-          minPosePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-          outputSegmentationMasks: false,
-        };
-        try {
-          landmarkerRef.current = await withTimeout(
-            PoseLandmarker.createFromOptions(vision, options),
-            MODEL_LOAD_TIMEOUT_MS,
-            "姿态模型加载超时",
-          );
-        } catch {
-          options.baseOptions = { modelAssetPath: POSE_MODEL_URL };
-          landmarkerRef.current = await withTimeout(
-            PoseLandmarker.createFromOptions(vision, options),
-            MODEL_LOAD_TIMEOUT_MS,
-            "姿态模型加载超时",
-          );
-        }
+        landmarkerRef.current = await withTimeout(
+          PoseLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
+            runningMode: "VIDEO",
+            numPoses: 1,
+            minPoseDetectionConfidence: 0.5,
+            minPosePresenceConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+            outputSegmentationMasks: false,
+          }),
+          MODEL_LOAD_TIMEOUT_MS,
+          "GPU 姿态模型加载超时",
+        );
         if (!cancelled) {
           setModelReady(true);
+          setInferenceBackend("gpu");
           setModelError("");
         }
-      } catch {
+      } catch (error) {
         modelFallbackRef.current = true;
         if (!cancelled) {
           setModelReady(false);
-          setModelError("姿态模型暂不可用，已进入动态骨架演示");
+          setInferenceBackend("unavailable");
+          setModelError(
+            `GPU 姿态推理不可用，已禁止回退 CPU：${error?.message || "初始化失败"}`,
+          );
         }
       }
     }
@@ -335,6 +336,8 @@ export function useLiveDemoCamera({
     cameraReady,
     aspectRatio,
     modelReady,
+    inferenceBackend,
+    gpuRenderer,
     personDetected,
     backendSkeletonActive,
     skeletonSource: backendSkeletonActive ? "a_backend" : "c_local",

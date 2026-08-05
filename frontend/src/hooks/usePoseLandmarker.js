@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { assertHardwareWebGl, inspectWebGlRenderer } from "../utils/gpu";
 import { createDemoLandmarks, drawSkeleton, mapLandmarks, resizeCanvas } from "../utils/pose";
 
 // 本地资产（predev 拷贝 wasm、模型已入库）：演示现场零 CDN 依赖。
@@ -119,40 +120,36 @@ export function usePoseLandmarker(externalFrame = null, onLandmarks = null) {
 
     async function loadModel() {
       try {
+        const rendererInfo = inspectWebGlRenderer();
+        assertHardwareWebGl(rendererInfo);
+
         const { FilesetResolver, PoseLandmarker } = await import("@mediapipe/tasks-vision");
         const vision = await withTimeout(
           FilesetResolver.forVisionTasks(MP_WASM_URL),
           MODEL_LOAD_TIMEOUT_MS,
           "wasm 加载超时",
         );
-        const options = {
-          baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
-          runningMode: "VIDEO",
-          numPoses: 1,
-          minPoseDetectionConfidence: 0.5,
-          minPosePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-          outputSegmentationMasks: false,
-        };
-
-        try {
-          landmarkerRef.current = await withTimeout(
-            PoseLandmarker.createFromOptions(vision, options),
-            MODEL_LOAD_TIMEOUT_MS,
-            "姿态模型加载超时",
-          );
-        } catch {
-          options.baseOptions = { modelAssetPath: POSE_MODEL_URL };
-          landmarkerRef.current = await withTimeout(
-            PoseLandmarker.createFromOptions(vision, options),
-            MODEL_LOAD_TIMEOUT_MS,
-            "姿态模型加载超时",
-          );
-        }
+        landmarkerRef.current = await withTimeout(
+          PoseLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
+            runningMode: "VIDEO",
+            numPoses: 1,
+            minPoseDetectionConfidence: 0.5,
+            minPosePresenceConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+            outputSegmentationMasks: false,
+          }),
+          MODEL_LOAD_TIMEOUT_MS,
+          "GPU 姿态模型加载超时",
+        );
 
         if (!cancelled) setModelReady(true);
-      } catch {
-        if (!cancelled) enableFallback();
+      } catch (error) {
+        if (!cancelled) {
+          enableFallback(
+            `GPU 姿态推理不可用，已禁止回退 CPU：${error?.message || "初始化失败"}`,
+          );
+        }
       }
     }
 
@@ -236,7 +233,7 @@ export function usePoseLandmarker(externalFrame = null, onLandmarks = null) {
     ? {
         connection: "已连接",
         title: backendActive ? "统一后端感知结果已接入" : "本地姿态模型已就绪",
-        hint: "检测到人物后只显示 17 节点火柴人",
+        hint: "GPU 姿态推理已启用，检测到人物后只显示 17 节点火柴人",
         retryable: false,
         visible: false,
       }

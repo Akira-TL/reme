@@ -20,7 +20,7 @@ frontend/typical-demo.html
   └─ 家属端隐私视图
 ```
 
-正式单机入口为 `scripts/demo/start-local-demo.sh`。它只管理统一后端和前端两个进程；感知到决策不经过内部 HTTP/WebSocket。
+正式单机入口为 `scripts/demo/start-local-demo.sh`。它只管理统一后端和前端两个进程；感知到决策不经过内部 HTTP/WebSocket。实时摄像头姿态默认由浏览器 MediaPipe GPU delegate 推理并直传 17 点关键点，GPU 不可用时明确降级，不静默回退 CPU。
 
 ## 快速启动
 

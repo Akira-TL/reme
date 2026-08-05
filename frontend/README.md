@@ -27,7 +27,7 @@ npm run dev
 
 默认地址：`http://127.0.0.1:4174`
 
-首次打开时允许浏览器使用摄像头。页面不会默认展示可识别原画，只在本地运行姿态识别并绘制 17 节点火柴人。MediaPipe wasm 与姿态模型均从本地资产加载，不依赖运行时 CDN；模型不可用或 15 秒内未加载完成时会明确进入降级模式。
+首次打开时允许浏览器使用摄像头。页面不会默认展示可识别原画，只在本地运行姿态识别并绘制 17 节点火柴人。MediaPipe wasm 与姿态模型均从本地资产加载，不依赖运行时 CDN。正式演示强制使用 MediaPipe GPU delegate，并拒绝 SwiftShader、llvmpipe 等软件 WebGL 渲染器；GPU 初始化失败时明确进入动态骨架降级，不会静默回退 CPU。
 
 ## 接入统一后端
 
@@ -43,9 +43,9 @@ VITE_REME_PERCEPTION_INPUT_WS_URL=ws://127.0.0.1:8770/ws/camera-input
 VITE_REME_DECISION_HTTP_URL=http://127.0.0.1:8770
 ```
 
-前端使用统一后端的 HTTP 控制接口启动/停止会话，通过 `/ws/events` 接收 `frame_landmarks`、`posture_observation` 和 `transition_event`，通过 `/ws` 接收决策事件。摄像头先发送 `scene_signal`，再以 `frame_meta + binary JPEG` 发送 10 FPS、最长边 640px 的帧。
+前端使用统一后端的 HTTP 控制接口启动/停止会话，通过 `/ws/events` 接收 `frame_landmarks`、`posture_observation` 和 `transition_event`，通过 `/ws` 接收决策事件。正式启动器使用 `landmarks` 输入模式：浏览器摄像头帧由 MediaPipe GPU delegate 转为 17 点关键点，再通过 `/ws/camera-input` 发送给统一后端；不会把 JPEG 交给 Python LiteRT 做 CPU MoveNet 推理。
 
-统一后端的 `auto` 模式优先接收浏览器 JPEG 并在本地运行 MoveNet；本地推理栈不可用时，页面才会按能力声明切换为 17 点关键点直传。感知事件通过后端进程内桥接进入决策模块，不经过第二个服务。两种模式都会如实显示数据源和降级状态。
+感知事件通过后端进程内桥接进入决策模块，不经过第二个服务。Debug 面板会显示 `inference_backend=gpu` 和浏览器实际 WebGL 渲染器，用于确认没有落到软件渲染。
 
 ## 四场景单机现场验收
 

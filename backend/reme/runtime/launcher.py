@@ -41,7 +41,7 @@ class LocalDemoConfig:
     host: str = DEFAULT_HOST
     backend_port: int = DEFAULT_BACKEND_PORT
     frontend_port: int = DEFAULT_FRONTEND_PORT
-    browser_input_mode: str = "auto"
+    browser_input_mode: str = "landmarks"
     startup_timeout_seconds: float = DEFAULT_STARTUP_TIMEOUT_SECONDS
     mimo_env: Path = DEFAULT_MIMO_ENV
 
@@ -351,6 +351,7 @@ def run_local_demo(config: LocalDemoConfig) -> int:
         print("\nReme 本地应用已就绪", flush=True)
         print(f"验收页面: {config.acceptance_url}", flush=True)
         print(f"统一后端: {config.backend_http_url}", flush=True)
+        print("浏览器姿态推理: GPU delegate（关键点直传）", flush=True)
         print("内部感知 → 决策: 进程内通讯", flush=True)
         print("按 Ctrl+C 停止 BACKEND 与 FRONTEND。\n", flush=True)
 
@@ -377,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--browser-input-mode",
         choices=("auto", "jpeg", "landmarks"),
-        default="auto",
+        default="landmarks",
     )
     parser.add_argument(
         "--startup-timeout",

@@ -57,6 +57,8 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       scene_id: scene.id,
       camera_ready: camera.cameraReady,
       model_ready: camera.modelReady,
+      inference_backend: camera.inferenceBackend || null,
+      gpu_renderer: camera.gpuRenderer || null,
       person_detected: camera.personDetected,
       skeleton_source: camera.skeletonSource || null,
       conversation_scenario: scene.conversationScenario || null,
@@ -112,6 +114,8 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="场景" value={scene.id} />
               <DebugValue label="摄像头" value={camera.cameraReady ? "online" : "offline"} />
               <DebugValue label="姿态模型" value={camera.modelReady ? "ready" : "loading / degraded"} />
+              <DebugValue label="推理后端" value={camera.inferenceBackend || "loading"} />
+              <DebugValue label="GPU 渲染器" value={camera.gpuRenderer || "detecting"} wide />
               <DebugValue label="检测到人物" value={camera.personDetected ? "yes" : "no"} />
               <DebugValue label="骨架显示来源" value={camera.skeletonSource || "—"} />
               <DebugValue label="场景对话任务" value={scene.conversationScenario || "disabled"} />
