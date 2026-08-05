@@ -13,11 +13,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
-from reme.runtime.decision.config import (
-    ServerConfigError,
-    build_parser as build_decision_parser,
-    server_config_from_namespace,
-)
+from reme.runtime.decision.config import ServerConfigError, server_config_from_namespace
+from reme.runtime.decision.config import build_parser as build_decision_parser
 from reme.runtime.decision.context import SceneStreamError
 from reme.runtime.decision.server import (
     build_decision_handler,

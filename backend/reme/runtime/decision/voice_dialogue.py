@@ -22,8 +22,8 @@ from reme.decision.mimo.speech import (
 )
 from reme.decision.records import (
     CareDecision,
-    DemoMode,
     DecisionState,
+    DemoMode,
     InteractionResponse,
     ResponseSource,
     ResponseValue,
