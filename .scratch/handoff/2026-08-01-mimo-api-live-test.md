@@ -25,4 +25,4 @@
 - 真实居家画面上的 V 路径识别质量与 video_tokens 成本（B 的 P0 实测素材）。
 - 流式响应的 usage 返回方式（做 AuditEntry 耗时统计时再验）。
 
-复现资产：会话 scratchpad `g01/`（请求体 req_decision.json / req_img.json / req_vid.json 与全部响应），会话结束即失效；请求体模板已内联于 [方案-MiMo接入.md](../../planning/docs/方案-MiMo接入.md) §3/§5。
+复现资产：会话 scratchpad `g01/`（请求体 req_decision.json / req_img.json / req_vid.json 与全部响应），会话结束即失效；请求体模板已内联于 [方案-MiMo接入.md](../../docs/integration/方案-MiMo接入.md) §3/§5。

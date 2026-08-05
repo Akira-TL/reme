@@ -9,7 +9,7 @@
   - `CONTEXT.md`
   - `docs/adr/0003-allow-minimal-visual-context-to-mimo.md`
   - `.scratch/team-roles/README.md`
-  - `planning/docs/Reme-核心产品文档-v3.0.md`
+  - `docs/product/Reme-核心产品文档-v3.0.md`
 
 ## 1. 角色目标
 

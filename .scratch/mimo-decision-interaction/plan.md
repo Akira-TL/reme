@@ -1,7 +1,7 @@
 # B 执行计划：MiMo 决策模块（方案 A · 本地 Python 服务）
 
 - Status: agreed（2026-08-01 晚，与 owner 对齐）
-- 上位文档：[spec.md](spec.md)（角色说明）、`.scratch/abc-interface/spec.md`（接口合同，develop/akira）、[方案-MiMo接入](../../planning/docs/方案-MiMo接入.md) §5（live 实测参数）、[G-01 live 实测](../handoff/2026-08-01-mimo-api-live-test.md)
+- 上位文档：[spec.md](spec.md)（角色说明）、`.scratch/abc-interface/spec.md`（接口合同，develop/akira）、[方案-MiMo接入](../../docs/integration/方案-MiMo接入.md) §5（live 实测参数）、[G-01 live 实测](../handoff/2026-08-01-mimo-api-live-test.md)
 - 演示优先级（owner 定调，2026-08-01）：**载体首选摄像头实时输入；演示设备首选手机，其次电脑。**
 
 ## 1. 运行时形态（已拍板）

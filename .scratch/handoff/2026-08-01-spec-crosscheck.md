@@ -1,7 +1,7 @@
 # 分工 spec 交叉审阅：冻结会待决清单
 
 - 日期：2026-08-01
-- 来源：Codex（gpt-5 系）对 6 份分工文档的异构交叉审阅（team-roles、A/B/C/D spec、motionbert-offline-demo）+ 人工核实，基线参照 `planning/docs/方案-MiMo接入.md`
+- 来源：Codex（gpt-5 系）对 6 份分工文档的异构交叉审阅（team-roles、A/B/C/D spec、motionbert-offline-demo）+ 人工核实，基线参照 `docs/integration/方案-MiMo接入.md`
 - 定位：讨论基线（handoff 层）。用途：0-4h 冻结会逐项裁决打勾；已按 team-roles §2 文档优先级校正——planning 层不作为判错依据，冲突默认解优先向 team-roles 候选合同收敛
 - 总判断：A 感知 / B 决策 / C 演示 / D 路演的分层可行，但**当前不具备无返工联调条件**；最大风险是共享合同、主演示闭环、高风险旁路三者尚未统一
 
@@ -43,7 +43,7 @@
 
 ## 6. 基线侧已完成的对齐（本次已改，无需裁决）
 
-- `planning/docs/方案-MiMo接入.md`：§1 原则 1 已按 ADR-0003 改为 S/V 双路径；流转图出网标注与 Miloco 对照叙事已同步（"按需最少地看"）；头部已声明执行期字段以 team-roles 候选合同为准。
+- `docs/integration/方案-MiMo接入.md`：§1 原则 1 已按 ADR-0003 改为 S/V 双路径；流转图出网标注与 Miloco 对照叙事已同步（"按需最少地看"）；头部已声明执行期字段以 team-roles 候选合同为准。
 
 ## 7. 对照更新（2026-08-01 傍晚）：develop/akira `56c3604 统一ABC实验接口合同` 解决情况
 
