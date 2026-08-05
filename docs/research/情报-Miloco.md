@@ -2,7 +2,7 @@
 
 > 来源：https://gitee.com/xiaomi-miloco （一手 README，2026-07-31 抓取）
 > 2026-08-01 补充：代码级深挖（调用方案/数据结构/流转图/出域清单）见 [情报-Miloco-代码剖析.md](情报-Miloco-代码剖析.md)；MiMo API 官方文档见 [情报-MiMo-API.md](情报-MiMo-API.md)。
-> 📒 来源台账：[docs/references/intel-sources.md](../../docs/references/intel-sources.md) §S5–S7。
+> 📒 来源台账：[docs/references/intel-sources.md](../references/intel-sources.md) §S5–S7。
 > 许可证红线已于 2026-08-02 经 GitHub 仓库复核确认；本文其余细节（发布日期、部署门槛、
 > 五大能力等）沿用 2026-07-31 抓取，**未逐条复核**，引用前请重新核对。
 > 结论先行：**Miloco 的存在同时是 Reme 最大的答辩雷区和最好的叙事陪衬**——它证明了"摄像头+MiMo"赛道是小米官方方向，但它把原始画面喂给云端多模态大模型的做法，恰好反衬出 Reme"像素止于端侧"的差异化价值。

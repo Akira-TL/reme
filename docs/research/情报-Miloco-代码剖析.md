@@ -158,7 +158,7 @@ flowchart TB
 
 **留在本地**：原始码流仅局域网 P2P；四个辅助 ONNX 模型；人脸样本库、SQLite、事件 clip（TTL 清理）、profile.md。
 
-**关键叙事事实**：Miloco 1.x README 自己写"On-Device LLM…ensure family privacy"，2.0 改为"感知与 Agent 主要依赖云端大模型"——**官方路线从本地隐私优先反转为云端能力优先**。Reme 的"看得更少"（只出去身份化事件 JSON，见 [方案-MiMo接入](方案-MiMo接入.md) §4.1）是与 Miloco 2.0 实际数据流的差异，不是与其宣传口径抬杠。对照表：
+**关键叙事事实**：Miloco 1.x README 自己写"On-Device LLM…ensure family privacy"，2.0 改为"感知与 Agent 主要依赖云端大模型"——**官方路线从本地隐私优先反转为云端能力优先**。Reme 的"看得更少"（只出去身份化事件 JSON，见 [方案-MiMo接入](../integration/方案-MiMo接入.md) §4.1）是与 Miloco 2.0 实际数据流的差异，不是与其宣传口径抬杠。对照表：
 
 | | Miloco 2.0（实测代码） | Reme（v3.0 冻结） |
 |---|---|---|
@@ -175,7 +175,7 @@ flowchart TB
 4. **熔断器 + 错误分类**：48h 版可简化为"连续 N 次失败自动切 mock + 面板提示"，即 SAFE-01 降级的工程化表达。
 5. **usage 记账进日志**：latency+token 落 AuditEntry（MIMO-12 已规划，坚持做）。
 6. **Gate 思想**：我们的对应物是"规则引擎先筛事件，MiMo 只看事件"——天然比 Miloco 每 4 秒窗口调 VLM 省一个数量级成本，可作为答辩的成本论据。
-7. **thinking 显式关闭**：官方感知调用就是 `thinking: disabled`——我们决策调用同样照做（已入 [方案-MiMo接入](方案-MiMo接入.md) §5）。
+7. **thinking 显式关闭**：官方感知调用就是 `thinking: disabled`——我们决策调用同样照做（已入 [方案-MiMo接入](../integration/方案-MiMo接入.md) §5）。
 
 ## 9. 未确认事项
 

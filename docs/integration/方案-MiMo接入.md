@@ -2,12 +2,12 @@
 
 > 状态：草案（2026-08-01，配合 0-4h 冻结会使用）
 > 2026-08-01 修订：§1 原则 1 已按 ADR-0003（Accepted）更新为 S/V 双路径。本文合同 JSON 化属 planning 层产品基线；按 `.scratch/team-roles/README.md` §2 文档优先级，执行期字段命名以该索引候选合同（`reme-posture/v0`、`care-decision.v0`）为准，两侧差异与全部待裁决项见 [.scratch/handoff/2026-08-01-spec-crosscheck.md](../../.scratch/handoff/2026-08-01-spec-crosscheck.md)。
-> 依据：[核心产品文档 v3.0](Reme-核心产品文档-v3.0.md) §04 MiMo 固定输入/输出合同、[任务分解](任务分解.md) MIMO-01~16 与三份数据契约、[情报-MiMo-API](情报-MiMo-API.md)、[情报-Miloco-代码剖析](情报-Miloco-代码剖析.md)。
+> 依据：[核心产品文档 v3.0](../product/Reme-核心产品文档-v3.0.md) §04 MiMo 固定输入/输出合同、[任务分解](../product/任务分解.md) MIMO-01~16 与三份数据契约、[情报-MiMo-API](../research/情报-MiMo-API.md)、[情报-Miloco-代码剖析](../research/情报-Miloco-代码剖析.md)。
 > 本文回答一个问题：**代码层面怎么用 MiMo**——客户端结构、每一跳的数据结构、完整流转图。API 端点等外部事实以情报文档为准，此处只引用不复述。
 
 ## 1. 总体原则（v3.0 冻结口径）
 
-1. 视觉输入按 **ADR-0003（Accepted，取代 ADR-0001 的绝对禁令）** 执行双路径：默认 **S 路径**（结构化事件与必要对话文本）；B 可在明确事件触发下走 **V 路径**（附加最小视觉上下文：选定关键帧/短视频），必须显式、最小、可观察、记录采样范围，禁止持续后台上传（见 [ADR-0003](../../docs/adr/0003-allow-minimal-visual-context-to-mimo.md) 与 team-roles §5）。验收项相应从"原始视频不进任何网络请求"改为"**每次请求实际发送内容可观察、可审计**"。
+1. 视觉输入按 **ADR-0003（Accepted，取代 ADR-0001 的绝对禁令）** 执行双路径：默认 **S 路径**（结构化事件与必要对话文本）；B 可在明确事件触发下走 **V 路径**（附加最小视觉上下文：选定关键帧/短视频），必须显式、最小、可观察、记录采样范围，禁止持续后台上传（见 [ADR-0003](../adr/0003-allow-minimal-visual-context-to-mimo.md) 与 team-roles §5）。验收项相应从"原始视频不进任何网络请求"改为"**每次请求实际发送内容可观察、可审计**"。
 2. 高风险规则状态机 **>** MiMo 输出：MiMo 可生成解释与文案，不能取消确定性告警，不能输出医疗诊断。
 3. 所有 MiMo 输出先做 schema 校验：解析失败重试 1 次 → 降级规则模板，`degraded` 落日志。
 4. MiMoClient 同时支持 **live / mock / record** 三模式，现场断网不影响产品闭环（live 视为加分而非前提）。
@@ -151,7 +151,7 @@ flowchart LR
     MC --> LOG
 ```
 
-隐私红线在图上的位置：默认（S 路径）`CareEvent` 之左全部留在端内，出网只有 `MiMoRequest`（结构化 JSON）；ADR-0003 后新增 V 路径例外——事件触发的最小关键帧/短视频可随单次请求出网，须显式记录采样范围并在 Demo 中可见。与 Miloco 的对照相应校正：Miloco 每触发窗口把 4s 原画 mp4+人脸 gallery+家庭档案全量送云（见 [情报-Miloco-代码剖析](情报-Miloco-代码剖析.md)），Reme 默认零像素出网、必要时才发送最小可审计的视觉上下文——**同一生态，Miloco 追求看得更懂，Reme 坚持按需最少地看**。（D 路演口径同步：不得声称所有 MiMo 推理完全不接触像素，见 team-roles §5。）
+隐私红线在图上的位置：默认（S 路径）`CareEvent` 之左全部留在端内，出网只有 `MiMoRequest`（结构化 JSON）；ADR-0003 后新增 V 路径例外——事件触发的最小关键帧/短视频可随单次请求出网，须显式记录采样范围并在 Demo 中可见。与 Miloco 的对照相应校正：Miloco 每触发窗口把 4s 原画 mp4+人脸 gallery+家庭档案全量送云（见 [情报-Miloco-代码剖析](../research/情报-Miloco-代码剖析.md)），Reme 默认零像素出网、必要时才发送最小可审计的视觉上下文——**同一生态，Miloco 追求看得更懂，Reme 坚持按需最少地看**。（D 路演口径同步：不得声称所有 MiMo 推理完全不接触像素，见 team-roles §5。）
 
 ### 4.2 场景 B（牙疼→行动闭环）调用时序
 
@@ -180,7 +180,7 @@ sequenceDiagram
     Note over S,M: 若 possible_fall：S 直接倒计时/告警，不等待 A 返回
 ```
 
-## 5. live 模式接入参数（已按 [情报-MiMo-API](情报-MiMo-API.md) 回填，2026-08-01）
+## 5. live 模式接入参数（已按 [情报-MiMo-API](../research/情报-MiMo-API.md) 回填，2026-08-01）
 
 | 项 | 冻结会建议值 | 依据 |
 |---|---|---|
@@ -193,4 +193,4 @@ sequenceDiagram
 | 限流应对 | RPM 100/模型，演示量级无压力；MiMoClient base URL 可配置，留 OpenRouter（`xiaomi/mimo-v2.5`）一键切换防 CORS 收紧 | 情报 §5/§7 |
 | 语音链路 | ASR `mimo-v2.5-asr`、TTS `mimo-v2.5-tts`（限免）同平台同 key，MIMO-14/15 不必另找供应商 | 情报 §3 |
 
-**G-01 实测结果（2026-08-01 真实 key 完成，全绿，详见 [.scratch/handoff/2026-08-01-mimo-api-live-test.md](../../.scratch/handoff/2026-08-01-mimo-api-live-test.md)）**：① 新建 key 即可调用；② 最小调用 200，`mimo-v2.5` 官方名直接可用（无需 `xiaomi/` 前缀），冷连接直连 0.51–2.03s；③ 真实 POST 带 Origin 响应 `allow-origin: *`，浏览器直连无阻碍；④ 决策 prompt JSON mode **5/5 解析成功、九字段全齐**（3.4–5.9s；建议 `temperature≈0.2` 收敛分支波动）；⑤ 附加：`image_url` 与 `video_url`（base64 mp4 data URI + `fps`）均 200——**V 路径视频载荷通道成立**，crosscheck L30 不必降级关键帧。live 可作主路径候选，mock 保底不变。key 寄存 `~/.config/reme/mimo.env`（600，不进 git）。
+**G-01 实测结果（2026-08-01 真实 key 完成，全绿，详见 [.scratch/handoff/2026-08-01-mimo-api-live-test.md](../../.scratch/handoff/2026-08-01-mimo-api-live-test.md)）**：① 新建 key 即可调用；② 最小调用 200，`mimo-v2.5` 官方名直接可用（无需 `xiaomi/` 前缀），冷连接直连 0.51–2.03s；③ 真实 POST 带 Origin 响应 `allow-origin: *`，浏览器直连无阻碍；④ 决策 prompt JSON mode **5/5 解析成功、九字段全齐**（3.4–5.9s；建议 `temperature≈0.2` 收敛分支波动）；⑤ 附加：`image_url` 与 `video_url`（base64 mp4 data URI + `fps`）均 200——**V 路径视频载荷通道成立**，crosscheck L30 不必降级关键帧。live 可作主路径候选，mock 保底不变。key 保存在仓库根目录 `.env`（600，已被 Git 忽略）。

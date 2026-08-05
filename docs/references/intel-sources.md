@@ -66,7 +66,7 @@
 
 ### S6 · Miloco 架构对照（差异叙事的事实基础）
 
-- 来源：`planning/docs/情报-Miloco-代码剖析.md`（**在 `mimo-api-research` 分支**）`[二手/读码]` · 2026-08-01
+- 来源：`docs/research/情报-Miloco-代码剖析.md`（历史来源分支现归档为 `archive/mimo-api-research`）`[二手/读码]` · 2026-08-01
 - 用于对照的关键差异：Miloco 在每个触发窗口把**原始 mp4 片段 + 人脸库 + 家庭档案**发往云端；Reme 的对照面是"画面转骨架、原始帧不出户、按需最少视觉上下文"（ADR-0001/0003）。
 - **叙事纪律**：这是**能力取向差异**，不是优劣评判——"Miloco 追求看得更懂，Reme 坚持看得更少"。任何把对方说成"隐私有问题"的表述都超出了事实，也无必要。
 - ⚠️ 该文档基于某一时点的代码阅读，上游随时可能变；**引用前须重新读码**，不得把旧结论当现状。
@@ -85,13 +85,13 @@
 
 | 文档 | 内容 | 台账对应 |
 |---|---|---|
-| `planning/docs/情报-MiMo-API.md` | API 能力面全景 | S1–S3 |
-| `planning/docs/情报-Miloco-代码剖析.md` | 架构对照读码 | S6 |
-| `planning/docs/方案-MiMo接入.md` | 接入方案与载荷模板 | S1, S4 |
-| `planning/docs/情报-Miloco.md` | Miloco 概览 | S5 |
+| `docs/research/情报-MiMo-API.md` | API 能力面全景 | S1–S3 |
+| `docs/research/情报-Miloco-代码剖析.md` | 架构对照读码 | S6 |
+| `docs/integration/方案-MiMo接入.md` | 接入方案与载荷模板 | S1, S4 |
+| `docs/research/情报-Miloco.md` | Miloco 概览 | S5 |
 | `.scratch/handoff/2026-08-01-mimo-api-live-test.md` | G-01 实测 | S4 |
 
-合并时的取舍（备查）：该分支上的**旧版 B 决策实现**（`contracts/engine/mimo_client/mock_scenes` 及其测试）**未合入**——现行 `decision/` 是后来从零重写的版本，两套并存只会造成误引用。旧实现仍可在合并历史与 `mimo-api-research` 分支中查到。
+合并时的取舍（备查）：该分支上的**旧版 B 决策实现**（`contracts/engine/mimo_client/mock_scenes` 及其测试）**未合入**——现行 `decision/` 是后来从零重写的版本，两套并存只会造成误引用。旧实现仍可在合并历史与 `archive/mimo-api-research` 分支中查到。
 
 ---
 
