@@ -17,3 +17,17 @@ pose-classification accuracy.
 The empty-room backdrop comes from the repository's existing
 `frontend/public/scenes/bathroom.jpg`. Its provenance is not documented on this branch and
 must be confirmed before redistribution outside the competition repository.
+
+## Imported local artifacts
+
+On 2026-08-05, the historical decision audit was copied from
+`akira@192.168.100.102:/home/akira/Projects/reme/artifacts/decision-audit.jsonl` to:
+
+```text
+artifacts/imported/AkiraArch/decision-audit.jsonl
+```
+
+It contains 509 JSONL records and has SHA-256
+`bacd65a082fbf99fea6d5cb9e46e870af36a1abd6c759337085009f206a8e0cf`.
+The file remains Git-ignored. It is a historical runtime trace for debugging and contract
+review, not training data, an accuracy report, or evidence of production performance.
