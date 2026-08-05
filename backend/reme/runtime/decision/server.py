@@ -1,7 +1,7 @@
 """B's HTTP surface: a thin stdlib handler over DecisionService.
 
 The handler only routes, parses and serializes; every business rule lives in
-:mod:`reme.decision.policy`. TLS uses ``ssl.SSLContext`` (``ssl.wrap_socket``
+:mod:`reme.runtime.decision.policy`. TLS uses ``ssl.SSLContext`` (``ssl.wrap_socket``
 was removed in Python 3.12); certificates come from mkcert so phone browsers
 on the demo hotspot can open the same origin that serves C's static page.
 """
@@ -811,7 +811,7 @@ def build_decision_handler(
             self._send_file(target, allow_range=False)
 
         def _send_file(self, path: Path, *, allow_range: bool, send_body: bool = True) -> None:
-            # Byte-range support mirrors reme.pose.review_server so phone
+            # Byte-range support mirrors runtime.perception.review_server so phone
             # browsers can seek inside bundle mp4 files.
             if not path.is_file():
                 self._send_error_json(HTTPStatus.NOT_FOUND, "not_found", path.name)

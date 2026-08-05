@@ -2,7 +2,7 @@
 
 Skeleton contract for parallel lane L1 — signatures are FROZEN; the server
 lane (L3) codes against them with fakes. Reuse the contract dataclasses from
-:mod:`reme.pose.runtime` verbatim; never define a second set.
+:mod:`reme.runtime.perception.runtime` verbatim; never define a second set.
 
 Frozen decisions:
 - Single active session per process (demo scale); starting a new session

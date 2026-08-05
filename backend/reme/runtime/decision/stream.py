@@ -6,11 +6,11 @@ lane (L3) codes against ``EventIngest`` with a fake.
 Frozen decisions:
 - ``IngestError.code`` maps to HTTP in the server layer: ``stale_session`` ->
   409, ``bad_event`` -> 422, ``no_active_session`` -> 409.
-- ``LiveStreams`` duck-aligns with ``reme.decision.context.SceneStreams``
+- ``LiveStreams`` duck-aligns with ``reme.runtime.decision.context.SceneStreams``
   (``.scene_id`` / ``.postures`` / ``.transitions``) so
   ``build_decision_context`` can consume either; widening that function's
   type annotation happens at integration time, NOT in this lane.
-- Reuse ``reme.decision.context._parse_posture_observation`` /
+- Reuse ``reme.runtime.decision.context._parse_posture_observation`` /
   ``_parse_transition_event`` (same-package private import is allowed here;
   do not modify context.py).
 - Per-scene buffers are bounded (default 2000 posture events) and

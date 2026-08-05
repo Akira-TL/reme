@@ -34,13 +34,13 @@ Three invariants, in order:
 
 ## Implementation anchors
 
-- `reme.decision.state_machine`: timeout transitions are rule-only
+- `reme.runtime.decision.state_machine`: timeout transitions are rule-only
   (`mimo_task is None`); escalations raise a monotonic `risk_floor`.
-- `reme.decision.guardrails.violates_risk_floor`: outbound decisions may not
+- `reme.runtime.decision.guardrails.violates_risk_floor`: outbound decisions may not
   map below the session's risk floor.
-- `reme.decision.policy.DecisionService`: a generation compare-and-swap
+- `reme.runtime.decision.policy.DecisionService`: a generation compare-and-swap
   discards MiMo results that lost the race against a rule transition.
-- `reme.decision.mimo.schema.MimoProposal`: the proposal type has no `action`,
+- `reme.runtime.decision.mimo.schema.MimoProposal`: the proposal type has no `action`,
   no `decision_id`, no `response_timeout_ms` and no `source`, and each task
   restricts the `state` values the model may suggest — a cancellation is not
   expressible at the type level.

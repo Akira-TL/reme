@@ -47,7 +47,7 @@ class VoicePresetError(RuntimeError):
 
 def _template_lines(persona: PersonaConfig) -> dict[TemplateId, str]:
     # Imported lazily to keep module import cheap and cycle-free.
-    from reme.decision.policy import _TEMPLATES, _fill
+    from reme.runtime.decision.policy import _TEMPLATES, _fill
 
     lines: dict[TemplateId, str] = {}
     for template in PRESET_TEMPLATES:

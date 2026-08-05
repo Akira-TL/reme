@@ -1442,7 +1442,7 @@ def _config_from_args(args: argparse.Namespace, argv: Sequence[str] | None) -> B
     report_json = args.report_json or default_prefix.with_suffix(".json")
     report_markdown = args.report_markdown or default_prefix.with_suffix(".md")
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    command = "python -m reme.pose.runtime_benchmark"
+    command = "python -m reme.runtime.perception.runtime_benchmark"
     if raw_argv:
         command = f"{command} {' '.join(raw_argv)}"
     return BenchmarkConfig(

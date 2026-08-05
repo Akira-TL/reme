@@ -226,7 +226,7 @@ def test_stale_session_event_is_rejected_end_to_end() -> None:
 
 
 def test_post_ingest_evaluation_survives_service_errors() -> None:
-    from reme.pose.runtime import RuntimeEvent, RuntimeEventType
+    from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
 
     # Without a live resolver the scene is unknown; the background hook must
     # swallow the resulting error instead of crashing its thread.

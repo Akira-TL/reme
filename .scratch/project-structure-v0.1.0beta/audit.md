@@ -152,3 +152,13 @@ e36ff41 feat(runtime): 删除旧本地演示兼容入口
 - 整理分支已从 `refactor/project-structure-v0.1.0beta` 缩短为 `refactor/structure`。
 
 模型与数据的当前事实分别以 `models/README.md`、`data/README.md` 和 `docs/assets/training-models.sha256` 为准。历史训练报告和 manifest 中的旧机器路径继续保留作为训练证据，不批量改写。
+
+## 10. 命名空间迁移完成
+
+2026-08-05 已完成仓库活动代码、示例与测试的正式命名空间迁移：
+
+- 感知实现统一使用 `reme.runtime.perception.*`；
+- 决策实现统一使用 `reme.runtime.decision.*`；
+- 全量测试保持 `563 passed, 25 failed` 的既有产品合同基线；
+- 顶层 `reme.pose` 和 `reme.decision` 兼容包已无仓库内部调用方，可以删除；
+- 历史 ADR、实验结果和交接记录中的旧模块名仅在其仍代表历史事实时保留。

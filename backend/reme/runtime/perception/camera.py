@@ -354,8 +354,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         posture_tracker = None
         if args.posture_model is not None:
-            from reme.pose.posture import StaticPostureModel
-            from reme.pose.posture_runtime import (
+            from reme.runtime.perception.posture import StaticPostureModel
+            from reme.runtime.perception.posture_runtime import (
                 PostureRuntimeConfig,
                 RealtimePostureTracker,
             )
