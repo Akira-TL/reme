@@ -16,9 +16,12 @@ akira@192.168.100.102:/home/akira/Projects/reme
 ```text
 data/
 ├── training/
-│   └── pose/
-│       ├── raw/downloads6/        # 58 段原始动作视频
-│       └── processed/downloads6/  # 23 组关键点、标注及 dataset-index.json
+│   ├── pose/
+│   │   ├── raw/downloads6/        # 58 段原始动作视频
+│   │   └── processed/downloads6/  # 23 组关键点、标注及 dataset-index.json
+│   └── fall/
+│       ├── raw/                    # 原始与带检测标记的 50 种摔倒视频
+│       └── bootstrap/              # clip manifest、弱标签候选和姿态样本
 ├── sources/
 │   └── pose/downloads6.zip        # 原始下载压缩包
 └── reference/
@@ -44,6 +47,29 @@ cab66cdd62e1f7c0b5709ab00c50c8e96a7b0bc80527e65013b6f35cd3cbe3a3  training/pose/
 ```
 
 远端根目录的 `148703662.mp4` 与 `reference/pose/video_148703662/media/source.mp4` 哈希相同，因此没有重复保存。
+
+## 跌倒数据校验
+
+```text
+dc0d3a6fec6fd28a52445d6af68a95d13dc2577c9dc86e2ae77cf0da2cbd878c  training/fall/raw/50种摔倒方式 -摔倒检测.mp4
+08c6d3c683e19d72a8c9c79cf0d7f074b86536e0855586dca5301019d429a8c2  training/fall/raw/50种摔倒.mp4
+0b8e153b4546df94af9a6b58bb97db545e59bc68a75900b60288a5a87a4acb4b  training/fall/bootstrap（目录聚合）
+```
+
+原始 bootstrap 文件保留了旧机器绝对路径，便于追溯训练现场。新旧路径对应关系：
+
+```text
+/home/akira/Projects/reme/50种摔倒.mp4
+→ data/training/fall/raw/50种摔倒.mp4
+
+/home/akira/Projects/reme/50种摔倒方式 -摔倒检测.mp4
+→ data/training/fall/raw/50种摔倒方式 -摔倒检测.mp4
+
+/home/akira/Projects/reme/artifacts/pose-classification/fall-50/bootstrap/
+→ data/training/fall/bootstrap/
+```
+
+重训时应通过命令参数传入新路径，不要直接覆盖原始 manifest 和训练报告中的历史记录。
 
 ## 使用规则
 
