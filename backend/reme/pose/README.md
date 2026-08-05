@@ -246,7 +246,7 @@ d80af32396c60cf66fa5afb7ef7f7c869ae0851afd3d91a75d55e76c5a62cb23
 
 ```bash
 /home/akira/.local/share/mamba/envs/DL/bin/python \
-  .scratch/motionbert-offline-demo/infer_motionbert.py \
+  experiments/motionbert-offline-demo/infer_motionbert.py \
   --keypoints artifacts/pose-classification/extractions/<scene_id>/keypoints.jsonl \
   --motionbert-repo models/motionbert/repo \
   --checkpoint models/motionbert/checkpoints/motionbert_ft_h36m.pth \

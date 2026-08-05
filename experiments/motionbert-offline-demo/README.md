@@ -13,7 +13,7 @@
 ## 运行 Web Demo
 
 ```bash
-.venv/bin/python .scratch/motionbert-offline-demo/server.py \
+.venv/bin/python experiments/motionbert-offline-demo/server.py \
   --video 148703662.mp4 \
   --poses /tmp/reme-motionbert-output/poses3d.json \
   --host 127.0.0.1 \
@@ -48,7 +48,7 @@ CUDA Python: /home/akira/.local/share/mamba/envs/DL/bin/python
 
 ```bash
 /home/akira/.local/share/mamba/envs/DL/bin/python \
-  .scratch/motionbert-offline-demo/infer_motionbert.py \
+  experiments/motionbert-offline-demo/infer_motionbert.py \
   --keypoints /tmp/reme-litert-lightning-f16-tracking-full/keypoints.jsonl \
   --motionbert-repo /tmp/reme-motionbert \
   --checkpoint /tmp/reme-motionbert-checkpoints/motionbert_ft_h36m.pth \
