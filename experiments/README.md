@@ -19,6 +19,7 @@
 
 - `conv1d-posture-classifier/`：MoveNet 17 点序列的 Conv1D 姿态分类复现原型。
 - `litert-movenet-feasibility/`：LiteRT MoveNet 视频提取、性能记录和 Web Viewer。
+- `legacy_motion_demo/`：从产品包移出的早期动作 JSONL 与透明启发式原型。
 - `motionbert-offline-demo/`：离线 3D 姿态提升与双栏演示。
 - `tiny-transition-model/`：基于合成数据的轻量动作转变基线。
 

@@ -20,7 +20,7 @@ from typing import Any
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EXPERIMENT_DIR.parents[1]
-for candidate in (str(EXPERIMENT_DIR), str(REPO_ROOT / "backend")):
+for candidate in (str(EXPERIMENT_DIR), str(REPO_ROOT)):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
@@ -34,13 +34,14 @@ from evaluate import (  # noqa: E402
     score,
 )
 from features import WindowFeatures, extract_features  # noqa: E402
-from models import LogisticRegression, TinyMLP  # noqa: E402
-from reme.motion import (  # noqa: E402
+from synth import Sequence_, generate_dataset  # noqa: E402
+
+from experiments.legacy_motion_demo.motion import (  # noqa: E402
     MotionObservation,
     detect_fall_like_event,
     has_insufficient_motion_data,
 )
-from synth import Sequence_, generate_dataset  # noqa: E402
+from models import LogisticRegression, TinyMLP  # noqa: E402
 
 ABSTENTION_MARGINS = (0.0, 0.05, 0.10, 0.15, 0.20, 0.25)
 MAX_ABSTENTION = 0.25
@@ -138,7 +139,7 @@ def calibrate_margin(
 
 
 def baseline_predictions(examples: Sequence[Example]) -> list[str]:
-    """Run the existing transparent heuristic from reme.motion on the same data."""
+    """Run the archived transparent motion heuristic on the same data."""
 
     started_at = datetime(2026, 1, 1, tzinfo=UTC)
     predictions: list[str] = []

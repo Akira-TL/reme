@@ -17,7 +17,7 @@ from typing import Protocol
 
 
 class Observation(Protocol):
-    """Structural type shared by synthetic samples and reme.motion.MotionObservation."""
+    """Structural type shared by synthetic samples and the archived motion prototype."""
 
     @property
     def offset_ms(self) -> int: ...

@@ -8,9 +8,9 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from reme.care import CheckInResponse, run_care_sequence
-from reme.motion import MotionObservation
-from reme.motion_io import load_motion_jsonl
+from experiments.legacy_motion_demo.care import CheckInResponse, run_care_sequence
+from experiments.legacy_motion_demo.motion import MotionObservation
+from experiments.legacy_motion_demo.motion_io import load_motion_jsonl
 
 STARTED_AT = datetime(2026, 8, 1, 0, 30, tzinfo=UTC)
 SCENARIOS = (

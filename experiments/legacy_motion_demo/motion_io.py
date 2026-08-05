@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from reme.motion import MotionObservation
+from experiments.legacy_motion_demo.motion import MotionObservation
 
 
 class MotionDataError(ValueError):

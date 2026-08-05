@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
 
 import pytest
-from reme.contracts import EventCandidate, EventType
+
+from experiments.legacy_motion_demo.contracts import EventCandidate, EventType
 
 
 def test_event_candidate_serializes_for_decision_agent() -> None:

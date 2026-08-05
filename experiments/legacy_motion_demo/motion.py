@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from reme.contracts import EventCandidate, EventType
+from experiments.legacy_motion_demo.contracts import EventCandidate, EventType
 
 
 @dataclass(frozen=True, slots=True)

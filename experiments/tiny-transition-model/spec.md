@@ -53,7 +53,7 @@
 
 | 模型 | macro-F1 | fall recall | fall precision | 拒判率 |
 |---|---:|---:|---:|---:|
-| `geometric_baseline`（`reme.motion.detect_fall_like_event`） | 0.824 | 0.979 | 0.723 | 0.000 |
+| `geometric_baseline`（`experiments.legacy_motion_demo.motion.detect_fall_like_event`） | 0.824 | 0.979 | 0.723 | 0.000 |
 | `logistic_regression` | 0.920 | 0.938 | 0.918 | 0.046 |
 | `tiny_mlp` | 0.928 | 0.896 | 0.977 | 0.083 |
 

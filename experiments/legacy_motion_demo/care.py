@@ -8,8 +8,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from reme.contracts import EventCandidate
-from reme.motion import (
+from experiments.legacy_motion_demo.contracts import EventCandidate
+from experiments.legacy_motion_demo.motion import (
     DEFAULT_FALL_HEURISTIC,
     FallHeuristic,
     MotionObservation,

@@ -162,4 +162,5 @@ e36ff41 feat(runtime): 删除旧本地演示兼容入口
 - 全量测试保持 `563 passed, 25 failed` 的既有产品合同基线；
 - 顶层 `reme.pose` 和 `reme.decision` 兼容包已删除；
 - `reme.scene_bundle` 兼容导出已无调用方并删除，正式路径为 `reme.runtime.perception.scene_bundle`；
+- 早期 `contracts/care/motion/motion_io/demo` 原型已从产品包迁入 `experiments/legacy_motion_demo/`；
 - 历史 ADR、实验结果和交接记录中的旧模块名仅在其仍代表历史事实时保留。

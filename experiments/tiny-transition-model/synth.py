@@ -26,7 +26,7 @@ NORMAL = "normal_transition"
 
 @dataclass(frozen=True, slots=True)
 class Sample:
-    """One synthetic observation, field-compatible with reme.motion.MotionObservation."""
+    """One synthetic observation compatible with the archived motion prototype."""
 
     offset_ms: int
     torso_angle_deg: float

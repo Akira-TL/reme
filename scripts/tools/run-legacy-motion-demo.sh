@@ -4,4 +4,4 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$ROOT"
-exec uv run python -m reme.demo "$@"
+exec uv run python -m experiments.legacy_motion_demo.demo "$@"

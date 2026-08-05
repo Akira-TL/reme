@@ -55,7 +55,7 @@ MiMoRequest → prompt 拼装(MIMO-03 人设) → HTTP 调用(超时上限) → 
 
 - `event_type ∈ {normal, prolonged_stillness, possible_fall}`（v3.0 三类）；`source ∈ {live, scripted}`，注入与真实同构。
 - 不含图像、不含逐帧关键点（关键点属 L1/L2，止于端内；下游只依赖 L3 事件层）。
-- 现状缺口：`backend/reme/contracts.py` 的 `EventCandidate` 缺 `zone/pose_state/motion_level`，`EventType` 缺 normal 类，命名 `duration_ms` vs 合同 `duration`——待冻结会对齐（该 spike 按 CONTEXT.md 属未接受探索，不直接扩展）。
+- 历史缺口：现已归档到 `experiments/legacy_motion_demo/contracts.py` 的 `EventCandidate` 缺 `zone/pose_state/motion_level`，`EventType` 缺 normal 类，命名 `duration_ms` vs 合同 `duration`。该 spike 按 `CONTEXT.md` 属未接受探索，不应扩展为当前运行时合同。
 
 ### 3.2 认知输入 `MiMoRequest`（规则层 → MiMoClient）
 

@@ -13,10 +13,7 @@ backend/reme/
 │   ├── transport.py       # 进程内感知到决策事件传输
 │   ├── debug_ws_client.py # 外部联调观察器，不参与内部传输
 │   └── server.py          # 唯一后端 HTTP/WS 服务入口
-├── care.py           # 早期动作 JSONL 关怀原型
-├── motion.py         # 早期动作数据规则
-├── motion_io.py      # 早期动作数据读取
-└── demo.py           # 早期动作原型实现，由 scripts/tools/ 包装调用
+└── __init__.py
 ```
 
 ## 规则
@@ -26,5 +23,5 @@ backend/reme/
 - 感知到决策的数据传输必须走 `reme.runtime.transport` 的进程内接口，不得重新建立内部 HTTP/WebSocket 链路。
 - 浏览器只访问统一后端服务暴露的 HTTP/WS 路由。
 - 感知与决策代码只使用 `reme.runtime.perception` 和 `reme.runtime.decision`；旧顶层命名空间已删除。
-- `care.py`、`motion.py`、`motion_io.py` 和 `demo.py` 属于兼容/历史原型；新代码不得继续扩大对它们的依赖。
+- 早期动作 JSONL 原型已迁入 `experiments/legacy_motion_demo/`，不得重新放回产品包。
 - 模型、训练数据和运行结果不得写入包目录，应写入 `models/` 约定位置或 Git 忽略的 `artifacts/`。

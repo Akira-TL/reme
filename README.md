@@ -106,7 +106,7 @@ npm --prefix frontend run build
 ## 兼容与历史内容
 
 - `scripts/demo/start-local-demo.sh` 是当前单机演示入口；项目不再向 `.venv/bin` 安装 `reme-*` 程序。
-- `scripts/tools/run-legacy-motion-demo.sh`、`reme.motion` 和 `docs/motion-data-format.md` 属于早期动作 JSONL 探索原型，暂时保留用于历史追溯和兼容测试。
+- `scripts/tools/run-legacy-motion-demo.sh`、`experiments/legacy_motion_demo/` 和 `docs/motion-data-format.md` 属于早期动作 JSONL 探索原型，仅用于历史追溯和实验复现，不进入产品运行时。
 - `.scratch/` 中的阶段性方案、实验代码和结果不自动构成当前架构决策；正式事实以 `CONTEXT.md`、已接受 ADR 和当前代码为准。
 
 ## 隐私边界
