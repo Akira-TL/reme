@@ -49,10 +49,9 @@ cp .env.example .env
 http://127.0.0.1:4174/typical-demo.html
 ```
 
-等价入口：
+兼容入口：
 
 ```bash
-uv run reme-local-demo
 scripts/start-demo.sh
 ```
 
@@ -64,7 +63,7 @@ macOS 仍可双击根目录的 `启动Reme全链路演示.command`。旧入口�
 
 ```text
 .
-├── backend/reme/       # Python 后端：A 感知、B 决策和本地启动器
+├── backend/reme/       # Python 后端实现；不直接提供 .venv/bin 程序入口
 ├── frontend/           # React/Vite 演示页面
 ├── models/             # 模型目录约定与待迁移占位
 ├── scripts/            # 演示、环境配置和平台启动器
@@ -109,8 +108,8 @@ npm --prefix frontend run build
 
 ## 兼容与历史内容
 
-- `reme-local-demo` 是当前 ABC 单机演示入口。
-- `reme-demo`、`reme.motion` 和 `docs/motion-data-format.md` 属于早期动作 JSONL 探索原型，暂时保留用于历史追溯和兼容测试。
+- `scripts/demo/start-local-demo.sh` 是当前单机演示入口；项目不再向 `.venv/bin` 安装 `reme-*` 程序。
+- `scripts/tools/run-legacy-motion-demo.sh`、`reme.motion` 和 `docs/motion-data-format.md` 属于早期动作 JSONL 探索原型，暂时保留用于历史追溯和兼容测试。
 - `.scratch/` 中的阶段性方案、实验代码和结果不自动构成当前架构决策；正式事实以 `CONTEXT.md`、已接受 ADR 和当前代码为准。
 
 ## 隐私边界

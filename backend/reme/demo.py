@@ -94,4 +94,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def entrypoint() -> int:
+    """Compatibility callable retained for direct Python imports."""
+
     return main()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

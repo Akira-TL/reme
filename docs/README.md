@@ -20,7 +20,7 @@ Reme 的长期文档统一放在 `docs/`；临时规格、任务、实验过程�
 
 - [MiMo 接入方案](integration/方案-MiMo接入.md)：请求载荷、端到端流转和降级路径。
 - [架构决策记录](adr/)：已接受、拒绝或被取代的架构决策。
-- [旧动作数据格式](motion-data-format.md)：早期 `reme-demo` 探索接口，仅供兼容与历史追溯。
+- [旧动作数据格式](motion-data-format.md)：早期动作探索接口，仅通过 `scripts/tools/run-legacy-motion-demo.sh` 运行。
 
 ## 调研资料
 

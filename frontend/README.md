@@ -7,7 +7,7 @@ Reme 前端使用 Vite、React、TailwindCSS v4 与 MUI 构建。7 张高保真�
 完整 ABC 单机验收请在仓库根目录执行：
 
 ```bash
-uv run reme-local-demo
+scripts/demo/start-local-demo.sh
 ```
 
 然后访问：

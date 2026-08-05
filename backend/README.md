@@ -13,7 +13,7 @@ backend/reme/
 ├── care.py        # 早期动作 JSONL 关怀原型
 ├── motion.py      # 早期动作数据规则
 ├── motion_io.py   # 早期动作数据读取
-└── demo.py        # 早期 `reme-demo` CLI
+└── demo.py        # 早期动作原型实现，由 scripts/tools/ 包装调用
 ```
 
 ## 规则

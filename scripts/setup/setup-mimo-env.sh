@@ -54,20 +54,12 @@ chmod 600 "$tmp_file"
 mv "$tmp_file" "$ENV_FILE"
 trap - EXIT
 
-echo "已写入 ${ENV_FILE}（权限 600）。reme-local-demo 会自动读取该文件。"
+echo "已写入 ${ENV_FILE}（权限 600）。正式启动脚本会自动读取该文件。"
 
-if [[ -x "${ROOT}/.venv/bin/reme-decision-smoke" ]]; then
-  echo "运行真实 API 冒烟验证（1 次调用）…"
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-  if "${ROOT}/.venv/bin/reme-decision-smoke" structured --rounds 1; then
-    echo "冒烟通过：key 可用。"
-  else
-    echo "冒烟失败：key 或网络有问题；.env 已保留，可稍后单独重跑。" >&2
-    exit 1
-  fi
+echo "运行真实 API 冒烟验证（1 次调用）…"
+if "${ROOT}/scripts/tools/mimo-smoke.sh" structured --rounds 1; then
+  echo "冒烟通过：key 可用。"
 else
-  echo "提示：先执行 uv sync --extra dev，再重跑本脚本可自动验证 key。"
+  echo "冒烟失败：key 或网络有问题；.env 已保留，可稍后单独重跑。" >&2
+  exit 1
 fi
