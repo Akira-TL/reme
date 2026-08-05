@@ -10,7 +10,7 @@
       --host 127.0.0.1 --port 8770 --input-adapter c_ws_server \
       --browser-input-mode landmarks
 
-  source ~/.config/reme/mimo.env && .venv/bin/python -m reme.decision.server \
+  set -a && source .env && set +a && .venv/bin/python -m reme.decision.server \
       --host 127.0.0.1 --port 8100 --a-events-url ws://127.0.0.1:8770/ws/events
 
 用法：

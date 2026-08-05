@@ -1,73 +1,117 @@
 # Reme
 
-Reme is a privacy-first care agent that aims to preserve a person's dignity while still detecting safety-relevant events.
+Reme 是面向家庭关怀场景的隐私优先演示系统：本地感知端提取人体姿态和动作事件，决策端结合确定性规则与 Xiaomi MiMo 生成关怀交互，家属端默认只看到抽象骨架和结构化状态。
 
-## Working hypothesis
+当前冻结演示版本为 `v0.1.0beta`。该版本用于比赛演示和后续结构整理，不代表医疗器械、生产级监护系统或已验证的跌倒检测产品。
 
-A locally processed human-action video may be convertible into a privacy-preserving skeleton or abstract view that retains enough motion information to classify body states and safety-relevant transitions. This is not yet proven on the team's video or hardware.
-
-The team has a usable MiMo API. The current uncertainty is pose extraction and posture/transition classification, not API availability. Pose model, classifier, permanent schema, Raspberry Pi role, MiMo input contract, and demo workflow remain open until feasibility experiments are reviewed.
-
-## Current stage
-
-Feasibility analysis. The current priority is to validate the source video, compare pose extraction routes, classify static postures, and determine whether normal transitions can be distinguished from fall-like transitions.
-
-## Repository layout
+## 当前演示链路
 
 ```text
-.
-├── AGENTS.md                 # Instructions for coding agents
-├── CONTEXT.md                # Domain language and product boundaries
-├── docs/
-│   ├── adr/                  # Architecture decision records
-│   └── agents/               # Agent workflow configuration
-├── backend/reme/             # Product code
-├── frontend/                 # Frontend app
-├── tests/                    # Deterministic tests
-└── .scratch/                 # Specs, tickets, experiments, and handoffs
+C 浏览器摄像头
+  └─ /ws/camera-input
+       ↓
+A backend/reme/pose/runtime_server.py
+  ├─ MoveNet / MediaPipe 姿态数据
+  ├─ posture_observation
+  └─ transition_event
+       ↓ /ws/events
+B backend/reme/decision/server.py
+  ├─ 确定性关怀与危险状态机
+  ├─ MiMo 对话与摘要
+  └─ care_decision
+       ↓ /ws
+C frontend/typical-demo.html
+  ├─ 老人端演示
+  └─ 家属端隐私视图
 ```
 
-## Local development
+正式单机入口由 `backend/reme/local_demo.py` 统一管理 A、B、C 三个进程。
+
+## 快速启动
+
+环境要求：Python 3.11+、`uv`、Node.js 和 npm。
 
 ```bash
 uv sync --extra dev --extra pose
-scripts/setup-mimo-env.sh   # 一次性：粘贴 MiMo key，写入 ~/.config/reme/mimo.env 并真实冒烟验证
-uv run pytest
-uv run ruff check .
-uv run mypy
+scripts/setup/setup-mimo-env.sh
+scripts/demo/start-local-demo.sh
 ```
 
-从另一台电脑或不同操作系统复制仓库时，不要沿用复制来的 `.venv` 和
-`frontend/node_modules`；应在目标机器分别重跑 `uv sync --extra dev --extra pose`
-以及 `npm ci`。一键启动器也会检查 Node 原生模块，
-发现平台不兼容时自动干净重装。
+MiMo 密钥写入仓库根目录 `.env`；该文件已被 Git 忽略。也可以复制模板后手动填写：
 
-启动 B（决策服务）前加载 key：`source ~/.config/reme/mimo.env`。key 文件在仓库外、每台机器各自生成，不进 git。
+```bash
+cp .env.example .env
+```
 
-### ABC 单机实时验收
+启动后访问：
 
-在仓库根目录执行一个前台命令：
+```text
+http://127.0.0.1:4174/typical-demo.html
+```
+
+等价入口：
 
 ```bash
 uv run reme-local-demo
+scripts/start-demo.sh
 ```
 
-该命令会自动读取 `~/.config/reme/mimo.env`，依次启动：
+macOS 仍可双击根目录的 `启动Reme全链路演示.command`。旧入口只是兼容包装，实际逻辑统一位于 `scripts/`。
 
-- A 感知服务：`http://127.0.0.1:8770`
-- B 决策服务：`http://127.0.0.1:8100`
-- C Vite 页面：`http://127.0.0.1:4174/typical-demo.html`
+完整说明见 [docs/快速启动.md](docs/快速启动.md)。
 
-浏览器打开验收页面并允许摄像头权限。页面默认进入跌倒链路验收，并在同一页面显示老人端视频/A 骨架与家属手机端。厨房场景会由 `mimo-v2.5` 询问是否分享包包子的生活片段，只有老人同意后家属端才收到提醒；浴室以外场景可由家属主动查看原视频与骨架。按 `Ctrl+C` 会统一停止三个本地进程；不使用 systemd，也不由 B 静态托管前端。
-
-The existing `reme-demo` command and motion-data files came from an early exploratory spike. They are not an accepted architecture and should not be used to constrain the feasibility experiments.
-
-## Immediate milestone
-
-Run the first feasibility gate after the team supplies a video:
+## 目录结构
 
 ```text
-inspect video -> compare pose extractors -> annotate posture windows -> evaluate posture/transition classifiers -> decide go/no-go
+.
+├── backend/reme/       # Python 后端：A 感知、B 决策和本地启动器
+├── frontend/           # React/Vite 演示页面
+├── models/             # 模型目录约定与待迁移占位
+├── scripts/            # 演示、环境配置和平台启动器
+├── docs/               # 产品、方案、调研、ADR 和启动文档
+├── examples/           # 联调与合同示例
+├── tests/              # Python 确定性测试
+├── .scratch/           # 规格、任务、实验过程、结果和交接记录
+├── AGENTS.md           # Agent 工程规则
+└── CONTEXT.md          # 当前领域边界与事实口径
 ```
 
-Do not define alert policy or a permanent MiMo payload before this gate. See `.scratch/feasibility/feasibility-analysis.md` and `.scratch/feasibility/posture-classification-protocol.md`.
+文档入口见 [docs/README.md](docs/README.md)。
+
+## 模型资产
+
+本轮结构整理只预留新目录，不自动移动模型。当前运行仍可能使用以下旧位置：
+
+```text
+models/movenet/movenet_lightning_f16_v4.tflite
+frontend/public/mediapipe/pose_landmarker_lite.task
+artifacts/pose-classification/
+```
+
+`artifacts/` 保存本地训练数据、模型和派生产物，默认不进入 Git。模型不存在于 Git 不等于模型未训练或本机不存在。
+
+后续模型迁移目标与规则见 [models/README.md](models/README.md)。
+
+## 开发检查
+
+全部整理批次完成后执行：
+
+```bash
+python -m compileall backend
+python -m pytest
+npm --prefix frontend test
+npm --prefix frontend run lint
+npm --prefix frontend run build
+```
+
+涉及本地模型、摄像头或 MiMo 的检查必须如实记录运行环境和缺失条件，不得把降级结果描述为完整能力通过。
+
+## 兼容与历史内容
+
+- `reme-local-demo` 是当前 ABC 单机演示入口。
+- `reme-demo`、`reme.motion` 和 `docs/motion-data-format.md` 属于早期动作 JSONL 探索原型，暂时保留用于历史追溯和兼容测试。
+- `.scratch/` 中的阶段性方案、实验代码和结果不自动构成当前架构决策；正式事实以 `CONTEXT.md`、已接受 ADR 和当前代码为准。
+
+## 隐私边界
+
+Reme 的窄化隐私主张是：感知默认在本地处理，家属和评委界面优先使用骨架、抽象视图和结构化事件。任何向 MiMo 发送的视觉上下文必须是事件触发、最小、显式且可审计的，不能扩展为持续后台上传。
