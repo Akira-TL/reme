@@ -86,11 +86,11 @@
 ## 复现命令
 
 ```bash
-.venv/bin/python .scratch/tiny-transition-model/run.py
+.venv/bin/python experiments/tiny-transition-model/run.py
 ```
 
 ```bash
-.venv/bin/python -m pytest .scratch/tiny-transition-model/test_experiment.py -q
+.venv/bin/python -m pytest experiments/tiny-transition-model/test_experiment.py -q
 ```
 
 全流程约 13 秒，测试约 18 秒，无第三方依赖。

@@ -1,6 +1,6 @@
 {
   "experiment": "gate5-synthetic-transition-baseline-vs-tiny-models",
-  "data_source": "synthetic (.scratch/tiny-transition-model/synth.py)",
+  "data_source": "synthetic (experiments/tiny-transition-model/synth.py)",
   "config": {
     "seed": 20260801,
     "sequences_per_scenario": 60,

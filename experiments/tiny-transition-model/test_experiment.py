@@ -1,7 +1,7 @@
 """Verification for the Gate 5 minimal experiment.
 
 Run:
-    .venv/bin/python -m pytest .scratch/tiny-transition-model/test_experiment.py
+    .venv/bin/python -m pytest experiments/tiny-transition-model/test_experiment.py
 
 These tests check reproducibility and the abstention contract. They deliberately
 do not assert a specific accuracy target: the data is synthetic, so a threshold
