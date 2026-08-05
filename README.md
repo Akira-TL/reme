@@ -60,7 +60,8 @@ macOS 仍可双击根目录的 `启动Reme全链路演示.command`。旧入口�
 .
 ├── backend/reme/       # 统一后端运行时：perception、decision、transport、server
 ├── frontend/           # React/Vite 演示页面
-├── models/             # 模型目录约定与待迁移占位
+├── models/             # 运行时模型约定与本地训练模型
+├── data/               # 本地训练、来源归档和参考场景数据
 ├── scripts/            # 演示、环境配置和平台启动器
 ├── docs/               # 产品、方案、调研、ADR 和启动文档
 ├── examples/           # 联调与合同示例
@@ -73,19 +74,20 @@ macOS 仍可双击根目录的 `启动Reme全链路演示.command`。旧入口�
 
 文档入口见 [docs/README.md](docs/README.md)。
 
-## 模型资产
+## 本地模型与训练数据
 
-本轮结构整理只预留新目录，不自动移动模型。当前运行仍可能使用以下旧位置：
+2026-08-05 已从团队开发机恢复训练模型和数据。当前运行时默认资产：
 
 ```text
 models/movenet/movenet_lightning_f16_v4.tflite
 frontend/public/mediapipe/pose_landmarker_lite.task
-artifacts/pose-classification/
+models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json
+models/trained/fall/mil-v3/model.json
 ```
 
-`artifacts/` 保存本地训练数据、模型和派生产物，默认不进入 Git。模型不存在于 Git 不等于模型未训练或本机不存在。
+本地还保存姿态 Softmax 历史版本、12 组 sweep 结果、MIL v1–v3、原始动作视频、关键点标注、跌倒 bootstrap 样本和参考场景。大型资产受 `.gitignore` 管理，不推送到远端 Git。
 
-后续模型迁移目标与规则见 [models/README.md](models/README.md)。
+目录与校验信息见 [models/README.md](models/README.md) 和 [data/README.md](data/README.md)。可再生成的运行日志与临时结果继续写入 `artifacts/`。
 
 ## 开发检查
 
