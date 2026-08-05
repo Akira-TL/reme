@@ -11,7 +11,7 @@ from itertools import product
 from pathlib import Path
 from typing import Any, cast
 
-from reme.pose.annotations import POSTURE_LABELS, PoseAnnotations
+from reme.runtime.perception.annotations import POSTURE_LABELS, PoseAnnotations
 
 GEOMETRY_MODEL_SCHEMA_VERSION = "reme-posture-geometry/v1-experiment"
 GEOMETRY_FEATURE_SCHEMA_VERSION = "reme-posture-geometry-features/v1-experiment"

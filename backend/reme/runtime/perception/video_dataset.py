@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from reme.pose.annotations import (
+from reme.runtime.perception.annotations import (
     ANNOTATION_SCHEMA_VERSION,
     DATA_SPLITS,
     POSTURE_LABELS,
@@ -19,8 +19,8 @@ from reme.pose.annotations import (
     PostureSegment,
     save_annotations,
 )
-from reme.pose.movenet import MoveNetError, MoveNetEstimator
-from reme.pose.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
+from reme.runtime.perception.movenet import MoveNetError, MoveNetEstimator
+from reme.runtime.perception.scene_bundle import FRAME_LANDMARKS_SCHEMA_VERSION
 
 DATASET_SCHEMA_VERSION = "reme-pose-dataset/v0-experiment"
 DATASET_INDEX_SCHEMA_VERSION = "reme-pose-dataset-index/v0-experiment"

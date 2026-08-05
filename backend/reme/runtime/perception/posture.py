@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import numpy as np
 
-from reme.pose.annotations import POSTURE_LABELS, PoseAnnotations
+from reme.runtime.perception.annotations import POSTURE_LABELS, PoseAnnotations
 
 MODEL_SCHEMA_VERSION = "reme-posture-softmax/v1-experiment"
 DATASET_INDEX_SCHEMA_VERSION = "reme-pose-dataset-index/v0-experiment"
