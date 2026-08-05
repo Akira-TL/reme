@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useDecisionRuntime } from "../hooks/useDecisionRuntime";
 import { usePerceptionRuntime } from "../hooks/usePerceptionRuntime";
 import { FALL_PHASES } from "./scenes";
@@ -27,9 +27,6 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     videoElement,
     enabled: Boolean(enabled && videoElement),
   });
-  // 已在子女端确认过的告警决策 id：新告警事件天然拿到新 id，无需清理副作用。
-  const [confirmedDecisionId, setConfirmedDecisionId] = useState(null);
-
   const current = decision.decision?.scene_id === sceneId ? decision.decision : null;
   // 本轮会话里是否出现过告警（history 由决策钩子维护，纯派生）。
   const wasAlarmed = useMemo(
@@ -48,7 +45,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     if (current) {
       if (current.state === "check_in_required") return "checking";
       if (["family_notification_required", "urgent_attention"].includes(current.state)) {
-        return current.decision_id === confirmedDecisionId ? "contacting" : "emergency";
+        return "emergency";
       }
       if (current.state === "resolved") {
         return wasAlarmed ? "resolved" : "idle";
@@ -63,28 +60,30 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
       return "candidate";
     }
     return "idle";
-  }, [active, confirmedDecisionId, current, enabled, perception.transition, sceneId, wasAlarmed]);
+  }, [active, current, enabled, perception.transition, sceneId, wasAlarmed]);
 
   const fallState = useMemo(() => {
     if (!active) return null;
     const trigger = current?.alarm ? TRIGGER_LABELS[current.alarm.trigger] || "" : "";
+    const decisionMessage = current?.family_notification
+      || current?.elder_message
+      || current?.reason_summary
+      || "";
     switch (phase) {
       case "checking":
         return {
           status: "正在确认安全（B 决策流）",
-          message: current?.elder_message || FALL_PHASES.checking.message,
+          message: decisionMessage || FALL_PHASES.checking.message,
         };
       case "emergency":
         return {
           status: trigger ? `已通知家属 · ${trigger}` : "已通知家属",
-          message: current?.family_notification || FALL_PHASES.emergency.message,
+          message: decisionMessage || FALL_PHASES.emergency.message,
         };
-      case "contacting":
-        return { status: "确认回执已发送", message: "家人已收到并确认处理，等待事件关闭" };
       case "resolved":
         return {
-          status: "事件已化解",
-          message: current?.elder_message || "家人已确认收到，紧急提醒结束",
+          status: "MiMo 已处理结果",
+          message: decisionMessage || FALL_PHASES.resolved.message,
         };
       case "candidate":
         return FALL_PHASES.candidate;
@@ -107,9 +106,8 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
   const triggerDebugScenario = perception.triggerDebugScenario;
 
   const confirmAlarm = useCallback(() => {
-    if (current) setConfirmedDecisionId(current.decision_id);
     decision.confirmAlarm();
-  }, [current, decision]);
+  }, [decision]);
 
   const emergencyNote = sceneId === "bathroom"
     ? "浴室场景不可查看原视频"

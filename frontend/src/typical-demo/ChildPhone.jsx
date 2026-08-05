@@ -30,13 +30,14 @@ export function ChildPhone({
   camera,
   viewMode,
   familyViewOpen,
+  autoFamilyViewOpen = false,
   familyVideoAllowed,
   onToggleFamilyView,
   onContact,
   onSafe,
 }) {
   const danger = scene.id === "fall" && fallPhase !== "idle";
-  const emergency = scene.id === "fall" && ["emergency", "contacting", "resolved"].includes(fallPhase);
+  const emergency = scene.id === "fall" && ["emergency", "resolved"].includes(fallPhase);
   const fallState = fallStateOverride || FALL_PHASES[fallPhase];
   const title = scene.id === "fall" && danger
     ? fallState.status
@@ -48,6 +49,7 @@ export function ChildPhone({
     : scene.id === "kitchen"
       ? kitchenShared ? kitchenNotification : "暂无新的家庭动态"
       : scene.phoneBody;
+  const liveVideoVisible = familyVideoAllowed && (familyViewOpen || autoFamilyViewOpen);
 
   return (
     <section className="phone-column" aria-label="家属端">
@@ -69,18 +71,20 @@ export function ChildPhone({
         <div className="family-view-control">
           <Button
             size="small"
-            variant={familyViewOpen && familyVideoAllowed ? "contained" : "outlined"}
-            startIcon={familyViewOpen && familyVideoAllowed
+            variant={liveVideoVisible ? "contained" : "outlined"}
+            startIcon={liveVideoVisible && !autoFamilyViewOpen
               ? <VisibilityOffRoundedIcon />
               : <VisibilityRoundedIcon />}
-            disabled={!familyVideoAllowed || !camera.cameraReady}
+            disabled={!familyVideoAllowed || !camera.cameraReady || autoFamilyViewOpen}
             onClick={onToggleFamilyView}
           >
             {scene.id === "bathroom"
               ? "浴室始终保护隐私"
               : !familyVideoAllowed
                 ? "等待家中设备连接"
-                : familyViewOpen
+                : autoFamilyViewOpen
+                  ? scene.id === "kitchen" ? "厨房场景显示原画" : "跌倒后自动开放原画"
+                  : familyViewOpen
                   ? "收起现场画面"
                   : "查看现场画面"}
           </Button>
@@ -134,12 +138,9 @@ export function ChildPhone({
                 <Button variant="text" onClick={onSafe}>老人已确认安全</Button>
               </>
             )}
-            {fallPhase === "contacting" && (
-              <div className="calling-state"><i /> {fallStateOverride ? fallState.message : "正在呼叫王阿姨…"}</div>
-            )}
             {fallPhase === "resolved" && (
               <div className="resolved-state">
-                <CheckCircleRoundedIcon /> {fallStateOverride ? fallState.message : "王阿姨已确认前往"}
+                <CheckCircleRoundedIcon /> {fallState.message}
               </div>
             )}
           </div>

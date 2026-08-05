@@ -67,8 +67,19 @@ class PoseEstimator(Protocol):
     def infer(self, frame: object) -> MoveNetResult: ...
 
 
+def _opencv_camera_backend(cv2_module: Any, platform_name: str) -> int:
+    """Select the native OpenCV camera backend for the current operating system."""
+
+    backend_name = {
+        "darwin": "CAP_AVFOUNDATION",
+        "linux": "CAP_V4L2",
+        "win32": "CAP_DSHOW",
+    }.get(platform_name, "CAP_ANY")
+    return int(getattr(cv2_module, backend_name, cv2_module.CAP_ANY))
+
+
 class OpenCVCameraSource:
-    """Open one V4L2/OpenCV camera without persisting raw frames."""
+    """Open one platform-native OpenCV camera without persisting raw frames."""
 
     def __init__(self, config: CameraConfig) -> None:
         self.config = config
@@ -86,9 +97,8 @@ class OpenCVCameraSource:
             raise CameraStreamError("camera runtime requires opencv-python") from exc
 
         cv2_module: Any = cv2
-        capture = cv2_module.VideoCapture(
-            self.config.device_index, cv2_module.CAP_V4L2
-        )
+        backend = _opencv_camera_backend(cv2_module, sys.platform)
+        capture = cv2_module.VideoCapture(self.config.device_index, backend)
         if not capture.isOpened():
             capture.release()
             raise CameraStreamError(

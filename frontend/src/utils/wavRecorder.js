@@ -64,7 +64,10 @@ function toBase64(bytes) {
 
 // 录一段单声道 WAV 并返回 base64。用 ScriptProcessorNode（兼容面最广），不要换成
 // MediaRecorder：其 webm/ogg 输出 B 服务不接收。权限拒绝/环境不支持时抛错，由调用方静默处理。
-export async function recordWav({ durationMs = 4000, sampleRate = 16000 } = {}) {
+export async function recordWav({
+  durationMs = 4000,
+  sampleRate = 16000,
+} = {}) {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
   const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextCtor) throw new Error("当前浏览器不支持 WebAudio 录音");

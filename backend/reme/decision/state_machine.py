@@ -15,8 +15,8 @@ from reme.decision.context import DecisionContext
 from reme.decision.guardrails import (
     TriggerConfig,
     detect_concern_trigger,
-    detect_fall_trigger,
     detect_observe_condition,
+    fall_trigger_event_id,
 )
 from reme.decision.records import (
     ActionCard,
@@ -96,8 +96,10 @@ REJECT_TIMELINE_REWIND = "timeline_rewind"
 REJECT_EPISODE_RESOLVED = "episode_resolved"
 REJECT_DANGER_NOT_APPLICABLE = "danger_not_applicable"
 
-# Danger link: which uploads B accepts against a fall episode's check-in.
-FALL_CONFIRM_CHANNELS = ("frame", "voice")
+# Danger link: keep the elder check-in first.  Visual confirmation is not
+# accepted during the first question, otherwise C's automatic frame upload
+# turns "lying -> ask" into an immediate family alert.
+FALL_CONFIRM_CHANNELS = ("voice",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,16 +253,17 @@ def _fall_check_in(
     return Directive(next_state=next_state, skeleton=skeleton)
 
 
-def _fall_preempts(state: SessionState, context: DecisionContext, config: TriggerConfig) -> bool:
-    if not detect_fall_trigger(context, config=config):
-        return False
-    event = context.active_transition
-    event_id = None if event is None else event.event_id
-    if event_id is not None and event_id == state.handled_fall_event_id:
-        return False
+def _fall_preempt_event_id(
+    state: SessionState, context: DecisionContext, config: TriggerConfig
+) -> str | None:
+    event_id = fall_trigger_event_id(context, config=config)
+    if event_id is None or event_id == state.handled_fall_event_id:
+        return None
     if state.phase in _FALL_PREEMPTIBLE_PHASES:
-        return True
-    return state.phase is SessionPhase.AWAITING_ELDER and state.escalation is EscalationKind.CONCERN
+        return event_id
+    if state.phase is SessionPhase.AWAITING_ELDER and state.escalation is EscalationKind.CONCERN:
+        return event_id
+    return None
 
 
 def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerConfig) -> Directive:
@@ -271,11 +274,11 @@ def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerCon
     if context.timestamp_ms + config.rewind_tolerance_ms < state.context_high_water_ms:
         return Directive(next_state=state, reject_code=REJECT_TIMELINE_REWIND)
     advanced = _advance_clock(state, context.timestamp_ms)
-    if _fall_preempts(advanced, context, config):
-        # A new high-confidence fall outranks any lower-severity episode and
-        # reopens a resolved one; family-alert states never de-escalate.
-        event = context.active_transition
-        return _fall_check_in(advanced, None if event is None else event.event_id, config=config)
+    fall_event_id = _fall_preempt_event_id(advanced, context, config)
+    if fall_event_id is not None:
+        # A new lying/fall danger condition outranks any lower-severity episode
+        # and immediately starts the elder check-in countdown for the live demo.
+        return _fall_check_in(advanced, fall_event_id, config=config)
     if advanced.phase is not SessionPhase.MONITORING:
         return Directive(next_state=advanced)
 

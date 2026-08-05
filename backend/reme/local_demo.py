@@ -26,6 +26,7 @@ DEFAULT_PERCEPTION_PORT = 8770
 DEFAULT_DECISION_PORT = 8100
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 30.0
 DEFAULT_MIMO_ENV = Path.home() / ".config" / "reme" / "mimo.env"
+FRONTEND_NATIVE_CHECK = Path("scripts/check-native-deps.mjs")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -234,6 +235,9 @@ def _process_group_alive(managed: ManagedProcess) -> bool:
         os.killpg(managed.process.pid, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # macOS may report EPERM briefly after the group leader has exited.
+        return managed.process.poll() is None
     return True
 
 
@@ -268,23 +272,48 @@ def stop_processes(processes: Sequence[ManagedProcess]) -> None:
         print(f"[{managed.label}] stopped", flush=True)
 
 
+def frontend_dependencies_ready(config: LocalDemoConfig, env: dict[str, str]) -> bool:
+    """Return whether copied frontend dependencies match the current platform."""
+
+    vite = config.frontend_dir / "node_modules" / ".bin" / "vite"
+    checker = config.frontend_dir / FRONTEND_NATIVE_CHECK
+    if not vite.is_file() or not checker.is_file():
+        return False
+    probe = subprocess.run(  # noqa: S603 - fixed local compatibility probe
+        ["node", str(FRONTEND_NATIVE_CHECK)],
+        cwd=config.frontend_dir,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return probe.returncode == 0
+
+
 def ensure_frontend_dependencies(config: LocalDemoConfig, env: dict[str, str]) -> None:
-    """Install frontend dependencies once when the Vite binary is absent."""
+    """Clean-install missing or cross-platform frontend dependencies."""
 
     if shutil.which("npm") is None:
         raise LocalDemoError("npm is not available on PATH")
-    if (config.frontend_dir / "node_modules" / ".bin" / "vite").is_file():
+    if shutil.which("node") is None:
+        raise LocalDemoError("node is not available on PATH")
+    if frontend_dependencies_ready(config, env):
         return
-    print("[C] frontend dependencies are missing; running npm install", flush=True)
+    print(
+        "[C] frontend dependencies are missing or incompatible; running npm ci",
+        flush=True,
+    )
     try:
         subprocess.run(  # noqa: S603 - fixed npm command
-            ["npm", "install"],
+            ["npm", "ci"],
             cwd=config.frontend_dir,
             env=env,
             check=True,
         )
     except subprocess.CalledProcessError as exc:
-        raise LocalDemoError("npm install failed") from exc
+        raise LocalDemoError("npm ci failed") from exc
+    if not frontend_dependencies_ready(config, env):
+        raise LocalDemoError("frontend native dependencies are incompatible after npm ci")
 
 
 def run_local_demo(config: LocalDemoConfig) -> int:

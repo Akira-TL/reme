@@ -14,4 +14,4 @@ command -v npm >/dev/null 2>&1 || {
   exit 1
 }
 
-exec uv run reme-local-demo "$@"
+exec uv run --extra pose reme-local-demo "$@"

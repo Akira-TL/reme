@@ -23,6 +23,7 @@ from reme.decision.mimo.speech import (
 from reme.decision.records import (
     CareDecision,
     DemoMode,
+    DecisionState,
     InteractionResponse,
     ResponseSource,
     ResponseValue,
@@ -42,6 +43,10 @@ class VoiceDecisionService(Protocol):
     def demo_mode(self) -> DemoMode: ...
 
     def current_decision(self, scene_id: str) -> CareDecision | None: ...
+
+    def mark_decision_voice_started(self, *, scene_id: str, decision_id: str) -> None: ...
+
+    def mark_decision_voice_ready(self, *, scene_id: str, decision_id: str) -> None: ...
 
     def submit_response(self, response: InteractionResponse) -> CareDecision: ...
 
@@ -120,7 +125,11 @@ class VoiceDialogueController:
         decision = self._require_decision(scene_id, decision_id)
         if decision.elder_message is None:
             raise VoiceDialogueError("no_elder_message")
-        result = self._synthesize(decision.elder_message)
+        self._service.mark_decision_voice_started(scene_id=scene_id, decision_id=decision_id)
+        try:
+            result = self._synthesize(decision.elder_message)
+        finally:
+            self._service.mark_decision_voice_ready(scene_id=scene_id, decision_id=decision_id)
         return decision, VoiceAudio.from_result(result)
 
     def submit_audio_reply(
@@ -151,7 +160,10 @@ class VoiceDialogueController:
         )
         next_decision = self._service.submit_response(response)
         audio = None
-        if next_decision.elder_message is not None:
+        if (
+            next_decision.elder_message is not None
+            and next_decision.state is not DecisionState.RESOLVED
+        ):
             audio = VoiceAudio.from_result(self._synthesize(next_decision.elder_message))
         return VoiceDialogueResult(
             transcript=recognition.transcript,

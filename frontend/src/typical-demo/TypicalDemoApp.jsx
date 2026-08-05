@@ -57,7 +57,9 @@ export function TypicalDemoApp() {
   const kitchenShared = Boolean(kitchenShareDecision);
   const kitchenNotification = kitchenShareDecision?.family_notification || "";
   const deviceViewMode = sceneId === "bathroom" ? "skeleton" : "video_skeleton";
-  const phoneViewMode = familyViewOpen && live.familyVideoAllowed
+  const autoFamilyViewOpen = sceneId === "kitchen"
+    || (sceneId === "fall" && ["checking", "emergency", "resolved"].includes(effectivePhase));
+  const phoneViewMode = (autoFamilyViewOpen || familyViewOpen) && live.familyVideoAllowed
     ? "video_skeleton"
     : "skeleton";
   const skeletonColor = sceneId === "fall" && ["candidate", "checking"].includes(effectivePhase)
@@ -286,6 +288,7 @@ export function TypicalDemoApp() {
           camera={cameraState}
           viewMode={phoneViewMode}
           familyViewOpen={familyViewOpen}
+          autoFamilyViewOpen={autoFamilyViewOpen}
           familyVideoAllowed={live.familyVideoAllowed}
           onToggleFamilyView={() => setFamilyViewOpen((current) => !current)}
           onContact={contactEmergency}

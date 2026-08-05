@@ -5,6 +5,7 @@ from reme.pose.camera import (
     CameraConfig,
     CameraStreamError,
     LiveMoveNetStream,
+    _opencv_camera_backend,
 )
 from reme.pose.movenet import MoveNetKeypoint, MoveNetResult
 
@@ -193,3 +194,18 @@ def test_camera_config_rejects_invalid_values() -> None:
         CameraConfig(device_index=-1)
     with pytest.raises(CameraStreamError, match="device_index"):
         CameraConfig(device_index=0.5)  # type: ignore[arg-type]
+
+
+def test_camera_backend_matches_operating_system() -> None:
+    class FakeCV2:
+        CAP_ANY = 0
+        CAP_AVFOUNDATION = 1200
+        CAP_V4L2 = 200
+        CAP_DSHOW = 700
+
+    cv2 = FakeCV2()
+
+    assert _opencv_camera_backend(cv2, "darwin") == cv2.CAP_AVFOUNDATION
+    assert _opencv_camera_backend(cv2, "linux") == cv2.CAP_V4L2
+    assert _opencv_camera_backend(cv2, "win32") == cv2.CAP_DSHOW
+    assert _opencv_camera_backend(cv2, "freebsd") == cv2.CAP_ANY

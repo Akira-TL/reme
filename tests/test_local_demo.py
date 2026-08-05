@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 import pytest
+import reme.local_demo as local_demo_module
 from reme.local_demo import (
     LocalDemoConfig,
     LocalDemoError,
     assert_port_available,
     build_child_commands,
+    ensure_frontend_dependencies,
     load_env_file,
     start_process,
     stop_processes,
@@ -64,6 +67,59 @@ def test_assert_port_available_rejects_occupied_listener() -> None:
         port = listener.getsockname()[1]
         with pytest.raises(LocalDemoError, match="already in use"):
             assert_port_available("127.0.0.1", port)
+
+
+def _write_frontend_dependency_markers(root: Path) -> LocalDemoConfig:
+    frontend = root / "frontend"
+    (frontend / "node_modules" / ".bin").mkdir(parents=True)
+    (frontend / "node_modules" / ".bin" / "vite").write_text("", encoding="utf-8")
+    (frontend / "scripts").mkdir()
+    (frontend / "scripts" / "check-native-deps.mjs").write_text("", encoding="utf-8")
+    (frontend / "package-lock.json").write_text("{}", encoding="utf-8")
+    return LocalDemoConfig(root=root)
+
+
+def test_ensure_frontend_dependencies_keeps_compatible_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write_frontend_dependency_markers(tmp_path)
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(local_demo_module.shutil, "which", lambda command: f"/bin/{command}")
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(local_demo_module.subprocess, "run", fake_run)
+
+    ensure_frontend_dependencies(config, {})
+
+    assert calls == [["node", "scripts/check-native-deps.mjs"]]
+
+
+def test_ensure_frontend_dependencies_reinstalls_cross_platform_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write_frontend_dependency_markers(tmp_path)
+    return_codes = iter([1, 0, 0])
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(local_demo_module.shutil, "which", lambda command: f"/bin/{command}")
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, next(return_codes))
+
+    monkeypatch.setattr(local_demo_module.subprocess, "run", fake_run)
+
+    ensure_frontend_dependencies(config, {})
+
+    assert calls == [
+        ["node", "scripts/check-native-deps.mjs"],
+        ["npm", "ci"],
+        ["node", "scripts/check-native-deps.mjs"],
+    ]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process-group supervision is POSIX-only")

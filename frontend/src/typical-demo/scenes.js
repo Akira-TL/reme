@@ -57,7 +57,7 @@ export const DEMO_SCENES = [
     phoneBody: "夜间守护已开启，暂无需要处理的情况。",
     backgroundImage: "/scenes/living-room.jpg",
     conversationScenario: "proactive_check_in",
-    autoConversation: true,
+    autoConversation: false,
   },
 ];
 
@@ -79,11 +79,11 @@ export const FALL_PHASES = {
     message: "一直没有听到回应，已按预授权通知家人查看现场。",
   },
   contacting: {
-    status: "正在联系身边的人",
-    message: "家人已经收到提醒，系统正在联系附近的王阿姨。",
+    status: "正在等待处理结果",
+    message: "家人已经收到提醒，系统正在等待回执。",
   },
   resolved: {
-    status: "附近联系人已响应",
-    message: "王阿姨已经出发，家人会继续关注现场情况。",
+    status: "事件状态已更新",
+    message: "MiMo 已返回本次事件的处理结果。",
   },
 };

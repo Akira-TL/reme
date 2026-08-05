@@ -74,32 +74,57 @@ class TriggerConfig:
     concern_postures: frozenset[Posture] = field(
         default_factory=lambda: frozenset({Posture.SITTING})
     )
-    check_in_timeout_ms: int = 8000
+    check_in_timeout_ms: int = 2500
     family_ack_timeout_ms: int = 8000
     rewind_tolerance_ms: float = 3000.0
     default_privacy_mode: PrivacyMode = PrivacyMode.BLURRED
 
 
-def detect_fall_trigger(context: DecisionContext, *, config: TriggerConfig) -> bool:
-    """High-confidence fall-like transition followed by a low, low-motion body state.
+def _lying_trigger_key(context: DecisionContext) -> str | None:
+    posture = context.latest_posture
+    if posture is None or not posture.person_detected:
+        return None
+    if posture.posture is not Posture.LYING:
+        return None
+    start_ms = max(0.0, posture.timestamp_ms - posture.posture_duration_ms)
+    return f"lying:{context.scene_id}:{round(start_ms / 1000.0)}"
 
-    A single lying posture never triggers on its own (contract section 8): the rule
-    requires an explicit fall_like_transition hypothesis from A.
+
+def fall_trigger_event_id(context: DecisionContext, *, config: TriggerConfig) -> str | None:
+    """Return the stable trigger id when posture evidence should open a fall check-in.
+
+    In the live demo, a detected lying posture is enough to start the 2.5s
+    confirmation countdown. A's fall_like transition path remains as a fallback
+    for vanish/occlusion cases.
     """
+
+    lying_key = _lying_trigger_key(context)
+    if lying_key is not None:
+        return lying_key
 
     transition = context.active_transition
     if transition is None or transition.transition is not Transition.FALL_LIKE:
-        return False
+        return None
     if transition.transition_confidence < config.fall_confidence_min:
-        return False
+        return None
     posture = context.latest_posture
     if posture is None:
-        return False
+        return None
     if posture.timestamp_ms < transition.start_ms:
-        return False
+        return None
     if posture.person_detected and posture.posture not in DOWN_POSTURES:
-        return False
-    return posture.motion_level in LOW_MOTION_LEVELS
+        return None
+    if not posture.person_detected:
+        return transition.event_id
+    if posture.motion_level not in LOW_MOTION_LEVELS:
+        return None
+    return transition.event_id
+
+
+def detect_fall_trigger(context: DecisionContext, *, config: TriggerConfig) -> bool:
+    """True when the latest posture evidence should open a fall check-in."""
+
+    return fall_trigger_event_id(context, config=config) is not None
 
 
 def detect_concern_trigger(context: DecisionContext, *, config: TriggerConfig) -> bool:

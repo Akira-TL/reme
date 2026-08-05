@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -56,6 +57,8 @@ from reme.decision.records import (
     DemoMode,
     InteractionResponse,
     PrivacyMode,
+    ResponseSource,
+    ResponseValue,
     Uncertainty,
     VisualContext,
     append_recorded_decision,
@@ -83,6 +86,9 @@ class DecisionRejectedError(ValueError):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+REJECT_RESPONSE_TOO_EARLY = "response_too_early"
 
 
 class UnknownSceneError(KeyError):
@@ -329,6 +335,9 @@ class _SceneRuntime:
     # ticks. Perception may keep updating its buffers, but it must not advance
     # the B scene session while MiMo is composing the question.
     explicit_conversation_inflight: bool = False
+    voice_prompt_decision_id: str | None = None
+    voice_prompt_inflight: bool = False
+    voice_prompt_ready_monotonic: float | None = None
 
 
 class DecisionService:
@@ -396,6 +405,39 @@ class DecisionService:
         with self._lock:
             runtime = self._runtimes.get(scene_id)
             return None if runtime is None else runtime.pending
+
+    def mark_decision_voice_started(self, *, scene_id: str, decision_id: str) -> None:
+        """Mark that C started synthesizing the elder-facing prompt.
+
+        This is a server-side race guard for stale/old frontends: a timeout
+        submitted while the prompt is still being synthesized must not escalate
+        the episode before the elder has even heard the question.
+        """
+
+        self._streams(scene_id)
+        with self._lock:
+            runtime = self._runtimes.get(scene_id)
+            if runtime is None or runtime.pending is None:
+                return
+            if runtime.pending.decision_id != decision_id:
+                return
+            runtime.voice_prompt_decision_id = decision_id
+            runtime.voice_prompt_inflight = True
+            runtime.voice_prompt_ready_monotonic = None
+
+    def mark_decision_voice_ready(self, *, scene_id: str, decision_id: str) -> None:
+        """Mark that the elder-facing prompt audio is ready to be played by C."""
+
+        self._streams(scene_id)
+        with self._lock:
+            runtime = self._runtimes.get(scene_id)
+            if runtime is None or runtime.pending is None:
+                return
+            if runtime.pending.decision_id != decision_id:
+                return
+            runtime.voice_prompt_decision_id = decision_id
+            runtime.voice_prompt_inflight = False
+            runtime.voice_prompt_ready_monotonic = time.monotonic()
 
     def get_decision(self, *, scene_id: str, timestamp_ms: float) -> CareDecision:
         """Evaluate the scene at one video timestamp and return the live decision."""
@@ -490,6 +532,7 @@ class DecisionService:
         with self._lock:
             runtime = self._runtime(response.scene_id)
             previous_id = None if runtime.pending is None else runtime.pending.decision_id
+            self._reject_too_early_timeout(runtime, response)
             # Response transitions consume only the untouchable timeout fields,
             # so the base config is used verbatim: a home-context lookup here
             # could only add failure surface to a deterministic escalation
@@ -650,6 +693,28 @@ class DecisionService:
             runtime = _SceneRuntime(session=SessionState(scene_id=scene_id))
             self._runtimes[scene_id] = runtime
         return runtime
+
+    def _reject_too_early_timeout(
+        self, runtime: _SceneRuntime, response: InteractionResponse
+    ) -> None:
+        pending = runtime.pending
+        if (
+            pending is None
+            or response.response is not ResponseValue.NONE
+            or response.source is not ResponseSource.TIMEOUT
+            or response.decision_id != pending.decision_id
+            or not pending.need_dialogue
+            or pending.elder_message is None
+            or pending.response_timeout_ms is None
+        ):
+            return
+        if runtime.voice_prompt_decision_id != pending.decision_id:
+            return
+        if runtime.voice_prompt_inflight or runtime.voice_prompt_ready_monotonic is None:
+            raise DecisionRejectedError(REJECT_RESPONSE_TOO_EARLY)
+        ready_elapsed_ms = (time.monotonic() - runtime.voice_prompt_ready_monotonic) * 1000
+        if ready_elapsed_ms < pending.response_timeout_ms:
+            raise DecisionRejectedError(REJECT_RESPONSE_TOO_EARLY)
 
     def _commit_rule_directive(
         self, runtime: _SceneRuntime, directive: Directive, timestamp_ms: float
@@ -946,6 +1011,9 @@ class DecisionService:
             next_state = replace(next_state, card_draft=draft)
         runtime.session = next_state
         runtime.pending = decision
+        runtime.voice_prompt_decision_id = None
+        runtime.voice_prompt_inflight = False
+        runtime.voice_prompt_ready_monotonic = None
         self._record_capture(runtime, decision)
         self._memory_milestones(directive, decision, previous_complaint)
 
