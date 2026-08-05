@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from reme.pose.fall_bootstrap import (
+from reme.runtime.perception.fall_bootstrap import (
     FallBootstrapError,
     SceneDifference,
     build_clip_intervals,

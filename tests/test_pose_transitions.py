@@ -2,10 +2,10 @@ import json
 import math
 from pathlib import Path
 
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType
-from reme.pose.scene_bundle import MOVENET_KEYPOINT_NAMES
-from reme.pose.transition_eval import main as transition_eval_main
-from reme.pose.transitions import TransitionDetector, TransitionDetectorConfig
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
+from reme.runtime.perception.scene_bundle import MOVENET_KEYPOINT_NAMES
+from reme.runtime.perception.transition_eval import main as transition_eval_main
+from reme.runtime.perception.transitions import TransitionDetector, TransitionDetectorConfig
 
 
 def _frame(

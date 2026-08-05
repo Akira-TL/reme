@@ -10,8 +10,8 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from reme.pose.posture import PosturePrediction
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType, RuntimeSessionError
+from reme.runtime.perception.posture import PosturePrediction
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType, RuntimeSessionError
 
 POSTURE_SCHEMA_VERSION = "reme-posture/v0-experiment"
 MOTION_LEVELS = ("still", "low", "medium", "high", "unknown")

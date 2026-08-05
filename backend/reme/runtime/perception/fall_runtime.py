@@ -6,12 +6,12 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from reme.pose.fall_mil import FallMILModel, FallMILScore, score_fall_samples
-from reme.pose.fall_training_data import derive_fall_pose_sample
-from reme.pose.fall_weak_labels import FallPoseSample
-from reme.pose.posture import PosturePrediction
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType
-from reme.pose.transitions import TransitionDetector, TransitionDetectorConfig
+from reme.runtime.perception.fall_mil import FallMILModel, FallMILScore, score_fall_samples
+from reme.runtime.perception.fall_training_data import derive_fall_pose_sample
+from reme.runtime.perception.fall_weak_labels import FallPoseSample
+from reme.runtime.perception.posture import PosturePrediction
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
+from reme.runtime.perception.transitions import TransitionDetector, TransitionDetectorConfig
 
 DEFAULT_FALL_MIL_MODEL = Path("models/trained/fall/mil-v3/model.json")
 
