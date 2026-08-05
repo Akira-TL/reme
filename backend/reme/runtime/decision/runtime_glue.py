@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 import threading
 from collections.abc import Callable
+from typing import Protocol
 
 from reme.decision.danger import DangerConfirmController, DangerRejectedError
 from reme.decision.policy import DecisionService
@@ -29,6 +30,24 @@ _EVALUATED_EVENT_TYPES = {
 # dict): A may attach the fall window's raw frame so the visual confirmation
 # starts without waiting for C's upload.  A never has to send it.
 EVIDENCE_FRAME_KEY = "frame_jpeg_b64"
+
+
+class PerceptionBridgeLike(Protocol):
+    """Session-scoped perception transport consumed by the HTTP handler."""
+
+    @property
+    def events_url(self) -> str: ...
+
+    @property
+    def safe_url(self) -> str: ...
+
+    def attached(self) -> bool: ...
+
+    def connected(self) -> bool: ...
+
+    def start_for(self, session_id: str) -> None: ...
+
+    def stop(self) -> None: ...
 
 
 class RuntimeDecisionPublisher:

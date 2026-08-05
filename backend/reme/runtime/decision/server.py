@@ -13,8 +13,8 @@ import mimetypes
 import os
 import re
 import ssl
-from collections.abc import Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,9 +29,8 @@ from reme.decision.config import (
     build_mimo_client,
     build_policy_config,
     build_speech_client,
-    server_config_from_args,
 )
-from reme.decision.context import SceneStreamError, discover_scenes
+from reme.decision.context import discover_scenes
 from reme.decision.danger import DangerConfirmController, DangerRejectedError
 from reme.decision.policy import (
     DecisionRejectedError,
@@ -40,7 +39,7 @@ from reme.decision.policy import (
 )
 from reme.decision.records import DecisionRecordError, DemoMode, parse_interaction_response
 from reme.decision.runtime_glue import (
-    PerceptionBridge,
+    PerceptionBridgeLike,
     RuntimeDecisionPublisher,
     live_streams_resolver,
     spawn_post_ingest_evaluation,
@@ -106,7 +105,7 @@ def build_decision_handler(
     registry: RuntimeSessionRegistry | None = None,
     hub: DecisionEventHub | None = None,
     ingest: EventIngest | None = None,
-    bridge: PerceptionBridge | None = None,
+    bridge: PerceptionBridgeLike | None = None,
     danger: DangerConfirmController | None = None,
     voice_dialogue: VoiceDialogueController | None = None,
     voice_dir: Path | None = None,
@@ -873,6 +872,58 @@ def build_decision_handler(
     return DecisionHandler
 
 
+@dataclass(frozen=True, slots=True)
+class DecisionRuntime:
+    """Decision components owned by the unified backend process."""
+
+    config: ServerConfig
+    service: DecisionService
+    registry: RuntimeSessionRegistry
+    hub: DecisionEventHub
+    ingest: EventIngest
+    danger: DangerConfirmController | None
+    voice_dialogue: VoiceDialogueController
+
+    def shutdown(self, bridge: PerceptionBridgeLike | None = None) -> None:
+        if bridge is not None:
+            bridge.stop()
+        self.hub.close_all()
+
+
+def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
+    """Build decision components without binding a standalone server."""
+
+    scenes = {} if config.scenes_dir is None else discover_scenes(config.scenes_dir)
+    if not scenes and config.demo_mode is DemoMode.RECORD:
+        raise ServerConfigError(f"no scene bundles found under {config.scenes_dir}")
+    audit = None if config.audit_path is None else AuditLog(config.audit_path)
+    registry = RuntimeSessionRegistry()
+    hub = DecisionEventHub()
+    ingest = EventIngest()
+    service = DecisionService(
+        scenes=scenes,
+        config=build_policy_config(config),
+        mimo=build_mimo_client(config),
+        audit=audit,
+        publisher=RuntimeDecisionPublisher(registry=registry, hub=hub),
+        live_streams=live_streams_resolver(registry, ingest),
+    )
+    danger = build_danger_controller(config, service, audit)
+    voice_dialogue = VoiceDialogueController(
+        service=service,
+        speech=build_speech_client(config),
+    )
+    return DecisionRuntime(
+        config=config,
+        service=service,
+        registry=registry,
+        hub=hub,
+        ingest=ingest,
+        danger=danger,
+        voice_dialogue=voice_dialogue,
+    )
+
+
 def build_ssl_context(certfile: Path, keyfile: Path) -> ssl.SSLContext:
     """TLS context for mkcert certificates (Python 3.12+ safe)."""
 
@@ -893,79 +944,3 @@ def build_server(
             server.socket, server_side=True, do_handshake_on_connect=False
         )
     return server
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """Boot the decision service over the given scenes directory."""
-
-    try:
-        config = server_config_from_args(argv)
-        scenes = {} if config.scenes_dir is None else discover_scenes(config.scenes_dir)
-    except (ServerConfigError, SceneStreamError) as exc:
-        print(f"error: {exc}")
-        return 2
-    if not scenes and config.demo_mode is DemoMode.RECORD:
-        # Only replay genuinely needs bundles; a live_camera run gets its
-        # perception from the session's event stream, not from disk (P0-5).
-        print(f"error: no scene bundles found under {config.scenes_dir}")
-        return 2
-    audit = None if config.audit_path is None else AuditLog(config.audit_path)
-    registry = RuntimeSessionRegistry()
-    hub = DecisionEventHub()
-    ingest = EventIngest()
-    service = DecisionService(
-        scenes=scenes,
-        config=build_policy_config(config),
-        mimo=build_mimo_client(config),
-        audit=audit,
-        publisher=RuntimeDecisionPublisher(registry=registry, hub=hub),
-        live_streams=live_streams_resolver(registry, ingest),
-    )
-    danger = build_danger_controller(config, service, audit)
-    voice_dialogue = VoiceDialogueController(
-        service=service,
-        speech=build_speech_client(config),
-    )
-    bridge = (
-        None
-        if config.a_events_url is None
-        else PerceptionBridge(
-            events_url=config.a_events_url,
-            ingest=ingest,
-            registry=registry,
-            service=service,
-            danger=danger,
-        )
-    )
-    handler = build_decision_handler(
-        service=service,
-        static_dir=config.static_dir,
-        registry=registry,
-        hub=hub,
-        ingest=ingest,
-        bridge=bridge,
-        danger=danger,
-        voice_dialogue=voice_dialogue,
-        voice_dir=config.voice_dir if config.voice_dir.is_dir() else None,
-    )
-    server = build_server(config, handler)
-    scheme = "https" if config.certfile is not None else "http"
-    print(f"Reme B decision service: {scheme}://{config.host}:{config.port}")
-    print(f"mode={config.demo_mode.value} scenes={', '.join(service.scene_ids())}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopped.")
-    finally:
-        # Close the streaming sockets first: server_close() only drops the
-        # listening socket, and blocked WS threads would keep the process up.
-        # The bridge goes too, or its reconnect loop outlives the server.
-        if bridge is not None:
-            bridge.stop()
-        hub.close_all()
-        server.server_close()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

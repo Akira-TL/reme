@@ -10,8 +10,8 @@ backend/reme/
 │   ├── perception/   # 图像输入、姿态提取、分类与动作转变
 │   ├── decision/     # 规则/MiMo、会话、危险确认与事件发布
 │   ├── launcher.py   # 本地程序监督与前端启动
-│   ├── transport.py  # 进程内事件传输（后续批次建立）
-│   └── server.py     # 统一后端 HTTP/WS 服务（后续批次建立）
+│   ├── transport.py  # 进程内感知到决策事件传输
+│   └── server.py     # 唯一后端 HTTP/WS 服务入口
 ├── pose/             # 旧 `reme.pose.*` 导入兼容层，不是独立服务
 ├── decision/         # 旧 `reme.decision.*` 导入兼容层，不是独立服务
 ├── local_demo.py     # 旧导入兼容别名

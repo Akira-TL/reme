@@ -172,7 +172,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def server_config_from_args(argv: Sequence[str] | None = None) -> ServerConfig:
-    args = build_parser().parse_args(argv)
+    return server_config_from_namespace(build_parser().parse_args(argv))
+
+
+def server_config_from_namespace(args: argparse.Namespace) -> ServerConfig:
+    """Validate a parser namespace and build the decision runtime config.
+
+    The unified backend parser extends the decision parser with perception
+    options, so configuration assembly must accept an already parsed namespace
+    instead of reparsing a second argv vector.
+    """
+
     if (args.cert is None) != (args.key is None):
         raise ServerConfigError("--cert and --key must be provided together")
     if args.home_script is not None and (args.home_room is not None or args.local_hour is not None):

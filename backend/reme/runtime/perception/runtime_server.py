@@ -8,9 +8,9 @@ import hashlib
 import json
 import queue
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -915,22 +915,36 @@ def _put_latest(subscription: EventSubscription, event: RuntimeEvent | None) -> 
     subscription.put_nowait(event)
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--host",
-        default="0.0.0.0",
-        help="Listen address; 0.0.0.0 allows B/C access on the local network",
-    )
-    parser.add_argument("--port", type=int, default=8770)
+@dataclass(frozen=True, slots=True)
+class PerceptionRuntime:
+    """Perception controller plus the optional browser input gateway."""
+
+    controller: RuntimePerceptionController
+    input_gateway: BrowserGatewayPerceptionWorker | None
+    input_adapter: str
+
+
+def add_perception_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    include_network: bool = True,
+) -> argparse.ArgumentParser:
+    """Add perception options to a standalone or unified runtime parser."""
+
+    if include_network:
+        parser.add_argument(
+            "--host",
+            default="0.0.0.0",
+            help="listen address for the unified local backend",
+        )
+        parser.add_argument("--port", type=int, default=8770)
     parser.add_argument(
         "--input-adapter",
         choices=("c_ws_server", "c_ws", "local_camera"),
         default="c_ws_server",
         help=(
-            "c_ws_server hosts /ws/camera-input for C's browser (default; "
-            "browsers cannot host sockets), c_ws dials out to a C-owned "
-            "socket, local_camera is test-only"
+            "c_ws_server hosts /ws/camera-input for the browser, c_ws dials a "
+            "C-owned socket, and local_camera is a local hardware adapter"
         ),
     )
     parser.add_argument(
@@ -938,9 +952,8 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("auto", "jpeg", "landmarks"),
         default="auto",
         help=(
-            "Input lane for c_ws_server: auto prefers JPEG inference when its dependencies "
-            "and model artifacts exist; landmarks forces the model-free keypoint lane; jpeg "
-            "requires the full local inference stack"
+            "auto prefers local JPEG inference when dependencies and models exist; "
+            "landmarks uses browser keypoints; jpeg requires the full local stack"
         ),
     )
     parser.add_argument("--c-camera-ws-url")
@@ -960,6 +973,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--score-threshold", type=float, default=0.2)
     parser.add_argument("--num-threads", type=int, default=4)
     return parser
+
+
+def build_parser() -> argparse.ArgumentParser:
+    return add_perception_arguments(argparse.ArgumentParser(description=__doc__))
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Compatibility alias for existing parser tests."""
+
+    return build_parser()
 
 
 def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionWorker:
@@ -1012,10 +1035,9 @@ def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionW
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Run the local A-side live perception control server."""
+def build_perception_runtime(args: argparse.Namespace) -> PerceptionRuntime:
+    """Build perception components without binding a standalone server."""
 
-    args = _build_parser().parse_args(argv)
     input_gateway: BrowserGatewayPerceptionWorker | None = None
     if args.input_adapter == "c_ws_server":
         input_gateway = build_browser_gateway(args)
@@ -1047,32 +1069,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             num_threads=args.num_threads,
             fall_mil_model=args.fall_mil_model,
         )
-    controller = RuntimePerceptionController(worker=worker)
-    server = RuntimeHTTPServer(
-        (args.host, args.port),
-        build_runtime_handler(controller, input_gateway=input_gateway),
+    return PerceptionRuntime(
+        controller=RuntimePerceptionController(worker=worker),
+        input_gateway=input_gateway,
+        input_adapter=args.input_adapter,
     )
-    print(f"Reme perception control: http://{args.host}:{args.port}")
-    print(f"Input adapter: {args.input_adapter}")
-    print(
-        "Fall transition model: "
-        + (str(args.fall_mil_model) if args.fall_mil_model.is_file() else "deterministic only")
-    )
-    if input_gateway is not None:
-        print(
-            "Camera input lane: "
-            f"ws://{args.host}:{args.port}/ws/camera-input ({input_gateway.mode})"
-        )
-    print(f"WebSocket events: ws://{args.host}:{args.port}/ws/events?session_id=<id>")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopped.")
-    finally:
-        controller.shutdown()
-        server.server_close()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
