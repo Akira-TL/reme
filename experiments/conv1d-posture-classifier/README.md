@@ -47,16 +47,16 @@ requirements.txt         独立依赖
 
 ```bash
 conda run -n DL python \
-  .scratch/conv1d-posture-classifier/train.py \
+  experiments/conv1d-posture-classifier/train.py \
   --dry-run --device cuda
 ```
 
 需要隔离环境时再新建虚拟环境：
 
 ```bash
-python3 -m venv .scratch/conv1d-posture-classifier/.venv
-.scratch/conv1d-posture-classifier/.venv/bin/pip install \
-  -r .scratch/conv1d-posture-classifier/requirements.txt
+python3 -m venv experiments/conv1d-posture-classifier/.venv
+experiments/conv1d-posture-classifier/.venv/bin/pip install \
+  -r experiments/conv1d-posture-classifier/requirements.txt
 ```
 
 CUDA 版本的 PyTorch 应按机器 CUDA 驱动选择官方安装命令，不要盲目使用 CPU wheel 或固定 CUDA wheel。
@@ -66,8 +66,8 @@ CUDA 版本的 PyTorch 应按机器 CUDA 驱动选择官方安装命令，不要
 安装依赖后运行一次合成数据前向和反向传播：
 
 ```bash
-.scratch/conv1d-posture-classifier/.venv/bin/python \
-  .scratch/conv1d-posture-classifier/train.py \
+experiments/conv1d-posture-classifier/.venv/bin/python \
+  experiments/conv1d-posture-classifier/train.py \
   --dry-run \
   --device cuda
 ```
@@ -79,8 +79,8 @@ CUDA 版本的 PyTorch 应按机器 CUDA 驱动选择官方安装命令，不要
 复制示例文件后，按视频连续片段填写：
 
 ```bash
-cp .scratch/conv1d-posture-classifier/annotations.example.csv \
-  .scratch/conv1d-posture-classifier/annotations.csv
+cp experiments/conv1d-posture-classifier/annotations.example.csv \
+  experiments/conv1d-posture-classifier/annotations.csv
 ```
 
 CSV 格式：
@@ -106,10 +106,10 @@ start_ms,end_ms,label,split
 使用当前最佳 MoveNet 跟踪裁剪输出：
 
 ```bash
-.scratch/conv1d-posture-classifier/.venv/bin/python \
-  .scratch/conv1d-posture-classifier/train.py \
+experiments/conv1d-posture-classifier/.venv/bin/python \
+  experiments/conv1d-posture-classifier/train.py \
   --keypoints /tmp/reme-litert-lightning-f16-tracking-full/keypoints.jsonl \
-  --annotations .scratch/conv1d-posture-classifier/annotations.csv \
+  --annotations experiments/conv1d-posture-classifier/annotations.csv \
   --output-dir artifacts/conv1d-posture \
   --window-frames 60 \
   --stride-frames 15 \
@@ -121,8 +121,8 @@ start_ms,end_ms,label,split
 ## 推理
 
 ```bash
-.scratch/conv1d-posture-classifier/.venv/bin/python \
-  .scratch/conv1d-posture-classifier/infer.py \
+experiments/conv1d-posture-classifier/.venv/bin/python \
+  experiments/conv1d-posture-classifier/infer.py \
   --keypoints /tmp/reme-litert-lightning-f16-tracking-full/keypoints.jsonl \
   --checkpoint artifacts/conv1d-posture/best.pt \
   --output artifacts/conv1d-posture/predictions.jsonl \
