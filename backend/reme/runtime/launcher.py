@@ -1,4 +1,4 @@
-"""Run the local A + B + C acceptance stack from one foreground command."""
+"""Run the unified Reme backend and frontend from one foreground command."""
 
 from __future__ import annotations
 
@@ -21,9 +21,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 DEFAULT_HOST = "127.0.0.1"
+DEFAULT_BACKEND_PORT = 8770
 DEFAULT_FRONTEND_PORT = 4174
-DEFAULT_PERCEPTION_PORT = 8770
-DEFAULT_DECISION_PORT = 8100
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 30.0
 DEFAULT_MIMO_ENV = Path(".env")
 FRONTEND_NATIVE_CHECK = Path("scripts/check-native-deps.mjs")
@@ -36,13 +35,12 @@ class LocalDemoError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class LocalDemoConfig:
-    """Ports, paths, and runtime mode for the local acceptance stack."""
+    """Paths, ports, and input mode for the local application."""
 
     root: Path
     host: str = DEFAULT_HOST
+    backend_port: int = DEFAULT_BACKEND_PORT
     frontend_port: int = DEFAULT_FRONTEND_PORT
-    perception_port: int = DEFAULT_PERCEPTION_PORT
-    decision_port: int = DEFAULT_DECISION_PORT
     browser_input_mode: str = "auto"
     startup_timeout_seconds: float = DEFAULT_STARTUP_TIMEOUT_SECONDS
     mimo_env: Path = DEFAULT_MIMO_ENV
@@ -53,23 +51,21 @@ class LocalDemoConfig:
 
     @property
     def mimo_env_path(self) -> Path:
-        """Resolve the repository-local MiMo environment file."""
-
         if self.mimo_env.is_absolute():
             return self.mimo_env
         return self.root / self.mimo_env
 
     @property
+    def backend_http_url(self) -> str:
+        return f"http://{self.host}:{self.backend_port}"
+
+    @property
+    def backend_ws_url(self) -> str:
+        return f"ws://{self.host}:{self.backend_port}"
+
+    @property
     def acceptance_url(self) -> str:
         return f"http://{self.host}:{self.frontend_port}/typical-demo.html"
-
-    @property
-    def perception_http_url(self) -> str:
-        return f"http://{self.host}:{self.perception_port}"
-
-    @property
-    def decision_http_url(self) -> str:
-        return f"http://{self.host}:{self.decision_port}"
 
 
 @dataclass(slots=True)
@@ -82,7 +78,7 @@ class ManagedProcess:
 
 
 def load_env_file(path: Path) -> dict[str, str]:
-    """Read the simple ``export KEY=value`` form written by setup-mimo-env.sh."""
+    """Read the simple ``KEY=value`` form written by setup-mimo-env.sh."""
 
     if not path.is_file():
         return {}
@@ -123,34 +119,23 @@ def assert_port_available(host: str, port: int) -> None:
 
 
 def build_child_commands(config: LocalDemoConfig) -> dict[str, list[str]]:
-    """Return the exact A, B, and C commands used by the launcher."""
+    """Return the unified backend and frontend commands."""
 
     return {
-        "A": [
+        "BACKEND": [
             sys.executable,
             "-m",
-            "reme.pose.runtime_server",
+            "reme.runtime.server",
             "--host",
             config.host,
             "--port",
-            str(config.perception_port),
+            str(config.backend_port),
             "--input-adapter",
             "c_ws_server",
             "--browser-input-mode",
             config.browser_input_mode,
         ],
-        "B": [
-            sys.executable,
-            "-m",
-            "reme.decision.server",
-            "--host",
-            config.host,
-            "--port",
-            str(config.decision_port),
-            "--a-events-url",
-            f"ws://{config.host}:{config.perception_port}/ws/events",
-        ],
-        "C": [
+        "FRONTEND": [
             "npm",
             "run",
             "dev",
@@ -195,7 +180,7 @@ def start_process(
     thread = threading.Thread(
         target=_forward_output,
         args=(label, stream),
-        name=f"reme-local-demo-{label.lower()}-output",
+        name=f"reme-launcher-{label.lower()}-output",
         daemon=True,
     )
     thread.start()
@@ -211,7 +196,7 @@ def wait_for_http(
     """Wait until one child answers HTTP, failing early if the child exits."""
 
     deadline = time.monotonic() + timeout_seconds
-    request = Request(url, headers={"User-Agent": "reme-local-demo/0.1"})
+    request = Request(url, headers={"User-Agent": "reme-launcher/0.2"})
     last_error: BaseException | None = None
     while time.monotonic() < deadline:
         return_code = component.process.poll()
@@ -229,8 +214,6 @@ def wait_for_http(
 
 
 def _signal_process_group(managed: ManagedProcess, sig: signal.Signals) -> bool:
-    """Signal the whole child process group, including npm-spawned Vite children."""
-
     try:
         os.killpg(managed.process.pid, sig)
     except ProcessLookupError:
@@ -244,13 +227,12 @@ def _process_group_alive(managed: ManagedProcess) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        # macOS may report EPERM briefly after the group leader has exited.
         return managed.process.poll() is None
     return True
 
 
 def stop_processes(processes: Sequence[ManagedProcess]) -> None:
-    """Stop every A/B/C process group and report each component's final state."""
+    """Stop every managed process group and report its final state."""
 
     for managed in reversed(processes):
         if _signal_process_group(managed, signal.SIGTERM):
@@ -307,10 +289,7 @@ def ensure_frontend_dependencies(config: LocalDemoConfig, env: dict[str, str]) -
         raise LocalDemoError("node is not available on PATH")
     if frontend_dependencies_ready(config, env):
         return
-    print(
-        "[C] frontend dependencies are missing or incompatible; running npm ci",
-        flush=True,
-    )
+    print("[FRONTEND] dependencies missing or incompatible; running npm ci", flush=True)
     try:
         subprocess.run(  # noqa: S603 - fixed npm command
             ["npm", "ci"],
@@ -325,22 +304,22 @@ def ensure_frontend_dependencies(config: LocalDemoConfig, env: dict[str, str]) -
 
 
 def run_local_demo(config: LocalDemoConfig) -> int:
-    """Start A, B, and C, then supervise them until Ctrl+C or child failure."""
+    """Start backend and frontend, then supervise them until exit."""
 
     if not config.frontend_dir.is_dir():
         raise LocalDemoError(f"frontend directory not found: {config.frontend_dir}")
-    for port in (config.perception_port, config.decision_port, config.frontend_port):
+    for port in (config.backend_port, config.frontend_port):
         assert_port_available(config.host, port)
 
     env = os.environ.copy()
     for name, value in load_env_file(config.mimo_env_path).items():
         env.setdefault(name, value)
     env["PYTHONUNBUFFERED"] = "1"
-    env["VITE_REME_PERCEPTION_HTTP_URL"] = config.perception_http_url
+    env["VITE_REME_PERCEPTION_HTTP_URL"] = config.backend_http_url
     env["VITE_REME_PERCEPTION_INPUT_WS_URL"] = (
-        f"ws://{config.host}:{config.perception_port}/ws/camera-input"
+        f"{config.backend_ws_url}/ws/camera-input"
     )
-    env["VITE_REME_DECISION_HTTP_URL"] = config.decision_http_url
+    env["VITE_REME_DECISION_HTTP_URL"] = config.backend_http_url
     env["VITE_REME_MIMO_MODEL"] = env.get("MIMO_MODEL", "mimo-v2.5")
     env["VITE_REME_MIMO_CONFIGURED"] = "true" if env.get("MIMO_API_KEY") else "false"
 
@@ -348,23 +327,20 @@ def run_local_demo(config: LocalDemoConfig) -> int:
     commands = build_child_commands(config)
     processes: list[ManagedProcess] = []
     try:
-        perception = start_process("A", commands["A"], cwd=config.root, env=env)
-        processes.append(perception)
+        backend = start_process("BACKEND", commands["BACKEND"], cwd=config.root, env=env)
+        processes.append(backend)
         wait_for_http(
-            perception,
-            f"{config.perception_http_url}/api/runtime/capabilities",
+            backend,
+            f"{config.backend_http_url}/api/health",
             timeout_seconds=config.startup_timeout_seconds,
         )
 
-        decision = start_process("B", commands["B"], cwd=config.root, env=env)
-        processes.append(decision)
-        wait_for_http(
-            decision,
-            f"{config.decision_http_url}/api/health",
-            timeout_seconds=config.startup_timeout_seconds,
+        frontend = start_process(
+            "FRONTEND",
+            commands["FRONTEND"],
+            cwd=config.frontend_dir,
+            env=env,
         )
-
-        frontend = start_process("C", commands["C"], cwd=config.frontend_dir, env=env)
         processes.append(frontend)
         wait_for_http(
             frontend,
@@ -372,11 +348,11 @@ def run_local_demo(config: LocalDemoConfig) -> int:
             timeout_seconds=config.startup_timeout_seconds,
         )
 
-        print("\nReme ABC 本地验收链路已就绪", flush=True)
+        print("\nReme 本地应用已就绪", flush=True)
         print(f"验收页面: {config.acceptance_url}", flush=True)
-        print(f"A 感知服务: {config.perception_http_url}", flush=True)
-        print(f"B 决策服务: {config.decision_http_url}", flush=True)
-        print("按 Ctrl+C 停止 A、B、C。\n", flush=True)
+        print(f"统一后端: {config.backend_http_url}", flush=True)
+        print("内部感知 → 决策: 进程内通讯", flush=True)
+        print("按 Ctrl+C 停止 BACKEND 与 FRONTEND。\n", flush=True)
 
         while True:
             for managed in processes:
@@ -387,7 +363,7 @@ def run_local_demo(config: LocalDemoConfig) -> int:
                     )
             time.sleep(0.25)
     except KeyboardInterrupt:
-        print("\n正在停止 Reme ABC 本地验收链路…", flush=True)
+        print("\n正在停止 Reme 本地应用…", flush=True)
         return 0
     finally:
         stop_processes(processes)
@@ -396,9 +372,8 @@ def run_local_demo(config: LocalDemoConfig) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--backend-port", type=int, default=DEFAULT_BACKEND_PORT)
     parser.add_argument("--frontend-port", type=int, default=DEFAULT_FRONTEND_PORT)
-    parser.add_argument("--perception-port", type=int, default=DEFAULT_PERCEPTION_PORT)
-    parser.add_argument("--decision-port", type=int, default=DEFAULT_DECISION_PORT)
     parser.add_argument(
         "--browser-input-mode",
         choices=("auto", "jpeg", "landmarks"),
@@ -421,13 +396,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     config = LocalDemoConfig(
         root=root,
         host=args.host,
+        backend_port=args.backend_port,
         frontend_port=args.frontend_port,
-        perception_port=args.perception_port,
-        decision_port=args.decision_port,
         browser_input_mode=args.browser_input_mode,
         startup_timeout_seconds=args.startup_timeout,
         mimo_env=args.mimo_env.expanduser(),

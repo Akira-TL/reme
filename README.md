@@ -1,31 +1,26 @@
 # Reme
 
-Reme 是面向家庭关怀场景的隐私优先演示系统：本地感知端提取人体姿态和动作事件，决策端结合确定性规则与 Xiaomi MiMo 生成关怀交互，家属端默认只看到抽象骨架和结构化状态。
+Reme 是面向家庭关怀场景的隐私优先演示系统：统一后端在本地完成姿态感知、动作事件和关怀决策，结合确定性规则与 Xiaomi MiMo 生成交互；家属端默认只看到抽象骨架和结构化状态。
 
 当前冻结演示版本为 `v0.1.0beta`。该版本用于比赛演示和后续结构整理，不代表医疗器械、生产级监护系统或已验证的跌倒检测产品。
 
 ## 当前演示链路
 
 ```text
-C 浏览器摄像头
+浏览器摄像头
   └─ /ws/camera-input
        ↓
-A backend/reme/pose/runtime_server.py
-  ├─ MoveNet / MediaPipe 姿态数据
-  ├─ posture_observation
-  └─ transition_event
-       ↓ /ws/events
-B backend/reme/decision/server.py
-  ├─ 确定性关怀与危险状态机
-  ├─ MiMo 对话与摘要
-  └─ care_decision
+统一后端 backend/reme/runtime/server.py
+  ├─ perception：MoveNet / MediaPipe、posture_observation、transition_event
+  ├─ 进程内 EventBroker → EventIngest
+  └─ decision：确定性状态机、MiMo 对话、care_decision
        ↓ /ws
-C frontend/typical-demo.html
+frontend/typical-demo.html
   ├─ 老人端演示
   └─ 家属端隐私视图
 ```
 
-正式单机入口由 `backend/reme/local_demo.py` 统一管理 A、B、C 三个进程。
+正式单机入口为 `scripts/demo/start-local-demo.sh`。它只管理统一后端和前端两个进程；感知到决策不经过内部 HTTP/WebSocket。
 
 ## 快速启动
 

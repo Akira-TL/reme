@@ -54,43 +54,43 @@ export function RuntimeInspector({ scene, camera, live, fallPhase }) {
   const mimoSource = decision?.source === "mimo" ? "MiMo 推理" : decision ? "确定性规则" : "等待事件";
 
   return (
-    <aside className="runtime-inspector" aria-label="ABC 单机链路验收">
+    <aside className="runtime-inspector" aria-label="统一运行时单机链路验收">
       <header>
-        <span>ABC 单机链路</span>
+        <span>统一后端链路</span>
         <h2>实时验收面板</h2>
-        <p>同一台电脑运行 A 感知、B 决策和 C 页面；这里显示真实连接和事件，不伪装离线状态。</p>
+        <p>同一台电脑运行统一后端与前端页面；感知和决策通过进程内通讯连接。</p>
       </header>
 
       <div className="runtime-flow" aria-label="数据流向">
-        <b>C 摄像头</b><i>→</i><b>A 感知</b><i>→</i><b>B / MiMo</b><i>→</i><b>C 展示</b>
+        <b>浏览器摄像头</b><i>→</i><b>本地感知</b><i>→</i><b>进程内决策 / MiMo</b><i>→</i><b>页面展示</b>
       </div>
 
       <StatusRow
         icon={<VideocamRoundedIcon />}
-        title="C · 浏览器输入"
+        title="浏览器输入"
         status={camera.cameraReady ? "摄像头已连接" : "等待摄像头"}
         detail={camera.error || `当前场景：${scene.title}`}
         online={camera.cameraReady}
       />
       <StatusRow
         icon={<SensorsRoundedIcon />}
-        title="A · 姿态感知"
+        title="后端 · 姿态感知"
         status={RUNTIME_LABELS[runtime.state] || runtime.state || "等待连接"}
         detail={posture ? `${describePosture(posture.posture)} · 置信度 ${Math.round((posture.posture_confidence || 0) * 100)}%` : runtime.reason || "等待 17 节点姿态事件"}
         online={perceptionOnline}
       />
       <StatusRow
         icon={<HubRoundedIcon />}
-        title="A · 动作转变"
+        title="后端 · 动作转变"
         status={transition ? TRANSITION_LABELS[transition.transition] || transition.transition : "等待转变事件"}
         detail={transition ? `置信度 ${Math.round((transition.transition_confidence || 0) * 100)}%` : "静态姿态不会被直接当作跌倒"}
         online={Boolean(transition)}
       />
       <StatusRow
         icon={<PsychologyRoundedIcon />}
-        title="B · 决策与 MiMo"
-        status={decisionOnline ? DECISION_LABELS[decision?.state] || "决策流已连接" : "决策服务未连接"}
-        detail={decision ? `${mimoSource} · ${decision.elder_message || decision.family_notification || "已生成关怀决策"}` : live.decision?.reason || "等待 A 的姿态或转变事件"}
+        title="后端 · 决策与 MiMo"
+        status={decisionOnline ? DECISION_LABELS[decision?.state] || "决策流已连接" : "统一后端决策流未连接"}
+        detail={decision ? `${mimoSource} · ${decision.elder_message || decision.family_notification || "已生成关怀决策"}` : live.decision?.reason || "等待感知姿态或转变事件"}
         online={decisionOnline}
       />
 
@@ -98,14 +98,14 @@ export function RuntimeInspector({ scene, camera, live, fallPhase }) {
         {live.active ? <CheckCircleRoundedIcon /> : <span />}
         <div>
           <small>当前验收状态</small>
-          <strong>{live.active ? "ABC 实时链路已接管" : "正在等待 ABC 链路"}</strong>
-          <p>{live.active ? `场景 ${scene.id} 正在真实运行，当前阶段：${fallPhase}` : "请确认 A、B 服务和摄像头权限均正常"}</p>
+          <strong>{live.active ? "统一实时链路已接管" : "正在等待统一后端链路"}</strong>
+          <p>{live.active ? `场景 ${scene.id} 正在真实运行，当前阶段：${fallPhase}` : "请确认统一后端和摄像头权限均正常"}</p>
         </div>
       </div>
 
       {decision?.state === "check_in_required" && (
         <Button variant="contained" color="success" fullWidth onClick={live.respondSafe}>
-          我没事，回应 B 的询问
+          我没事，回应安全询问
         </Button>
       )}
       {decision?.alarm && (

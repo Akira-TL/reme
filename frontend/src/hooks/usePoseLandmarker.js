@@ -235,7 +235,7 @@ export function usePoseLandmarker(externalFrame = null, onLandmarks = null) {
   const resolvedStatus = backendActive || (cameraReady && modelReady)
     ? {
         connection: "已连接",
-        title: backendActive ? "A 感知结果已接入" : "本地姿态模型已就绪",
+        title: backendActive ? "统一后端感知结果已接入" : "本地姿态模型已就绪",
         hint: "检测到人物后只显示 17 节点火柴人",
         retryable: false,
         visible: false,

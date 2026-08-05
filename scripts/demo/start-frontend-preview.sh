@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 启动单独的前端预览页，不启动 A/B 后端。
+# 启动单独的前端预览页，不启动统一后端。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

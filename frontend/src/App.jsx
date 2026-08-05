@@ -53,7 +53,7 @@ export function App() {
     if (!transition || transition.sequence === lastTransitionRef.current) return;
     lastTransitionRef.current = transition.sequence;
     const message = transition.transition === "fall_like_transition"
-      ? "A 检测到跌倒式动作候选，等待 B 决策确认"
+      ? "感知模块检测到跌倒式动作候选，等待决策模块确认"
       : transition.transition === "uncertain_transition"
         ? "A 检测到不确定动作变化，继续观察中"
         : "";

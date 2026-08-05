@@ -72,7 +72,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     switch (phase) {
       case "checking":
         return {
-          status: "正在确认安全（B 决策流）",
+          status: "正在确认安全（统一后端决策流）",
           message: decisionMessage || FALL_PHASES.checking.message,
         };
       case "emergency":
@@ -90,7 +90,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
       default:
         return {
           status: "真实决策流待命",
-          message: "A/B 链路已接入：请在镜头前演示跌倒动作，无需按键触发",
+          message: "统一运行时链路已接入：请在镜头前演示跌倒动作，无需按键触发",
         };
     }
   }, [active, current, phase]);

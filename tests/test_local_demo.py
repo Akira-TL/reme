@@ -42,21 +42,22 @@ def test_load_env_file_rejects_shell_commands(tmp_path: Path) -> None:
         load_env_file(env_file)
 
 
-def test_build_child_commands_connects_a_b_and_vite(tmp_path: Path) -> None:
+def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> None:
     config = LocalDemoConfig(
         root=tmp_path,
         host="127.0.0.1",
+        backend_port=18770,
         frontend_port=14174,
-        perception_port=18770,
-        decision_port=18100,
         browser_input_mode="landmarks",
     )
 
     commands = build_child_commands(config)
 
-    assert commands["A"][-2:] == ["--browser-input-mode", "landmarks"]
-    assert commands["B"][-1] == "ws://127.0.0.1:18770/ws/events"
-    assert commands["C"][-3:] == ["--port", "14174", "--strictPort"]
+    assert commands["BACKEND"][1:3] == ["-m", "reme.runtime.server"]
+    assert commands["BACKEND"][-2:] == ["--browser-input-mode", "landmarks"]
+    assert "--a-events-url" not in commands["BACKEND"]
+    assert commands["FRONTEND"][-3:] == ["--port", "14174", "--strictPort"]
+    assert config.backend_http_url == "http://127.0.0.1:18770"
     assert config.acceptance_url == "http://127.0.0.1:14174/typical-demo.html"
     assert config.mimo_env_path == tmp_path / ".env"
 
@@ -126,7 +127,7 @@ def test_ensure_frontend_dependencies_reinstalls_cross_platform_copy(
 @pytest.mark.skipif(os.name != "posix", reason="process-group supervision is POSIX-only")
 def test_stop_processes_kills_spawned_process_group(tmp_path: Path) -> None:
     managed = start_process(
-        "C",
+        "FRONTEND",
         [
             sys.executable,
             "-c",

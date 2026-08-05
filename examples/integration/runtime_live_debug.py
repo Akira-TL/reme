@@ -1,41 +1,34 @@
-"""A→B 本地联调驱动：合成关键点喂给 A，实时打印 A 姿态分类与 B 决策输出。
+"""统一运行时联调驱动：注入合成关键点并观察感知与决策事件。
 
-用途：B→C 链路未通时，独立验证「A 对姿态的分类传给 B，B 的 MiMo 判断并输出」
-这一段数据流。脚本同时订阅 A 的 ``/ws/events`` 和 B 的 ``/ws``，把两侧事件
-按时间顺序打在同一个终端里，结束时给出摘要。
+脚本连接同一个后端地址，同时订阅 ``/ws/events`` 与 ``/ws``。感知事件在后端
+进程内直接进入决策模块；这两个 WebSocket 只用于调试观察，不承担内部传输。
 
-前置（两个终端分别启动，先 A 后 B）：
+前置：
 
-  .venv/bin/python -m reme.pose.runtime_server \
-      --host 127.0.0.1 --port 8770 --input-adapter c_ws_server \
-      --browser-input-mode landmarks
-
-  set -a && source .env && set +a && .venv/bin/python -m reme.decision.server \
-      --host 127.0.0.1 --port 8100 --a-events-url ws://127.0.0.1:8770/ws/events
+  set -a && source .env && set +a
+  uv run --extra pose python -m reme.runtime.server \
+      --host 127.0.0.1 --port 8770 \
+      --input-adapter c_ws_server --browser-input-mode landmarks
 
 用法：
 
-  # 「站立→跌倒→躺地」：规则跌倒问询 → 8s 无回应 → 规则家属升级（危险链路全程不等 MiMo）
-  .venv/bin/python examples/integration/ab_live_debug.py
+  # 「站立→跌倒→躺地」：规则跌倒问询 → 无回应 → 家属升级
+  uv run python examples/integration/runtime_live_debug.py
 
-  # 「坐姿静止 30s」关切链路，MiMo 三次出场：撰写问询（COMPOSE_CHECK_IN）→
-  # 解读老人主诉（need_help+text → INTERPRET_RESPONSE）→ 同意后撰写家属卡（COMPOSE_CARD）
-  .venv/bin/python examples/integration/ab_live_debug.py --scenario concern \
+  # 「坐姿静止」关切链路，并替老人提交自由文本回应
+  uv run python examples/integration/runtime_live_debug.py --scenario concern \
       --respond-text "牙疼了两天，饭都吃不下，又不想麻烦孩子"
 
-  # 关切问询后不回应：MiMo 撰写问询 → 超时 → 规则家属升级
-  .venv/bin/python examples/integration/ab_live_debug.py --scenario concern
+  # 持续站立，验证正常稳定时不调用 MiMo
+  uv run python examples/integration/runtime_live_debug.py \
+      --scenario still --duration 8 --linger 3
 
-  # 持续站立，验证正常稳定时 B 不调用 MiMo
-  .venv/bin/python examples/integration/ab_live_debug.py --scenario still --duration 8 --linger 3
+  # 不注入输入，旁听浏览器已激活的会话
+  uv run python examples/integration/runtime_live_debug.py --attach
 
-  # 不注入任何输入，旁听当前已激活会话（例如浏览器真人驱动时）
-  .venv/bin/python examples/integration/ab_live_debug.py --attach
-
-合成骨架与 tests/test_danger_link_e2e.py 保持一致，走 A 的浏览器关键点直传
-通道（``/ws/camera-input`` 的 ``landmarks_frame``），不需要摄像头和模型文件。
-倒计时归 C 所有（状态机不自带定时器），本脚本会替 C 扮演：超时提交
-``response=none/source=timeout``，或按 ``--respond-text`` 替老人回话。
+合成骨架与 tests/test_danger_link_e2e.py 保持一致，通过 ``/ws/camera-input`` 的
+``landmarks_frame`` 通道注入，不需要摄像头和模型文件。脚本还可模拟前端倒计时，
+提交 ``response=none/source=timeout``，或按 ``--respond-text`` 替老人回话。
 """
 
 from __future__ import annotations
@@ -618,8 +611,11 @@ def _drive_scenario(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("--a-url", default="http://127.0.0.1:8770", help="A 感知服务地址")
-    parser.add_argument("--b-url", default="http://127.0.0.1:8100", help="B 决策服务地址")
+    parser.add_argument(
+        "--runtime-url",
+        default="http://127.0.0.1:8770",
+        help="统一后端地址",
+    )
     parser.add_argument("--scenario", choices=("fall", "concern", "still"), default="fall")
     parser.add_argument("--duration", type=float, default=8.0, help="still 场景时长（秒）")
     parser.add_argument("--fps", type=float, default=10.0, help="注入帧率")
@@ -641,31 +637,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verbose", action="store_true", help="逐帧打印 A 的全部事件")
     args = parser.parse_args(argv)
 
-    _require_health("A", args.a_url)
+    runtime_url = args.runtime_url.rstrip("/")
+    _require_health("统一后端", runtime_url)
     if not args.attach:
-        _require_landmark_input(args.a_url)
-    _require_health("B", args.b_url)
+        _require_landmark_input(runtime_url)
 
-    a_ws = args.a_url.replace("http://", "ws://", 1) + "/ws/events"
-    b_ws = args.b_url.replace("http://", "ws://", 1) + "/ws"
+    perception_ws = runtime_url.replace("http://", "ws://", 1) + "/ws/events"
+    decision_ws = runtime_url.replace("http://", "ws://", 1) + "/ws"
 
     if args.attach:
-        status, body = _request(args.a_url, "GET", "/api/runtime/status")
+        status, body = _request(runtime_url, "GET", "/api/runtime/status")
         if status != 200 or not isinstance(body, dict) or not body.get("session_id"):
-            raise SystemExit("A 当前没有活跃会话，--attach 无从旁听")
+            raise SystemExit("统一后端当前没有活跃会话，--attach 无从旁听")
         session_id = str(body["session_id"])
         _say("驱动", f"旁听会话 {session_id}（state={body.get('state')}），Ctrl+C 退出")
     else:
         session_id = f"live-camera-debug-{uuid.uuid4().hex[:8]}"
-        _stop_active_a_session(args.a_url)
-        _start_sessions(args.a_url, args.b_url, session_id, args.scene_id)
+        _stop_active_a_session(runtime_url)
+        _start_sessions(runtime_url, runtime_url, session_id, args.scene_id)
 
     clock = StreamClock()
     responder = (
         None
         if args.attach
         else CResponder(
-            b_url=args.b_url,
+            b_url=runtime_url,
             scene_id=args.scene_id,
             clock=clock,
             respond_text=args.respond_text,
@@ -673,8 +669,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     observer = LinkObserver(verbose=args.verbose, responder=responder)
-    a_client = PerceptionEventClient(url=a_ws, session_id=session_id, on_event=observer.on_a_event)
-    b_client = PerceptionEventClient(url=b_ws, session_id=session_id, on_event=observer.on_b_event)
+    a_client = PerceptionEventClient(
+        url=perception_ws,
+        session_id=session_id,
+        on_event=observer.on_a_event,
+    )
+    b_client = PerceptionEventClient(
+        url=decision_ws,
+        session_id=session_id,
+        on_event=observer.on_b_event,
+    )
     a_client.start()
     b_client.start()
 
@@ -684,7 +688,7 @@ def main(argv: list[str] | None = None) -> int:
             while True:
                 time.sleep(0.5)
         else:
-            sender = _connect_camera_input(args.a_url)
+            sender = _connect_camera_input(runtime_url)
             _drive_scenario(
                 sender,
                 session_id,
@@ -705,7 +709,7 @@ def main(argv: list[str] | None = None) -> int:
         a_client.stop()
         b_client.stop()
         if not args.attach:
-            _stop_sessions(args.a_url, args.b_url, session_id)
+            _stop_sessions(runtime_url, runtime_url, session_id)
         with _PRINT_LOCK:
             print(observer.summary(), flush=True)
     return 0

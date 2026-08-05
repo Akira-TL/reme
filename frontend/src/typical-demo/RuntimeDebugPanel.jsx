@@ -95,10 +95,10 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       </button>
 
       {open && (
-        <section id="runtime-debug-panel" className="runtime-debug-panel" aria-label="ABC 后端实时调试信息">
+        <section id="runtime-debug-panel" className="runtime-debug-panel" aria-label="统一后端实时调试信息">
           <header>
             <div>
-              <small>ABC RUNTIME DEBUG</small>
+              <small>UNIFIED RUNTIME DEBUG</small>
               <h2>后端实时状态</h2>
             </div>
             <button type="button" onClick={() => setOpen(false)} aria-label="关闭调试面板">

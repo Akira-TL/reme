@@ -1,4 +1,4 @@
-const DEFAULT_HTTP_URL = "http://127.0.0.1:8100";
+const DEFAULT_HTTP_URL = "http://127.0.0.1:8770";
 
 export const RESPONSE_SCHEMA = "reme-interaction-response/v0-experiment";
 

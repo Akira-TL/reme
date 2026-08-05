@@ -45,7 +45,7 @@ function connectSocket(url, timeoutMs = 2500) {
 }
 
 export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) {
-  const [runtime, setRuntime] = useState({ state: "offline", reason: "正在检查 A 感知服务" });
+  const [runtime, setRuntime] = useState({ state: "offline", reason: "正在检查统一后端感知模块" });
   const [landmarkFrame, setLandmarkFrame] = useState(null);
   const [posture, setPosture] = useState(null);
   const [transition, setTransition] = useState(null);
@@ -58,7 +58,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
   const acceptedInputsRef = useRef([]);
   const lastLandmarksSentRef = useRef(0);
   const retry = useCallback(() => {
-    setRuntime({ state: "offline", reason: "正在重新连接 A 感知服务" });
+    setRuntime({ state: "offline", reason: "正在重新连接统一后端感知模块" });
     setRetryGeneration((value) => value + 1);
   }, []);
 
@@ -293,7 +293,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
         }, 1500);
       } catch (error) {
         if (!disposed && error.name !== "AbortError") {
-          setRuntime({ state: "offline", reason: error.message || "A 感知服务不可用", sessionId });
+          setRuntime({ state: "offline", reason: error.message || "统一后端感知模块不可用", sessionId });
         }
       }
     }

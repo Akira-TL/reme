@@ -5,7 +5,7 @@
 ```text
 examples/
 ├── decision/       # B 侧家庭上下文、MiMo mock 和预置语音
-├── integration/    # A/B 联调驱动
+├── integration/    # 统一运行时联调驱动
 └── motion/         # 早期动作 JSONL 示例，由 scripts/tools/run-legacy-motion-demo.sh 使用
 ```
 

@@ -721,7 +721,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         setConnection("error");
         setReason(error.code === "profile_mismatch"
           ? "B 会话画像不匹配 (profile_mismatch)"
-          : error.message || "B 决策服务不可用");
+          : error.message || "统一后端决策模块不可用");
       }
     }
 
