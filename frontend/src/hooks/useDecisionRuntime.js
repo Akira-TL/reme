@@ -166,8 +166,36 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     let pendingSceneSwitch = Promise.resolve();
     let vibrateTimer = 0;
     let ring = null;
+    let voiceReplyTimer = 0;
+    let voiceCaptureAbortController = null;
+    let sceneGeneration = 0;
     let voiceTurnDecisionId = null;
     const spokenDecisionIds = new Set();
+
+    function clearVoiceReplyTimer() {
+      if (voiceReplyTimer) {
+        window.clearTimeout(voiceReplyTimer);
+        voiceReplyTimer = 0;
+      }
+    }
+
+    function abortVoiceCapture() {
+      voiceCaptureAbortController?.abort();
+      voiceCaptureAbortController = null;
+    }
+
+    function scheduleVoiceReply(payload) {
+      clearVoiceReplyTimer();
+      const generation = sceneGeneration;
+      voiceReplyTimer = window.setTimeout(() => {
+        voiceReplyTimer = 0;
+        if (
+          !disposed
+          && generation === sceneGeneration
+          && (!payload?.scene_id || payload.scene_id === sceneRef.current)
+        ) runVoiceReply(payload);
+      }, 250);
+    }
 
     function stopAlarmLocal() {
       if (vibrateTimer) {
@@ -280,6 +308,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       if (payload?.alarm) return false;
       if (!payload?.elder_message) return false;
       if (!force && spokenDecisionIds.has(payload.decision_id)) return false;
+      const playbackGeneration = sceneGeneration;
       spokenDecisionIds.add(payload.decision_id);
       setVoice((current) => ({
         ...current,
@@ -292,7 +321,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           sceneId: payload.scene_id || sceneRef.current,
           decisionId: payload.decision_id,
         });
-        if (disposed) return;
+        if (disposed || playbackGeneration !== sceneGeneration) return false;
         setVoice((current) => ({
           ...current,
           stage: "playing",
@@ -302,10 +331,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         }));
         await playBase64Audio(speech.audio_b64, speech.audio_format);
       } catch (error) {
-        if (disposed) return;
+        if (disposed || playbackGeneration !== sceneGeneration) return false;
         if (payload.voice_asset) {
           try {
             await playAudioElement(new Audio(`${httpBase}${payload.voice_asset}`));
+            if (disposed || playbackGeneration !== sceneGeneration) return false;
             setVoice((current) => ({
               ...current,
               stage: "playing_fallback",
@@ -328,7 +358,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           return false;
         }
       }
-      if (disposed) return false;
+      if (disposed || playbackGeneration !== sceneGeneration) return false;
       setVoice((current) => ({
         ...current,
         stage: decisionAwaitsReply(payload) ? "waiting_reply" : "complete",
@@ -338,7 +368,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         && decisionAwaitsReply(payload)
         && !respondedDecisionIds.has(payload.decision_id)
       ) {
-        window.setTimeout(() => runVoiceReply(payload), 250);
+        scheduleVoiceReply(payload);
         return true;
       }
       return false;
@@ -352,6 +382,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         || respondedDecisionIds.has(target.decision_id)
         || voiceTurnDecisionId === target.decision_id
       ) return;
+      const replyGeneration = sceneGeneration;
       if (!createVoiceState().supported) {
         setVoice((current) => ({
           ...current,
@@ -378,12 +409,16 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         asrLatencyMs: null,
         error: "",
       }));
+      abortVoiceCapture();
+      const captureAbortController = new AbortController();
+      voiceCaptureAbortController = captureAbortController;
       try {
         const audioB64 = await recordWav({
           durationMs: replyWindowMs,
           sampleRate: 16000,
+          signal: captureAbortController.signal,
         });
-        if (disposed) return;
+        if (disposed || replyGeneration !== sceneGeneration) return;
         clearCountdown();
         markResponded(target.decision_id);
         setVoice((current) => ({
@@ -397,7 +432,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           timestampMs: performance.now(),
           audioB64,
         });
-        if (disposed) return;
+        if (disposed || replyGeneration !== sceneGeneration) return;
         const next = pluckDecision(result);
         const playReplyAudio = Boolean(result.audio_b64 && next?.state !== "resolved");
         if (next) {
@@ -421,18 +456,19 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         if (playReplyAudio) {
           await playBase64Audio(result.audio_b64, result.audio_format);
         }
-        if (disposed) return;
+        if (disposed || replyGeneration !== sceneGeneration) return;
         setVoice((current) => ({
           ...current,
           stage: decisionAwaitsReply(next) ? "waiting_reply" : "complete",
         }));
         voiceTurnDecisionId = null;
         if (decisionAwaitsReply(next) && !respondedDecisionIds.has(next.decision_id)) {
-          window.setTimeout(() => runVoiceReply(next), 250);
+          scheduleVoiceReply(next);
         }
       } catch (error) {
         voiceTurnDecisionId = null;
         clearCountdown();
+        if (disposed || replyGeneration !== sceneGeneration || error?.name === "AbortError") return;
         setVoice((current) => ({
           ...current,
           listening: false,
@@ -441,6 +477,10 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         }));
         if (!disposed && !respondedDecisionIds.has(target.decision_id)) {
           submitFor(target, "none", "timeout");
+        }
+      } finally {
+        if (voiceCaptureAbortController === captureAbortController) {
+          voiceCaptureAbortController = null;
         }
       }
     }
@@ -562,6 +602,19 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       },
       switchScene(nextSceneId) {
         if (!nextSceneId || nextSceneId === sceneRef.current) return pendingSceneSwitch;
+        sceneGeneration += 1;
+        clearVoiceReplyTimer();
+        abortVoiceCapture();
+        voiceTurnDecisionId = null;
+        clearCountdown();
+        setVoice((current) => ({
+          ...current,
+          listening: false,
+          stage: "idle",
+          transcript: "",
+          responseValue: "",
+          error: "",
+        }));
         pendingSceneSwitch = switchSessionScene(httpBase, {
           sessionId,
           sceneId: nextSceneId,
@@ -654,6 +707,18 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         });
       },
       resetScene() {
+        sceneGeneration += 1;
+        clearVoiceReplyTimer();
+        abortVoiceCapture();
+        voiceTurnDecisionId = null;
+        setVoice((current) => ({
+          ...current,
+          listening: false,
+          stage: "idle",
+          transcript: "",
+          responseValue: "",
+          error: "",
+        }));
         return requestSceneReset(httpBase, sceneRef.current)
           .then(() => {
             if (disposed) return;
@@ -733,6 +798,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       abortController.abort();
       if (countdown.timer) window.clearTimeout(countdown.timer);
       countdown = { decisionId: null, timer: 0 };
+      sceneGeneration += 1;
+      clearVoiceReplyTimer();
+      abortVoiceCapture();
       stopAlarmLocal();
       try {
         socket?.close();

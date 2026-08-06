@@ -37,7 +37,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
   const active = Boolean(
     enabled
       && decision.connection === "open"
-      && ["starting", "running", "input_unavailable"].includes(perception.runtime.state)
+      && perception.runtime.state === "running"
   );
 
   const phase = useMemo(() => {
