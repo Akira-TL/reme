@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { assertHardwareWebGl, inspectWebGlRenderer } from "../utils/gpu";
-import { createDemoLandmarks, drawSkeleton, mapLandmarks } from "../utils/pose";
+import { drawSkeleton, mapLandmarks } from "../utils/pose";
 
 // 本地资产（predev 拷贝 wasm、模型已入库）：演示现场零 CDN 依赖。
 const MP_WASM_URL = "/mediapipe/wasm";
@@ -162,7 +162,7 @@ export function useLiveDemoCamera({
 
     if (!navigator.mediaDevices?.getUserMedia) {
       cameraFallbackRef.current = true;
-      setCameraError("当前浏览器不支持摄像头，已进入动态骨架演示");
+      setCameraError("当前浏览器不支持摄像头，无法获取实时关键点");
       return;
     }
 
@@ -216,7 +216,7 @@ export function useLiveDemoCamera({
       setCameraReady(false);
       setCameraError(cameraFailure?.name === "NotAllowedError"
         ? "摄像头权限被拒绝，请允许权限后重试"
-        : "摄像头连接失败，已进入动态骨架演示");
+        : "摄像头连接失败，无法获取实时关键点");
     }
   }, []);
 
@@ -327,12 +327,15 @@ export function useLiveDemoCamera({
 
     function detect(now) {
       if (cameraFallbackRef.current || modelFallbackRef.current) {
-        localLandmarksRef.current = createDemoLandmarks(now);
+        localLandmarksRef.current = [];
         return;
       }
       const video = videoRef.current;
       const landmarker = landmarkerRef.current;
-      if (!cameraReadyRef.current || !modelReadyRef.current || !video || !landmarker) return;
+      if (!cameraReadyRef.current || !modelReadyRef.current || !video || !landmarker) {
+        localLandmarksRef.current = [];
+        return;
+      }
       if (now - lastInferenceAtRef.current < 75 || video.readyState < 2 || video.currentTime === lastVideoTimeRef.current) return;
       lastInferenceAtRef.current = now;
       lastVideoTimeRef.current = video.currentTime;
@@ -394,9 +397,7 @@ export function useLiveDemoCamera({
         backendActiveRef.current = backendActive;
         setBackendSkeletonActive(backendActive);
       }
-      const fallbackSkeleton = !backendActive
-        && (cameraFallbackRef.current || modelFallbackRef.current);
-      const detected = !fallbackSkeleton && displayLandmarks.length === 17;
+      const detected = displayLandmarks.length === 17;
       if (detected !== detectedRef.current) {
         detectedRef.current = detected;
         setPersonDetected(detected);
@@ -414,9 +415,7 @@ export function useLiveDemoCamera({
     ? "a_backend"
     : cameraReady && modelReady
       ? "c_gpu"
-      : cameraError || modelError
-        ? "demo_fallback"
-        : "unavailable";
+      : "unavailable";
 
   return {
     videoRef,
