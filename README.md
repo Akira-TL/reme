@@ -15,7 +15,7 @@ Reme 是面向家庭关怀场景的隐私优先演示系统：统一后端在本
   ├─ 进程内 EventBroker → EventIngest
   └─ decision：确定性状态机、MiMo 对话、care_decision
        ↓ /ws
-frontend/typical-demo.html
+frontend React 单页应用（/）
   ├─ 老人端演示
   └─ 家属端隐私视图
 ```
@@ -41,7 +41,7 @@ cp .env.example .env
 启动后访问：
 
 ```text
-http://127.0.0.1:4174/typical-demo.html
+http://127.0.0.1:4174/
 ```
 
 macOS 可双击根目录的 `启动Reme全链路演示.command`。该快捷方式统一转发到 `scripts/launchers/macos/`，实际启动逻辑位于 `scripts/demo/`。

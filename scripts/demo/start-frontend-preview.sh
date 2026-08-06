@@ -4,11 +4,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FRONTEND_DIR="${ROOT}/frontend"
-PAGE="${1:-index.html}"
 PORT="${REME_DEMO_PORT:-4174}"
 HOST="${REME_DEMO_HOST:-127.0.0.1}"
 NPM_CACHE="${REME_NPM_CACHE_DIR:-/private/tmp/reme-npm-cache}"
-URL="http://${HOST}:${PORT}/${PAGE#index.html}"
+URL="http://${HOST}:${PORT}/"
 
 cd "$FRONTEND_DIR"
 

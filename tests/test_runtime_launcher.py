@@ -64,7 +64,7 @@ def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> N
     assert "--a-events-url" not in commands["BACKEND"]
     assert commands["FRONTEND"][-3:] == ["--port", "14174", "--strictPort"]
     assert config.backend_http_url == "http://127.0.0.1:18770"
-    assert config.acceptance_url == "http://127.0.0.1:14174/typical-demo.html"
+    assert config.acceptance_url == "http://127.0.0.1:14174/"
     assert config.mimo_env_path == tmp_path / ".env"
 
 

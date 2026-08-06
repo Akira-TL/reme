@@ -13,7 +13,7 @@ scripts/
 
 ```bash
 scripts/demo/start-local-demo.sh
-scripts/demo/start-frontend-preview.sh typical-demo.html
+scripts/demo/start-frontend-preview.sh
 scripts/setup/setup-mimo-env.sh
 scripts/training/run-posture-sweep.sh
 scripts/tools/mimo-smoke.sh structured --rounds 1
