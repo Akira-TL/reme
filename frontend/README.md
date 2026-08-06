@@ -1,6 +1,6 @@
-# Reme 手机端交互 Demo
+# Reme 单机演示前端
 
-Reme 前端使用 Vite、React、TailwindCSS v4 与 MUI 构建。7 张高保真设计稿继续作为视觉基准，React 组件负责页面状态、场景切换、风险弹窗、设置交互、本地姿态识别，以及统一后端运行时接入。
+Reme 前端使用 Vite、React、TailwindCSS v4 与 MUI 构建。正式入口展示四场景单机验收页面，负责场景切换、本地姿态识别、统一后端运行时接入，以及老人端与家属端联动演示。
 
 ## 启动
 
@@ -13,7 +13,7 @@ scripts/demo/start-local-demo.sh
 然后访问：
 
 ```text
-http://127.0.0.1:4174/typical-demo.html
+http://127.0.0.1:4174/
 ```
 
 该命令以前台进程组方式启动统一后端和 Vite，按 `Ctrl+C` 会输出 `[FRONTEND] stopped`、`[BACKEND] stopped` 并统一退出；不使用 systemd，也不由后端静态托管前端。
@@ -49,13 +49,13 @@ VITE_REME_DECISION_HTTP_URL=http://127.0.0.1:8770
 
 ## 四场景单机现场验收
 
-独立入口：
+正式入口：
 
 ```text
-http://127.0.0.1:4174/typical-demo.html
+http://127.0.0.1:4174/
 ```
 
-macOS 可双击 `启动Reme典型场景演示.command`，也可以执行 `npm run dev`。
+旧地址 `/typical-demo.html` 仅保留为兼容跳转，并会保留 `?debug=1` 等查询参数。macOS 可双击 `启动Reme典型场景演示.command`，也可以执行 `npm run dev`。
 
 该页面在同一设备上显示老人端与家属手机端，并复用同一个电脑摄像头：
 
@@ -83,23 +83,21 @@ frontend/
 │   ├── services/           # 统一后端 HTTP/WS 地址与控制请求
 │   ├── typical-demo/       # 四场景单机现场验收
 │   ├── utils/              # 17 节点映射与 Canvas 绘制
-│   ├── App.jsx             # 产品状态与场景编排
-│   ├── index.css           # TailwindCSS + 精确坐标样式
-│   └── main.jsx            # React 入口和 MUI 主题
-├── index.html
-├── typical-demo.html
+│   ├── App.jsx             # 历史手机原型编排，当前不作为页面入口
+│   ├── index.css           # 历史手机原型样式
+│   └── main.jsx            # 历史手机原型入口，当前未挂载
+├── index.html              # 唯一正式页面入口
+├── typical-demo.html       # 旧地址兼容跳转
 ├── package.json
 └── vite.config.js
 ```
 
-## 交互
+## 入口约定
 
-- 首页：点击“外婆家”切换客厅实时、做饭、洗澡隐私和异常姿态场景。
-- 异常姿态：自动触发紧急弹窗，可模拟呼叫、实时查看和联系紧急联系人。
-- 看板：点击摘要、生活片段、对话、情绪曲线和心路历程查看 MUI 详情弹窗。
-- 设置：自动隐私保护和 MiMo 主动关怀使用 MUI Switch，其他条目打开详情。
-- 导航：首页、看板、设置三页使用 MUI BottomNavigation 管理。
-- 感知模块的 `fall_like_transition` 只显示为候选并等待决策模块处理，不直接触发紧急通知；原型中的“异常姿态”场景仍是独立的脚本演示。
+- `/` 是唯一正式入口，直接挂载 `src/typical-demo/main.jsx`。
+- `/typical-demo.html` 是历史兼容地址，只跳转到 `/`，不再挂载第二套 React 应用。
+- `src/main.jsx`、`src/App.jsx` 及旧手机原型组件暂时保留用于后续归档，但不会被生产入口加载。
+- 前端当前没有 React Router，也没有其他客户端页面路由。
 
 ## 构建
 

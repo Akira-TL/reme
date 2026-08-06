@@ -8,8 +8,8 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        mobile: fileURLToPath(new URL("./index.html", import.meta.url)),
-        typicalDemo: fileURLToPath(new URL("./typical-demo.html", import.meta.url)),
+        app: fileURLToPath(new URL("./index.html", import.meta.url)),
+        legacyTypicalDemo: fileURLToPath(new URL("./typical-demo.html", import.meta.url)),
       },
     },
   },
