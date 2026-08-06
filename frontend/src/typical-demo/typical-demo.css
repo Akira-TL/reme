@@ -476,9 +476,10 @@ button { font: inherit; }
   cursor: pointer;
 }
 .runtime-debug-trigger svg { width: 19px; height: 19px; color: var(--accent); }
-.runtime-debug-trigger span { font-size: 12px; font-weight: 800; letter-spacing: .03em; }
-.runtime-debug-trigger i { width: 8px; height: 8px; margin-left: 3px; border-radius: 50%; background: #b3ada8; }
-.runtime-debug-trigger i.is-online { background: #37c052; box-shadow: 0 0 0 4px rgba(55,192,82,.16); }
+.runtime-debug-trigger.MuiButton-root { text-transform: none; }
+.runtime-debug-trigger .MuiButton-endIcon { margin-left: 5px; }
+.runtime-debug-trigger .debug-online-dot { width: 8px; height: 8px; border-radius: 50%; background: #b3ada8; }
+.runtime-debug-trigger .debug-online-dot.is-online { background: #37c052; box-shadow: 0 0 0 4px rgba(55,192,82,.16); }
 .runtime-debug-panel {
   position: absolute;
   left: 0;
@@ -525,7 +526,6 @@ button { font: inherit; }
 .dynamic-island { position: absolute; left: 50%; top: 7px; width: 74px; height: 22px; transform: translateX(-50%); border-radius: 99px; background: #050505; }
 .phone-header { display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 15px; }
 .phone-header b { font-size: 16px; }.phone-header span { font-size: 14px; }
-.phone-header i { margin-left: auto; width: 15px; height: 22px; border: 2px solid var(--accent); border-radius: 4px; }
 .phone-shell .scene-viewport { width: calc(100% - 20px); margin: 0 10px; border-radius: 12px; }
 .family-view-control { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 7px 10px 0; }
 .family-view-control .MuiButton-root { min-height: 27px; padding: 3px 8px; border-radius: 8px; font-size: 7px; white-space: nowrap; }
@@ -552,14 +552,16 @@ button { font: inherit; }
 .phone-timeline { margin: 0 15px; }
 .phone-timeline h3 { margin: 12px 0 7px; font-size: 12px; }
 .phone-timeline > div { position: relative; display: grid; grid-template-columns: 14px 40px 1fr; align-items: center; gap: 5px; min-height: 34px; font-size: 8px; }
-.phone-timeline i { position: relative; z-index: 1; width: 9px; height: 9px; border: 2px solid #fff; border-radius: 50%; background: #ffb56f; box-shadow: 0 0 0 1px #ffad60; }
+.phone-timeline .timeline-dot { position: relative; z-index: 1; width: 9px; height: 9px; padding: 1px; border: 2px solid #fff; border-radius: 50%; color: #ffad60; background: #ffb56f; box-shadow: 0 0 0 1px #ffad60; }
 .phone-timeline > div:not(:last-child)::after { content: ""; position: absolute; left: 4px; top: 20px; width: 1px; height: 26px; background: #ff8d31; }
 .phone-timeline time { font-weight: 650; }.phone-timeline span { color: #64615d; }
 
-.phone-nav { position: absolute; z-index: 3; left: 8px; right: 8px; bottom: 8px; display: grid; grid-template-columns: repeat(3,1fr); height: 58px; border: 1px solid #efedeb; border-radius: 15px; background: rgba(255,255,255,.94); box-shadow: 0 -8px 22px rgba(47,39,32,.04); backdrop-filter: blur(12px); }
-.phone-nav > span { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: #777; }
-.phone-nav svg { width: 20px; }.phone-nav small { font-size: 7px; }.phone-nav .active { color: var(--accent); }
-.heart-icon { height: 22px; font-size: 24px; line-height: 18px; }
+.phone-nav.MuiBottomNavigation-root { position: absolute; z-index: 3; left: 8px; right: 8px; bottom: 8px; height: 58px; border: 1px solid #efedeb; border-radius: 15px; background: rgba(255,255,255,.94); box-shadow: 0 -8px 22px rgba(47,39,32,.04); backdrop-filter: blur(12px); }
+.phone-nav .MuiBottomNavigationAction-root { min-width: 0; padding: 5px 8px; color: #777; }
+.phone-nav .MuiBottomNavigationAction-root.Mui-selected { color: var(--accent); }
+.phone-nav .MuiBottomNavigationAction-label { font-size: 7px; }
+.phone-nav .MuiBottomNavigationAction-label.Mui-selected { font-size: 7px; }
+.phone-nav svg { width: 20px; }
 .column-label { margin-top: 10px; font-size: 13px; letter-spacing: .08em; }
 
 .phone-shell.has-emergency::before { content: ""; position: absolute; z-index: 20; inset: 0; background: rgba(10,11,13,.52); backdrop-filter: blur(2px); }

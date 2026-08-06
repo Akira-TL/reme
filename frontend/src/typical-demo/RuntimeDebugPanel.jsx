@@ -1,5 +1,6 @@
 import BugReportRoundedIcon from "@mui/icons-material/BugReportRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
+import { Button, IconButton } from "@mui/material";
 import { useState } from "react";
 import { describePosture } from "../adapters/perception";
 import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
@@ -90,17 +91,16 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
 
   return (
     <div className={`runtime-debug ${open ? "is-open" : ""}`}>
-      <button
-        type="button"
+      <Button
         className="runtime-debug-trigger"
+        startIcon={<BugReportRoundedIcon />}
+        endIcon={<span className={`debug-online-dot ${live.active ? "is-online" : ""}`} />}
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls="runtime-debug-panel"
       >
-        <BugReportRoundedIcon />
-        <span>Debug</span>
-        <i className={live.active ? "is-online" : ""} />
-      </button>
+        Debug
+      </Button>
 
       {open && (
         <section id="runtime-debug-panel" className="runtime-debug-panel" aria-label="统一后端实时调试信息">
@@ -109,9 +109,9 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <small>UNIFIED RUNTIME DEBUG</small>
               <h2>后端实时状态</h2>
             </div>
-            <button type="button" onClick={() => setOpen(false)} aria-label="关闭调试面板">
+            <IconButton onClick={() => setOpen(false)} aria-label="关闭调试面板" size="small">
               <CloseRoundedIcon />
-            </button>
+            </IconButton>
           </header>
 
           <div className="debug-section">
