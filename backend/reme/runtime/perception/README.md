@@ -205,6 +205,22 @@ uv run --extra pose python -m reme.runtime.server \
   --camera 0
 ```
 
+端侧 bundle 不改变现有协议。显式传入 bundle 内三份模型即可启用 INT8 MoveNet、保留鼻子的 INT16 姿态头和 INT16 跌倒头；未传入时继续使用历史默认模型：
+
+```bash
+BUNDLE=artifacts/training/edge-int8/bundle-manual-run
+uv run --extra pose python -m reme.runtime.server \
+  --host 127.0.0.1 \
+  --port 8770 \
+  --input-adapter local_camera \
+  --camera 0 \
+  --movenet-model "$BUNDLE/models/pose_int8.tflite" \
+  --posture-model "$BUNDLE/models/posture_head.int16.json" \
+  --fall-mil-model "$BUNDLE/models/fall_head.int16.json"
+```
+
+紧凑姿态头只使用鼻子和非面部身体节点，双眼、双耳不进入分类；MoveNet 仍输出标准 17 点以保持事件合同兼容。bundle manifest 会校验模型哈希，并明确标记目标 NPU 尚未验证。
+
 控制入口：
 
 ```text

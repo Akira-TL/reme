@@ -67,6 +67,15 @@ class PosturePredictor(Protocol):
     def predict_record(self, record: dict[str, Any]) -> PosturePrediction: ...
 
 
+class FallWindowPredictor(Protocol):
+    """Minimal probability seam shared by float and compact fall heads."""
+
+    threshold: float
+    window_config: FallWindowConfig
+
+    def predict_probability(self, features: Sequence[float]) -> float: ...
+
+
 @dataclass(frozen=True, slots=True)
 class FallBag:
     """One video-level multiple-instance bag with ordered pose samples."""
@@ -459,7 +468,7 @@ class FallMILScore:
 
 
 def score_fall_samples(
-    model: FallMILModel,
+    model: FallWindowPredictor,
     samples: Sequence[FallPoseSample],
     *,
     bag_id: str = "runtime",
