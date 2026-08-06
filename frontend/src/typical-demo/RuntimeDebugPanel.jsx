@@ -2,6 +2,7 @@ import BugReportRoundedIcon from "@mui/icons-material/BugReportRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import { useState } from "react";
 import { describePosture } from "../adapters/perception";
+import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
 const MIMO_MODEL = import.meta.env.VITE_REME_MIMO_MODEL || "mimo-v2.5";
 const MIMO_CONFIGURED = import.meta.env.VITE_REME_MIMO_CONFIGURED === "true";
@@ -51,6 +52,8 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
   const decision = decisionRuntime.decision;
   const mimoRequest = decisionRuntime.mimoRequest || {};
   const voice = live.voice || {};
+  const cameraHealth = getCameraHealth(camera);
+  const modelHealth = getModelHealth(camera);
 
   const rawSnapshot = {
     c: {
@@ -61,8 +64,11 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       gpu_renderer: camera.gpuRenderer || null,
       person_detected: camera.personDetected,
       skeleton_source: camera.skeletonSource || null,
+      skeleton_source_label: describeSkeletonSource(camera.skeletonSource),
       conversation_scenario: scene.conversationScenario || null,
       auto_conversation: Boolean(scene.autoConversation),
+      camera_error: camera.cameraError || null,
+      model_error: camera.modelError || null,
       error: camera.error || null,
     },
     a: {
@@ -112,15 +118,16 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
             <h3>C · 浏览器输入</h3>
             <div className="debug-grid">
               <DebugValue label="场景" value={scene.id} />
-              <DebugValue label="摄像头" value={camera.cameraReady ? "online" : "offline"} />
-              <DebugValue label="姿态模型" value={camera.modelReady ? "ready" : "loading / degraded"} />
+              <DebugValue label="摄像头" value={`${cameraHealth.state} · ${cameraHealth.label}`} />
+              <DebugValue label="姿态模型" value={`${modelHealth.state} · ${modelHealth.label}`} />
               <DebugValue label="推理后端" value={camera.inferenceBackend || "loading"} />
               <DebugValue label="GPU 渲染器" value={camera.gpuRenderer || "detecting"} wide />
               <DebugValue label="检测到人物" value={camera.personDetected ? "yes" : "no"} />
-              <DebugValue label="骨架显示来源" value={camera.skeletonSource || "—"} />
+              <DebugValue label="骨架显示来源" value={`${camera.skeletonSource || "—"} · ${describeSkeletonSource(camera.skeletonSource)}`} wide />
               <DebugValue label="场景对话任务" value={scene.conversationScenario || "disabled"} />
               <DebugValue label="自动对话" value={scene.autoConversation ? "enabled (2.5s)" : "manual / disabled"} />
-              {camera.error && <DebugValue label="C 错误" value={camera.error} wide />}
+              {camera.cameraError && <DebugValue label="摄像头错误" value={camera.cameraError} wide />}
+              {camera.modelError && <DebugValue label="GPU 模型错误" value={camera.modelError} wide />}
             </div>
           </div>
 

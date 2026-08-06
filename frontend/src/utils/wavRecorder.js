@@ -67,17 +67,27 @@ function toBase64(bytes) {
 export async function recordWav({
   durationMs = 4000,
   sampleRate = 16000,
+  signal = null,
 } = {}) {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
   const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextCtor) throw new Error("当前浏览器不支持 WebAudio 录音");
+  if (signal?.aborted) throw new DOMException("录音已取消", "AbortError");
 
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const context = new AudioContextCtor();
+  if (signal?.aborted) {
+    stream.getTracks().forEach((track) => track.stop());
+    throw new DOMException("录音已取消", "AbortError");
+  }
+
+  let context = null;
+  let source = null;
+  let processor = null;
   try {
+    context = new AudioContextCtor();
     await context.resume().catch(() => {});
-    const source = context.createMediaStreamSource(stream);
-    const processor = context.createScriptProcessor(4096, 1, 1);
+    source = context.createMediaStreamSource(stream);
+    processor = context.createScriptProcessor(4096, 1, 1);
     const chunks = [];
     processor.onaudioprocess = (event) => {
       chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
@@ -85,18 +95,50 @@ export async function recordWav({
     source.connect(processor);
     processor.connect(context.destination);
 
-    await new Promise((resolve) => window.setTimeout(resolve, durationMs));
+    await new Promise((resolve, reject) => {
+      let timer = window.setTimeout(finish, durationMs);
 
-    processor.onaudioprocess = null;
-    source.disconnect();
-    processor.disconnect();
+      function cleanup() {
+        if (timer) window.clearTimeout(timer);
+        timer = 0;
+        signal?.removeEventListener("abort", cancel);
+      }
+
+      function finish() {
+        cleanup();
+        resolve();
+      }
+
+      function cancel() {
+        cleanup();
+        reject(new DOMException("录音已取消", "AbortError"));
+      }
+
+      if (signal?.aborted) cancel();
+      else signal?.addEventListener("abort", cancel, { once: true });
+    });
 
     const recorded = mergeChunks(chunks);
     if (!recorded.length) throw new Error("未采集到音频数据");
     const resampled = resampleLinear(recorded, context.sampleRate, sampleRate);
     return toBase64(encodeWav(resampled, sampleRate));
   } finally {
+    if (processor) {
+      processor.onaudioprocess = null;
+      try {
+        processor.disconnect();
+      } catch {
+        // 节点可能已断开
+      }
+    }
+    if (source) {
+      try {
+        source.disconnect();
+      } catch {
+        // 节点可能已断开
+      }
+    }
     stream.getTracks().forEach((track) => track.stop());
-    context.close().catch(() => {});
+    context?.close().catch(() => {});
   }
 }

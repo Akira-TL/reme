@@ -65,7 +65,7 @@ class LocalDemoConfig:
 
     @property
     def acceptance_url(self) -> str:
-        return f"http://{self.host}:{self.frontend_port}/typical-demo.html"
+        return f"http://{self.host}:{self.frontend_port}/"
 
 
 @dataclass(slots=True)

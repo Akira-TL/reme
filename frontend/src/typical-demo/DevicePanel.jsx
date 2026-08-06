@@ -1,6 +1,11 @@
 import { SceneViewport } from "./SceneViewport";
+import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
 export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
+  const cameraHealth = getCameraHealth(camera);
+  const modelHealth = getModelHealth(camera);
+  const skeletonSource = describeSkeletonSource(camera.skeletonSource);
+
   return (
     <section className={`device-panel tone-${scene.tone}`} aria-label="家中实时画面">
       <header className="panel-heading device-panel-heading-simple">
@@ -10,12 +15,28 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
         </div>
       </header>
 
+      <div className="device-health-strip" aria-label="家中设备运行状态">
+        <span className={`device-health-badge status-${cameraHealth.state}`} title={cameraHealth.detail}>
+          {cameraHealth.label}
+        </span>
+        <span className={`device-health-badge status-${modelHealth.state}`} title={modelHealth.detail}>
+          {modelHealth.label}
+        </span>
+        <span className={`device-health-badge source-${camera.skeletonSource}`} title={skeletonSource}>
+          {skeletonSource}
+        </span>
+      </div>
+
       <SceneViewport
         sceneId={scene.id}
         backgroundImage={scene.backgroundImage}
         aspectRatio={camera.aspectRatio}
         canvasRef={canvasRef}
         cameraReady={camera.cameraReady}
+        cameraError={camera.cameraError}
+        modelReady={camera.modelReady}
+        modelError={camera.modelError}
+        inferenceBackend={camera.inferenceBackend}
         viewMode={viewMode}
         skeletonSource={camera.skeletonSource}
         showStatus={false}

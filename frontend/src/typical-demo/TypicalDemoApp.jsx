@@ -1,4 +1,5 @@
 import FullscreenRoundedIcon from "@mui/icons-material/FullscreenRounded";
+import MemoryRoundedIcon from "@mui/icons-material/MemoryRounded";
 import RestartAltRoundedIcon from "@mui/icons-material/RestartAltRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import { Button } from "@mui/material";
@@ -7,6 +8,7 @@ import { AcceptanceControls } from "./AcceptanceControls";
 import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
 import { RuntimeDebugPanel } from "./RuntimeDebugPanel";
+import { getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus";
 import { DEMO_SCENES } from "./scenes";
 import { useFallLiveLink } from "./useFallLiveLink";
 import { useLiveDemoCamera } from "./useLiveDemoCamera";
@@ -77,7 +79,9 @@ export function TypicalDemoApp() {
     personDetected,
     backendSkeletonActive,
     skeletonSource,
-    error: cameraError,
+    cameraError,
+    modelError,
+    error: cameraRuntimeError,
     retry: retryCamera,
   } = useLiveDemoCamera({
     deviceViewMode,
@@ -104,20 +108,28 @@ export function TypicalDemoApp() {
     personDetected,
     backendSkeletonActive,
     skeletonSource,
-    error: cameraError,
+    cameraError,
+    modelError,
+    error: cameraRuntimeError,
     retry: retryCamera,
   }), [
     backendSkeletonActive,
     cameraAspectRatio,
     cameraError,
     cameraReady,
+    cameraRuntimeError,
     gpuRenderer,
     inferenceBackend,
+    modelError,
     modelReady,
     personDetected,
     retryCamera,
     skeletonSource,
   ]);
+
+  const cameraHealth = getCameraHealth(cameraState);
+  const modelHealth = getModelHealth(cameraState);
+  const linkHealth = getLinkHealth(live);
 
   const selectScene = useCallback((nextScene) => {
     setSceneId(nextScene);
@@ -245,11 +257,23 @@ export function TypicalDemoApp() {
           <div><h1>Reme 家庭关怀演示</h1><p>在本地理解日常状态，需要时再主动询问并提醒家人</p></div>
         </div>
         <div className="topbar-actions">
-          <span className={`camera-health ${cameraReady ? "is-online" : ""}`}>
-            <VideocamRoundedIcon />{cameraReady ? "家中摄像头已连接" : "正在连接家中摄像头"}
+          <span
+            className={`camera-health status-${cameraHealth.state}`}
+            title={cameraHealth.detail}
+          >
+            <VideocamRoundedIcon />{cameraHealth.label}
           </span>
-          <span className={`camera-health live-link-health ${liveActive ? "is-online" : ""}`}>
-            {liveActive ? "关怀链路已就绪" : "正在连接关怀链路"}
+          <span
+            className={`camera-health status-${modelHealth.state}`}
+            title={modelHealth.detail}
+          >
+            <MemoryRoundedIcon />{modelHealth.label}
+          </span>
+          <span
+            className={`camera-health live-link-health status-${linkHealth.state}`}
+            title={linkHealth.detail}
+          >
+            {linkHealth.label}
           </span>
           <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>进入全屏</Button>
         </div>

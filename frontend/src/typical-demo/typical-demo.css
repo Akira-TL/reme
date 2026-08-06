@@ -52,7 +52,7 @@ button { font: inherit; }
 .brand-lockup h1 { margin: 0; font-size: clamp(19px, 2vw, 28px); line-height: 1.15; letter-spacing: -0.02em; }
 .brand-lockup p { margin: 5px 0 0; color: #777; font-size: 13px; }
 
-.topbar-actions { display: flex; align-items: center; gap: 12px; }
+.topbar-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px 12px; }
 .topbar-actions .MuiButton-root {
   min-height: 40px;
   padding-inline: 16px;
@@ -70,16 +70,26 @@ button { font: inherit; }
   font-weight: 650;
 }
 .camera-health svg { width: 19px; }
-.camera-health.is-online { color: #238e35; }
+.camera-health.status-online, .camera-health.is-online { color: #238e35; }
+.camera-health.status-loading { color: #8a6a2b; }
+.camera-health.status-degraded { color: #c04f25; }
 .live-link-health {
   padding: 5px 11px;
   border-radius: 999px;
   border: 1px solid #d8d2c6;
   background: #f4f1ea;
 }
-.live-link-health.is-online {
+.live-link-health.is-online, .live-link-health.status-online {
   border-color: #9fd8ae;
   background: #ecf8ef;
+}
+.live-link-health.status-loading {
+  border-color: #e2cf9c;
+  background: #fff9e8;
+}
+.live-link-health.status-degraded {
+  border-color: #efb19e;
+  background: #fff1ed;
 }
 
 .scene-tabs {
@@ -161,6 +171,11 @@ button { font: inherit; }
 }
 .source-state i { width: 7px; height: 7px; border-radius: 50%; background: #bbb; }
 .source-state i.is-online { background: #2ba03d; box-shadow: 0 0 0 4px rgba(43,160,61,0.1); }
+.device-health-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: -3px 0 10px; }
+.device-health-badge { max-width: 100%; overflow: hidden; padding: 5px 8px; border: 1px solid #dedbd7; border-radius: 999px; color: #69645f; background: #f7f5f2; font-size: 9px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.device-health-badge.status-online, .device-health-badge.source-a_backend, .device-health-badge.source-c_gpu { border-color: #b9ddc1; color: #237d34; background: #eff9f1; }
+.device-health-badge.status-loading, .device-health-badge.source-unavailable { border-color: #e4d4aa; color: #896b2f; background: #fff9e9; }
+.device-health-badge.status-degraded, .device-health-badge.source-demo_fallback { border-color: #efb9a8; color: #ad4d2d; background: #fff2ee; }
 
 .scene-viewport {
   position: relative;
@@ -325,7 +340,10 @@ button { font: inherit; }
 .viewport-live { left: 3%; color: #23973a; }
 .viewport-privacy { right: 3%; color: #222; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #23973a; box-shadow: 0 0 0 0 rgba(35,151,58,.4); animation: livePulse 1.8s infinite; }
-.live-dot.is-waiting { background: #c59032; }
+.live-dot.is-waiting, .live-dot.is-loading { background: #c59032; animation: none; }
+.live-dot.is-degraded { background: #d9542b; animation: none; }
+.viewport-live.status-loading { color: #8a6a2b; }
+.viewport-live.status-degraded, .viewport-privacy.status-degraded { color: #b94725; background: rgba(255,244,240,.94); }
 .night-time { position: absolute; z-index: 10; left: 3%; bottom: 4%; padding: 5px 8px; border-radius: 8px; color: #f0c995; background: rgba(17,15,16,.7); font-size: 11px; font-weight: 750; letter-spacing: .08em; }
 
 .device-status {

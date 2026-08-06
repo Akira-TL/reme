@@ -1,5 +1,5 @@
 {
-  "name": "reme-mobile-demo",
+  "name": "reme-demo-frontend",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "node --test src/adapters/perception.test.js src/utils/gpu.test.js",
+    "test": "node --test src/adapters/perception.test.js src/utils/gpu.test.js src/typical-demo/runtimeStatus.test.js",
     "predev": "node scripts/copy-mediapipe.mjs",
     "prebuild": "node scripts/copy-mediapipe.mjs"
   },
