@@ -26,15 +26,71 @@ from reme.runtime.perception.posture import (
     load_dataset_samples,
     save_posture_model,
 )
+from reme.runtime.perception.scene_bundle import MOVENET_KEYPOINT_NAMES
 
-FEATURE_COUNT = 68
+KEYPOINT_COUNT = len(MOVENET_KEYPOINT_NAMES)
+COORDINATE_FEATURE_COUNT = KEYPOINT_COUNT * 2
+SCORE_OFFSET = COORDINATE_FEATURE_COUNT
+GEOMETRY_OFFSET = SCORE_OFFSET + KEYPOINT_COUNT
+GEOMETRY_FEATURE_COUNT = 17
+FEATURE_COUNT = GEOMETRY_OFFSET + GEOMETRY_FEATURE_COUNT
 UNKNOWN_INDEX = POSTURE_LABELS.index("unknown")
+FACE_KEYPOINTS = (
+    "left_eye",
+    "right_eye",
+    "left_ear",
+    "right_ear",
+)
+BODY_KEYPOINTS = MOVENET_KEYPOINT_NAMES[5:]
+CORE_BODY_KEYPOINTS = (
+    "left_shoulder",
+    "right_shoulder",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle",
+)
+HEAD_TRACKING_KEYPOINT = "nose"
+HEAD_TRACKING_MODES = ("nose_body_geometry", "nose_core_geometry")
+
+
+def _feature_indices_for_keypoints(keypoint_names: Sequence[str]) -> np.ndarray:
+    keypoint_indices = [MOVENET_KEYPOINT_NAMES.index(name) for name in keypoint_names]
+    coordinate_indices = [
+        feature_index
+        for keypoint_index in keypoint_indices
+        for feature_index in (keypoint_index * 2, keypoint_index * 2 + 1)
+    ]
+    score_indices = [SCORE_OFFSET + keypoint_index for keypoint_index in keypoint_indices]
+    return np.asarray(
+        [
+            *coordinate_indices,
+            *score_indices,
+            *range(GEOMETRY_OFFSET, FEATURE_COUNT),
+        ],
+        dtype=np.int64,
+    )
+
+
+FEATURE_MODE_KEYPOINTS: dict[str, tuple[str, ...]] = {
+    "all": MOVENET_KEYPOINT_NAMES,
+    "body_geometry": BODY_KEYPOINTS,
+    "nose_body_geometry": (HEAD_TRACKING_KEYPOINT, *BODY_KEYPOINTS),
+    "nose_core_geometry": (HEAD_TRACKING_KEYPOINT, *CORE_BODY_KEYPOINTS),
+    "geometry": (),
+}
 FEATURE_MODES: dict[str, np.ndarray] = {
     "all": np.arange(FEATURE_COUNT, dtype=np.int64),
-    "body_geometry": np.asarray(
-        [*range(10, 34), *range(39, 51), *range(51, 68)], dtype=np.int64
+    "body_geometry": _feature_indices_for_keypoints(BODY_KEYPOINTS),
+    "nose_body_geometry": _feature_indices_for_keypoints(
+        FEATURE_MODE_KEYPOINTS["nose_body_geometry"]
     ),
-    "geometry": np.arange(51, 68, dtype=np.int64),
+    "nose_core_geometry": _feature_indices_for_keypoints(
+        FEATURE_MODE_KEYPOINTS["nose_core_geometry"]
+    ),
+    "geometry": np.arange(GEOMETRY_OFFSET, FEATURE_COUNT, dtype=np.int64),
 }
 SEEDS = (42, 2026)
 LEARNING_RATES = (0.01, 0.03)
@@ -427,8 +483,11 @@ def train_grouped_posture(index_path: Path, output_dir: Path) -> ConfigResult:
                         epochs=400,
                     )
                 )
+    eligible_results = [item for item in results if item.mode in HEAD_TRACKING_MODES]
+    if not eligible_results:
+        raise RefineError("no head-tracking posture candidates were evaluated")
     selected = max(
-        results,
+        eligible_results,
         key=lambda item: (
             item.selection_score,
             item.minimum_known_f1,
@@ -458,7 +517,15 @@ def train_grouped_posture(index_path: Path, output_dir: Path) -> ConfigResult:
         "dataset_index": str(index_path.resolve()),
         "sample_count": int(features.shape[0]),
         "scene_count": len(set(scene_ids.tolist())),
-        "selection_basis": "oof_macro_f1_plus_0.2_times_minimum_known_class_f1",
+        "selection_basis": (
+            "best head-tracking mode by oof_macro_f1_plus_0.2_times_"
+            "minimum_known_class_f1"
+        ),
+        "head_tracking": {
+            "proxy_keypoint": HEAD_TRACKING_KEYPOINT,
+            "required_modes": list(HEAD_TRACKING_MODES),
+            "ignored_face_keypoints": list(FACE_KEYPOINTS),
+        },
         "selected": _config_payload(selected, include_scene=True),
         "candidates": [
             _config_payload(item, include_scene=False)
@@ -468,7 +535,13 @@ def train_grouped_posture(index_path: Path, output_dir: Path) -> ConfigResult:
             )
         ],
         "feature_modes": {
-            name: [int(value) for value in indices.tolist()]
+            name: {
+                "feature_indices": [int(value) for value in indices.tolist()],
+                "keypoints": list(FEATURE_MODE_KEYPOINTS[name]),
+                "feature_count": int(indices.size),
+                "retains_head_tracking": HEAD_TRACKING_KEYPOINT
+                in FEATURE_MODE_KEYPOINTS[name],
+            }
             for name, indices in FEATURE_MODES.items()
         },
         "claim_boundary": (
@@ -646,6 +719,9 @@ def run(source_run: Path, output_dir: Path) -> dict[str, object]:
         "elapsed_seconds": round(time.time() - started, 3),
         "posture": {
             "mode": selected_posture.mode,
+            "head_tracking_proxy": HEAD_TRACKING_KEYPOINT,
+            "ignored_face_keypoints": list(FACE_KEYPOINTS),
+            "retained_keypoints": list(FEATURE_MODE_KEYPOINTS[selected_posture.mode]),
             "seed": selected_posture.seed,
             "learning_rate": selected_posture.learning_rate,
             "oof_macro_f1": selected_posture.macro_f1,
