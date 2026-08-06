@@ -68,7 +68,7 @@ def test_mil_v3_scores_known_positive_training_bag() -> None:
     assert score.threshold == model.threshold
 
 
-def test_runtime_enhancer_upgrades_only_confirmed_uncertain_candidate() -> None:
+def test_runtime_enhancer_does_not_upgrade_mil_without_structural_confirmation() -> None:
     model = FallMILModel.load(_MODEL_PATH)
 
     class ConfirmingEnhancer(FallMILTransitionEnhancer):
@@ -79,8 +79,8 @@ def test_runtime_enhancer_upgrades_only_confirmed_uncertain_candidate() -> None:
 
     result = enhancer._enhance(_transition_event())
 
-    assert result.payload["transition"] == "fall_like_transition"
-    assert result.payload["transition_confidence"] == 0.91
+    assert result.payload["transition"] == "uncertain_transition"
+    assert result.payload["transition_confidence"] == 0.35
     assert result.payload["evidence"]["fall_mil_confirmed"] is True
     assert result.payload["evidence"]["deterministic_transition"] == "uncertain_transition"
 
