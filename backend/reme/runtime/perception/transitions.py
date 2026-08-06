@@ -49,6 +49,8 @@ class TransitionDetectorConfig:
     fall_center_drop: float = 0.20
     fall_peak_speed: float = 0.65
     fall_torso_change_deg: float = 45.0
+    fall_final_center_y: float = 0.65
+    fall_final_torso_deg: float = 45.0
     fall_max_duration_ms: float = 1400.0
     camera_jump_distance: float = 0.18
     camera_jump_residual: float = 0.035
@@ -74,6 +76,7 @@ class TransitionDetectorConfig:
         ratios = {
             "score_threshold": self.score_threshold,
             "min_visible_keypoint_ratio": self.min_visible_keypoint_ratio,
+            "fall_final_center_y": self.fall_final_center_y,
         }
         for field_name, value in ratios.items():
             if not math.isfinite(value) or not 0.0 <= value <= 1.0:
@@ -85,6 +88,7 @@ class TransitionDetectorConfig:
             "fall_center_drop": self.fall_center_drop,
             "fall_peak_speed": self.fall_peak_speed,
             "fall_torso_change_deg": self.fall_torso_change_deg,
+            "fall_final_torso_deg": self.fall_final_torso_deg,
             "camera_jump_distance": self.camera_jump_distance,
             "camera_jump_residual": self.camera_jump_residual,
         }
@@ -183,9 +187,13 @@ class _Sample:
 class _WindowEvidence:
     start_ms: float
     end_ms: float
+    center_start_y: float
+    center_end_y: float
     center_height_change: float
     maximum_center_drop: float
     peak_keypoint_speed: float
+    torso_start_deg: float
+    torso_end_deg: float
     torso_direction_change_deg: float
     maximum_torso_excursion_deg: float
     posture_before: str
@@ -422,9 +430,13 @@ class TransitionDetector:
             transition=transition,
             transition_confidence=confidence,
             evidence={
+                "center_start_y": round(evidence.center_start_y, 6),
+                "center_end_y": round(evidence.center_end_y, 6),
                 "center_height_change": round(evidence.center_height_change, 6),
                 "maximum_center_drop": round(evidence.maximum_center_drop, 6),
                 "peak_keypoint_speed": round(evidence.peak_keypoint_speed, 6),
+                "torso_start_deg": round(evidence.torso_start_deg, 3),
+                "torso_end_deg": round(evidence.torso_end_deg, 3),
                 "torso_direction_change_deg": round(evidence.torso_direction_change_deg, 3),
                 "maximum_torso_excursion_deg": round(evidence.maximum_torso_excursion_deg, 3),
                 "posture_before": evidence.posture_before,
@@ -466,8 +478,9 @@ class TransitionDetector:
             "large_torso_change": evidence.torso_direction_change_deg
             >= self.config.fall_torso_change_deg,
             "short_window": evidence.duration_ms <= self.config.fall_max_duration_ms,
-            "high_to_low_posture": evidence.posture_before in {"standing", "sitting"}
-            and evidence.posture_after == "lying",
+            "low_final_center": evidence.center_end_y >= self.config.fall_final_center_y,
+            "horizontal_final_torso": evidence.torso_end_deg
+            >= self.config.fall_final_torso_deg,
         }
         if all(fall_signals.values()):
             confidence = _clamp(
@@ -491,7 +504,10 @@ class TransitionDetector:
         rapid_drop_conflict = (
             fall_signals["rapid_center_drop"]
             and fall_signals["high_keypoint_speed"]
-            and not fall_signals["high_to_low_posture"]
+            and not (
+                fall_signals["low_final_center"]
+                and fall_signals["horizontal_final_torso"]
+            )
         )
         missing_posture_context = (
             evidence.posture_before == "unknown" or evidence.posture_after == "unknown"
@@ -575,12 +591,16 @@ def _window_evidence(samples: tuple[_Sample, ...]) -> _WindowEvidence:
     return _WindowEvidence(
         start_ms=samples[0].timestamp_ms,
         end_ms=samples[-1].timestamp_ms,
+        center_start_y=start_center,
+        center_end_y=end_center,
         center_height_change=end_center - start_center,
         maximum_center_drop=max(sample.center_y for sample in samples) - start_center,
         peak_keypoint_speed=max(
             _pair_speed(previous, current)
             for previous, current in zip(samples, samples[1:], strict=False)
         ),
+        torso_start_deg=start_angle,
+        torso_end_deg=end_angle,
         torso_direction_change_deg=abs(end_angle - start_angle),
         maximum_torso_excursion_deg=max(
             abs(sample.torso_angle_deg - start_angle) for sample in samples

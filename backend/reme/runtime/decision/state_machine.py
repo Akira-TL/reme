@@ -276,8 +276,8 @@ def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerCon
     advanced = _advance_clock(state, context.timestamp_ms)
     fall_event_id = _fall_preempt_event_id(advanced, context, config)
     if fall_event_id is not None:
-        # A new lying/fall danger condition outranks any lower-severity episode
-        # and immediately starts the elder check-in countdown for the live demo.
+        # A new temporally confirmed fall outranks any lower-severity episode
+        # and immediately starts the elder check-in countdown.
         return _fall_check_in(advanced, fall_event_id, config=config)
     if advanced.phase is not SessionPhase.MONITORING:
         return Directive(next_state=advanced)
