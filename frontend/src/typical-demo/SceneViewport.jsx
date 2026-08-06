@@ -1,5 +1,6 @@
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import WifiRoundedIcon from "@mui/icons-material/WifiRounded";
+import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
 export function SceneViewport({
   sceneId,
@@ -7,8 +8,12 @@ export function SceneViewport({
   aspectRatio,
   canvasRef,
   cameraReady,
+  cameraError = "",
+  modelReady = false,
+  modelError = "",
+  inferenceBackend = "loading",
   viewMode,
-  skeletonSource = "c_local",
+  skeletonSource = "unavailable",
   compact = false,
   showStatus = true,
 }) {
@@ -16,6 +21,12 @@ export function SceneViewport({
   const night = sceneId === "fall";
   const hideEnvironment = privacy && compact;
   const hasSceneBackground = Boolean(backgroundImage) && !hideEnvironment;
+  const cameraHealth = getCameraHealth({ cameraReady, cameraError });
+  const modelHealth = getModelHealth({ modelReady, modelError, inferenceBackend });
+  const sourceLabel = describeSkeletonSource(skeletonSource);
+  const liveCode = cameraHealth.state === "online"
+    ? "LIVE"
+    : cameraHealth.state === "degraded" ? "ERROR" : "WAITING";
 
   return (
     <div
@@ -47,22 +58,28 @@ export function SceneViewport({
 
       {showStatus && (
         <>
-          <div className="viewport-pill viewport-live">
-            <span className={cameraReady ? "live-dot" : "live-dot is-waiting"} />
-            <b>{cameraReady ? "LIVE" : "WAITING"}</b>
+          <div
+            className={`viewport-pill viewport-live status-${cameraHealth.state}`}
+            title={cameraHealth.detail}
+          >
+            <span className={`live-dot is-${cameraHealth.state}`} />
+            <b>{liveCode}</b>
             <WifiRoundedIcon />
-            <span>{cameraReady ? "已连接" : "连接中"}</span>
+            <span>{cameraHealth.label}</span>
           </div>
-          <div className="viewport-pill viewport-privacy">
+          <div
+            className={`viewport-pill viewport-privacy status-${modelHealth.state}`}
+            title={`${modelHealth.detail} · ${sourceLabel}`}
+          >
             <LockOutlinedIcon />
             <span>
               {privacy
-                ? "浴室仅显示姿态"
+                ? `浴室仅显示姿态 · ${sourceLabel}`
                 : viewMode === "video_skeleton"
-                  ? `${skeletonSource === "a_backend" ? "实时姿态" : "本地姿态"} + 现场画面`
+                  ? `${sourceLabel} + 现场画面`
                   : viewMode === "video"
                     ? "现场画面"
-                    : skeletonSource === "a_backend" ? "实时姿态画面" : "本地姿态画面"}
+                    : sourceLabel}
             </span>
           </div>
         </>

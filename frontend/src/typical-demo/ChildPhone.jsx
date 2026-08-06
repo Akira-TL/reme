@@ -63,6 +63,10 @@ export function ChildPhone({
           aspectRatio={camera.aspectRatio}
           canvasRef={canvasRef}
           cameraReady={camera.cameraReady}
+          cameraError={camera.cameraError}
+          modelReady={camera.modelReady}
+          modelError={camera.modelError}
+          inferenceBackend={camera.inferenceBackend}
           viewMode={viewMode}
           skeletonSource={camera.skeletonSource}
           compact
