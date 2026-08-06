@@ -55,7 +55,7 @@ VITE_REME_DECISION_HTTP_URL=http://127.0.0.1:8770
 http://127.0.0.1:4174/
 ```
 
-旧地址 `/typical-demo.html` 仅保留为兼容跳转，并会保留 `?debug=1` 等查询参数。macOS 可双击 `启动Reme典型场景演示.command`，也可以执行 `npm run dev`。
+前端不再提供第二个 HTML 入口。macOS 可双击 `启动Reme典型场景演示.command`，也可以执行 `npm run dev`。
 
 该页面在同一设备上显示老人端与家属手机端，并复用同一个电脑摄像头：
 
@@ -75,29 +75,23 @@ http://127.0.0.1:4174/
 ```text
 frontend/
 ├── src/
-│   ├── assets/             # 7 张高保真界面素材
-│   ├── components/         # 页面、导航、MUI 弹层与摄像头组件
 │   ├── adapters/           # 运行时 schema 校验和 17 节点映射
-│   ├── data/               # 场景、看板和设置文案
-│   ├── hooks/              # 摄像头、MediaPipe 与统一运行时生命周期
+│   ├── hooks/              # 统一运行时生命周期
 │   ├── services/           # 统一后端 HTTP/WS 地址与控制请求
-│   ├── typical-demo/       # 四场景单机现场验收
-│   ├── utils/              # 17 节点映射与 Canvas 绘制
-│   ├── App.jsx             # 历史手机原型编排，当前不作为页面入口
-│   ├── index.css           # 历史手机原型样式
-│   └── main.jsx            # 历史手机原型入口，当前未挂载
-├── index.html              # 唯一正式页面入口
-├── typical-demo.html       # 旧地址兼容跳转
+│   ├── typical-demo/       # 四场景页面、摄像头与状态展示
+│   ├── utils/              # GPU、骨架绘制与音频录制
+│   ├── main.jsx            # 唯一 React 挂载入口
+│   └── theme.js            # MUI 主题
+├── index.html              # Vite/React 单页应用壳
 ├── package.json
 └── vite.config.js
 ```
 
 ## 入口约定
 
-- `/` 是唯一正式入口，直接挂载 `src/typical-demo/main.jsx`。
-- `/typical-demo.html` 是历史兼容地址，只跳转到 `/`，不再挂载第二套 React 应用。
-- `src/main.jsx`、`src/App.jsx` 及旧手机原型组件暂时保留用于后续归档，但不会被生产入口加载。
-- 前端当前没有 React Router，也没有其他客户端页面路由。
+- `/` 是唯一正式入口；`index.html` 只负责加载 `src/main.jsx`，页面由 React 在浏览器中动态渲染。
+- 前端只有一个 Vite 构建入口，不再生成或维护 `typical-demo.html`。
+- 当前只有一个页面，不引入 React Router；后续出现多个客户端页面时再增加语义化路由。
 
 ## 构建
 
