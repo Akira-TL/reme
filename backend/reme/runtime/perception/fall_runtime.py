@@ -375,6 +375,7 @@ class FallMILTransitionEnhancer:
         payload = dict(event.payload)
         evidence = dict(payload.get("evidence") or {})
         evidence.update(self._model_evidence(score))
+        evidence["deterministic_transition"] = payload.get("transition")
         if continuous is not None and continuous.confirmed:
             evidence.update(continuous.evidence)
         payload["evidence"] = evidence
