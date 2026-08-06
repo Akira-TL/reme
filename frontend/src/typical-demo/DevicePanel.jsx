@@ -1,3 +1,8 @@
+import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
+import MemoryRoundedIcon from "@mui/icons-material/MemoryRounded";
+import RestartAltRoundedIcon from "@mui/icons-material/RestartAltRounded";
+import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
+import { Button } from "@mui/material";
 import { SceneViewport } from "./SceneViewport";
 import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
@@ -16,14 +21,14 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
       </header>
 
       <div className="device-health-strip" aria-label="家中设备运行状态">
-        <span className={`device-health-badge status-${cameraHealth.state}`} title={cameraHealth.detail}>
-          {cameraHealth.label}
+        <span className={`device-health-badge status-${cameraHealth.state} inline-flex items-center gap-1`} title={cameraHealth.detail}>
+          <VideocamRoundedIcon sx={{ fontSize: 12 }} />{cameraHealth.label}
         </span>
-        <span className={`device-health-badge status-${modelHealth.state}`} title={modelHealth.detail}>
-          {modelHealth.label}
+        <span className={`device-health-badge status-${modelHealth.state} inline-flex items-center gap-1`} title={modelHealth.detail}>
+          <MemoryRoundedIcon sx={{ fontSize: 12 }} />{modelHealth.label}
         </span>
-        <span className={`device-health-badge source-${camera.skeletonSource}`} title={skeletonSource}>
-          {skeletonSource}
+        <span className={`device-health-badge source-${camera.skeletonSource} inline-flex items-center gap-1`} title={skeletonSource}>
+          <AccountTreeRoundedIcon sx={{ fontSize: 12 }} />{skeletonSource}
         </span>
       </div>
 
@@ -43,9 +48,15 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
       />
 
       {camera.error && (
-        <button className="camera-error" type="button" onClick={camera.retry}>
+        <Button
+          className="camera-error"
+          color="error"
+          variant="outlined"
+          startIcon={<RestartAltRoundedIcon />}
+          onClick={camera.retry}
+        >
           {camera.error} · 点击重试
-        </button>
+        </Button>
       )}
     </section>
   );

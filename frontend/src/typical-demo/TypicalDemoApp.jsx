@@ -1,8 +1,14 @@
+import BathtubRoundedIcon from "@mui/icons-material/BathtubRounded";
+import DirectionsWalkRoundedIcon from "@mui/icons-material/DirectionsWalkRounded";
+import EmergencyRoundedIcon from "@mui/icons-material/EmergencyRounded";
 import FullscreenRoundedIcon from "@mui/icons-material/FullscreenRounded";
+import HubRoundedIcon from "@mui/icons-material/HubRounded";
 import MemoryRoundedIcon from "@mui/icons-material/MemoryRounded";
+import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
 import RestartAltRoundedIcon from "@mui/icons-material/RestartAltRounded";
+import SyncRoundedIcon from "@mui/icons-material/SyncRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
-import { Button } from "@mui/material";
+import { Button, ButtonBase } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AcceptanceControls } from "./AcceptanceControls";
 import { ChildPhone } from "./ChildPhone";
@@ -13,6 +19,13 @@ import { getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus"
 import { DEMO_SCENES } from "./scenes";
 import { useFallLiveLink } from "./useFallLiveLink";
 import { useLiveDemoCamera } from "./useLiveDemoCamera";
+
+const SCENE_ICONS = {
+  living: DirectionsWalkRoundedIcon,
+  kitchen: RestaurantRoundedIcon,
+  bathroom: BathtubRoundedIcon,
+  fall: EmergencyRoundedIcon,
+};
 
 export function TypicalDemoApp() {
   const [sceneId, setSceneId] = useState("fall");
@@ -276,25 +289,30 @@ export function TypicalDemoApp() {
             className={`camera-health live-link-health status-${linkHealth.state}`}
             title={linkHealth.detail}
           >
-            {linkHealth.label}
+            <HubRoundedIcon />{linkHealth.label}
           </span>
           <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>进入全屏</Button>
         </div>
       </header>
 
       <nav className="scene-tabs" aria-label="选择典型演示场景">
-        {DEMO_SCENES.map((item, index) => (
-          <button
-            type="button"
-            key={item.id}
-            className={sceneId === item.id ? "is-active" : ""}
-            onClick={() => selectScene(item.id)}
-          >
-            <small>0{index + 1}</small>
-            <span>{item.nav.replace(/^场景.：/, "")}</span>
-            <kbd>{index + 1}</kbd>
-          </button>
-        ))}
+        {DEMO_SCENES.map((item, index) => {
+          const SceneIcon = SCENE_ICONS[item.id];
+          return (
+            <ButtonBase
+              key={item.id}
+              className={sceneId === item.id ? "is-active" : ""}
+              onClick={() => selectScene(item.id)}
+            >
+              <small>0{index + 1}</small>
+              <span className="flex items-center gap-2">
+                <SceneIcon sx={{ fontSize: 17 }} />
+                {item.nav.replace(/^场景.：/, "")}
+              </span>
+              <kbd>{index + 1}</kbd>
+            </ButtonBase>
+          );
+        })}
       </nav>
 
       <div className="demo-workspace">
@@ -307,6 +325,7 @@ export function TypicalDemoApp() {
 
         <div className="sync-rail" aria-hidden="true">
           <span /><i /><span />
+          <SyncRoundedIcon className="text-orange-500" sx={{ fontSize: 18 }} />
           <b>实时同步</b>
         </div>
 
@@ -339,7 +358,9 @@ export function TypicalDemoApp() {
       <RuntimeDebugPanel camera={cameraState} live={live} scene={scene} />
 
       <footer className="demo-footer">
-        <button type="button" onClick={resetAcceptance}><RestartAltRoundedIcon />重新开始当前场景</button>
+        <Button size="small" variant="text" startIcon={<RestartAltRoundedIcon />} onClick={resetAcceptance}>
+          重新开始当前场景
+        </Button>
       </footer>
     </main>
   );
