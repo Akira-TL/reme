@@ -21,6 +21,7 @@ def _result(
         fall_triggered=triggered,
         duplicate_fall_events=duplicate,
         first_fall_event_end_ms=1000.0 if triggered else None,
+        fall_events=(),
         elapsed_seconds=0.1,
         mean_inference_ms=2.0,
         p95_inference_ms=2.5,
