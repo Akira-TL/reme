@@ -8,6 +8,7 @@ import { AcceptanceControls } from "./AcceptanceControls";
 import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
 import { RuntimeDebugPanel } from "./RuntimeDebugPanel";
+import { shouldAutoOpenFamilyVideo, shouldCloseFamilyVideo } from "./phoneState";
 import { getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus";
 import { DEMO_SCENES } from "./scenes";
 import { useFallLiveLink } from "./useFallLiveLink";
@@ -59,9 +60,10 @@ export function TypicalDemoApp() {
   const kitchenShared = Boolean(kitchenShareDecision);
   const kitchenNotification = kitchenShareDecision?.family_notification || "";
   const deviceViewMode = sceneId === "bathroom" ? "skeleton" : "video_skeleton";
-  const autoFamilyViewOpen = sceneId === "kitchen"
-    || (sceneId === "fall" && ["checking", "emergency", "resolved"].includes(effectivePhase));
-  const phoneViewMode = (autoFamilyViewOpen || familyViewOpen) && live.familyVideoAllowed
+  const autoFamilyViewOpen = shouldAutoOpenFamilyVideo(sceneId, effectivePhase);
+  const effectiveFamilyViewOpen = familyViewOpen
+    && !(sceneId === "fall" && shouldCloseFamilyVideo(effectivePhase));
+  const phoneViewMode = (autoFamilyViewOpen || effectiveFamilyViewOpen) && live.familyVideoAllowed
     ? "video_skeleton"
     : "skeleton";
   const skeletonColor = sceneId === "fall" && ["candidate", "checking"].includes(effectivePhase)
@@ -136,6 +138,7 @@ export function TypicalDemoApp() {
     setFamilyViewOpen(false);
     autoConversationRef.current = null;
   }, []);
+
 
   const markSafe = live.respondSafe;
 
@@ -317,7 +320,7 @@ export function TypicalDemoApp() {
           canvasRef={phoneCanvasRef}
           camera={cameraState}
           viewMode={phoneViewMode}
-          familyViewOpen={familyViewOpen}
+          familyViewOpen={effectiveFamilyViewOpen}
           autoFamilyViewOpen={autoFamilyViewOpen}
           familyVideoAllowed={live.familyVideoAllowed}
           onToggleFamilyView={() => setFamilyViewOpen((current) => !current)}

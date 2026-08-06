@@ -16,6 +16,10 @@ import {
   submitResponse,
   uploadDangerFrame,
 } from "../services/decisionClient";
+import {
+  shouldStopAlarmForDecision,
+  shouldStopAlarmForResponse,
+} from "../typical-demo/phoneState";
 import { recordWav } from "../utils/wavRecorder";
 
 let pendingSessionStop = Promise.resolve();
@@ -527,8 +531,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setDecision(payload);
       setHistory((current) => [payload, ...current].slice(0, 5));
 
-      // 任何新 decision 到达都清掉旧倒计时
+      // 任何新 decision 到达都清掉旧倒计时；已化解状态同步停止本地声光警报。
       clearCountdown();
+      if (shouldStopAlarmForDecision(payload)) clearAlarmState();
 
       if (!payload.alarm && !suppressVoice && voiceTurnDecisionId === null) {
         playDecisionVoice(payload).then((voiceHandled) => {
@@ -592,6 +597,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         const target = latestDecision;
         if (!target?.decision_id || respondedDecisionIds.has(target.decision_id)) return;
         markResponded(target.decision_id);
+        if (shouldStopAlarmForResponse(response)) {
+          clearVoiceReplyTimer();
+          abortVoiceCapture();
+          clearAlarmState();
+        }
         submitFor(target, response, source, text);
       },
       replayVoice() {
@@ -737,9 +747,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           return;
         }
         markResponded(target.decision_id);
-        submitFor(target, "card_confirmed", "family_input").then((succeeded) => {
-          if (succeeded && !disposed) clearAlarmState();
-        });
+        clearAlarmState();
+        submitFor(target, "card_confirmed", "family_input");
       },
       dismissAlarm() {
         clearAlarmState();
