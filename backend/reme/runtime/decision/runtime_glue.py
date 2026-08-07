@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from reme.runtime.decision.danger import DangerConfirmController, DangerRejectedError
-from reme.runtime.decision.policy import DecisionService
+from reme.runtime.decision.policy import DecisionPublisher, DecisionService
 from reme.runtime.decision.records import CareDecision, DecisionState
 from reme.runtime.decision.session import RuntimeSessionRegistry, SessionRegistryError
 from reme.runtime.decision.stream import EventIngest, LiveStreams
@@ -46,6 +46,20 @@ class PerceptionBridgeLike(Protocol):
     def start_for(self, session_id: str) -> None: ...
 
     def stop(self) -> None: ...
+
+
+class DecisionPublisherFanout:
+    """Publish one decision to independent sinks without cross-sink failure coupling."""
+
+    def __init__(self, *publishers: DecisionPublisher) -> None:
+        self._publishers = publishers
+
+    def publish_decision(self, decision: CareDecision) -> None:
+        for publisher in self._publishers:
+            try:
+                publisher.publish_decision(decision)
+            except Exception as exc:  # noqa: BLE001 - one sink must not suppress another
+                print(f"warning: decision publisher failed: {exc}")
 
 
 class RuntimeDecisionPublisher:

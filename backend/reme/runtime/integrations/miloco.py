@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol, cast
 from urllib.error import HTTPError, URLError
@@ -44,7 +45,10 @@ class MilocoWebhookConfig:
 
     url: str
     token: str
-    timeout_seconds: float = 3.0
+    # OpenClaw waits up to 15s for runner admission. Give that admission
+    # contract one second of client-side headroom while still staying far
+    # below Miloco's own 180s synchronous agent webhook wait.
+    timeout_seconds: float = 16.0
     max_attempts: int = 3
     retry_delay_seconds: float = 0.2
 
@@ -60,6 +64,23 @@ class MilocoWebhookConfig:
             raise MilocoConfigError("max_attempts must be positive")
         if self.retry_delay_seconds < 0:
             raise MilocoConfigError("retry_delay_seconds must be non-negative")
+
+
+def miloco_config_from_environment(
+    environ: Mapping[str, str] | None = None,
+) -> MilocoWebhookConfig | None:
+    """Read only Reme's dedicated OpenClaw hook URL/token pair."""
+
+    source = os.environ if environ is None else environ
+    url = source.get("REME_MILOCO_WEBHOOK_URL", "").strip()
+    token = source.get("REME_MILOCO_WEBHOOK_TOKEN", "").strip()
+    if not url and not token:
+        return None
+    if not url or not token:
+        raise MilocoConfigError(
+            "REME_MILOCO_WEBHOOK_URL and REME_MILOCO_WEBHOOK_TOKEN must both be configured"
+        )
+    return MilocoWebhookConfig(url=url, token=token)
 
 
 class MilocoWebhookTransport:

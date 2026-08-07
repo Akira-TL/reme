@@ -15,6 +15,7 @@ from reme.runtime.decision.records import (
     PrivacyMode,
     Uncertainty,
 )
+from reme.runtime.decision.runtime_glue import DecisionPublisherFanout
 from reme.runtime.integrations.emergency import (
     EmergencyDecisionPublisher,
     EmergencyEvent,
@@ -138,6 +139,32 @@ def test_event_id_is_stable_for_retries_and_distinct_across_scenes() -> None:
     assert first.event_id != other_scene.event_id
     assert "fall_demo_01" not in first.event_id
     assert "decision-0042" not in first.event_id
+
+
+class _RecordingDecisionPublisher:
+    def __init__(self) -> None:
+        self.decisions: list[CareDecision] = []
+
+    def publish_decision(self, decision: CareDecision) -> None:
+        self.decisions.append(decision)
+
+
+class _ExplodingDecisionPublisher:
+    def publish_decision(self, decision: CareDecision) -> None:
+        raise RuntimeError(f"simulated publisher failure for {decision.decision_id}")
+
+
+def test_decision_publisher_fanout_isolates_each_sink(capsys: Any) -> None:
+    first = _RecordingDecisionPublisher()
+    last = _RecordingDecisionPublisher()
+    fanout = DecisionPublisherFanout(first, _ExplodingDecisionPublisher(), last)
+    decision = _urgent_decision()
+
+    fanout.publish_decision(decision)
+
+    assert first.decisions == [decision]
+    assert last.decisions == [decision]
+    assert "warning: decision publisher failed" in capsys.readouterr().out
 
 
 class _BlockingTransport:
