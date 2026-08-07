@@ -161,13 +161,13 @@ def _mark_emitted(state: SessionState, skeleton: DecisionSkeleton) -> SessionSta
 
 
 def _resolved_skeleton(
-    template: TemplateId, *, include_card: CardStatus | None
+    template: TemplateId, *, include_card: CardStatus | None, need_dialogue: bool = False
 ) -> DecisionSkeleton:
     return DecisionSkeleton(
         state=DecisionState.RESOLVED,
         risk_level=0,
         action=DecisionAction.MARK_RESOLVED,
-        need_dialogue=True,
+        need_dialogue=need_dialogue,
         dialogue_goal=None,
         consent_required=False,
         response_timeout_ms=None,
@@ -177,9 +177,17 @@ def _resolved_skeleton(
 
 
 def _resolve(
-    state: SessionState, template: TemplateId, *, include_card: CardStatus | None = None
+    state: SessionState,
+    template: TemplateId,
+    *,
+    include_card: CardStatus | None = None,
+    need_dialogue: bool = False,
 ) -> Directive:
-    skeleton = _resolved_skeleton(template, include_card=include_card)
+    skeleton = _resolved_skeleton(
+        template,
+        include_card=include_card,
+        need_dialogue=need_dialogue,
+    )
     next_state = replace(_mark_emitted(state, skeleton), phase=SessionPhase.RESOLVED, risk_floor=0)
     return Directive(next_state=next_state, skeleton=skeleton)
 
@@ -434,7 +442,7 @@ def _kitchen_share_notification(state: SessionState) -> Directive:
         state=DecisionState.RESOLVED,
         risk_level=0,
         action=DecisionAction.NOTIFY_FAMILY,
-        need_dialogue=True,
+        need_dialogue=False,
         dialogue_goal=None,
         consent_required=False,
         response_timeout_ms=None,
@@ -453,7 +461,7 @@ def _on_elder_response(
 ) -> Directive:
     value = response.response
     if value is ResponseValue.SAFE:
-        return _resolve(state, TemplateId.SAFE_RESOLVED)
+        return _resolve(state, TemplateId.SAFE_RESOLVED, need_dialogue=True)
     if value is ResponseValue.NEED_HELP:
         if state.escalation is EscalationKind.FALL:
             return _family_alert(
@@ -638,7 +646,7 @@ def _on_family_notified_response(state: SessionState, response: InteractionRespo
         )
         return Directive(next_state=next_state, skeleton=skeleton)
     if value is ResponseValue.SAFE:
-        return _resolve(state, TemplateId.LATE_SAFE_RESOLVED)
+        return _resolve(state, TemplateId.LATE_SAFE_RESOLVED, need_dialogue=True)
     if value is ResponseValue.NEED_HELP:
         return Directive(next_state=state)
     return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
@@ -650,7 +658,7 @@ def _on_urgent_response(state: SessionState, response: InteractionResponse) -> D
         include_card = CardStatus.CONFIRMED if state.card_draft is not None else None
         return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=include_card)
     if value is ResponseValue.SAFE:
-        return _resolve(state, TemplateId.LATE_SAFE_RESOLVED)
+        return _resolve(state, TemplateId.LATE_SAFE_RESOLVED, need_dialogue=True)
     if value in (ResponseValue.NONE, ResponseValue.NEED_HELP):
         # An explicit help request cannot raise severity further; keep the
         # urgent decision on screen rather than erroring at the elder.
