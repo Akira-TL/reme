@@ -1,0 +1,19 @@
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Reme 单线字标">
+  <!-- 单线字形：笔画粗细与火柴人肢体同宽——名字和人是同一种笔画写出来的 -->
+  <g fill="none" stroke="#1E2E3E" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <!-- R -->
+    <path d="M 40 112 L 40 30"/>
+    <path d="M 40 30 L 62 30 A 22 22 0 0 1 62 74 L 40 74"/>
+    <path d="M 60 74 L 84 112"/>
+    <!-- e -->
+    <path d="M 101 78 L 159 78"/>
+    <path d="M 159 78 A 29 29 0 1 0 149 105"/>
+    <!-- m -->
+    <path d="M 178 112 L 178 54"/>
+    <path d="M 178 71 A 17 17 0 0 1 212 71 L 212 112"/>
+    <path d="M 212 71 A 17 17 0 0 1 246 71 L 246 112"/>
+    <!-- e -->
+    <path d="M 264 78 L 322 78"/>
+    <path d="M 322 78 A 29 29 0 1 0 312 105"/>
+  </g>
+</svg>

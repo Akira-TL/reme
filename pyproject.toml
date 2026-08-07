@@ -14,9 +14,6 @@ dependencies = [
   "numpy>=2.0",
 ]
 
-[project.scripts]
-reme-demo = "reme.demo:entrypoint"
-
 [project.optional-dependencies]
 dev = [
   "mypy>=1.14",
@@ -33,18 +30,23 @@ packages = ["backend/reme"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
-pythonpath = ["backend"]
+pythonpath = ["backend", "."]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = [".scratch"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 mypy_path = "backend"
 packages = ["reme"]
+
+[[tool.mypy.overrides]]
+module = ["cv2", "cv2.*", "ai_edge_litert", "ai_edge_litert.*"]
+ignore_missing_imports = true

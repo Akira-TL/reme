@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from reme.pose.geometry import (
+from reme.runtime.perception.geometry import (
     GEOMETRY_MODEL_SCHEMA_VERSION,
     GeometricPostureModel,
     GeometryError,
@@ -11,7 +11,7 @@ from reme.pose.geometry import (
     extract_geometry_features,
     save_geometry_model,
 )
-from reme.pose.scene_bundle import MOVENET_KEYPOINT_NAMES
+from reme.runtime.perception.scene_bundle import MOVENET_KEYPOINT_NAMES
 
 
 def _coords(label: str) -> list[tuple[float, float]]:

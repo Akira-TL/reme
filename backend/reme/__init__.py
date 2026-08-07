@@ -1,6 +1,3 @@
-"""Reme privacy-first care agent."""
+"""Reme privacy-first care agent runtime."""
 
-from reme.contracts import EventCandidate, EventType
-
-__all__ = ["EventCandidate", "EventType"]
 __version__ = "0.1.0"

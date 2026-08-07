@@ -26,9 +26,9 @@ The current demo heuristic uses torso rotation, downward center movement, elapse
 ## Run examples
 
 ```bash
-uv run reme-demo --scenario fall-no-response
-uv run reme-demo --input examples/motion/fall_like.jsonl --response no_response
-uv run reme-demo --input examples/motion/normal.jsonl
+scripts/tools/run-legacy-motion-demo.sh --scenario fall-no-response
+scripts/tools/run-legacy-motion-demo.sh --input examples/motion/fall_like.jsonl --response no_response
+scripts/tools/run-legacy-motion-demo.sh --input examples/motion/normal.jsonl
 ```
 
 ## Offline video adapter contract

@@ -2,10 +2,10 @@ import json
 import math
 from pathlib import Path
 
-from reme.pose.runtime import RuntimeEvent, RuntimeEventType
-from reme.pose.scene_bundle import MOVENET_KEYPOINT_NAMES
-from reme.pose.transition_eval import main as transition_eval_main
-from reme.pose.transitions import TransitionDetector, TransitionDetectorConfig
+from reme.runtime.perception.runtime import RuntimeEvent, RuntimeEventType
+from reme.runtime.perception.scene_bundle import MOVENET_KEYPOINT_NAMES
+from reme.runtime.perception.transition_eval import main as transition_eval_main
+from reme.runtime.perception.transitions import TransitionDetector, TransitionDetectorConfig
 
 
 def _frame(
@@ -225,6 +225,27 @@ def test_rapid_high_to_low_motion_is_fall_like() -> None:
     evidence = events[0].payload["evidence"]
     assert evidence["center_height_change"] > 0.2
     assert evidence["peak_keypoint_speed"] > 0.5
+
+
+def test_rapid_fall_geometry_does_not_require_lying_classification() -> None:
+    detector = TransitionDetector(session_id="session-1")
+    centers = [0.35, 0.36, 0.37, 0.43, 0.54, 0.65, 0.66, 0.66, 0.66]
+    angles = [0.0, 0.0, 2.0, 20.0, 52.0, 84.0, 86.0, 86.0, 86.0]
+    postures = ["standing"] * len(centers)
+
+    events = _run_trajectory(
+        detector,
+        centers=centers,
+        angles=angles,
+        postures=postures,
+        interval_ms=100.0,
+    )
+
+    assert [event.payload["transition"] for event in events] == ["fall_like_transition"]
+    reasons = events[0].payload["evidence"]["reasons"]
+    assert "low_final_center" in reasons
+    assert "horizontal_final_torso" in reasons
+    assert "high_to_low_posture" not in reasons
 
 
 def test_single_lying_frame_does_not_emit_fall() -> None:

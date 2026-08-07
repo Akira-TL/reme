@@ -2,7 +2,7 @@ import json
 import socket
 from pathlib import Path
 
-from reme.demo import main
+from experiments.legacy_motion_demo.demo import main
 
 
 def test_demo_cli_runs_without_network_or_raw_media_artifacts(

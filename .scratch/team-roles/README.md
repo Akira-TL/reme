@@ -75,9 +75,9 @@ C → B：InteractionResponse
 3. `.scratch/abc-interface/spec.md`：A/B/C 当前共享实验接口；
 4. 本目录链接的 A / B / C / D 工作规格：各角色内部执行范围；
 5. `.scratch/handoff/`：讨论基线和移交背景；
-6. `planning/`：产品、比赛材料和历史规划基线。
+6. `docs/product/`：产品、比赛材料和历史规划基线。
 
-`planning/` 中的“冻结版”不覆盖后续实验结果或 ADR。产品叙事由 D 根据当前实测结果和已接受 ADR 持续校正。
+`docs/product/` 中的“冻结版”不覆盖后续实验结果或 ADR。产品叙事由 D 根据当前实测结果和已接受 ADR 持续校正。
 
 ## 4. 职责接口摘要
 

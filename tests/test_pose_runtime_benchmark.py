@@ -5,13 +5,13 @@ import time
 from collections.abc import Callable
 from typing import cast
 
-from reme.pose.runtime import (
+from reme.runtime.perception.runtime import (
     ModeProfile,
     RuntimeEvent,
     RuntimeEventType,
     RuntimeSessionRequest,
 )
-from reme.pose.runtime_benchmark import (
+from reme.runtime.perception.runtime_benchmark import (
     AcceptanceThresholds,
     MetricSeries,
     SessionRecorder,
@@ -19,7 +19,7 @@ from reme.pose.runtime_benchmark import (
     evaluate_acceptance,
     render_markdown,
 )
-from reme.pose.runtime_server import (
+from reme.runtime.perception.runtime_server import (
     EventBroker,
     RuntimeHTTPServer,
     RuntimePerceptionController,
@@ -240,7 +240,7 @@ def test_markdown_summary_exposes_measured_values_and_failures() -> None:
         "schema_version": "reme-runtime-reliability/v0-experiment",
         "started_at": "2026-08-01T15:00:00Z",
         "finished_at": "2026-08-01T15:10:05Z",
-        "command": "python -m reme.pose.runtime_benchmark",
+        "command": "python -m reme.runtime.perception.runtime_benchmark",
         "requested_camera_seconds": 600.0,
         "metrics": {
             "camera_active_seconds": 600.1,

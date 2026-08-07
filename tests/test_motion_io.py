@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from reme.motion_io import MotionDataError, load_motion_jsonl
+from experiments.legacy_motion_demo.motion_io import MotionDataError, load_motion_jsonl
 
 
 def test_load_motion_jsonl_reads_normalized_observations(tmp_path: Path) -> None:

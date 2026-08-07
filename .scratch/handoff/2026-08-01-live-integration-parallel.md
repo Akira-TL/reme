@@ -19,6 +19,15 @@ WS   /ws/events?session_id=<session_id>
 
 切换session时旧连接关闭，旧事件不会进入新会话。
 
+> **B 侧核对补注（2026-08-02，依据 `56e91e3` 后的代码）**：上面这份清单已被 A 自己的实现超过——
+> `runtime_server.py::derive_live_perception_events` 现在每帧派生并推送**三类**事件：`FrameLandmarks`、
+> `PostureObservation`、以及 `TransitionEvent`（`transition_detector.process_runtime_event` 的产物）。
+> 对 B 的意义：转变事件**已经带有真实 `evidence`**（`maximum_center_drop` / `peak_keypoint_speed` /
+> `torso_direction_change_deg` / `posture_before|after` / `visible_keypoint_ratio` / `window_duration_ms` 等，
+> 其中位移类量以归一化画面高度表示），B 的空间线索通道因此具备激活条件。
+> ⚠️ 命名提醒：`maximum_center_drop` 的 center 是 `_body_center_y`（躯干关键点 y 的中位数），
+> **是躯干中点而非质心**；B 侧不得把它当作 CoM 使用或对外宣称（依据 docs/references/cognition-evidence.md R12/R13）。
+
 ## B可并行修改
 
 1. 增加与A同形状的运行时启动、停止和状态接口；

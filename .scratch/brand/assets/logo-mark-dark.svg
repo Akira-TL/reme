@@ -1,0 +1,29 @@
+<svg viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Reme 图形标（深色背景版）">
+  <rect width="240" height="240" rx="20" fill="#0A141C"/>
+  <path d="M 42 208 Q 122 248 200 196" fill="none" stroke="#E8794A" stroke-width="13" stroke-linecap="round"/>
+  <g fill="none" stroke="#F5EFE6" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="118" cy="52" r="16" stroke-width="9.5"/>
+    <path d="M 94 92 L 142 90"/>
+    <path d="M 94 92 L 103 142"/>
+    <path d="M 142 90 L 131 142"/>
+    <path d="M 103 142 L 131 142"/>
+    <path d="M 94 92 L 80 118 L 74 144"/>
+    <path d="M 142 90 L 166 74 L 178 44"/>
+    <path d="M 103 142 L 98 170 L 96 196"/>
+    <path d="M 131 142 L 138 170 L 143 196"/>
+  </g>
+  <g fill="#F5EFE6">
+    <circle cx="94" cy="92" r="7"/>
+    <circle cx="142" cy="90" r="7"/>
+    <circle cx="80" cy="118" r="7"/>
+    <circle cx="166" cy="74" r="7"/>
+    <circle cx="74" cy="144" r="7"/>
+    <circle cx="103" cy="142" r="7"/>
+    <circle cx="131" cy="142" r="7"/>
+    <circle cx="98" cy="170" r="7"/>
+    <circle cx="138" cy="170" r="7"/>
+    <circle cx="96" cy="196" r="7"/>
+    <circle cx="143" cy="196" r="7"/>
+  </g>
+  <circle cx="178" cy="44" r="8" fill="#F2A46B"/>
+</svg>

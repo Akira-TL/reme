@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from reme.pose.fall_training_data import derive_fall_pose_sample
-from reme.pose.posture import PosturePrediction
-from reme.pose.scene_bundle import MOVENET_KEYPOINT_NAMES
+from reme.runtime.perception.fall_training_data import derive_fall_pose_sample
+from reme.runtime.perception.posture import PosturePrediction
+from reme.runtime.perception.scene_bundle import MOVENET_KEYPOINT_NAMES
 
 
 def _record(timestamp_ms: float, *, y_shift: float = 0.0) -> dict[str, object]:

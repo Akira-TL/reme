@@ -15,9 +15,32 @@ build/
 .DS_Store
 
 # Local models, recordings, and generated data
-models/
+# Model binaries remain local by default. The competition MoveNet runtime asset,
+# browser MediaPipe task and directory layout documentation are tracked explicitly.
+models/*
+!models/README.md
+!models/runtime/
+!models/trained/
+!models/vendor/
+models/runtime/*
+!models/runtime/movenet/
+models/trained/*
+!models/trained/posture/
+!models/trained/fall/
+models/vendor/*
+!models/vendor/.gitkeep
+models/runtime/movenet/*
+!models/runtime/movenet/README.md
+!models/runtime/movenet/movenet_lightning_f16_v4.tflite
+models/trained/posture/*
+!models/trained/posture/.gitkeep
+models/trained/fall/*
+!models/trained/fall/.gitkeep
 recordings/
-data/raw/
+# Training/reference datasets are local assets. Keep only the root inventory
+# document in Git; videos, keypoints, annotations and source archives remain local.
+data/*
+!data/README.md
 artifacts/
 Downloads*.zip
 
@@ -25,7 +48,22 @@ Downloads*.zip
 .env
 .env.*
 !.env.example
+node_modules/
+frontend/.vercel/
+.scratch/runtime/
 
 # CodeGraph local index
 .codegraph/
 **/*mp4
+**/*jpg
+!frontend/public/scenes/
+!frontend/public/scenes/*.jpg
+# Claude Code local state (agent worktrees, session settings)
+.claude/
+
+# MediaPipe wasm 由 predev/prebuild 从 node_modules 拷贝（模型 .task 入库）
+frontend/public/mediapipe/wasm/
+frontend/public/litert/wasm/
+
+# Derived keypoint copies used for local analysis (regenerate with git show)
+.scratch/posture-classifier-theory/data/

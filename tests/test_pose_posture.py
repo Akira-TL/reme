@@ -2,14 +2,14 @@ import json
 from pathlib import Path
 
 import numpy as np
-from reme.pose.annotations import PoseAnnotations, PostureSegment, save_annotations
-from reme.pose.posture import (
+from reme.runtime.perception.annotations import PoseAnnotations, PostureSegment, save_annotations
+from reme.runtime.perception.posture import (
     StaticPostureModel,
     extract_posture_features,
     save_posture_model,
     train_posture_model,
 )
-from reme.pose.scene_bundle import MOVENET_KEYPOINT_NAMES
+from reme.runtime.perception.scene_bundle import MOVENET_KEYPOINT_NAMES
 
 
 def _coords(label: str) -> list[tuple[float, float]]:

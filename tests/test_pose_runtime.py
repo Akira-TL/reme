@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from reme.pose.runtime import (
+from reme.runtime.perception.runtime import (
     Component,
     ModeProfile,
     RuntimeEvent,

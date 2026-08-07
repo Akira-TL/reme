@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from reme.pose.video_dataset import (
+from reme.runtime.perception.video_dataset import (
     DATASET_SCHEMA_VERSION,
     DatasetCatalog,
     VideoDatasetError,

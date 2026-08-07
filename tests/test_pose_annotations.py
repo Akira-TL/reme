@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from reme.pose.annotations import (
+from reme.runtime.perception.annotations import (
     ANNOTATION_SCHEMA_VERSION,
     AnnotationError,
     PoseAnnotations,
