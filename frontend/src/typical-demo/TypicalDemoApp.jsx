@@ -55,7 +55,7 @@ export function TypicalDemoApp() {
     resetSceneState,
     startDemoConversation,
   } = live;
-  const effectivePhase = sceneId === "fall" && liveActive ? live.phase : "idle";
+  const effectivePhase = liveActive ? live.phase : "idle";
   const kitchenShareDecision = useMemo(
     () => [live.decision?.decision, ...(live.decision?.history || [])]
       .find((item) => (
@@ -70,11 +70,11 @@ export function TypicalDemoApp() {
   const deviceViewMode = sceneId === "bathroom" ? "skeleton" : "video_skeleton";
   const autoFamilyViewOpen = shouldAutoOpenFamilyVideo(sceneId, effectivePhase);
   const effectiveFamilyViewOpen = familyViewOpen
-    && !(sceneId === "fall" && shouldCloseFamilyVideo(effectivePhase));
+    && !shouldCloseFamilyVideo(effectivePhase);
   const phoneViewMode = (autoFamilyViewOpen || effectiveFamilyViewOpen) && live.familyVideoAllowed
     ? "video_skeleton"
     : "skeleton";
-  const skeletonColor = sceneId === "fall" && ["candidate", "checking"].includes(effectivePhase)
+  const skeletonColor = ["candidate", "checking"].includes(effectivePhase)
     ? "#ff3b30"
     : "#ff5a00";
   const {

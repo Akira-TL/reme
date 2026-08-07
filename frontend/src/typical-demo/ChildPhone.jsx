@@ -117,10 +117,10 @@ export function ChildPhone({
   const [activeTab, setActiveTab] = useState("home");
   const [privacyEnabled, setPrivacyEnabled] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-  const danger = scene.id === "fall" && isActiveFallDanger(fallPhase);
-  const emergency = scene.id === "fall" && shouldShowEmergencySheet(fallPhase);
-  const resolved = scene.id === "fall" && fallPhase === "resolved";
-  const hasFallState = scene.id === "fall" && fallPhase !== "idle";
+  const danger = isActiveFallDanger(fallPhase);
+  const emergency = shouldShowEmergencySheet(fallPhase);
+  const resolved = fallPhase === "resolved";
+  const hasFallState = fallPhase !== "idle";
   const fallState = fallStateOverride || FALL_PHASES[fallPhase];
   const title = hasFallState
     ? fallState.status
