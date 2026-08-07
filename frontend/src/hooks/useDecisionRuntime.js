@@ -20,7 +20,13 @@ import {
   shouldStopAlarmForDecision,
   shouldStopAlarmForResponse,
 } from "../typical-demo/phoneState";
-import { recordWav } from "../utils/wavRecorder";
+import {
+  inspectMicrophoneProcessing,
+  openMicrophone,
+  setMicrophoneEnabled,
+  startWavCapture,
+  stopMicrophone,
+} from "../utils/wavRecorder";
 
 let pendingSessionStop = Promise.resolve();
 
@@ -66,6 +72,31 @@ function playBase64Audio(audioB64, audioFormat = "wav") {
   return playAudioElement(new Audio(`data:${mimeType};base64,${audioB64}`));
 }
 
+function waitForVoiceWindow(durationMs, signal) {
+  return new Promise((resolve, reject) => {
+    let timer = window.setTimeout(finish, durationMs);
+
+    function cleanup() {
+      if (timer) window.clearTimeout(timer);
+      timer = 0;
+      signal?.removeEventListener("abort", cancel);
+    }
+
+    function finish() {
+      cleanup();
+      resolve();
+    }
+
+    function cancel() {
+      cleanup();
+      reject(new DOMException("录音已取消", "AbortError"));
+    }
+
+    if (signal?.aborted) cancel();
+    else signal?.addEventListener("abort", cancel, { once: true });
+  });
+}
+
 function decisionAwaitsReply(payload) {
   return Boolean(
     payload?.need_dialogue
@@ -90,6 +121,14 @@ function createVoiceState() {
       && Boolean(window.AudioContext || window.webkitAudioContext),
     listening: false,
     stage: "idle",
+    microphoneReady: false,
+    microphoneProcessing: {
+      echoCancellation: null,
+      noiseSuppression: null,
+      autoGainControl: null,
+      voiceIsolation: null,
+    },
+    microphoneError: "",
     transcript: "",
     responseValue: "",
     asrModel: "mimo-v2.5-asr",
@@ -172,6 +211,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     let ring = null;
     let voiceReplyTimer = 0;
     let voiceCaptureAbortController = null;
+    let microphoneStream = null;
+    let microphonePromise = null;
     let sceneGeneration = 0;
     let voiceTurnDecisionId = null;
     const spokenDecisionIds = new Set();
@@ -183,9 +224,72 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       }
     }
 
+    function microphoneIsLive(stream = microphoneStream) {
+      return Boolean(stream?.getAudioTracks?.().some((track) => track.readyState === "live"));
+    }
+
+    function disableMicrophone() {
+      setMicrophoneEnabled(microphoneStream, false);
+    }
+
+    function releaseMicrophone() {
+      const stream = microphoneStream;
+      microphoneStream = null;
+      microphonePromise = null;
+      stopMicrophone(stream);
+    }
+
+    async function prepareMicrophone() {
+      if (microphoneIsLive()) return microphoneStream;
+      if (microphonePromise) return microphonePromise;
+      microphonePromise = openMicrophone({ signal: abortController.signal })
+        .then((stream) => {
+          if (disposed) {
+            stopMicrophone(stream);
+            throw new DOMException("麦克风预热已取消", "AbortError");
+          }
+          microphoneStream = stream;
+          setMicrophoneEnabled(stream, false);
+          const processing = inspectMicrophoneProcessing(stream);
+          stream.getAudioTracks?.()[0]?.addEventListener("ended", () => {
+            if (disposed || microphoneStream !== stream) return;
+            microphoneStream = null;
+            setVoice((current) => ({
+              ...current,
+              microphoneReady: false,
+              microphoneError: "麦克风连接已中断",
+            }));
+          }, { once: true });
+          setVoice((current) => ({
+            ...current,
+            microphoneReady: true,
+            microphoneProcessing: processing,
+            microphoneError: "",
+          }));
+          return stream;
+        })
+        .catch((error) => {
+          if (!disposed && error?.name !== "AbortError") {
+            setVoice((current) => ({
+              ...current,
+              microphoneReady: false,
+              microphoneError: error?.name === "NotAllowedError"
+                ? "麦克风权限被拒绝"
+                : error?.message || "麦克风预热失败",
+            }));
+          }
+          throw error;
+        })
+        .finally(() => {
+          microphonePromise = null;
+        });
+      return microphonePromise;
+    }
+
     function abortVoiceCapture() {
       voiceCaptureAbortController?.abort();
       voiceCaptureAbortController = null;
+      disableMicrophone();
     }
 
     function scheduleVoiceReply(payload) {
@@ -308,120 +412,102 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       };
     }
 
-    async function playDecisionVoice(payload, { force = false, autoReply = true } = {}) {
-      if (payload?.alarm) return false;
-      if (!payload?.elder_message) return false;
-      if (!force && spokenDecisionIds.has(payload.decision_id)) return false;
-      const playbackGeneration = sceneGeneration;
-      spokenDecisionIds.add(payload.decision_id);
-      setVoice((current) => ({
-        ...current,
-        stage: "tts_request",
-        listening: false,
-        error: "",
-      }));
-      try {
-        const speech = await requestDecisionVoice(httpBase, {
-          sceneId: payload.scene_id || sceneRef.current,
-          decisionId: payload.decision_id,
-        });
-        if (disposed || playbackGeneration !== sceneGeneration) return false;
-        setVoice((current) => ({
-          ...current,
-          stage: "playing",
-          ttsModel: speech.tts_model || current.ttsModel,
-          ttsLatencyMs: speech.tts_latency_ms ?? null,
-          error: "",
-        }));
-        await playBase64Audio(speech.audio_b64, speech.audio_format);
-      } catch (error) {
-        if (disposed || playbackGeneration !== sceneGeneration) return false;
-        if (payload.voice_asset) {
-          try {
-            await playAudioElement(new Audio(`${httpBase}${payload.voice_asset}`));
-            if (disposed || playbackGeneration !== sceneGeneration) return false;
-            setVoice((current) => ({
-              ...current,
-              stage: "playing_fallback",
-              error: `MiMo TTS 失败，已播放预置语音：${error.message || "unknown"}`,
-            }));
-          } catch (fallbackError) {
-            setVoice((current) => ({
-              ...current,
-              stage: "failed",
-              error: fallbackError.message || "语音播放失败",
-            }));
-            return false;
-          }
-        } else {
-          setVoice((current) => ({
-            ...current,
-            stage: "failed",
-            error: error.message || "MiMo TTS 失败",
-          }));
-          return false;
-        }
-      }
-      if (disposed || playbackGeneration !== sceneGeneration) return false;
-      setVoice((current) => ({
-        ...current,
-        stage: decisionAwaitsReply(payload) ? "waiting_reply" : "complete",
-      }));
-      if (
-        autoReply
-        && decisionAwaitsReply(payload)
-        && !respondedDecisionIds.has(payload.decision_id)
-      ) {
-        scheduleVoiceReply(payload);
-        return true;
-      }
-      return false;
+    function replyWindowMs(target) {
+      return Number.isFinite(target?.response_timeout_ms) && target.response_timeout_ms > 0
+        ? target.response_timeout_ms
+        : 2500;
     }
 
-    async function runVoiceReply(target = latestDecision) {
+    async function beginVoiceCapture(target, stage = "recording") {
       if (
         !target?.decision_id
         || target.scene_id !== sceneRef.current
         || !decisionAwaitsReply(target)
         || respondedDecisionIds.has(target.decision_id)
         || voiceTurnDecisionId === target.decision_id
-      ) return;
-      const replyGeneration = sceneGeneration;
+      ) return null;
       if (!createVoiceState().supported) {
         setVoice((current) => ({
           ...current,
           supported: false,
+          listening: false,
           stage: "failed",
           error: "当前浏览器无法采集麦克风 WAV",
         }));
-        armResponseTimeout(target);
-        return;
+        return null;
       }
-      voiceTurnDecisionId = target.decision_id;
-      const replyWindowMs = Number.isFinite(target.response_timeout_ms)
-        && target.response_timeout_ms > 0
-        ? target.response_timeout_ms
-        : 2500;
-      showReplyWindow(target, replyWindowMs);
-      setVoice((current) => ({
-        ...current,
-        supported: true,
-        listening: true,
-        stage: "recording",
-        transcript: "",
-        responseValue: "",
-        asrLatencyMs: null,
-        error: "",
-      }));
+
       abortVoiceCapture();
+      voiceTurnDecisionId = null;
       const captureAbortController = new AbortController();
       voiceCaptureAbortController = captureAbortController;
+      const replyGeneration = sceneGeneration;
       try {
-        const audioB64 = await recordWav({
-          durationMs: replyWindowMs,
+        const stream = await prepareMicrophone();
+        if (
+          disposed
+          || replyGeneration !== sceneGeneration
+          || captureAbortController.signal.aborted
+        ) throw new DOMException("录音已取消", "AbortError");
+        setMicrophoneEnabled(stream, true);
+        const recorder = await startWavCapture({
+          stream,
           sampleRate: 16000,
           signal: captureAbortController.signal,
         });
+        if (
+          disposed
+          || replyGeneration !== sceneGeneration
+          || captureAbortController.signal.aborted
+        ) throw new DOMException("录音已取消", "AbortError");
+        voiceTurnDecisionId = target.decision_id;
+        setVoice((current) => ({
+          ...current,
+          supported: true,
+          microphoneReady: true,
+          listening: true,
+          stage,
+          transcript: "",
+          responseValue: "",
+          asrLatencyMs: null,
+          error: "",
+        }));
+        return {
+          target,
+          recorder,
+          replyGeneration,
+          captureAbortController,
+        };
+      } catch (error) {
+        disableMicrophone();
+        voiceTurnDecisionId = null;
+        if (voiceCaptureAbortController === captureAbortController) {
+          voiceCaptureAbortController = null;
+        }
+        if (!disposed && replyGeneration === sceneGeneration && error?.name !== "AbortError") {
+          setVoice((current) => ({
+            ...current,
+            listening: false,
+            stage: "failed",
+            microphoneError: current.microphoneError || error.message || "麦克风采集失败",
+            error: error.message || "麦克风采集失败",
+          }));
+        }
+        return null;
+      }
+    }
+
+    async function finishVoiceCapture(capture, delayMs) {
+      const {
+        target,
+        recorder,
+        replyGeneration,
+        captureAbortController,
+      } = capture;
+      try {
+        await waitForVoiceWindow(delayMs, captureAbortController.signal);
+        const audioB64 = await recorder.stop();
+        disableMicrophone();
         if (disposed || replyGeneration !== sceneGeneration) return;
         clearCountdown();
         markResponded(target.decision_id);
@@ -479,14 +565,136 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           stage: "failed",
           error: error.message || "MiMo 语音对话失败",
         }));
-        if (!disposed && !respondedDecisionIds.has(target.decision_id)) {
+        if (!respondedDecisionIds.has(target.decision_id)) {
           submitFor(target, "none", "timeout");
         }
       } finally {
+        disableMicrophone();
         if (voiceCaptureAbortController === captureAbortController) {
           voiceCaptureAbortController = null;
         }
       }
+    }
+
+    async function playDecisionVoice(payload, { force = false, autoReply = true } = {}) {
+      if (payload?.alarm) return false;
+      if (!payload?.elder_message) return false;
+      if (!force && spokenDecisionIds.has(payload.decision_id)) return false;
+      const playbackGeneration = sceneGeneration;
+      let promptCapture = null;
+      spokenDecisionIds.add(payload.decision_id);
+      setVoice((current) => ({
+        ...current,
+        stage: "tts_request",
+        listening: false,
+        error: "",
+      }));
+
+      async function ensurePromptCapture() {
+        if (
+          promptCapture
+          || !autoReply
+          || !decisionAwaitsReply(payload)
+          || respondedDecisionIds.has(payload.decision_id)
+        ) return promptCapture;
+        promptCapture = await beginVoiceCapture(payload, "listening_prompt");
+        return promptCapture;
+      }
+
+      try {
+        const speech = await requestDecisionVoice(httpBase, {
+          sceneId: payload.scene_id || sceneRef.current,
+          decisionId: payload.decision_id,
+        });
+        if (disposed || playbackGeneration !== sceneGeneration) return false;
+        await ensurePromptCapture();
+        setVoice((current) => ({
+          ...current,
+          stage: promptCapture ? "listening_prompt" : "playing",
+          listening: Boolean(promptCapture),
+          ttsModel: speech.tts_model || current.ttsModel,
+          ttsLatencyMs: speech.tts_latency_ms ?? null,
+          error: "",
+        }));
+        await playBase64Audio(speech.audio_b64, speech.audio_format);
+      } catch (error) {
+        if (disposed || playbackGeneration !== sceneGeneration) return false;
+        if (payload.voice_asset) {
+          try {
+            await ensurePromptCapture();
+            setVoice((current) => ({
+              ...current,
+              stage: promptCapture ? "listening_prompt" : "playing_fallback",
+              listening: Boolean(promptCapture),
+              error: `MiMo TTS 失败，已播放预置语音：${error.message || "unknown"}`,
+            }));
+            await playAudioElement(new Audio(`${httpBase}${payload.voice_asset}`));
+            if (disposed || playbackGeneration !== sceneGeneration) return false;
+          } catch (fallbackError) {
+            if (promptCapture) promptCapture.captureAbortController.abort();
+            setVoice((current) => ({
+              ...current,
+              listening: false,
+              stage: "failed",
+              error: fallbackError.message || "语音播放失败",
+            }));
+            return false;
+          }
+        } else {
+          if (promptCapture) promptCapture.captureAbortController.abort();
+          setVoice((current) => ({
+            ...current,
+            listening: false,
+            stage: "failed",
+            error: error.message || "MiMo TTS 失败",
+          }));
+          return false;
+        }
+      }
+      if (disposed || playbackGeneration !== sceneGeneration) return false;
+      if (respondedDecisionIds.has(payload.decision_id)) {
+        setVoice((current) => ({ ...current, listening: false, stage: "complete" }));
+        return true;
+      }
+      if (promptCapture && !promptCapture.captureAbortController.signal.aborted) {
+        const timeoutMs = replyWindowMs(payload);
+        showReplyWindow(payload, timeoutMs);
+        setVoice((current) => ({ ...current, listening: true, stage: "recording" }));
+        void finishVoiceCapture(promptCapture, timeoutMs);
+        return true;
+      }
+      setVoice((current) => ({
+        ...current,
+        listening: false,
+        stage: decisionAwaitsReply(payload) ? "waiting_reply" : "complete",
+      }));
+      if (
+        autoReply
+        && decisionAwaitsReply(payload)
+        && !respondedDecisionIds.has(payload.decision_id)
+      ) {
+        scheduleVoiceReply(payload);
+        return true;
+      }
+      return false;
+    }
+
+    async function runVoiceReply(target = latestDecision) {
+      if (
+        !target?.decision_id
+        || target.scene_id !== sceneRef.current
+        || !decisionAwaitsReply(target)
+        || respondedDecisionIds.has(target.decision_id)
+        || voiceTurnDecisionId === target.decision_id
+      ) return;
+      const capture = await beginVoiceCapture(target, "recording");
+      if (!capture) {
+        armResponseTimeout(target);
+        return;
+      }
+      const timeoutMs = replyWindowMs(target);
+      showReplyWindow(target, timeoutMs);
+      await finishVoiceCapture(capture, timeoutMs);
     }
 
     async function submitFor(target, response, source, text = null) {
@@ -597,11 +805,10 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         const target = latestDecision;
         if (!target?.decision_id || respondedDecisionIds.has(target.decision_id)) return;
         markResponded(target.decision_id);
-        if (shouldStopAlarmForResponse(response)) {
-          clearVoiceReplyTimer();
-          abortVoiceCapture();
-          clearAlarmState();
-        }
+        clearVoiceReplyTimer();
+        abortVoiceCapture();
+        voiceTurnDecisionId = null;
+        if (shouldStopAlarmForResponse(response)) clearAlarmState();
         submitFor(target, response, source, text);
       },
       replayVoice() {
@@ -774,6 +981,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         error: "",
       });
       setVoice(createVoiceState());
+      prepareMicrophone().catch(() => {});
       try {
         await pendingSessionStop;
         if (disposed) return;
@@ -810,6 +1018,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       sceneGeneration += 1;
       clearVoiceReplyTimer();
       abortVoiceCapture();
+      releaseMicrophone();
       stopAlarmLocal();
       try {
         socket?.close();
