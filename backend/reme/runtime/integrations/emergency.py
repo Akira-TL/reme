@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import queue
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from reme.runtime.decision.records import CareDecision, DecisionState
 
 EMERGENCY_SCHEMA_VERSION = "reme-emergency-event/v1"
+_DEFAULT_QUEUE_SIZE = 32
+_STOP = object()
 
 
 class EmergencyType(StrEnum):
@@ -25,6 +30,12 @@ class EmergencySeverity(StrEnum):
 
     HIGH = "high"
     CRITICAL = "critical"
+
+
+class EmergencyTransport(Protocol):
+    """Transport seam: send one already-minimized emergency event."""
+
+    def send_event(self, event: EmergencyEvent) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +74,82 @@ _OUTBOUND_STATES: dict[
         "Reme 检测到需要立即外部介入的紧急事件，请立即处理。",
     ),
 }
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+class EmergencyDecisionPublisher:
+    """Non-blocking CareDecision publisher for external emergency executors."""
+
+    def __init__(
+        self,
+        transport: EmergencyTransport,
+        *,
+        clock: Callable[[], datetime] = _utc_now,
+        queue_size: int = _DEFAULT_QUEUE_SIZE,
+    ) -> None:
+        if queue_size <= 0:
+            raise ValueError("queue_size must be positive")
+        self._transport = transport
+        self._clock = clock
+        self._queue: queue.Queue[EmergencyEvent | object] = queue.Queue(maxsize=queue_size)
+        self._seen_event_ids: set[str] = set()
+        self._lock = threading.Lock()
+        self._closed = False
+        self._worker = threading.Thread(
+            target=self._run,
+            name="reme-emergency-publisher",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def publish_decision(self, decision: CareDecision) -> None:
+        """Enqueue one allowlisted emergency decision without waiting on HTTP."""
+
+        event = emergency_event_from_decision(decision, occurred_at=self._clock())
+        if event is None:
+            return
+        with self._lock:
+            if self._closed or event.event_id in self._seen_event_ids:
+                return
+            self._seen_event_ids.add(event.event_id)
+        try:
+            self._queue.put_nowait(event)
+        except queue.Full:
+            with self._lock:
+                self._seen_event_ids.discard(event.event_id)
+            print(f"warning: emergency queue full; dropped {event.event_id}")
+
+    def close(self, *, timeout_seconds: float = 1.0) -> None:
+        """Stop the daemon worker after queued events, bounded by timeout_seconds."""
+
+        if timeout_seconds < 0:
+            raise ValueError("timeout_seconds must be non-negative")
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        try:
+            self._queue.put(_STOP, timeout=timeout_seconds)
+        except queue.Full:
+            return
+        self._worker.join(timeout=timeout_seconds)
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            try:
+                if item is _STOP:
+                    return
+                assert isinstance(item, EmergencyEvent)
+                try:
+                    self._transport.send_event(item)
+                except Exception as exc:  # noqa: BLE001 - external delivery is never safety-critical
+                    print(f"warning: emergency delivery failed for {item.event_id}: {exc}")
+            finally:
+                self._queue.task_done()
 
 
 def emergency_event_from_decision(

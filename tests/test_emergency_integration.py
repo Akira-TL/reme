@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from threading import Event
 from typing import Any
 
 from reme.runtime.decision.records import (
@@ -15,6 +16,7 @@ from reme.runtime.decision.records import (
     Uncertainty,
 )
 from reme.runtime.integrations.emergency import (
+    EmergencyDecisionPublisher,
     EmergencyEvent,
     EmergencySeverity,
     EmergencyType,
@@ -136,6 +138,86 @@ def test_event_id_is_stable_for_retries_and_distinct_across_scenes() -> None:
     assert first.event_id != other_scene.event_id
     assert "fall_demo_01" not in first.event_id
     assert "decision-0042" not in first.event_id
+
+
+class _BlockingTransport:
+    def __init__(self) -> None:
+        self.started = Event()
+        self.release = Event()
+        self.sent: list[EmergencyEvent] = []
+
+    def send_event(self, event: EmergencyEvent) -> None:
+        self.started.set()
+        if not self.release.wait(timeout=1.0):
+            raise TimeoutError("test transport was not released")
+        self.sent.append(event)
+
+
+class _CollectingTransport:
+    def __init__(self) -> None:
+        self.sent: list[EmergencyEvent] = []
+
+    def send_event(self, event: EmergencyEvent) -> None:
+        self.sent.append(event)
+
+
+class _FailingTransport:
+    def send_event(self, event: EmergencyEvent) -> None:
+        raise TimeoutError(f"simulated timeout for {event.event_id}")
+
+
+def _urgent_decision() -> CareDecision:
+    return _decision(
+        state=DecisionState.URGENT_ATTENTION,
+        risk_level=4,
+        need_dialogue=False,
+        dialogue_goal=None,
+        elder_message=None,
+        action=DecisionAction.SHOW_URGENT_ATTENTION,
+        response_timeout_ms=None,
+    )
+
+
+def test_emergency_publisher_is_non_blocking_and_deduplicates_decisions() -> None:
+    transport = _BlockingTransport()
+    publisher = EmergencyDecisionPublisher(
+        transport,
+        clock=lambda: datetime(2026, 8, 7, 11, 42, tzinfo=UTC),
+    )
+    decision = _urgent_decision()
+
+    publisher.publish_decision(decision)
+    assert transport.started.wait(timeout=0.5)
+    publisher.publish_decision(decision)
+    transport.release.set()
+    publisher.close()
+
+    assert len(transport.sent) == 1
+
+
+def test_emergency_publisher_swallows_transport_failures(capsys: Any) -> None:
+    publisher = EmergencyDecisionPublisher(
+        _FailingTransport(),
+        clock=lambda: datetime(2026, 8, 7, 11, 42, tzinfo=UTC),
+    )
+
+    publisher.publish_decision(_urgent_decision())
+    publisher.close()
+
+    assert "warning: emergency delivery failed" in capsys.readouterr().out
+
+
+def test_emergency_publisher_ignores_non_emergency_decisions() -> None:
+    transport = _CollectingTransport()
+    publisher = EmergencyDecisionPublisher(
+        transport,
+        clock=lambda: datetime(2026, 8, 7, 11, 42, tzinfo=UTC),
+    )
+
+    publisher.publish_decision(_decision())
+    publisher.close()
+
+    assert transport.sent == []
 
 
 def test_non_emergency_decisions_never_project_outbound_events() -> None:
