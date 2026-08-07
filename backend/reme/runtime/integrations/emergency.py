@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -78,9 +79,19 @@ def emergency_event_from_decision(
     occurred_at_utc = occurred_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
     return EmergencyEvent(
         schema_version=EMERGENCY_SCHEMA_VERSION,
-        event_id=decision.decision_id,
+        event_id=_external_event_id(decision),
         type=event_type,
         severity=severity,
         summary=summary,
         occurred_at=occurred_at_utc,
     )
+
+
+def _external_event_id(decision: CareDecision) -> str:
+    """Derive a stable opaque id without exposing the internal scene identifier."""
+
+    identity = "\x1f".join(
+        (decision.scene_id, decision.decision_id, str(decision.timestamp_ms))
+    ).encode("utf-8")
+    digest = hashlib.sha256(identity).hexdigest()[:32]
+    return f"reme-{digest}"

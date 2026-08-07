@@ -63,7 +63,7 @@ def test_family_alert_projects_to_exact_minimal_emergency_payload() -> None:
 
     assert event == EmergencyEvent(
         schema_version="reme-emergency-event/v1",
-        event_id="decision-0042",
+        event_id="reme-8c891fd4e5c6e3cb5e06ac339bbb7ecc",
         type=EmergencyType.FAMILY_INTERVENTION_REQUIRED,
         severity=EmergencySeverity.HIGH,
         summary="Reme 检测到需要家属介入的紧急事件，请尽快处理。",
@@ -71,7 +71,7 @@ def test_family_alert_projects_to_exact_minimal_emergency_payload() -> None:
     )
     assert event.to_payload() == {
         "schema_version": "reme-emergency-event/v1",
-        "event_id": "decision-0042",
+        "event_id": "reme-8c891fd4e5c6e3cb5e06ac339bbb7ecc",
         "type": "family_intervention_required",
         "severity": "high",
         "summary": "Reme 检测到需要家属介入的紧急事件，请尽快处理。",
@@ -99,6 +99,43 @@ def test_urgent_attention_projects_to_critical_emergency() -> None:
     assert event.type is EmergencyType.URGENT_ATTENTION
     assert event.severity is EmergencySeverity.CRITICAL
     assert event.summary == "Reme 检测到需要立即外部介入的紧急事件，请立即处理。"
+
+
+def test_event_id_is_stable_for_retries_and_distinct_across_scenes() -> None:
+    decision = _decision(
+        state=DecisionState.URGENT_ATTENTION,
+        risk_level=4,
+        need_dialogue=False,
+        dialogue_goal=None,
+        elder_message=None,
+        action=DecisionAction.SHOW_URGENT_ATTENTION,
+        response_timeout_ms=None,
+    )
+    first = emergency_event_from_decision(
+        decision, occurred_at=datetime(2026, 8, 7, 11, 40, tzinfo=UTC)
+    )
+    retry = emergency_event_from_decision(
+        decision, occurred_at=datetime(2026, 8, 7, 11, 41, tzinfo=UTC)
+    )
+    other_scene = emergency_event_from_decision(
+        _decision(
+            scene_id="kitchen",
+            state=DecisionState.URGENT_ATTENTION,
+            risk_level=4,
+            need_dialogue=False,
+            dialogue_goal=None,
+            elder_message=None,
+            action=DecisionAction.SHOW_URGENT_ATTENTION,
+            response_timeout_ms=None,
+        ),
+        occurred_at=datetime(2026, 8, 7, 11, 40, tzinfo=UTC),
+    )
+
+    assert first is not None and retry is not None and other_scene is not None
+    assert first.event_id == retry.event_id
+    assert first.event_id != other_scene.event_id
+    assert "fall_demo_01" not in first.event_id
+    assert "decision-0042" not in first.event_id
 
 
 def test_non_emergency_decisions_never_project_outbound_events() -> None:
