@@ -14,7 +14,6 @@ from reme.runtime.decision.context import (
 from reme.runtime.decision.records import DecisionState, PrivacyMode
 
 LOW_MOTION_LEVELS = frozenset({MotionLevel.STILL, MotionLevel.LOW})
-DOWN_POSTURES = frozenset({Posture.LYING, Posture.UNKNOWN})
 
 # Derivation of A's fall_like confidence range (reme/pose/transitions.py::_classify):
 # conf = clamp(0.55 + 0.12*min(drop/0.20 - 1, 1) + 0.12*min(speed/0.65 - 1, 1) + 0.08*r, 0, 0.95),
@@ -86,43 +85,19 @@ class TriggerConfig:
     default_privacy_mode: PrivacyMode = PrivacyMode.BLURRED
 
 
-def _lying_trigger_key(context: DecisionContext) -> str | None:
-    posture = context.latest_posture
-    if posture is None or not posture.person_detected:
-        return None
-    if posture.posture is not Posture.LYING:
-        return None
-    start_ms = max(0.0, posture.timestamp_ms - posture.posture_duration_ms)
-    return f"lying:{context.scene_id}:{round(start_ms / 1000.0)}"
-
-
 def fall_trigger_event_id(context: DecisionContext, *, config: TriggerConfig) -> str | None:
-    """Return the stable trigger id when posture evidence should open a fall check-in.
+    """Return the stable trigger id for a confirmed temporal fall event.
 
-    In the live demo, a detected lying posture is enough to start the 2.5s
-    confirmation countdown. A's fall_like transition path remains as a fallback
-    for vanish/occlusion cases.
+    Static posture labels never open a fall check-in. The decision layer only
+    reacts to ``fall_like_transition`` emitted by A's temporal geometry/model
+    detector, so ordinary lying down remains a posture observation rather than
+    an alarm condition.
     """
-
-    lying_key = _lying_trigger_key(context)
-    if lying_key is not None:
-        return lying_key
 
     transition = context.active_transition
     if transition is None or transition.transition is not Transition.FALL_LIKE:
         return None
     if transition.transition_confidence < config.fall_confidence_min:
-        return None
-    posture = context.latest_posture
-    if posture is None:
-        return None
-    if posture.timestamp_ms < transition.start_ms:
-        return None
-    if posture.person_detected and posture.posture not in DOWN_POSTURES:
-        return None
-    if not posture.person_detected:
-        return transition.event_id
-    if posture.motion_level not in LOW_MOTION_LEVELS:
         return None
     return transition.event_id
 

@@ -57,6 +57,7 @@ class CaseResult:
     fall_triggered: bool
     duplicate_fall_events: bool
     first_fall_event_end_ms: float | None
+    fall_events: tuple[dict[str, Any], ...]
     elapsed_seconds: float
     mean_inference_ms: float
     p95_inference_ms: float
@@ -255,10 +256,44 @@ def replay_case(
         first_fall_event_end_ms=(
             float(fall_events[0]["end_ms"]) if fall_events else None
         ),
+        fall_events=tuple(_fall_event_summary(event) for event in fall_events),
         elapsed_seconds=round(elapsed, 6),
         mean_inference_ms=round(_mean(inference_times), 6),
         p95_inference_ms=round(_percentile(inference_times, 95.0), 6),
     )
+
+
+def _fall_event_summary(event: dict[str, Any]) -> dict[str, Any]:
+    evidence = event.get("evidence")
+    evidence_map = evidence if isinstance(evidence, dict) else {}
+    fields = (
+        "continuous_source",
+        "continuous_model_probability",
+        "deterministic_transition",
+        "fall_mil_probability",
+        "fall_mil_confirmed",
+        "center_start",
+        "center_drop",
+        "max_downward_center_speed",
+        "torso_end_deg",
+        "torso_range_deg",
+        "peak_motion_speed",
+        "high_motion_ratio",
+        "has_fallen_anchor",
+        "reasons",
+    )
+    return {
+        "event_id": event.get("event_id"),
+        "start_ms": event.get("start_ms"),
+        "end_ms": event.get("end_ms"),
+        "transition_confidence": event.get("transition_confidence"),
+        "evidence": {
+            field: evidence_map[field]
+            for field in fields
+            if field in evidence_map
+        },
+    }
+
 
 
 def summarize(results: Sequence[CaseResult]) -> dict[str, Any]:
@@ -320,6 +355,7 @@ def evaluate(
     sample_fps: float,
     threads: int,
     splits: frozenset[str],
+    case_ids: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     if not math.isfinite(sample_fps) or sample_fps <= 0:
         raise FallRuntimeEvaluationError("sample_fps must be finite and positive")
@@ -334,8 +370,10 @@ def evaluate(
             *load_fall_cases(fall_manifest_path),
             *load_normal_cases(normal_index_path),
         ]
-        if case.split in splits
+        if case.split in splits and (case_ids is None or case.case_id in case_ids)
     ]
+    if not cases:
+        raise FallRuntimeEvaluationError("no cases matched the requested filters")
     estimator = MoveNetEstimator(
         bundle.pose_model_path,
         score_threshold=bundle.posture_model.score_threshold,
@@ -443,6 +481,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("train", "val", "test"),
         default=("val", "test"),
     )
+    parser.add_argument(
+        "--case-id",
+        action="append",
+        dest="case_ids",
+        help="restrict replay to one or more case IDs for targeted debugging",
+    )
     return parser
 
 
@@ -457,6 +501,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sample_fps=args.sample_fps,
             threads=args.threads,
             splits=frozenset(args.splits),
+            case_ids=(frozenset(args.case_ids) if args.case_ids else None),
         )
         return 0 if report["summary"]["engineering_gate"]["passed"] else 1
     except (FallRuntimeEvaluationError, OSError, ValueError, KeyError) as exc:

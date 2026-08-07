@@ -82,14 +82,13 @@ def test_fall_trigger_requires_confidence_threshold() -> None:
     assert not detect_fall_trigger(context, config=TriggerConfig())
 
 
-def test_fall_trigger_requires_low_motion_after_transition() -> None:
-    context = _context(latest_posture=_posture(motion_level=MotionLevel.HIGH))
-    assert not detect_fall_trigger(context, config=TriggerConfig())
+def test_fall_trigger_does_not_depend_on_posture_label_or_motion() -> None:
+    posture = _posture(posture=Posture.STANDING, motion_level=MotionLevel.HIGH)
+    assert detect_fall_trigger(_context(latest_posture=posture), config=TriggerConfig())
 
 
-def test_fall_trigger_ignores_posture_from_before_the_transition() -> None:
-    context = _context(latest_posture=_posture(timestamp_ms=9000.0))
-    assert not detect_fall_trigger(context, config=TriggerConfig())
+def test_fall_trigger_does_not_require_a_posture_observation() -> None:
+    assert detect_fall_trigger(_context(latest_posture=None), config=TriggerConfig())
 
 
 def test_fall_trigger_accepts_person_lost_after_transition() -> None:
