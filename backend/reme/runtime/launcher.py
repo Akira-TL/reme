@@ -41,7 +41,7 @@ class LocalDemoConfig:
     host: str = DEFAULT_HOST
     backend_port: int = DEFAULT_BACKEND_PORT
     frontend_port: int = DEFAULT_FRONTEND_PORT
-    browser_input_mode: str = "landmarks"
+    browser_input_mode: str = "jpeg"
     startup_timeout_seconds: float = DEFAULT_STARTUP_TIMEOUT_SECONDS
     mimo_env: Path = DEFAULT_MIMO_ENV
 
@@ -378,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--browser-input-mode",
         choices=("auto", "jpeg", "landmarks"),
-        default="landmarks",
+        default="jpeg",
     )
     parser.add_argument(
         "--startup-timeout",
