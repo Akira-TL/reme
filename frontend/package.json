@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "node --test src/adapters/perception.test.js src/typical-demo/runtimeStatus.test.js src/typical-demo/phoneState.test.js"
+    "test": "node --test src/adapters/perception.test.js src/typical-demo/runtimeStatus.test.js src/typical-demo/phoneState.test.js src/utils/wavRecorder.test.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

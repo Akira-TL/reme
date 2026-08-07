@@ -62,83 +62,168 @@ function toBase64(bytes) {
   return btoa(binary);
 }
 
-// 录一段单声道 WAV 并返回 base64。用 ScriptProcessorNode（兼容面最广），不要换成
-// MediaRecorder：其 webm/ogg 输出 B 服务不接收。权限拒绝/环境不支持时抛错，由调用方静默处理。
+function abortError() {
+  return new DOMException("录音已取消", "AbortError");
+}
+
+function wait(durationMs, signal) {
+  return new Promise((resolve, reject) => {
+    let timer = window.setTimeout(finish, durationMs);
+
+    function cleanup() {
+      if (timer) window.clearTimeout(timer);
+      timer = 0;
+      signal?.removeEventListener("abort", cancel);
+    }
+
+    function finish() {
+      cleanup();
+      resolve();
+    }
+
+    function cancel() {
+      cleanup();
+      reject(abortError());
+    }
+
+    if (signal?.aborted) cancel();
+    else signal?.addEventListener("abort", cancel, { once: true });
+  });
+}
+
+export function createMicrophoneConstraints(supported = {}) {
+  const audio = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+  if (supported.voiceIsolation) audio.voiceIsolation = true;
+  return { audio };
+}
+
+export function inspectMicrophoneProcessing(stream) {
+  const settings = stream?.getAudioTracks?.()[0]?.getSettings?.() || {};
+  return {
+    echoCancellation: settings.echoCancellation ?? null,
+    noiseSuppression: settings.noiseSuppression ?? null,
+    autoGainControl: settings.autoGainControl ?? null,
+    voiceIsolation: settings.voiceIsolation ?? null,
+  };
+}
+
+export function setMicrophoneEnabled(stream, enabled) {
+  stream?.getAudioTracks?.().forEach((track) => {
+    track.enabled = Boolean(enabled);
+  });
+}
+
+export function stopMicrophone(stream) {
+  stream?.getTracks?.().forEach((track) => track.stop());
+}
+
+export async function openMicrophone({ signal = null } = {}) {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
+  if (signal?.aborted) throw abortError();
+  const supported = navigator.mediaDevices.getSupportedConstraints?.() || {};
+  const stream = await navigator.mediaDevices.getUserMedia(createMicrophoneConstraints(supported));
+  if (signal?.aborted) {
+    stopMicrophone(stream);
+    throw abortError();
+  }
+  return stream;
+}
+
+// 在已经授权的麦克风 stream 上开始采集，直到调用 stop()。输入轨道应由调用方在
+// AI 播放询问前启用，这样浏览器的 AEC 可以利用扬声器回放参考抑制自身 TTS 回灌。
+export async function startWavCapture({
+  stream,
+  sampleRate = 16000,
+  signal = null,
+} = {}) {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) throw new Error("当前浏览器不支持 WebAudio 录音");
+  if (signal?.aborted) throw abortError();
+  const audioTrack = stream?.getAudioTracks?.().find((track) => track.readyState === "live");
+  if (!audioTrack) throw new Error("麦克风连接不可用");
+
+  const context = new AudioContextCtor();
+  await context.resume().catch(() => {});
+  const source = context.createMediaStreamSource(stream);
+  const highPass = context.createBiquadFilter();
+  highPass.type = "highpass";
+  highPass.frequency.value = 100;
+  const processor = context.createScriptProcessor(4096, 1, 1);
+  const mute = context.createGain();
+  mute.gain.value = 0;
+  const chunks = [];
+  let stopped = false;
+  let aborted = false;
+  let stopPromise = null;
+
+  processor.onaudioprocess = (event) => {
+    chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+  };
+  source.connect(highPass);
+  highPass.connect(processor);
+  processor.connect(mute);
+  mute.connect(context.destination);
+
+  function disconnect() {
+    processor.onaudioprocess = null;
+    for (const node of [source, highPass, processor, mute]) {
+      try {
+        node.disconnect();
+      } catch {
+        // 节点可能已断开。
+      }
+    }
+  }
+
+  function cancel() {
+    aborted = true;
+    disconnect();
+    context.close().catch(() => {});
+  }
+
+  signal?.addEventListener("abort", cancel, { once: true });
+
+  return {
+    stop() {
+      if (stopPromise) return stopPromise;
+      stopPromise = (async () => {
+        if (!stopped) {
+          stopped = true;
+          signal?.removeEventListener("abort", cancel);
+          disconnect();
+          await context.close().catch(() => {});
+        }
+        if (aborted || signal?.aborted) throw abortError();
+        const recorded = mergeChunks(chunks);
+        if (!recorded.length) throw new Error("未采集到音频数据");
+        const resampled = resampleLinear(recorded, context.sampleRate, sampleRate);
+        return toBase64(encodeWav(resampled, sampleRate));
+      })();
+      return stopPromise;
+    },
+  };
+}
+
+// 兼容单次录音调用；新对话链路优先复用 openMicrophone() 获得的会话级 stream。
 export async function recordWav({
   durationMs = 4000,
   sampleRate = 16000,
   signal = null,
+  stream = null,
 } = {}) {
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持麦克风采集");
-  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextCtor) throw new Error("当前浏览器不支持 WebAudio 录音");
-  if (signal?.aborted) throw new DOMException("录音已取消", "AbortError");
-
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  if (signal?.aborted) {
-    stream.getTracks().forEach((track) => track.stop());
-    throw new DOMException("录音已取消", "AbortError");
-  }
-
-  let context = null;
-  let source = null;
-  let processor = null;
+  const ownsStream = !stream;
+  const inputStream = stream || await openMicrophone({ signal });
+  if (ownsStream) setMicrophoneEnabled(inputStream, true);
   try {
-    context = new AudioContextCtor();
-    await context.resume().catch(() => {});
-    source = context.createMediaStreamSource(stream);
-    processor = context.createScriptProcessor(4096, 1, 1);
-    const chunks = [];
-    processor.onaudioprocess = (event) => {
-      chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
-    };
-    source.connect(processor);
-    processor.connect(context.destination);
-
-    await new Promise((resolve, reject) => {
-      let timer = window.setTimeout(finish, durationMs);
-
-      function cleanup() {
-        if (timer) window.clearTimeout(timer);
-        timer = 0;
-        signal?.removeEventListener("abort", cancel);
-      }
-
-      function finish() {
-        cleanup();
-        resolve();
-      }
-
-      function cancel() {
-        cleanup();
-        reject(new DOMException("录音已取消", "AbortError"));
-      }
-
-      if (signal?.aborted) cancel();
-      else signal?.addEventListener("abort", cancel, { once: true });
-    });
-
-    const recorded = mergeChunks(chunks);
-    if (!recorded.length) throw new Error("未采集到音频数据");
-    const resampled = resampleLinear(recorded, context.sampleRate, sampleRate);
-    return toBase64(encodeWav(resampled, sampleRate));
+    const capture = await startWavCapture({ stream: inputStream, sampleRate, signal });
+    await wait(durationMs, signal);
+    return await capture.stop();
   } finally {
-    if (processor) {
-      processor.onaudioprocess = null;
-      try {
-        processor.disconnect();
-      } catch {
-        // 节点可能已断开
-      }
-    }
-    if (source) {
-      try {
-        source.disconnect();
-      } catch {
-        // 节点可能已断开
-      }
-    }
-    stream.getTracks().forEach((track) => track.stop());
-    context?.close().catch(() => {});
+    if (ownsStream) stopMicrophone(inputStream);
   }
 }

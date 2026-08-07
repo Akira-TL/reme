@@ -33,6 +33,10 @@ function number(value, suffix = "") {
   return Number.isFinite(value) ? `${Math.round(value)}${suffix}` : "—";
 }
 
+function enabledLabel(value) {
+  return value === true ? "on" : value === false ? "off" : "unknown";
+}
+
 function DebugValue({ label, value, wide = false }) {
   return (
     <div className={`debug-value ${wide ? "is-wide" : ""}`}>
@@ -185,6 +189,11 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="老人话术" value={decision?.elder_message || "—"} wide />
               <DebugValue label="家属通知" value={decision?.family_notification || "—"} wide />
               <DebugValue label="语音能力" value={voice.supported ? "ready" : "unsupported"} />
+              <DebugValue label="麦克风预热" value={voice.microphoneReady ? "ready" : "not-ready"} />
+              <DebugValue label="回声消除 AEC" value={enabledLabel(voice.microphoneProcessing?.echoCancellation)} />
+              <DebugValue label="环境降噪" value={enabledLabel(voice.microphoneProcessing?.noiseSuppression)} />
+              <DebugValue label="自动增益" value={enabledLabel(voice.microphoneProcessing?.autoGainControl)} />
+              <DebugValue label="Voice Isolation" value={enabledLabel(voice.microphoneProcessing?.voiceIsolation)} />
               <DebugValue label="语音阶段" value={voice.stage || "idle"} />
               <DebugValue label="自动聆听" value={voice.listening ? "recording" : "idle"} />
               <DebugValue label="ASR 模型" value={voice.asrModel || "mimo-v2.5-asr"} />
@@ -193,6 +202,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="TTS 延迟" value={number(voice.ttsLatencyMs, " ms")} />
               <DebugValue label="识别文本" value={voice.transcript || "—"} wide />
               <DebugValue label="回复意图" value={voice.responseValue || "—"} />
+              {voice.microphoneError && <DebugValue label="麦克风错误" value={voice.microphoneError} wide />}
               {voice.error && <DebugValue label="语音错误" value={voice.error} wide />}
               {decisionRuntime.reason && <DebugValue label="B 错误" value={decisionRuntime.reason} wide />}
             </div>

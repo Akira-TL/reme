@@ -81,7 +81,18 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
   }, []);
 
   useEffect(() => {
+    const previousSceneId = sceneRef.current;
     sceneRef.current = sceneId;
+    if (previousSceneId === sceneId) return;
+    const socket = inputSocketRef.current;
+    const sessionId = sessionRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !sessionId) return;
+    socket.send(JSON.stringify(createSceneSignal(
+      sessionId,
+      sceneId,
+      "switch",
+      performance.now(),
+    )));
   }, [sceneId]);
 
   useEffect(() => {
@@ -97,7 +108,6 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
     let pollTimer = 0;
     let encoding = false;
     sessionRef.current = sessionId;
-    sceneRef.current = sceneId;
     frameIndexRef.current = 0;
     const parseEvent = createEventParser(sessionId);
 
@@ -276,7 +286,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
       acceptedInputsRef.current = [];
       pendingRuntimeStop = stopRuntime(urls.httpBase, sessionId).catch(() => {});
     };
-  }, [enabled, retryGeneration, sceneId, videoElement]);
+  }, [enabled, retryGeneration, videoElement]);
 
   return {
     runtime,
