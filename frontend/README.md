@@ -1,6 +1,6 @@
 # Reme 单机演示前端
 
-Reme 前端使用 Vite、React、TailwindCSS v4 与 MUI 构建。正式入口展示四场景单机验收页面，负责场景切换、本地姿态识别、统一后端运行时接入，以及老人端与家属端联动演示。
+Reme 前端使用 Vite、React、TailwindCSS v4 与 MUI 构建。正式入口展示四场景单机验收页面，负责摄像头采集、场景切换、统一后端运行时接入，以及老人端与家属端联动演示。姿态提取、分类和跌倒判断均由统一后端完成。
 
 ## 启动
 
@@ -21,13 +21,12 @@ http://127.0.0.1:4174/
 仅调试前端时可执行：
 
 ```bash
-npm install
-npm run dev
+scripts/demo/start-frontend-preview.sh
 ```
 
 默认地址：`http://127.0.0.1:4174`
 
-首次打开时允许浏览器使用摄像头。页面不会默认展示可识别原画，只在本地运行姿态识别并绘制 17 节点火柴人。MediaPipe wasm 与姿态模型均从本地资产加载，不依赖运行时 CDN。正式演示强制使用 MediaPipe GPU delegate，并拒绝 SwiftShader、llvmpipe 等软件 WebGL 渲染器；GPU 初始化失败时明确进入动态骨架降级，不会静默回退 CPU。
+首次打开时允许浏览器使用摄像头。浏览器只负责采集视频并以约 10 FPS 的 JPEG 帧发送到统一后端；前端不加载 MediaPipe、MoveNet 或其他姿态模型，也不要求浏览器具备硬件 GPU。后端返回 17 节点关键点后，前端仅负责 Canvas 骨架绘制和状态展示。
 
 ## 接入统一后端
 
@@ -43,9 +42,9 @@ VITE_REME_PERCEPTION_INPUT_WS_URL=ws://127.0.0.1:8770/ws/camera-input
 VITE_REME_DECISION_HTTP_URL=http://127.0.0.1:8770
 ```
 
-前端使用统一后端的 HTTP 控制接口启动/停止会话，通过 `/ws/events` 接收 `frame_landmarks`、`posture_observation` 和 `transition_event`，通过 `/ws` 接收决策事件。正式启动器使用 `landmarks` 输入模式：浏览器摄像头帧由 MediaPipe GPU delegate 转为 17 点关键点，再通过 `/ws/camera-input` 发送给统一后端；不会把 JPEG 交给 Python LiteRT 做 CPU MoveNet 推理。
+前端使用统一后端的 HTTP 控制接口启动/停止会话，通过 `/ws/camera-input` 发送 JPEG 视频帧，通过 `/ws/events` 接收 `frame_landmarks`、`posture_observation` 和 `transition_event`，通过 `/ws` 接收决策事件。正式启动器固定使用 `jpeg` 输入模式，MoveNet/姿态分类/动作转变全部在统一后端执行。
 
-感知事件通过后端进程内桥接进入决策模块，不经过第二个服务。Debug 面板会显示 `inference_backend=gpu` 和浏览器实际 WebGL 渲染器，用于确认没有落到软件渲染。
+感知事件通过后端进程内桥接进入决策模块，不经过第二个服务。Debug 面板会显示浏览器 JPEG 上传、后端输入模式、帧龄、关键点质量和分类来源，不再展示浏览器 GPU/WebGL 状态。
 
 ## 四场景单机现场验收
 
@@ -79,7 +78,7 @@ frontend/
 │   ├── hooks/              # 统一运行时生命周期
 │   ├── services/           # 统一后端 HTTP/WS 地址与控制请求
 │   ├── typical-demo/       # 四场景页面、摄像头与状态展示
-│   ├── utils/              # GPU、骨架绘制与音频录制
+│   ├── utils/              # 骨架绘制与音频录制
 │   ├── main.jsx            # 唯一 React 挂载入口
 │   └── theme.js            # MUI 主题
 ├── index.html              # Vite/React 单页应用壳
