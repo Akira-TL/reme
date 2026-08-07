@@ -227,6 +227,27 @@ def test_rapid_high_to_low_motion_is_fall_like() -> None:
     assert evidence["peak_keypoint_speed"] > 0.5
 
 
+def test_fall_like_detection_can_start_at_500ms_baseline() -> None:
+    detector = TransitionDetector(session_id="session-1")
+    centers = [0.35, 0.36, 0.43, 0.54, 0.65, 0.66]
+    angles = [0.0, 0.0, 20.0, 52.0, 84.0, 86.0]
+    postures = ["standing", "standing", "bending_or_crouching", "lying", "lying", "lying"]
+
+    events = _run_trajectory(
+        detector,
+        centers=centers,
+        angles=angles,
+        postures=postures,
+        interval_ms=100.0,
+    )
+
+    assert len(events) == 1
+    event = events[0].payload
+    assert event["transition"] == "fall_like_transition"
+    assert event["end_ms"] == 500.0
+    assert event["evidence"]["window_duration_ms"] == 500.0
+
+
 def test_rapid_fall_geometry_does_not_require_lying_classification() -> None:
     detector = TransitionDetector(session_id="session-1")
     centers = [0.35, 0.36, 0.37, 0.43, 0.54, 0.65, 0.66, 0.66, 0.66]

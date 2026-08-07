@@ -38,6 +38,12 @@ from reme.runtime.decision.policy import (
 from reme.runtime.decision.records import DemoMode
 from reme.runtime.decision.state_machine import TemplateId
 from reme.runtime.decision.voice_preset import load_voice_assets
+from reme.runtime.integrations.emergency import EmergencyDecisionPublisher
+from reme.runtime.integrations.miloco import (
+    MilocoConfigError,
+    MilocoWebhookTransport,
+    miloco_config_from_environment,
+)
 
 DEFAULT_PORT = 8100
 DEFAULT_MOCK_SCRIPT_DIR = Path("examples/decision/mimo_mock")
@@ -293,6 +299,19 @@ def build_speech_client(config: ServerConfig) -> MimoSpeechClient | None:
     if config.demo_mode is not DemoMode.LIVE:
         return None
     return MimoSpeechClient(speech_config_from_environment())
+
+
+def build_miloco_emergency_publisher() -> EmergencyDecisionPublisher | None:
+    """Build the optional external publisher without making startup depend on it."""
+
+    try:
+        webhook_config = miloco_config_from_environment()
+    except MilocoConfigError as exc:
+        print(f"warning: Miloco integration disabled: {exc}")
+        return None
+    if webhook_config is None:
+        return None
+    return EmergencyDecisionPublisher(MilocoWebhookTransport(webhook_config))
 
 
 def build_danger_controller(

@@ -170,7 +170,7 @@ def test_decision_endpoint_returns_contract_payload(tmp_path: Path) -> None:
         assert status == 200
         decision = parse_care_decision(body)
         assert decision.state.value == "check_in_required"
-        assert decision.response_timeout_ms == 8000
+        assert decision.response_timeout_ms == 2500
     finally:
         _stop_server(server, thread)
 

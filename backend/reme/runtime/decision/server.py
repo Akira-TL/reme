@@ -26,6 +26,7 @@ from reme.runtime.decision.config import (
     ServerConfig,
     ServerConfigError,
     build_danger_controller,
+    build_miloco_emergency_publisher,
     build_mimo_client,
     build_policy_config,
     build_speech_client,
@@ -33,6 +34,7 @@ from reme.runtime.decision.config import (
 from reme.runtime.decision.context import discover_scenes
 from reme.runtime.decision.danger import DangerConfirmController, DangerRejectedError
 from reme.runtime.decision.policy import (
+    DecisionPublisher,
     DecisionRejectedError,
     DecisionService,
     UnknownSceneError,
@@ -43,6 +45,7 @@ from reme.runtime.decision.records import (
     parse_interaction_response,
 )
 from reme.runtime.decision.runtime_glue import (
+    DecisionPublisherFanout,
     PerceptionBridgeLike,
     RuntimeDecisionPublisher,
     live_streams_resolver,
@@ -60,6 +63,7 @@ from reme.runtime.decision.voice_dialogue import (
     VoiceDialogueError,
 )
 from reme.runtime.decision.websocket import DecisionEventHub, WebSocketError
+from reme.runtime.integrations.emergency import EmergencyDecisionPublisher
 from reme.runtime.perception.runtime import ModeProfile, RuntimeSessionStatus
 
 _REJECT_STATUS: dict[str, HTTPStatus] = {
@@ -890,10 +894,13 @@ class DecisionRuntime:
     ingest: EventIngest
     danger: DangerConfirmController | None
     voice_dialogue: VoiceDialogueController
+    emergency_publisher: EmergencyDecisionPublisher | None
 
     def shutdown(self, bridge: PerceptionBridgeLike | None = None) -> None:
         if bridge is not None:
             bridge.stop()
+        if self.emergency_publisher is not None:
+            self.emergency_publisher.close()
         self.hub.close_all()
 
 
@@ -907,12 +914,17 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
     registry = RuntimeSessionRegistry()
     hub = DecisionEventHub()
     ingest = EventIngest()
+    local_publisher = RuntimeDecisionPublisher(registry=registry, hub=hub)
+    emergency_publisher = build_miloco_emergency_publisher()
+    publisher: DecisionPublisher = local_publisher
+    if emergency_publisher is not None:
+        publisher = DecisionPublisherFanout(local_publisher, emergency_publisher)
     service = DecisionService(
         scenes=scenes,
         config=build_policy_config(config),
         mimo=build_mimo_client(config),
         audit=audit,
-        publisher=RuntimeDecisionPublisher(registry=registry, hub=hub),
+        publisher=publisher,
         live_streams=live_streams_resolver(registry, ingest),
     )
     danger = build_danger_controller(config, service, audit)
@@ -928,6 +940,7 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
         ingest=ingest,
         danger=danger,
         voice_dialogue=voice_dialogue,
+        emergency_publisher=emergency_publisher,
     )
 
 
