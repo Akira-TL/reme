@@ -320,7 +320,7 @@ def test_fall_scene_escalates_after_timeout_then_urgent(tmp_path: Path) -> None:
     check_in = service.get_decision(scene_id=scene, timestamp_ms=13000.0)
     assert check_in.state is DecisionState.CHECK_IN_REQUIRED
     assert check_in.source is DecisionSource.RULE
-    assert check_in.response_timeout_ms == 8000
+    assert check_in.response_timeout_ms == 2500
 
     alert = service.submit_response(
         _response(
