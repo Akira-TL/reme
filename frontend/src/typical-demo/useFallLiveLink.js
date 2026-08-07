@@ -127,7 +127,6 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     landmarkFrame: perception.landmarkFrame,
     posture: perception.posture,
     transition: perception.transition,
-    sendLandmarks: perception.sendLandmarks,
     triggerDebugScenario,
     respondSafe,
     respondNeedHelp,

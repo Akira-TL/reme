@@ -32,7 +32,6 @@ export function TypicalDemoApp() {
   const [familyViewOpen, setFamilyViewOpen] = useState(false);
   const [videoElement, setVideoElement] = useState(null);
   const [pendingScenario, setPendingScenario] = useState(null);
-  const sendLandmarksRef = useRef(null);
   const autoConversationRef = useRef(null);
   const conversationGuardRef = useRef({
     status: "idle",
@@ -43,10 +42,6 @@ export function TypicalDemoApp() {
   const scene = useMemo(
     () => DEMO_SCENES.find((item) => item.id === sceneId),
     [sceneId],
-  );
-  const handleLandmarks = useCallback(
-    (points, timestampMs) => sendLandmarksRef.current?.(points, timestampMs),
-    [],
   );
   const live = useFallLiveLink({
     enabled: true,
@@ -88,21 +83,16 @@ export function TypicalDemoApp() {
     phoneCanvasRef,
     cameraReady,
     aspectRatio: cameraAspectRatio,
-    modelReady,
-    inferenceBackend,
-    gpuRenderer,
     personDetected,
     backendSkeletonActive,
     skeletonSource,
     cameraError,
-    modelError,
     error: cameraRuntimeError,
     retry: retryCamera,
   } = useLiveDemoCamera({
     deviceViewMode,
     phoneViewMode,
     skeletonColor,
-    onLandmarks: handleLandmarks,
     backendLandmarkFrame: live.landmarkFrame,
   });
 
@@ -110,33 +100,27 @@ export function TypicalDemoApp() {
     setVideoElement(videoRef.current);
   }, [videoRef]);
 
-  useEffect(() => {
-    sendLandmarksRef.current = live.sendLandmarks;
-  }, [live.sendLandmarks]);
-
   const cameraState = useMemo(() => ({
     cameraReady,
     aspectRatio: cameraAspectRatio,
-    modelReady,
-    inferenceBackend,
-    gpuRenderer,
     personDetected,
     backendSkeletonActive,
     skeletonSource,
     cameraError,
-    modelError,
     error: cameraRuntimeError,
     retry: retryCamera,
+    perceptionState: liveRuntime?.state || "offline",
+    inputMode: liveRuntime?.inputMode || null,
+    perceptionReason: liveRuntime?.reason || "",
   }), [
     backendSkeletonActive,
     cameraAspectRatio,
     cameraError,
     cameraReady,
     cameraRuntimeError,
-    gpuRenderer,
-    inferenceBackend,
-    modelError,
-    modelReady,
+    liveRuntime?.inputMode,
+    liveRuntime?.reason,
+    liveRuntime?.state,
     personDetected,
     retryCamera,
     skeletonSource,

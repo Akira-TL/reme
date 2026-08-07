@@ -165,9 +165,9 @@ export function ChildPhone({
               canvasRef={canvasRef}
               cameraReady={camera.cameraReady}
               cameraError={camera.cameraError}
-              modelReady={camera.modelReady}
-              modelError={camera.modelError}
-              inferenceBackend={camera.inferenceBackend}
+              perceptionState={camera.perceptionState}
+              inputMode={camera.inputMode}
+              perceptionReason={camera.perceptionReason}
               viewMode={viewMode}
               skeletonSource={camera.skeletonSource}
               compact
@@ -193,7 +193,7 @@ export function ChildPhone({
                         ? "收起现场画面"
                         : "查看现场画面"}
               </Button>
-              <small>{viewMode === "video_skeleton" ? "现场画面已叠加姿态识别" : "默认只显示姿态画面"}</small>
+              <small>{viewMode === "video_skeleton" ? "现场画面叠加后端姿态结果" : "默认只显示后端姿态画面"}</small>
             </div>
 
             <div className={`phone-care-card ${danger ? "is-danger" : `is-${scene.tone}`}`}>

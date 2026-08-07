@@ -173,9 +173,9 @@ button { font: inherit; }
 .source-state i.is-online { background: #2ba03d; box-shadow: 0 0 0 4px rgba(43,160,61,0.1); }
 .device-health-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: -3px 0 10px; }
 .device-health-badge { max-width: 100%; overflow: hidden; padding: 5px 8px; border: 1px solid #dedbd7; border-radius: 999px; color: #69645f; background: #f7f5f2; font-size: 9px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
-.device-health-badge.status-online, .device-health-badge.source-a_backend, .device-health-badge.source-c_gpu { border-color: #b9ddc1; color: #237d34; background: #eff9f1; }
+.device-health-badge.status-online, .device-health-badge.source-a_backend { border-color: #b9ddc1; color: #237d34; background: #eff9f1; }
 .device-health-badge.status-loading, .device-health-badge.source-unavailable { border-color: #e4d4aa; color: #896b2f; background: #fff9e9; }
-.device-health-badge.status-degraded, .device-health-badge.source-demo_fallback { border-color: #efb9a8; color: #ad4d2d; background: #fff2ee; }
+.device-health-badge.status-degraded { border-color: #efb9a8; color: #ad4d2d; background: #fff2ee; }
 
 .scene-viewport {
   position: relative;

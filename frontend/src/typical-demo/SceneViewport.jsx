@@ -9,9 +9,9 @@ export function SceneViewport({
   canvasRef,
   cameraReady,
   cameraError = "",
-  modelReady = false,
-  modelError = "",
-  inferenceBackend = "loading",
+  perceptionState = "offline",
+  inputMode = null,
+  perceptionReason = "",
   viewMode,
   skeletonSource = "unavailable",
   compact = false,
@@ -22,7 +22,7 @@ export function SceneViewport({
   const hideEnvironment = privacy && compact;
   const hasSceneBackground = Boolean(backgroundImage) && !hideEnvironment;
   const cameraHealth = getCameraHealth({ cameraReady, cameraError });
-  const modelHealth = getModelHealth({ modelReady, modelError, inferenceBackend });
+  const modelHealth = getModelHealth({ perceptionState, inputMode, perceptionReason });
   const sourceLabel = describeSkeletonSource(skeletonSource);
   const liveCode = cameraHealth.state === "online"
     ? "LIVE"

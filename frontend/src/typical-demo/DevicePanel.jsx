@@ -39,9 +39,9 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
         canvasRef={canvasRef}
         cameraReady={camera.cameraReady}
         cameraError={camera.cameraError}
-        modelReady={camera.modelReady}
-        modelError={camera.modelError}
-        inferenceBackend={camera.inferenceBackend}
+        perceptionState={camera.perceptionState}
+        inputMode={camera.inputMode}
+        perceptionReason={camera.perceptionReason}
         viewMode={viewMode}
         skeletonSource={camera.skeletonSource}
         showStatus={false}

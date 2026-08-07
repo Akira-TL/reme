@@ -60,16 +60,16 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
     c: {
       scene_id: scene.id,
       camera_ready: camera.cameraReady,
-      model_ready: camera.modelReady,
-      inference_backend: camera.inferenceBackend || null,
-      gpu_renderer: camera.gpuRenderer || null,
+      upload_mode: "jpeg",
+      perception_state: camera.perceptionState || null,
+      perception_input_mode: camera.inputMode || null,
       person_detected: camera.personDetected,
       skeleton_source: camera.skeletonSource || null,
       skeleton_source_label: describeSkeletonSource(camera.skeletonSource),
       conversation_scenario: scene.conversationScenario || null,
       auto_conversation: Boolean(scene.autoConversation),
       camera_error: camera.cameraError || null,
-      model_error: camera.modelError || null,
+      perception_reason: camera.perceptionReason || null,
       error: camera.error || null,
     },
     a: {
@@ -119,15 +119,15 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
             <div className="debug-grid">
               <DebugValue label="场景" value={scene.id} />
               <DebugValue label="摄像头" value={`${cameraHealth.state} · ${cameraHealth.label}`} />
-              <DebugValue label="姿态模型" value={`${modelHealth.state} · ${modelHealth.label}`} />
-              <DebugValue label="推理后端" value={camera.inferenceBackend || "loading"} />
-              <DebugValue label="GPU 渲染器" value={camera.gpuRenderer || "detecting"} wide />
+              <DebugValue label="姿态服务" value={`${modelHealth.state} · ${modelHealth.label}`} />
+              <DebugValue label="浏览器上传" value="JPEG · 10 FPS" />
+              <DebugValue label="推理位置" value="统一后端" />
               <DebugValue label="检测到人物" value={camera.personDetected ? "yes" : "no"} />
               <DebugValue label="骨架显示来源" value={`${camera.skeletonSource || "—"} · ${describeSkeletonSource(camera.skeletonSource)}`} wide />
               <DebugValue label="场景对话任务" value={scene.conversationScenario || "disabled"} />
               <DebugValue label="自动对话" value={scene.autoConversation ? "enabled (2.5s)" : "manual / disabled"} />
               {camera.cameraError && <DebugValue label="摄像头错误" value={camera.cameraError} wide />}
-              {camera.modelError && <DebugValue label="GPU 模型错误" value={camera.modelError} wide />}
+              {camera.perceptionReason && <DebugValue label="后端感知状态" value={camera.perceptionReason} wide />}
             </div>
           </div>
 

@@ -13,14 +13,16 @@ test("摄像头错误不能继续显示为连接中", () => {
   assert.equal(health.label, "摄像头不可用");
 });
 
-test("GPU 严格模式明确显示不可用而不是 ready", () => {
-  const health = getModelHealth({
-    modelReady: false,
-    inferenceBackend: "unavailable",
-    modelError: "禁止回退 CPU",
-  });
+test("后端 JPEG 推理运行中显示姿态服务已就绪", () => {
+  const health = getModelHealth({ perceptionState: "running", inputMode: "jpeg" });
+  assert.equal(health.state, "online");
+  assert.equal(health.label, "后端姿态已就绪");
+});
+
+test("后端 landmarks 模式被前端明确判为不兼容", () => {
+  const health = getModelHealth({ perceptionState: "running", inputMode: "landmarks" });
   assert.equal(health.state, "degraded");
-  assert.equal(health.label, "GPU 姿态不可用");
+  assert.equal(health.label, "输入模式不兼容");
 });
 
 test("输入通道降级不能被 active 状态伪装为链路就绪", () => {
@@ -41,12 +43,10 @@ test("只有感知运行且决策 WebSocket 打开才显示链路运行中", () 
   assert.equal(health.state, "online");
 });
 
-test("骨架来源区分后端、本地 GPU 与演示降级", () => {
-  assert.equal(describeSkeletonSource("a_backend"), "A 后端实时关键点");
-  assert.equal(describeSkeletonSource("c_gpu"), "C 本地 GPU 关键点");
-  assert.equal(describeSkeletonSource("demo_fallback"), "演示骨架（降级）");
+test("骨架来源只接受后端实时关键点", () => {
+  assert.equal(describeSkeletonSource("a_backend"), "后端实时关键点");
+  assert.equal(describeSkeletonSource("unavailable"), "等待后端关键点");
 });
-
 
 test("运行中的感知不能掩盖已关闭的决策连接", () => {
   const health = getLinkHealth({
