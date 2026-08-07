@@ -148,7 +148,10 @@ class VoiceDialogueController:
             recognition = speech.transcribe(audio_bytes, audio_format=audio_format)
         except MimoSpeechError as exc:
             raise VoiceDialogueError("asr_failed", str(exc)) from exc
-        response_value = _classify_transcript(recognition.transcript, decision)
+        reply_text = _strip_prompt_echo(recognition.transcript, decision.elder_message)
+        if not reply_text:
+            raise VoiceDialogueError("prompt_echo", "ASR 只检测到系统询问的回声")
+        response_value = _classify_transcript(reply_text, decision)
         response = InteractionResponse(
             scene_id=scene_id,
             decision_id=decision_id,
@@ -206,6 +209,31 @@ class VoiceDialogueController:
         if audio_format == "wav" and not payload.startswith(b"RIFF"):
             raise VoiceDialogueError("bad_audio", "WAV payload has an invalid header")
         return payload
+
+
+def _strip_prompt_echo(transcript: str, prompt: str | None) -> str:
+    """Remove a leading ASR fragment that is likely the just-played TTS prompt.
+
+    Browser AEC is the primary defence. This deterministic guard only strips a
+    sufficiently long *leading* fragment when that fragment occurs in the
+    current elder prompt, so genuine user speech after the prompt is preserved.
+    """
+
+    text = transcript.strip()
+    if not text or not prompt:
+        return text
+
+    normalized_text = "".join(char.casefold() for char in text if char.isalnum())
+    normalized_prompt = "".join(char.casefold() for char in prompt if char.isalnum())
+    if len(normalized_text) < 5 or len(normalized_prompt) < 5:
+        return text
+
+    max_prefix = min(len(normalized_text), len(normalized_prompt))
+    for prefix_len in range(max_prefix, 4, -1):
+        prefix = normalized_text[:prefix_len]
+        if prefix in normalized_prompt:
+            return normalized_text[prefix_len:]
+    return text
 
 
 def _classify_transcript(transcript: str, decision: CareDecision) -> ResponseValue:

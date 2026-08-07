@@ -5,6 +5,7 @@ import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import { Button } from "@mui/material";
 import { describePosture } from "../adapters/perception";
+import { describeSkeletonSource, getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus";
 
 const RUNTIME_LABELS = {
   offline: "离线",
@@ -49,8 +50,16 @@ export function RuntimeInspector({ scene, camera, live, fallPhase }) {
   const posture = live.posture;
   const transition = live.transition;
   const decision = live.decision?.decision;
-  const perceptionOnline = ["starting", "running", "input_unavailable"].includes(runtime.state);
+  const perceptionOnline = runtime.state === "running";
   const decisionOnline = live.decision?.connection === "open";
+  const cameraHealth = getCameraHealth(camera);
+  const modelHealth = getModelHealth(camera);
+  const linkHealth = getLinkHealth(live);
+  const inputOnline = cameraHealth.state === "online" && modelHealth.state === "online";
+  const inputStatus = inputOnline
+    ? "摄像头与后端姿态已就绪"
+    : cameraHealth.state === "degraded" ? cameraHealth.label : modelHealth.label;
+  const inputDetail = `${describeSkeletonSource(camera.skeletonSource)} · ${cameraHealth.detail} · ${modelHealth.detail}`;
   const mimoSource = decision?.source === "mimo" ? "MiMo 推理" : decision ? "确定性规则" : "等待事件";
 
   return (
@@ -62,15 +71,15 @@ export function RuntimeInspector({ scene, camera, live, fallPhase }) {
       </header>
 
       <div className="runtime-flow" aria-label="数据流向">
-        <b>浏览器摄像头</b><i>→</i><b>本地感知</b><i>→</i><b>进程内决策 / MiMo</b><i>→</i><b>页面展示</b>
+        <b>浏览器摄像头</b><i>→</i><b>JPEG 帧</b><i>→</i><b>后端感知 / 决策</b><i>→</i><b>页面展示</b>
       </div>
 
       <StatusRow
         icon={<VideocamRoundedIcon />}
         title="浏览器输入"
-        status={camera.cameraReady ? "摄像头已连接" : "等待摄像头"}
-        detail={camera.error || `当前场景：${scene.title}`}
-        online={camera.cameraReady}
+        status={inputStatus}
+        detail={inputDetail}
+        online={inputOnline}
       />
       <StatusRow
         icon={<SensorsRoundedIcon />}
@@ -94,12 +103,12 @@ export function RuntimeInspector({ scene, camera, live, fallPhase }) {
         online={decisionOnline}
       />
 
-      <div className={`acceptance-result ${live.active ? "is-online" : ""}`}>
-        {live.active ? <CheckCircleRoundedIcon /> : <span />}
+      <div className={`acceptance-result ${linkHealth.state === "online" ? "is-online" : ""}`}>
+        {linkHealth.state === "online" ? <CheckCircleRoundedIcon /> : <span />}
         <div>
           <small>当前验收状态</small>
-          <strong>{live.active ? "统一实时链路已接管" : "正在等待统一后端链路"}</strong>
-          <p>{live.active ? `场景 ${scene.id} 正在真实运行，当前阶段：${fallPhase}` : "请确认统一后端和摄像头权限均正常"}</p>
+          <strong>{linkHealth.label}</strong>
+          <p>{linkHealth.state === "online" ? `场景 ${scene.id} 正在真实运行，当前阶段：${fallPhase}` : linkHealth.detail}</p>
         </div>
       </div>
 

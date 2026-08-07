@@ -13,7 +13,8 @@ const VOICE_STAGE_LABELS = {
   tts_request: "正在准备语音询问…",
   playing: "正在播放关怀语音…",
   playing_fallback: "正在使用备用语音播放…",
-  waiting_reply: "播放结束后会自动聆听…",
+  listening_prompt: "正在询问，同时聆听外婆是否回应…",
+  waiting_reply: "正在准备聆听回复…",
   recording: "正在聆听外婆的回复…",
   asr_request: "正在理解语音回复…",
   complete: "这一轮对话已完成",
@@ -139,6 +140,7 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
         <b>{live.active ? `正在演示：${scene.title}` : "关怀链路尚未连接"}</b>
         <p>
           {voice.error
+            || voice.microphoneError
             || (voice.stage && voice.stage !== "idle" ? VOICE_STAGE_LABELS[voice.stage] : "")
             || mimoRequest.error
             || (mimoRequest.status === "waiting_scene" ? "正在切换场景，稍后会发起询问…" : "")

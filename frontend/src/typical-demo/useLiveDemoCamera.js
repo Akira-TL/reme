@@ -1,24 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { assertHardwareWebGl, inspectWebGlRenderer } from "../utils/gpu";
-import { createDemoLandmarks, drawSkeleton, mapLandmarks } from "../utils/pose";
+import { drawSkeleton } from "../utils/pose";
 
-// 本地资产（predev 拷贝 wasm、模型已入库）：演示现场零 CDN 依赖。
-const MP_WASM_URL = "/mediapipe/wasm";
-const POSE_MODEL_URL = "/mediapipe/pose_landmarker_lite.task";
-const MODEL_LOAD_TIMEOUT_MS = 15000;
 const BACKEND_FRAME_TTL_MS = 1600;
 const DEFAULT_RENDER_WIDTH = 960;
 const DEFAULT_RENDER_HEIGHT = 540;
 const MAX_RENDER_EDGE = 1280;
-
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      window.setTimeout(() => reject(new Error(label)), ms);
-    }),
-  ]);
-}
 
 function getSourceSize(source) {
   return {
@@ -77,18 +63,14 @@ export function useLiveDemoCamera({
   deviceViewMode,
   phoneViewMode,
   skeletonColor,
-  onLandmarks = null,
   backendLandmarkFrame = null,
 }) {
   const videoRef = useRef(null);
   const deviceCanvasRef = useRef(null);
   const phoneCanvasRef = useRef(null);
   const streamRef = useRef(null);
-  const landmarkerRef = useRef(null);
+  const cameraRequestRef = useRef(0);
   const renderFrameRef = useRef(0);
-  const lastVideoTimeRef = useRef(-1);
-  const lastInferenceAtRef = useRef(0);
-  const localLandmarksRef = useRef([]);
   const backendLandmarksRef = useRef([]);
   const backendReceivedAtRef = useRef(0);
   const deviceRenderCanvasRef = useRef(null);
@@ -96,31 +78,23 @@ export function useLiveDemoCamera({
   const deviceViewModeRef = useRef(deviceViewMode);
   const phoneViewModeRef = useRef(phoneViewMode);
   const skeletonColorRef = useRef(skeletonColor);
-  const cameraFallbackRef = useRef(false);
-  const modelFallbackRef = useRef(false);
-  const onLandmarksRef = useRef(onLandmarks);
-  const detectedRef = useRef(false);
   const backendActiveRef = useRef(false);
   const cameraReadyRef = useRef(false);
-  const modelReadyRef = useRef(false);
 
   const [cameraReady, setCameraReady] = useState(false);
   const [aspectRatio, setAspectRatio] = useState(DEFAULT_RENDER_WIDTH / DEFAULT_RENDER_HEIGHT);
-  const [modelReady, setModelReady] = useState(false);
   const [personDetected, setPersonDetected] = useState(false);
   const [backendSkeletonActive, setBackendSkeletonActive] = useState(false);
   const [cameraError, setCameraError] = useState("");
-  const [modelError, setModelError] = useState("");
-  const [inferenceBackend, setInferenceBackend] = useState("loading");
-  const [gpuRenderer, setGpuRenderer] = useState("detecting");
-
-  useEffect(() => {
-    onLandmarksRef.current = onLandmarks;
-  }, [onLandmarks]);
+  const [restartGeneration, setRestartGeneration] = useState(0);
 
   useEffect(() => {
     const landmarks = backendLandmarkFrame?.landmarks;
-    if (!Array.isArray(landmarks) || landmarks.length !== 17) return;
+    if (!Array.isArray(landmarks) || landmarks.length !== 17) {
+      backendLandmarksRef.current = [];
+      backendReceivedAtRef.current = 0;
+      return;
+    }
     backendLandmarksRef.current = landmarks;
     backendReceivedAtRef.current = Number.isFinite(backendLandmarkFrame.receivedAt)
       ? backendLandmarkFrame.receivedAt
@@ -137,21 +111,25 @@ export function useLiveDemoCamera({
     cameraReadyRef.current = cameraReady;
   }, [cameraReady]);
 
-  useEffect(() => {
-    modelReadyRef.current = modelReady;
-  }, [modelReady]);
-
   const startCamera = useCallback(async () => {
+    const requestId = cameraRequestRef.current + 1;
+    cameraRequestRef.current = requestId;
+    cameraReadyRef.current = false;
+    setCameraReady(false);
     setCameraError("");
-    cameraFallbackRef.current = false;
+
+    const previousStream = streamRef.current;
+    streamRef.current = null;
+    previousStream?.getTracks().forEach((track) => track.stop());
+
     if (!navigator.mediaDevices?.getUserMedia) {
-      cameraFallbackRef.current = true;
-      setCameraError("当前浏览器不支持摄像头，已进入动态骨架演示");
+      setCameraError("当前浏览器不支持摄像头，无法采集实时画面");
       return;
     }
+
+    let stream = null;
     try {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
           facingMode: { ideal: "user" },
@@ -160,79 +138,68 @@ export function useLiveDemoCamera({
           frameRate: { ideal: 30, max: 30 },
         },
       });
+      if (cameraRequestRef.current !== requestId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      const video = videoRef.current;
+      if (!video) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       streamRef.current = stream;
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-      const settings = stream.getVideoTracks()[0]?.getSettings?.() || {};
-      const sourceWidth = videoRef.current.videoWidth || settings.width;
-      const sourceHeight = videoRef.current.videoHeight || settings.height;
+      video.srcObject = stream;
+      await video.play();
+      if (cameraRequestRef.current !== requestId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      const track = stream.getVideoTracks()[0];
+      const settings = track?.getSettings?.() || {};
+      const sourceWidth = video.videoWidth || settings.width;
+      const sourceHeight = video.videoHeight || settings.height;
       if (sourceWidth && sourceHeight) setAspectRatio(sourceWidth / sourceHeight);
+      track?.addEventListener("ended", () => {
+        if (cameraRequestRef.current !== requestId) return;
+        cameraReadyRef.current = false;
+        setCameraReady(false);
+        setCameraError("摄像头连接已中断，请检查设备后重试");
+      }, { once: true });
+      cameraReadyRef.current = true;
       setCameraReady(true);
     } catch (cameraFailure) {
-      cameraFallbackRef.current = true;
+      stream?.getTracks().forEach((track) => track.stop());
+      if (cameraRequestRef.current !== requestId) return;
+      cameraReadyRef.current = false;
       setCameraReady(false);
       setCameraError(cameraFailure?.name === "NotAllowedError"
         ? "摄像头权限被拒绝，请允许权限后重试"
-        : "摄像头连接失败，已进入动态骨架演示");
+        : "摄像头连接失败，无法采集实时画面");
     }
   }, []);
 
+  const retry = useCallback(() => {
+    cameraReadyRef.current = false;
+    setCameraReady(false);
+    setCameraError("");
+    setRestartGeneration((value) => value + 1);
+  }, []);
+
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadModel() {
-      modelFallbackRef.current = false;
-      try {
-        const rendererInfo = inspectWebGlRenderer();
-        if (!cancelled) setGpuRenderer(rendererInfo.renderer);
-        assertHardwareWebGl(rendererInfo);
-
-        const { FilesetResolver, PoseLandmarker } = await import("@mediapipe/tasks-vision");
-        const vision = await withTimeout(
-          FilesetResolver.forVisionTasks(MP_WASM_URL),
-          MODEL_LOAD_TIMEOUT_MS,
-          "wasm 加载超时",
-        );
-        landmarkerRef.current = await withTimeout(
-          PoseLandmarker.createFromOptions(vision, {
-            baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
-            runningMode: "VIDEO",
-            numPoses: 1,
-            minPoseDetectionConfidence: 0.5,
-            minPosePresenceConfidence: 0.5,
-            minTrackingConfidence: 0.5,
-            outputSegmentationMasks: false,
-          }),
-          MODEL_LOAD_TIMEOUT_MS,
-          "GPU 姿态模型加载超时",
-        );
-        if (!cancelled) {
-          setModelReady(true);
-          setInferenceBackend("gpu");
-          setModelError("");
-        }
-      } catch (error) {
-        modelFallbackRef.current = true;
-        if (!cancelled) {
-          setModelReady(false);
-          setInferenceBackend("unavailable");
-          setModelError(
-            `GPU 姿态推理不可用，已禁止回退 CPU：${error?.message || "初始化失败"}`,
-          );
-        }
-      }
-    }
-
+    const mountedVideo = videoRef.current;
     const cameraTimer = window.setTimeout(startCamera, 0);
-    loadModel();
     return () => {
-      cancelled = true;
+      cameraRequestRef.current += 1;
+      cameraReadyRef.current = false;
       window.clearTimeout(cameraTimer);
-      cancelAnimationFrame(renderFrameRef.current);
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      landmarkerRef.current?.close();
+      const stream = streamRef.current;
+      streamRef.current = null;
+      stream?.getTracks().forEach((track) => track.stop());
+      if (mountedVideo) mountedVideo.srcObject = null;
     };
-  }, [startCamera]);
+  }, [restartGeneration, startCamera]);
 
   useEffect(() => {
     const deviceRenderCanvas = document.createElement("canvas");
@@ -245,29 +212,6 @@ export function useLiveDemoCamera({
     phoneRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
     const deviceContext = deviceRenderCanvas.getContext("2d");
     const phoneContext = phoneRenderCanvas.getContext("2d");
-
-    function detect(now) {
-      if (cameraFallbackRef.current || modelFallbackRef.current) {
-        localLandmarksRef.current = createDemoLandmarks(now);
-        return;
-      }
-      const video = videoRef.current;
-      const landmarker = landmarkerRef.current;
-      if (!cameraReadyRef.current || !modelReadyRef.current || !video || !landmarker) return;
-      if (now - lastInferenceAtRef.current < 75 || video.readyState < 2 || video.currentTime === lastVideoTimeRef.current) return;
-      lastInferenceAtRef.current = now;
-      lastVideoTimeRef.current = video.currentTime;
-      try {
-        const result = landmarker.detectForVideo(video, now);
-        localLandmarksRef.current = result?.landmarks?.[0] ? mapLandmarks(result.landmarks[0]) : [];
-        // 本地真实推理只在 A 明确要求 landmarks 输入时上送；演示骨架永不上送。
-        if (localLandmarksRef.current.length === 17) {
-          onLandmarksRef.current?.(localLandmarksRef.current, now);
-        }
-      } catch {
-        localLandmarksRef.current = [];
-      }
-    }
 
     function drawMode(context, mode, points, video) {
       const width = context.canvas.width;
@@ -290,12 +234,9 @@ export function useLiveDemoCamera({
     }
 
     function render(now) {
-      detect(now);
       const backendActive = backendLandmarksRef.current.length === 17
         && now - backendReceivedAtRef.current <= BACKEND_FRAME_TTL_MS;
-      const displayLandmarks = backendActive
-        ? backendLandmarksRef.current
-        : localLandmarksRef.current;
+      const displayLandmarks = backendActive ? backendLandmarksRef.current : [];
       const video = videoRef.current;
       const renderSize = resolveRenderSize(cameraReadyRef.current ? video : null);
       if (
@@ -314,11 +255,7 @@ export function useLiveDemoCamera({
       if (backendActive !== backendActiveRef.current) {
         backendActiveRef.current = backendActive;
         setBackendSkeletonActive(backendActive);
-      }
-      const detected = displayLandmarks.length === 17;
-      if (detected !== detectedRef.current) {
-        detectedRef.current = detected;
-        setPersonDetected(detected);
+        setPersonDetected(backendActive);
       }
       paintTarget(deviceCanvasRef.current, deviceRenderCanvas);
       paintTarget(phoneCanvasRef.current, phoneRenderCanvas);
@@ -335,13 +272,11 @@ export function useLiveDemoCamera({
     phoneCanvasRef,
     cameraReady,
     aspectRatio,
-    modelReady,
-    inferenceBackend,
-    gpuRenderer,
     personDetected,
     backendSkeletonActive,
-    skeletonSource: backendSkeletonActive ? "a_backend" : "c_local",
-    error: cameraError || modelError,
-    retry: startCamera,
+    skeletonSource: backendSkeletonActive ? "a_backend" : "unavailable",
+    cameraError,
+    error: cameraError,
+    retry,
   };
 }

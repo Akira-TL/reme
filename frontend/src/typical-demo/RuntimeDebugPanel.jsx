@@ -1,7 +1,9 @@
 import BugReportRoundedIcon from "@mui/icons-material/BugReportRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
+import { Button, IconButton } from "@mui/material";
 import { useState } from "react";
 import { describePosture } from "../adapters/perception";
+import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
 const MIMO_MODEL = import.meta.env.VITE_REME_MIMO_MODEL || "mimo-v2.5";
 const MIMO_CONFIGURED = import.meta.env.VITE_REME_MIMO_CONFIGURED === "true";
@@ -31,6 +33,10 @@ function number(value, suffix = "") {
   return Number.isFinite(value) ? `${Math.round(value)}${suffix}` : "—";
 }
 
+function enabledLabel(value) {
+  return value === true ? "on" : value === false ? "off" : "unknown";
+}
+
 function DebugValue({ label, value, wide = false }) {
   return (
     <div className={`debug-value ${wide ? "is-wide" : ""}`}>
@@ -51,18 +57,23 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
   const decision = decisionRuntime.decision;
   const mimoRequest = decisionRuntime.mimoRequest || {};
   const voice = live.voice || {};
+  const cameraHealth = getCameraHealth(camera);
+  const modelHealth = getModelHealth(camera);
 
   const rawSnapshot = {
     c: {
       scene_id: scene.id,
       camera_ready: camera.cameraReady,
-      model_ready: camera.modelReady,
-      inference_backend: camera.inferenceBackend || null,
-      gpu_renderer: camera.gpuRenderer || null,
+      upload_mode: "jpeg",
+      perception_state: camera.perceptionState || null,
+      perception_input_mode: camera.inputMode || null,
       person_detected: camera.personDetected,
       skeleton_source: camera.skeletonSource || null,
+      skeleton_source_label: describeSkeletonSource(camera.skeletonSource),
       conversation_scenario: scene.conversationScenario || null,
       auto_conversation: Boolean(scene.autoConversation),
+      camera_error: camera.cameraError || null,
+      perception_reason: camera.perceptionReason || null,
       error: camera.error || null,
     },
     a: {
@@ -84,17 +95,16 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
 
   return (
     <div className={`runtime-debug ${open ? "is-open" : ""}`}>
-      <button
-        type="button"
+      <Button
         className="runtime-debug-trigger"
+        startIcon={<BugReportRoundedIcon />}
+        endIcon={<span className={`debug-online-dot ${live.active ? "is-online" : ""}`} />}
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls="runtime-debug-panel"
       >
-        <BugReportRoundedIcon />
-        <span>Debug</span>
-        <i className={live.active ? "is-online" : ""} />
-      </button>
+        Debug
+      </Button>
 
       {open && (
         <section id="runtime-debug-panel" className="runtime-debug-panel" aria-label="统一后端实时调试信息">
@@ -103,24 +113,25 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <small>UNIFIED RUNTIME DEBUG</small>
               <h2>后端实时状态</h2>
             </div>
-            <button type="button" onClick={() => setOpen(false)} aria-label="关闭调试面板">
+            <IconButton onClick={() => setOpen(false)} aria-label="关闭调试面板" size="small">
               <CloseRoundedIcon />
-            </button>
+            </IconButton>
           </header>
 
           <div className="debug-section">
             <h3>C · 浏览器输入</h3>
             <div className="debug-grid">
               <DebugValue label="场景" value={scene.id} />
-              <DebugValue label="摄像头" value={camera.cameraReady ? "online" : "offline"} />
-              <DebugValue label="姿态模型" value={camera.modelReady ? "ready" : "loading / degraded"} />
-              <DebugValue label="推理后端" value={camera.inferenceBackend || "loading"} />
-              <DebugValue label="GPU 渲染器" value={camera.gpuRenderer || "detecting"} wide />
+              <DebugValue label="摄像头" value={`${cameraHealth.state} · ${cameraHealth.label}`} />
+              <DebugValue label="姿态服务" value={`${modelHealth.state} · ${modelHealth.label}`} />
+              <DebugValue label="浏览器上传" value="JPEG · 10 FPS" />
+              <DebugValue label="推理位置" value="统一后端" />
               <DebugValue label="检测到人物" value={camera.personDetected ? "yes" : "no"} />
-              <DebugValue label="骨架显示来源" value={camera.skeletonSource || "—"} />
+              <DebugValue label="骨架显示来源" value={`${camera.skeletonSource || "—"} · ${describeSkeletonSource(camera.skeletonSource)}`} wide />
               <DebugValue label="场景对话任务" value={scene.conversationScenario || "disabled"} />
               <DebugValue label="自动对话" value={scene.autoConversation ? "enabled (2.5s)" : "manual / disabled"} />
-              {camera.error && <DebugValue label="C 错误" value={camera.error} wide />}
+              {camera.cameraError && <DebugValue label="摄像头错误" value={camera.cameraError} wide />}
+              {camera.perceptionReason && <DebugValue label="后端感知状态" value={camera.perceptionReason} wide />}
             </div>
           </div>
 
@@ -178,6 +189,11 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="老人话术" value={decision?.elder_message || "—"} wide />
               <DebugValue label="家属通知" value={decision?.family_notification || "—"} wide />
               <DebugValue label="语音能力" value={voice.supported ? "ready" : "unsupported"} />
+              <DebugValue label="麦克风预热" value={voice.microphoneReady ? "ready" : "not-ready"} />
+              <DebugValue label="回声消除 AEC" value={enabledLabel(voice.microphoneProcessing?.echoCancellation)} />
+              <DebugValue label="环境降噪" value={enabledLabel(voice.microphoneProcessing?.noiseSuppression)} />
+              <DebugValue label="自动增益" value={enabledLabel(voice.microphoneProcessing?.autoGainControl)} />
+              <DebugValue label="Voice Isolation" value={enabledLabel(voice.microphoneProcessing?.voiceIsolation)} />
               <DebugValue label="语音阶段" value={voice.stage || "idle"} />
               <DebugValue label="自动聆听" value={voice.listening ? "recording" : "idle"} />
               <DebugValue label="ASR 模型" value={voice.asrModel || "mimo-v2.5-asr"} />
@@ -186,6 +202,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="TTS 延迟" value={number(voice.ttsLatencyMs, " ms")} />
               <DebugValue label="识别文本" value={voice.transcript || "—"} wide />
               <DebugValue label="回复意图" value={voice.responseValue || "—"} />
+              {voice.microphoneError && <DebugValue label="麦克风错误" value={voice.microphoneError} wide />}
               {voice.error && <DebugValue label="语音错误" value={voice.error} wide />}
               {decisionRuntime.reason && <DebugValue label="B 错误" value={decisionRuntime.reason} wide />}
             </div>

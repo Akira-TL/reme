@@ -6,7 +6,17 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-from reme.runtime.perception.fall_mil import FallMILModel, FallMILScore, score_fall_samples
+from reme.runtime.perception.edge_bundle import (
+    FALL_HEAD_SCHEMA_VERSION,
+    CompactFallModel,
+    model_schema_version,
+)
+from reme.runtime.perception.fall_mil import (
+    FallMILModel,
+    FallMILScore,
+    FallWindowPredictor,
+    score_fall_samples,
+)
 from reme.runtime.perception.fall_training_data import derive_fall_pose_sample
 from reme.runtime.perception.fall_weak_labels import FallPoseSample
 from reme.runtime.perception.posture import PosturePrediction
@@ -34,12 +44,13 @@ class FallMILTransitionEnhancer:
         self,
         *,
         session_id: str,
-        model: FallMILModel,
+        model: FallWindowPredictor,
         config: TransitionDetectorConfig | None = None,
         score_threshold: float = 0.2,
     ) -> None:
         self.session_id = session_id
         self.model = model
+        self.model_name = "edge-int16" if isinstance(model, CompactFallModel) else "mil-v3"
         self.detector = TransitionDetector(session_id=session_id, config=config)
         self.score_threshold = score_threshold
         self._samples: deque[FallPoseSample] = deque()
@@ -55,9 +66,14 @@ class FallMILTransitionEnhancer:
         config: TransitionDetectorConfig | None = None,
         score_threshold: float = 0.2,
     ) -> FallMILTransitionEnhancer:
+        model: FallMILModel | CompactFallModel
+        if model_schema_version(model_path) == FALL_HEAD_SCHEMA_VERSION:
+            model = CompactFallModel.load(model_path)
+        else:
+            model = FallMILModel.load(model_path)
         return cls(
             session_id=session_id,
-            model=FallMILModel.load(model_path),
+            model=model,
             config=config,
             score_threshold=score_threshold,
         )
@@ -136,7 +152,7 @@ class FallMILTransitionEnhancer:
         evidence = dict(payload.get("evidence") or {})
         evidence.update(
             {
-                "fall_mil_model": "mil-v3",
+                "fall_mil_model": self.model_name,
                 "fall_mil_probability": round(score.probability, 6),
                 "fall_mil_threshold": round(score.threshold, 6),
                 "fall_mil_candidate_eligible": score.candidate_eligible,

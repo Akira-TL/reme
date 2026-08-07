@@ -36,6 +36,11 @@ from reme.runtime.perception.camera import (
     OpenCVCameraSource,
 )
 from reme.runtime.perception.demo_scenarios import build_demo_runtime_events
+from reme.runtime.perception.edge_bundle import (
+    POSTURE_HEAD_SCHEMA_VERSION,
+    CompactPostureModel,
+    model_schema_version,
+)
 from reme.runtime.perception.fall_runtime import (
     DEFAULT_FALL_MIL_MODEL,
     FallMILTransitionEnhancer,
@@ -161,7 +166,7 @@ class HybridPostureModel:
     def __init__(
         self,
         *,
-        primary: StaticPostureModel,
+        primary: StaticPostureModel | CompactPostureModel,
         fallback: GeometricPostureModel,
     ) -> None:
         self.primary = primary
@@ -184,8 +189,13 @@ def build_runtime_posture_model(
 ) -> HybridPostureModel:
     """Load the runtime static model with a safe real-domain fallback."""
 
+    primary: StaticPostureModel | CompactPostureModel
+    if model_schema_version(posture_model) == POSTURE_HEAD_SCHEMA_VERSION:
+        primary = CompactPostureModel.load(posture_model)
+    else:
+        primary = StaticPostureModel.load(posture_model)
     return HybridPostureModel(
-        primary=StaticPostureModel.load(posture_model),
+        primary=primary,
         fallback=GeometricPostureModel(score_threshold=score_threshold),
     )
 

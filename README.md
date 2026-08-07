@@ -11,16 +11,16 @@ Reme 是面向家庭关怀场景的隐私优先演示系统：统一后端在本
   └─ /ws/camera-input
        ↓
 统一后端 backend/reme/runtime/server.py
-  ├─ perception：MoveNet / MediaPipe、posture_observation、transition_event
+  ├─ perception：MoveNet / 姿态分类、posture_observation、transition_event
   ├─ 进程内 EventBroker → EventIngest
   └─ decision：确定性状态机、MiMo 对话、care_decision
        ↓ /ws
-frontend/typical-demo.html
+frontend React 单页应用（/）
   ├─ 老人端演示
   └─ 家属端隐私视图
 ```
 
-正式单机入口为 `scripts/demo/start-local-demo.sh`。它只管理统一后端和前端两个进程；感知到决策不经过内部 HTTP/WebSocket。实时摄像头姿态默认由浏览器 MediaPipe GPU delegate 推理并直传 17 点关键点，GPU 不可用时明确降级，不静默回退 CPU。
+正式单机入口为 `scripts/demo/start-local-demo.sh`。它只管理统一后端和前端两个进程；感知到决策不经过内部 HTTP/WebSocket。浏览器只采集摄像头并向统一后端发送 JPEG 帧；MoveNet、姿态分类和动作转变判断均在后端完成，前端只展示后端返回的关键点和状态。
 
 ## 快速启动
 
@@ -41,7 +41,7 @@ cp .env.example .env
 启动后访问：
 
 ```text
-http://127.0.0.1:4174/typical-demo.html
+http://127.0.0.1:4174/
 ```
 
 macOS 可双击根目录的 `启动Reme全链路演示.command`。该快捷方式统一转发到 `scripts/launchers/macos/`，实际启动逻辑位于 `scripts/demo/`。
@@ -74,7 +74,6 @@ macOS 可双击根目录的 `启动Reme全链路演示.command`。该快捷方�
 
 ```text
 models/runtime/movenet/movenet_lightning_f16_v4.tflite
-frontend/public/mediapipe/pose_landmarker_lite.task
 models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json
 models/trained/fall/mil-v3/model.json
 ```

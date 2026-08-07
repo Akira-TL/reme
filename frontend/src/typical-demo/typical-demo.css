@@ -52,7 +52,7 @@ button { font: inherit; }
 .brand-lockup h1 { margin: 0; font-size: clamp(19px, 2vw, 28px); line-height: 1.15; letter-spacing: -0.02em; }
 .brand-lockup p { margin: 5px 0 0; color: #777; font-size: 13px; }
 
-.topbar-actions { display: flex; align-items: center; gap: 12px; }
+.topbar-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px 12px; }
 .topbar-actions .MuiButton-root {
   min-height: 40px;
   padding-inline: 16px;
@@ -70,16 +70,26 @@ button { font: inherit; }
   font-weight: 650;
 }
 .camera-health svg { width: 19px; }
-.camera-health.is-online { color: #238e35; }
+.camera-health.status-online, .camera-health.is-online { color: #238e35; }
+.camera-health.status-loading { color: #8a6a2b; }
+.camera-health.status-degraded { color: #c04f25; }
 .live-link-health {
   padding: 5px 11px;
   border-radius: 999px;
   border: 1px solid #d8d2c6;
   background: #f4f1ea;
 }
-.live-link-health.is-online {
+.live-link-health.is-online, .live-link-health.status-online {
   border-color: #9fd8ae;
   background: #ecf8ef;
+}
+.live-link-health.status-loading {
+  border-color: #e2cf9c;
+  background: #fff9e8;
+}
+.live-link-health.status-degraded {
+  border-color: #efb19e;
+  background: #fff1ed;
 }
 
 .scene-tabs {
@@ -161,6 +171,11 @@ button { font: inherit; }
 }
 .source-state i { width: 7px; height: 7px; border-radius: 50%; background: #bbb; }
 .source-state i.is-online { background: #2ba03d; box-shadow: 0 0 0 4px rgba(43,160,61,0.1); }
+.device-health-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: -3px 0 10px; }
+.device-health-badge { max-width: 100%; overflow: hidden; padding: 5px 8px; border: 1px solid #dedbd7; border-radius: 999px; color: #69645f; background: #f7f5f2; font-size: 9px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.device-health-badge.status-online, .device-health-badge.source-a_backend { border-color: #b9ddc1; color: #237d34; background: #eff9f1; }
+.device-health-badge.status-loading, .device-health-badge.source-unavailable { border-color: #e4d4aa; color: #896b2f; background: #fff9e9; }
+.device-health-badge.status-degraded { border-color: #efb9a8; color: #ad4d2d; background: #fff2ee; }
 
 .scene-viewport {
   position: relative;
@@ -325,7 +340,10 @@ button { font: inherit; }
 .viewport-live { left: 3%; color: #23973a; }
 .viewport-privacy { right: 3%; color: #222; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #23973a; box-shadow: 0 0 0 0 rgba(35,151,58,.4); animation: livePulse 1.8s infinite; }
-.live-dot.is-waiting { background: #c59032; }
+.live-dot.is-waiting, .live-dot.is-loading { background: #c59032; animation: none; }
+.live-dot.is-degraded { background: #d9542b; animation: none; }
+.viewport-live.status-loading { color: #8a6a2b; }
+.viewport-live.status-degraded, .viewport-privacy.status-degraded { color: #b94725; background: rgba(255,244,240,.94); }
 .night-time { position: absolute; z-index: 10; left: 3%; bottom: 4%; padding: 5px 8px; border-radius: 8px; color: #f0c995; background: rgba(17,15,16,.7); font-size: 11px; font-weight: 750; letter-spacing: .08em; }
 
 .device-status {
@@ -458,9 +476,10 @@ button { font: inherit; }
   cursor: pointer;
 }
 .runtime-debug-trigger svg { width: 19px; height: 19px; color: var(--accent); }
-.runtime-debug-trigger span { font-size: 12px; font-weight: 800; letter-spacing: .03em; }
-.runtime-debug-trigger i { width: 8px; height: 8px; margin-left: 3px; border-radius: 50%; background: #b3ada8; }
-.runtime-debug-trigger i.is-online { background: #37c052; box-shadow: 0 0 0 4px rgba(55,192,82,.16); }
+.runtime-debug-trigger.MuiButton-root { text-transform: none; }
+.runtime-debug-trigger .MuiButton-endIcon { margin-left: 5px; }
+.runtime-debug-trigger .debug-online-dot { width: 8px; height: 8px; border-radius: 50%; background: #b3ada8; }
+.runtime-debug-trigger .debug-online-dot.is-online { background: #37c052; box-shadow: 0 0 0 4px rgba(55,192,82,.16); }
 .runtime-debug-panel {
   position: absolute;
   left: 0;
@@ -507,7 +526,6 @@ button { font: inherit; }
 .dynamic-island { position: absolute; left: 50%; top: 7px; width: 74px; height: 22px; transform: translateX(-50%); border-radius: 99px; background: #050505; }
 .phone-header { display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 15px; }
 .phone-header b { font-size: 16px; }.phone-header span { font-size: 14px; }
-.phone-header i { margin-left: auto; width: 15px; height: 22px; border: 2px solid var(--accent); border-radius: 4px; }
 .phone-shell .scene-viewport { width: calc(100% - 20px); margin: 0 10px; border-radius: 12px; }
 .family-view-control { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 7px 10px 0; }
 .family-view-control .MuiButton-root { min-height: 27px; padding: 3px 8px; border-radius: 8px; font-size: 7px; white-space: nowrap; }
@@ -534,14 +552,16 @@ button { font: inherit; }
 .phone-timeline { margin: 0 15px; }
 .phone-timeline h3 { margin: 12px 0 7px; font-size: 12px; }
 .phone-timeline > div { position: relative; display: grid; grid-template-columns: 14px 40px 1fr; align-items: center; gap: 5px; min-height: 34px; font-size: 8px; }
-.phone-timeline i { position: relative; z-index: 1; width: 9px; height: 9px; border: 2px solid #fff; border-radius: 50%; background: #ffb56f; box-shadow: 0 0 0 1px #ffad60; }
+.phone-timeline .timeline-dot { position: relative; z-index: 1; width: 9px; height: 9px; padding: 1px; border: 2px solid #fff; border-radius: 50%; color: #ffad60; background: #ffb56f; box-shadow: 0 0 0 1px #ffad60; }
 .phone-timeline > div:not(:last-child)::after { content: ""; position: absolute; left: 4px; top: 20px; width: 1px; height: 26px; background: #ff8d31; }
 .phone-timeline time { font-weight: 650; }.phone-timeline span { color: #64615d; }
 
-.phone-nav { position: absolute; z-index: 3; left: 8px; right: 8px; bottom: 8px; display: grid; grid-template-columns: repeat(3,1fr); height: 58px; border: 1px solid #efedeb; border-radius: 15px; background: rgba(255,255,255,.94); box-shadow: 0 -8px 22px rgba(47,39,32,.04); backdrop-filter: blur(12px); }
-.phone-nav > span { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: #777; }
-.phone-nav svg { width: 20px; }.phone-nav small { font-size: 7px; }.phone-nav .active { color: var(--accent); }
-.heart-icon { height: 22px; font-size: 24px; line-height: 18px; }
+.phone-nav.MuiBottomNavigation-root { position: absolute; z-index: 3; left: 8px; right: 8px; bottom: 8px; height: 58px; border: 1px solid #efedeb; border-radius: 15px; background: rgba(255,255,255,.94); box-shadow: 0 -8px 22px rgba(47,39,32,.04); backdrop-filter: blur(12px); }
+.phone-nav .MuiBottomNavigationAction-root { min-width: 0; padding: 5px 8px; color: #777; }
+.phone-nav .MuiBottomNavigationAction-root.Mui-selected { color: var(--accent); }
+.phone-nav .MuiBottomNavigationAction-label { font-size: 7px; }
+.phone-nav .MuiBottomNavigationAction-label.Mui-selected { font-size: 7px; }
+.phone-nav svg { width: 20px; }
 .column-label { margin-top: 10px; font-size: 13px; letter-spacing: .08em; }
 
 .phone-shell.has-emergency::before { content: ""; position: absolute; z-index: 20; inset: 0; background: rgba(10,11,13,.52); backdrop-filter: blur(2px); }

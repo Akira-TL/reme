@@ -1,22 +1,37 @@
+import BathtubRoundedIcon from "@mui/icons-material/BathtubRounded";
+import DirectionsWalkRoundedIcon from "@mui/icons-material/DirectionsWalkRounded";
+import EmergencyRoundedIcon from "@mui/icons-material/EmergencyRounded";
 import FullscreenRoundedIcon from "@mui/icons-material/FullscreenRounded";
+import HubRoundedIcon from "@mui/icons-material/HubRounded";
+import MemoryRoundedIcon from "@mui/icons-material/MemoryRounded";
+import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
 import RestartAltRoundedIcon from "@mui/icons-material/RestartAltRounded";
+import SyncRoundedIcon from "@mui/icons-material/SyncRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
-import { Button } from "@mui/material";
+import { Button, ButtonBase } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AcceptanceControls } from "./AcceptanceControls";
 import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
 import { RuntimeDebugPanel } from "./RuntimeDebugPanel";
+import { shouldAutoOpenFamilyVideo, shouldCloseFamilyVideo } from "./phoneState";
+import { getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus";
 import { DEMO_SCENES } from "./scenes";
 import { useFallLiveLink } from "./useFallLiveLink";
 import { useLiveDemoCamera } from "./useLiveDemoCamera";
+
+const SCENE_ICONS = {
+  living: DirectionsWalkRoundedIcon,
+  kitchen: RestaurantRoundedIcon,
+  bathroom: BathtubRoundedIcon,
+  fall: EmergencyRoundedIcon,
+};
 
 export function TypicalDemoApp() {
   const [sceneId, setSceneId] = useState("fall");
   const [familyViewOpen, setFamilyViewOpen] = useState(false);
   const [videoElement, setVideoElement] = useState(null);
   const [pendingScenario, setPendingScenario] = useState(null);
-  const sendLandmarksRef = useRef(null);
   const autoConversationRef = useRef(null);
   const conversationGuardRef = useRef({
     status: "idle",
@@ -27,10 +42,6 @@ export function TypicalDemoApp() {
   const scene = useMemo(
     () => DEMO_SCENES.find((item) => item.id === sceneId),
     [sceneId],
-  );
-  const handleLandmarks = useCallback(
-    (points, timestampMs) => sendLandmarksRef.current?.(points, timestampMs),
-    [],
   );
   const live = useFallLiveLink({
     enabled: true,
@@ -44,7 +55,7 @@ export function TypicalDemoApp() {
     resetSceneState,
     startDemoConversation,
   } = live;
-  const effectivePhase = sceneId === "fall" && liveActive ? live.phase : "idle";
+  const effectivePhase = liveActive ? live.phase : "idle";
   const kitchenShareDecision = useMemo(
     () => [live.decision?.decision, ...(live.decision?.history || [])]
       .find((item) => (
@@ -57,12 +68,13 @@ export function TypicalDemoApp() {
   const kitchenShared = Boolean(kitchenShareDecision);
   const kitchenNotification = kitchenShareDecision?.family_notification || "";
   const deviceViewMode = sceneId === "bathroom" ? "skeleton" : "video_skeleton";
-  const autoFamilyViewOpen = sceneId === "kitchen"
-    || (sceneId === "fall" && ["checking", "emergency", "resolved"].includes(effectivePhase));
-  const phoneViewMode = (autoFamilyViewOpen || familyViewOpen) && live.familyVideoAllowed
+  const autoFamilyViewOpen = shouldAutoOpenFamilyVideo(sceneId, effectivePhase);
+  const effectiveFamilyViewOpen = familyViewOpen
+    && !shouldCloseFamilyVideo(effectivePhase);
+  const phoneViewMode = (autoFamilyViewOpen || effectiveFamilyViewOpen) && live.familyVideoAllowed
     ? "video_skeleton"
     : "skeleton";
-  const skeletonColor = sceneId === "fall" && ["candidate", "checking"].includes(effectivePhase)
+  const skeletonColor = ["candidate", "checking"].includes(effectivePhase)
     ? "#ff3b30"
     : "#ff5a00";
   const {
@@ -71,19 +83,16 @@ export function TypicalDemoApp() {
     phoneCanvasRef,
     cameraReady,
     aspectRatio: cameraAspectRatio,
-    modelReady,
-    inferenceBackend,
-    gpuRenderer,
     personDetected,
     backendSkeletonActive,
     skeletonSource,
-    error: cameraError,
+    cameraError,
+    error: cameraRuntimeError,
     retry: retryCamera,
   } = useLiveDemoCamera({
     deviceViewMode,
     phoneViewMode,
     skeletonColor,
-    onLandmarks: handleLandmarks,
     backendLandmarkFrame: live.landmarkFrame,
   });
 
@@ -91,39 +100,42 @@ export function TypicalDemoApp() {
     setVideoElement(videoRef.current);
   }, [videoRef]);
 
-  useEffect(() => {
-    sendLandmarksRef.current = live.sendLandmarks;
-  }, [live.sendLandmarks]);
-
   const cameraState = useMemo(() => ({
     cameraReady,
     aspectRatio: cameraAspectRatio,
-    modelReady,
-    inferenceBackend,
-    gpuRenderer,
     personDetected,
     backendSkeletonActive,
     skeletonSource,
-    error: cameraError,
+    cameraError,
+    error: cameraRuntimeError,
     retry: retryCamera,
+    perceptionState: liveRuntime?.state || "offline",
+    inputMode: liveRuntime?.inputMode || null,
+    perceptionReason: liveRuntime?.reason || "",
   }), [
     backendSkeletonActive,
     cameraAspectRatio,
     cameraError,
     cameraReady,
-    gpuRenderer,
-    inferenceBackend,
-    modelReady,
+    cameraRuntimeError,
+    liveRuntime?.inputMode,
+    liveRuntime?.reason,
+    liveRuntime?.state,
     personDetected,
     retryCamera,
     skeletonSource,
   ]);
+
+  const cameraHealth = getCameraHealth(cameraState);
+  const modelHealth = getModelHealth(cameraState);
+  const linkHealth = getLinkHealth(live);
 
   const selectScene = useCallback((nextScene) => {
     setSceneId(nextScene);
     setFamilyViewOpen(false);
     autoConversationRef.current = null;
   }, []);
+
 
   const markSafe = live.respondSafe;
 
@@ -245,29 +257,46 @@ export function TypicalDemoApp() {
           <div><h1>Reme 家庭关怀演示</h1><p>在本地理解日常状态，需要时再主动询问并提醒家人</p></div>
         </div>
         <div className="topbar-actions">
-          <span className={`camera-health ${cameraReady ? "is-online" : ""}`}>
-            <VideocamRoundedIcon />{cameraReady ? "家中摄像头已连接" : "正在连接家中摄像头"}
+          <span
+            className={`camera-health status-${cameraHealth.state}`}
+            title={cameraHealth.detail}
+          >
+            <VideocamRoundedIcon />{cameraHealth.label}
           </span>
-          <span className={`camera-health live-link-health ${liveActive ? "is-online" : ""}`}>
-            {liveActive ? "关怀链路已就绪" : "正在连接关怀链路"}
+          <span
+            className={`camera-health status-${modelHealth.state}`}
+            title={modelHealth.detail}
+          >
+            <MemoryRoundedIcon />{modelHealth.label}
+          </span>
+          <span
+            className={`camera-health live-link-health status-${linkHealth.state}`}
+            title={linkHealth.detail}
+          >
+            <HubRoundedIcon />{linkHealth.label}
           </span>
           <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>进入全屏</Button>
         </div>
       </header>
 
       <nav className="scene-tabs" aria-label="选择典型演示场景">
-        {DEMO_SCENES.map((item, index) => (
-          <button
-            type="button"
-            key={item.id}
-            className={sceneId === item.id ? "is-active" : ""}
-            onClick={() => selectScene(item.id)}
-          >
-            <small>0{index + 1}</small>
-            <span>{item.nav.replace(/^场景.：/, "")}</span>
-            <kbd>{index + 1}</kbd>
-          </button>
-        ))}
+        {DEMO_SCENES.map((item, index) => {
+          const SceneIcon = SCENE_ICONS[item.id];
+          return (
+            <ButtonBase
+              key={item.id}
+              className={sceneId === item.id ? "is-active" : ""}
+              onClick={() => selectScene(item.id)}
+            >
+              <small>0{index + 1}</small>
+              <span className="flex items-center gap-2">
+                <SceneIcon sx={{ fontSize: 17 }} />
+                {item.nav.replace(/^场景.：/, "")}
+              </span>
+              <kbd>{index + 1}</kbd>
+            </ButtonBase>
+          );
+        })}
       </nav>
 
       <div className="demo-workspace">
@@ -280,6 +309,7 @@ export function TypicalDemoApp() {
 
         <div className="sync-rail" aria-hidden="true">
           <span /><i /><span />
+          <SyncRoundedIcon className="text-orange-500" sx={{ fontSize: 18 }} />
           <b>实时同步</b>
         </div>
 
@@ -293,7 +323,7 @@ export function TypicalDemoApp() {
           canvasRef={phoneCanvasRef}
           camera={cameraState}
           viewMode={phoneViewMode}
-          familyViewOpen={familyViewOpen}
+          familyViewOpen={effectiveFamilyViewOpen}
           autoFamilyViewOpen={autoFamilyViewOpen}
           familyVideoAllowed={live.familyVideoAllowed}
           onToggleFamilyView={() => setFamilyViewOpen((current) => !current)}
@@ -312,7 +342,9 @@ export function TypicalDemoApp() {
       <RuntimeDebugPanel camera={cameraState} live={live} scene={scene} />
 
       <footer className="demo-footer">
-        <button type="button" onClick={resetAcceptance}><RestartAltRoundedIcon />重新开始当前场景</button>
+        <Button size="small" variant="text" startIcon={<RestartAltRoundedIcon />} onClick={resetAcceptance}>
+          重新开始当前场景
+        </Button>
       </footer>
     </main>
   );

@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useDecisionRuntime } from "../hooks/useDecisionRuntime";
 import { usePerceptionRuntime } from "../hooks/usePerceptionRuntime";
+import { isFallSafetyDecision } from "./phoneState";
 import { FALL_PHASES } from "./scenes";
 
 // 单机真实链路：A 在全部场景持续产出骨架/姿态/转变，B 按同一会话做决策。
@@ -28,28 +29,26 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     enabled: Boolean(enabled && videoElement),
   });
   const current = decision.decision?.scene_id === sceneId ? decision.decision : null;
-  // 本轮会话里是否出现过告警（history 由决策钩子维护，纯派生）。
-  const wasAlarmed = useMemo(
-    () => decision.history.some((item) => item?.alarm),
-    [decision.history],
+  const fallEpisodeActive = useMemo(
+    () => [current, ...decision.history]
+      .some((item) => item?.scene_id === sceneId && isFallSafetyDecision(item)),
+    [current, decision.history, sceneId],
   );
 
   const active = Boolean(
     enabled
       && decision.connection === "open"
-      && ["starting", "running", "input_unavailable"].includes(perception.runtime.state)
+      && perception.runtime.state === "running"
   );
 
   const phase = useMemo(() => {
-    if (!enabled || !active || sceneId !== "fall") return "idle";
-    if (current) {
+    if (!enabled || !active) return "idle";
+    if (current && fallEpisodeActive) {
       if (current.state === "check_in_required") return "checking";
       if (["family_notification_required", "urgent_attention"].includes(current.state)) {
         return "emergency";
       }
-      if (current.state === "resolved") {
-        return wasAlarmed ? "resolved" : "idle";
-      }
+      if (current.state === "resolved") return "resolved";
     }
     // 决策尚未跟上最新转移时短暂显示"候选"；check-in 一到即被上面的分支接管。
     const transition = perception.transition;
@@ -60,7 +59,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
       return "candidate";
     }
     return "idle";
-  }, [active, current, enabled, perception.transition, sceneId, wasAlarmed]);
+  }, [active, current, enabled, fallEpisodeActive, perception.transition]);
 
   const fallState = useMemo(() => {
     if (!active) return null;
@@ -127,7 +126,6 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     landmarkFrame: perception.landmarkFrame,
     posture: perception.posture,
     transition: perception.transition,
-    sendLandmarks: perception.sendLandmarks,
     triggerDebugScenario,
     respondSafe,
     respondNeedHelp,

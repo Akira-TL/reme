@@ -43,9 +43,9 @@ def test_load_env_file_rejects_shell_commands(tmp_path: Path) -> None:
         load_env_file(env_file)
 
 
-def test_launcher_defaults_to_browser_gpu_landmarks() -> None:
-    assert LocalDemoConfig(root=Path("/tmp/reme")).browser_input_mode == "landmarks"
-    assert build_parser().parse_args([]).browser_input_mode == "landmarks"
+def test_launcher_defaults_to_backend_jpeg_inference() -> None:
+    assert LocalDemoConfig(root=Path("/tmp/reme")).browser_input_mode == "jpeg"
+    assert build_parser().parse_args([]).browser_input_mode == "jpeg"
 
 
 def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> None:
@@ -54,17 +54,17 @@ def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> N
         host="127.0.0.1",
         backend_port=18770,
         frontend_port=14174,
-        browser_input_mode="landmarks",
+        browser_input_mode="jpeg",
     )
 
     commands = build_child_commands(config)
 
     assert commands["BACKEND"][1:3] == ["-m", "reme.runtime.server"]
-    assert commands["BACKEND"][-2:] == ["--browser-input-mode", "landmarks"]
+    assert commands["BACKEND"][-2:] == ["--browser-input-mode", "jpeg"]
     assert "--a-events-url" not in commands["BACKEND"]
     assert commands["FRONTEND"][-3:] == ["--port", "14174", "--strictPort"]
     assert config.backend_http_url == "http://127.0.0.1:18770"
-    assert config.acceptance_url == "http://127.0.0.1:14174/typical-demo.html"
+    assert config.acceptance_url == "http://127.0.0.1:14174/"
     assert config.mimo_env_path == tmp_path / ".env"
 
 

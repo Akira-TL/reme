@@ -4,7 +4,6 @@ import {
   createFrameMeta,
   createSceneSignal,
   createSessionRequest,
-  KEYPOINT_NAMES,
   mapFrameLandmarks,
   parseRuntimeStatus,
   POSTURE_SCHEMA,
@@ -54,16 +53,12 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
   const sessionRef = useRef(null);
   const sceneRef = useRef(sceneId);
   const frameIndexRef = useRef(0);
-  const landmarksModeRef = useRef(false);
   const acceptedInputsRef = useRef([]);
-  const lastLandmarksSentRef = useRef(0);
   const retry = useCallback(() => {
     setRuntime({ state: "offline", reason: "正在重新连接统一后端感知模块" });
     setRetryGeneration((value) => value + 1);
   }, []);
 
-  // 关键点直传：A 声明 jpeg_inference=false 且接受 landmarks_frame 时，由浏览器本地
-  // MediaPipe 推理结果直接上送，替代 JPEG 帧。节流到 ≤10fps，非直传模式下为空操作。
   const triggerDebugScenario = useCallback((scenario) => {
     const socket = inputSocketRef.current;
     const sessionId = sessionRef.current;
@@ -85,34 +80,19 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
     return true;
   }, []);
 
-  const sendLandmarks = useCallback((points, timestampMs) => {
-    if (!landmarksModeRef.current || !Array.isArray(points) || points.length === 0) return;
+  useEffect(() => {
+    const previousSceneId = sceneRef.current;
+    sceneRef.current = sceneId;
+    if (previousSceneId === sceneId) return;
     const socket = inputSocketRef.current;
     const sessionId = sessionRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN || !sessionId) return;
-    const now = Number.isFinite(timestampMs) ? timestampMs : performance.now();
-    if (now - lastLandmarksSentRef.current < 1000 / CAMERA_FPS) return;
-    lastLandmarksSentRef.current = now;
-    const visibleCount = points.filter((point) => Number(point.score) >= 0.2).length;
-    socket.send(JSON.stringify({
-      type: "landmarks_frame",
-      session_id: sessionId,
-      scene_id: sceneRef.current,
-      frame_index: frameIndexRef.current++,
-      timestamp_ms: now,
-      person_detected: points.length === 17,
-      keypoints: points.map((point, index) => ({
-        name: KEYPOINT_NAMES[index],
-        x_norm: point.x,
-        y_norm: point.y,
-        score: point.score,
-      })),
-      landmark_quality: visibleCount / points.length >= 0.5 ? "usable" : "degraded",
-    }));
-  }, []);
-
-  useEffect(() => {
-    sceneRef.current = sceneId;
+    socket.send(JSON.stringify(createSceneSignal(
+      sessionId,
+      sceneId,
+      "switch",
+      performance.now(),
+    )));
   }, [sceneId]);
 
   useEffect(() => {
@@ -128,10 +108,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
     let pollTimer = 0;
     let encoding = false;
     sessionRef.current = sessionId;
-    sceneRef.current = sceneId;
     frameIndexRef.current = 0;
-    landmarksModeRef.current = false;
-    lastLandmarksSentRef.current = 0;
     const parseEvent = createEventParser(sessionId);
 
     function applyStatus(payload) {
@@ -211,22 +188,21 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
         if (capabilities?.schemas?.runtime_event !== "reme-runtime-event/v0-experiment") {
           throw new Error("A 的 runtime event schema 不兼容");
         }
-        // capabilities 缺 input 字段时视为旧 A，保持 JPEG 帧行为
-        const landmarksMode = Boolean(
-          capabilities?.input
-          && capabilities.input.jpeg_inference === false
-          && Array.isArray(capabilities.input.accepts)
-          && capabilities.input.accepts.includes("landmarks_frame"),
-        );
-        landmarksModeRef.current = landmarksMode;
-        acceptedInputsRef.current = Array.isArray(capabilities?.input?.accepts)
+        const acceptedInputs = Array.isArray(capabilities?.input?.accepts)
           ? capabilities.input.accepts
           : [];
+        const jpegReady = capabilities?.input?.jpeg_inference === true
+          && acceptedInputs.includes("frame_meta")
+          && acceptedInputs.includes("frame");
+        if (!jpegReady) {
+          throw new Error("统一后端未启用 JPEG 姿态推理，请以 --browser-input-mode jpeg 启动");
+        }
+        acceptedInputsRef.current = acceptedInputs;
         setRuntime((current) => ({
           ...current,
           sessionId,
-          inputMode: landmarksMode ? "landmarks" : "jpeg",
-          acceptedInputs: capabilities?.input?.accepts || [],
+          inputMode: "jpeg",
+          acceptedInputs,
         }));
         const starting = await startRuntime(
           urls.httpBase,
@@ -274,11 +250,11 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
           inputSocket.binaryType = "arraybuffer";
           inputSocketRef.current = inputSocket;
           sendScene("activate");
-          if (!landmarksMode) captureTimer = window.setInterval(captureFrame, 1000 / CAMERA_FPS);
+          captureTimer = window.setInterval(captureFrame, 1000 / CAMERA_FPS);
         } catch {
           setRuntime({
             state: "input_unavailable",
-            reason: "A 尚未开放浏览器摄像头输入 WS，当前使用本地姿态后备",
+            reason: "统一后端摄像头输入 WebSocket 不可用",
             sessionId,
           });
         }
@@ -310,7 +286,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
       acceptedInputsRef.current = [];
       pendingRuntimeStop = stopRuntime(urls.httpBase, sessionId).catch(() => {});
     };
-  }, [enabled, retryGeneration, sceneId, videoElement]);
+  }, [enabled, retryGeneration, videoElement]);
 
   return {
     runtime,
@@ -318,7 +294,6 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
     posture,
     transition,
     retry,
-    sendLandmarks,
     triggerDebugScenario,
   };
 }
