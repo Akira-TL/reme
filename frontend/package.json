@@ -8,14 +8,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "node --test src/adapters/perception.test.js src/utils/gpu.test.js src/typical-demo/runtimeStatus.test.js src/typical-demo/phoneState.test.js",
-    "predev": "node scripts/copy-mediapipe.mjs",
-    "prebuild": "node scripts/copy-mediapipe.mjs"
+    "test": "node --test src/adapters/perception.test.js src/typical-demo/runtimeStatus.test.js src/typical-demo/phoneState.test.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
-    "@mediapipe/tasks-vision": "^1.0.1",
     "@mui/icons-material": "^9.2.0",
     "@mui/material": "^9.2.0",
     "react": "^19.2.8",

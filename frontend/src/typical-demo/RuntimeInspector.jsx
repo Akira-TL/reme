@@ -57,7 +57,7 @@ export function RuntimeInspector({ scene, camera, live, fallPhase }) {
   const linkHealth = getLinkHealth(live);
   const inputOnline = cameraHealth.state === "online" && modelHealth.state === "online";
   const inputStatus = inputOnline
-    ? "摄像头与 GPU 已就绪"
+    ? "摄像头与后端姿态已就绪"
     : cameraHealth.state === "degraded" ? cameraHealth.label : modelHealth.label;
   const inputDetail = `${describeSkeletonSource(camera.skeletonSource)} · ${cameraHealth.detail} · ${modelHealth.detail}`;
   const mimoSource = decision?.source === "mimo" ? "MiMo 推理" : decision ? "确定性规则" : "等待事件";
@@ -71,12 +71,12 @@ export function RuntimeInspector({ scene, camera, live, fallPhase }) {
       </header>
 
       <div className="runtime-flow" aria-label="数据流向">
-        <b>浏览器摄像头</b><i>→</i><b>本地感知</b><i>→</i><b>进程内决策 / MiMo</b><i>→</i><b>页面展示</b>
+        <b>浏览器摄像头</b><i>→</i><b>JPEG 帧</b><i>→</i><b>后端感知 / 决策</b><i>→</i><b>页面展示</b>
       </div>
 
       <StatusRow
         icon={<VideocamRoundedIcon />}
-        title="浏览器输入与 GPU"
+        title="浏览器输入"
         status={inputStatus}
         detail={inputDetail}
         online={inputOnline}
