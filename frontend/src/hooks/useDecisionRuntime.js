@@ -559,11 +559,12 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         voiceTurnDecisionId = null;
         clearCountdown();
         if (disposed || replyGeneration !== sceneGeneration || error?.name === "AbortError") return;
+        const promptEcho = error?.code === "prompt_echo";
         setVoice((current) => ({
           ...current,
           listening: false,
-          stage: "failed",
-          error: error.message || "MiMo 语音对话失败",
+          stage: promptEcho ? "complete" : "failed",
+          error: promptEcho ? "" : error.message || "MiMo 语音对话失败",
         }));
         if (!respondedDecisionIds.has(target.decision_id)) {
           submitFor(target, "none", "timeout");
