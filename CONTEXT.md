@@ -4,9 +4,10 @@
 
 Reme explores whether home-care monitoring can preserve a person's dignity while still surfacing safety-relevant information.
 
-The team has confirmed two constraints:
+The team has confirmed two constraints, with one explicit demo exception:
 
-- Source video may be decoded locally, but judge/family-facing output must not make the person easily identifiable.
+- Source video may be decoded locally, and routine judge/family-facing output must not make the person easily identifiable.
+- ADR-0008 permits a fixed public demo room to expose short-lived clear video to all connected Viewers only for an explicitly consented kitchen event or an authoritative fall escalation. This is not a production privacy or access-control design.
 - A usable MiMo API is available.
 
 The current feasibility question is whether the current CUDA development computer can sustain a single-person live-camera pipeline from MoveNet 2D landmarks to posture observations and a complete event-triggered MiMo interaction loop. Recorded video remains a later stability and playback path. The final classifier, transition capability, Raspberry Pi role, and competition story remain open until measured.
@@ -28,6 +29,7 @@ The current boundary is:
 - selected keyframes or short clips may also be sent to MiMo when visual context materially improves privacy-state or care-state reasoning;
 - visual transmission must be explicit, minimal, and observable in the demo rather than continuous background upload;
 - presentation should still prefer skeletons, silhouettes, strongly abstracted views, or structured classifications;
+- the ADR-0008 public demo may open a bounded clear-video grant after explicit kitchen consent (maximum 60 seconds) or authoritative fall escalation (maximum 30 seconds), but never in the bathroom;
 - no additional raw-frame files are exported unless explicitly enabled for debugging.
 
 ### Pose extraction
@@ -75,6 +77,8 @@ Raspberry Pi 4B and the Tuya display board are available assets, not predetermin
 - **Care decision**: the decision layer's current recommendation about observation, check-in, family notification, privacy presentation, or degradation. It is distinct from perception output.
 - **Interaction response**: the older adult's explicit, scripted, unclear, or absent response to a check-in. The response is an input to the next care decision, not a decision by itself.
 - **Privacy mode**: the presentation instruction that determines whether source imagery is visible, blurred, replaced by a skeleton, or hidden. It does not change the underlying perception result.
+- **Room session**: the Relay authority lifetime for the fixed public demo room. It is distinct from a runtime session and must never be used as a perception or decision cursor.
+- **Media grant**: a bounded, event-scoped permission for connected Viewers to receive WebRTC clear video. It is presentation authority, not perception evidence and not authentication.
 
 ## Feasibility gates
 
