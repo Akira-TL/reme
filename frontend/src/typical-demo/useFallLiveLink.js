@@ -34,6 +34,14 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
       .some((item) => item?.scene_id === sceneId && isFallSafetyDecision(item)),
     [current, decision.history, sceneId],
   );
+  const kitchenConsentActive = useMemo(
+    () => [current, ...decision.history].some((item) => (
+      item?.scene_id === "kitchen"
+      && item.action === "notify_family"
+      && Boolean(item.family_notification)
+    )),
+    [current, decision.history],
+  );
 
   const active = Boolean(
     enabled
@@ -94,24 +102,29 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     }
   }, [active, current, phase]);
 
-  const respondSafe = useCallback(() => {
-    decision.respondSafe();
+  const respondSafe = useCallback((decisionId = null) => {
+    return decision.respondSafe(decisionId);
   }, [decision]);
 
-  const respondNeedHelp = useCallback(() => {
-    decision.respondNeedHelp();
+  const respondNeedHelp = useCallback((decisionId = null) => {
+    return decision.respondNeedHelp(decisionId);
   }, [decision]);
 
   const triggerDebugScenario = perception.triggerDebugScenario;
 
-  const confirmAlarm = useCallback(() => {
-    decision.confirmAlarm();
+  const confirmAlarm = useCallback((decisionId = null) => {
+    return decision.confirmAlarm(decisionId);
   }, [decision]);
 
+  const familyVideoAllowed = Boolean(active && (
+    (sceneId === "kitchen" && kitchenConsentActive)
+    || (sceneId === "fall" && phase === "emergency")
+  ));
   const emergencyNote = sceneId === "bathroom"
-    ? "浴室场景不可查看原视频"
-    : "家属可主动查看原视频与 A 骨架叠加";
-  const familyVideoAllowed = Boolean(active && sceneId !== "bathroom");
+    ? "浴室永不开放原画"
+    : familyVideoAllowed
+      ? "本次事件已临时授权原画；授权到期会自动关闭"
+      : "日常只同步骨架；厨房需本人同意，跌倒需权威升级";
 
   return {
     active,
@@ -120,6 +133,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     emergencyNote,
     showEmergencyVideo: familyVideoAllowed,
     familyVideoAllowed,
+    kitchenConsentActive,
     connection: decision.connection,
     perceptionState: perception.runtime.state,
     runtime: perception.runtime,

@@ -215,6 +215,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     let microphonePromise = null;
     let sceneGeneration = 0;
     let voiceTurnDecisionId = null;
+    let pendingSceneId = null;
     const spokenDecisionIds = new Set();
 
     function clearVoiceReplyTimer() {
@@ -802,24 +803,49 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     }
 
     apiRef.current = {
-      respond(response, source, text = null) {
+      respond(response, source, text = null, expectedDecisionId = null) {
         const target = latestDecision;
-        if (!target?.decision_id || respondedDecisionIds.has(target.decision_id)) return;
+        if (!target?.decision_id) {
+          return Promise.resolve({ ok: false, code: "decision_unavailable" });
+        }
+        if (expectedDecisionId && target.decision_id !== expectedDecisionId) {
+          return Promise.resolve({ ok: false, code: "stale_decision" });
+        }
+        if (respondedDecisionIds.has(target.decision_id)) {
+          return Promise.resolve({ ok: false, code: "decision_already_answered" });
+        }
         markResponded(target.decision_id);
         clearVoiceReplyTimer();
         abortVoiceCapture();
         voiceTurnDecisionId = null;
         if (shouldStopAlarmForResponse(response)) clearAlarmState();
-        submitFor(target, response, source, text);
+        return submitFor(target, response, source, text).then((ok) => ({
+          ok,
+          code: ok ? "response_applied" : "response_failed",
+          decisionId: target.decision_id,
+        }));
       },
-      replayVoice() {
-        if (latestDecision) playDecisionVoice(latestDecision, { force: true, autoReply: false });
+      replayVoice(expectedDecisionId = null) {
+        const target = latestDecision;
+        if (!target?.decision_id) {
+          return Promise.resolve({ ok: false, code: "decision_unavailable" });
+        }
+        if (expectedDecisionId && target.decision_id !== expectedDecisionId) {
+          return Promise.resolve({ ok: false, code: "stale_decision" });
+        }
+        return playDecisionVoice(target, { force: true, autoReply: false }).then((ok) => ({
+          ok,
+          code: ok ? "voice_replayed" : "voice_unavailable",
+          decisionId: target.decision_id,
+        }));
       },
       startVoiceReply() {
         runVoiceReply(latestDecision);
       },
       switchScene(nextSceneId) {
         if (!nextSceneId || nextSceneId === sceneRef.current) return pendingSceneSwitch;
+        if (nextSceneId === pendingSceneId) return pendingSceneSwitch;
+        pendingSceneId = nextSceneId;
         sceneGeneration += 1;
         clearVoiceReplyTimer();
         abortVoiceCapture();
@@ -860,8 +886,10 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             transcript: "",
             error: "",
           }));
+          pendingSceneId = null;
         }).catch((error) => {
           if (!disposed) setReason(error.message || "B 场景切换失败");
+          pendingSceneId = null;
           throw error;
         });
         return pendingSceneSwitch;
@@ -946,17 +974,27 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             setDecision(null);
             setHistory([]);
           })
-          .catch(() => {});
+          .catch((error) => {
+            if (!disposed) setReason(error.message || "B 场景重置失败");
+            throw error;
+          });
       },
-      confirmAlarm() {
+      confirmAlarm(expectedDecisionId = null) {
         const target = latestAlarmDecision || latestDecision;
         if (!target?.decision_id) {
           clearAlarmState();
-          return;
+          return Promise.resolve({ ok: false, code: "decision_unavailable" });
+        }
+        if (expectedDecisionId && target.decision_id !== expectedDecisionId) {
+          return Promise.resolve({ ok: false, code: "stale_decision" });
         }
         markResponded(target.decision_id);
         clearAlarmState();
-        submitFor(target, "card_confirmed", "family_input");
+        return submitFor(target, "card_confirmed", "family_input").then((ok) => ({
+          ok,
+          code: ok ? "alarm_confirmed" : "response_failed",
+          decisionId: target.decision_id,
+        }));
       },
       dismissAlarm() {
         clearAlarmState();
@@ -1030,29 +1068,41 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     };
   }, [enabled, sessionId]);
 
-  const respondSafe = useCallback(() => {
-    apiRef.current.respond?.("safe", "user_input");
+  const respondSafe = useCallback((decisionId = null) => {
+    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
+    return apiRef.current.respond?.("safe", "user_input", null, expectedDecisionId)
+      || Promise.resolve({ ok: false, code: "decision_unavailable" });
   }, []);
-  const respondNeedHelp = useCallback(() => {
-    apiRef.current.respond?.("need_help", "user_input");
+  const respondNeedHelp = useCallback((decisionId = null) => {
+    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
+    return apiRef.current.respond?.("need_help", "user_input", null, expectedDecisionId)
+      || Promise.resolve({ ok: false, code: "decision_unavailable" });
   }, []);
-  const respondConsentGranted = useCallback(() => {
-    apiRef.current.respond?.("consent_granted", "user_input");
+  const respondConsentGranted = useCallback((decisionId = null) => {
+    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
+    return apiRef.current.respond?.("consent_granted", "user_input", null, expectedDecisionId)
+      || Promise.resolve({ ok: false, code: "decision_unavailable" });
   }, []);
-  const respondConsentDenied = useCallback(() => {
-    apiRef.current.respond?.("consent_denied", "user_input");
+  const respondConsentDenied = useCallback((decisionId = null) => {
+    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
+    return apiRef.current.respond?.("consent_denied", "user_input", null, expectedDecisionId)
+      || Promise.resolve({ ok: false, code: "decision_unavailable" });
   }, []);
   const startDemoConversation = useCallback((scenario) => (
     apiRef.current.startDemoConversation?.(scenario) || Promise.resolve(null)
   ), []);
-  const confirmAlarm = useCallback(() => {
-    apiRef.current.confirmAlarm?.();
+  const confirmAlarm = useCallback((decisionId = null) => {
+    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
+    return apiRef.current.confirmAlarm?.(expectedDecisionId)
+      || Promise.resolve({ ok: false, code: "decision_unavailable" });
   }, []);
   const dismissAlarm = useCallback(() => {
     apiRef.current.dismissAlarm?.();
   }, []);
-  const replayVoice = useCallback(() => {
-    apiRef.current.replayVoice?.();
+  const replayVoice = useCallback((decisionId = null) => {
+    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
+    return apiRef.current.replayVoice?.(expectedDecisionId)
+      || Promise.resolve({ ok: false, code: "decision_unavailable" });
   }, []);
   const startVoiceReply = useCallback(() => {
     apiRef.current.startVoiceReply?.();
