@@ -24,6 +24,64 @@ function careAssessment(overrides = {}) {
   };
 }
 
+function careDecision({
+  scene,
+  care,
+  decisionId,
+  careMessage,
+  assessment,
+  alarm,
+  timestampMs,
+}) {
+  if (!decisionId) return null;
+  const state = care === "checking"
+    ? "check_in_required"
+    : care === "emergency"
+      ? "family_notification_required"
+      : care === "resolved"
+        ? "resolved"
+        : "observe";
+  const action = assessment?.action || (care === "checking" ? "ask_elder" : "observe");
+  const needDialogue = action === "ask_elder";
+  return {
+    schema_version: "reme-care-decision/v0-experiment",
+    scene_id: scene,
+    decision_id: decisionId,
+    timestamp_ms: timestampMs,
+    state,
+    risk_level: care === "emergency" ? 3 : 1,
+    privacy_mode: "skeleton_only",
+    need_dialogue: needDialogue,
+    dialogue_goal: needDialogue ? "understand_need" : null,
+    elder_message: needDialogue ? careMessage || "奶奶，您还好吗？" : null,
+    family_notification: assessment?.verdict || (care === "emergency" ? careMessage : null),
+    action,
+    reason_summary: assessment?.basis || careMessage || "当前关怀状态已更新。",
+    uncertainty: assessment?.uncertainty || "unknown",
+    fallback_used: false,
+    source: assessment?.source || "rule",
+    demo_mode: "live",
+    consent_required: false,
+    response_timeout_ms: null,
+    action_card: assessment ? {
+      event: assessment.verdict,
+      elder_quote: "暂无本人补充",
+      system_judgment: assessment.basis,
+      suggested_action: assessment.suggested_action,
+      time_window: "当前",
+      status: "pending",
+    } : null,
+    visual_context: assessment ? {
+      ...assessment.visual_context,
+      start_ms: null,
+      end_ms: null,
+    } : null,
+    alarm,
+    voice_asset: null,
+    confirm_channels: null,
+  };
+}
+
 function snapshot({
   room = "room-1",
   revision = 1,
@@ -38,10 +96,20 @@ function snapshot({
   consent = "none",
   careMessage = null,
   assessment = null,
+  alarm = null,
   grant = null,
 } = {}) {
+  const decision = careDecision({
+    scene,
+    care,
+    decisionId,
+    careMessage,
+    assessment,
+    alarm,
+    timestampMs,
+  });
   return {
-    schema_version: "reme-demo-state/v2",
+    schema_version: "reme-demo-state/v3",
     room_session_id: room,
     runtime_session_id: "runtime-1",
     state_revision: revision,
@@ -63,11 +131,8 @@ function snapshot({
       },
       care: {
         phase: care,
-        decision_id: decisionId,
         consent,
-        alarm_authoritative: care === "emergency",
-        message: careMessage,
-        assessment,
+        decision,
       },
       media_grant: grant,
     },
@@ -183,7 +248,7 @@ test("assessment, authorization and privacy results keep care-first priority", (
   assert.equal(state.events.some((event) => event.kind === "runtime"), false);
 });
 
-test("a care phase without an assessment is labeled as progress, not a MiMo verdict", () => {
+test("Family derives a sourced assessment from the current CareDecision", () => {
   let state = observe(createFamilyTimelineState(), snapshot({ revision: 1 }));
   state = observe(state, snapshot({
     revision: 2,
@@ -192,10 +257,10 @@ test("a care phase without an assessment is labeled as progress, not a MiMo verd
     careMessage: "奶奶，您还好吗？",
   }));
 
-  assert.equal(state.events[0].kind, "care");
-  assert.equal(state.events[0].label, "关怀进展");
+  assert.equal(state.events[0].kind, "assessment");
+  assert.equal(state.events[0].label, "安全规则判断");
   assert.doesNotMatch(state.events[0].title, /MiMo/);
-  assert.equal(state.events[0].assessmentSource, null);
+  assert.equal(state.events[0].assessmentSource, "rule");
 });
 
 test("room-session changes discard the previous room timeline", () => {

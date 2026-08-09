@@ -8,7 +8,6 @@ const RESPONSE_SOURCE_RULES = {
   unclear: "user_input",
   consent_granted: "user_input",
   consent_denied: "user_input",
-  none: "timeout",
   card_confirmed: "family_input",
 };
 

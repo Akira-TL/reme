@@ -11,7 +11,7 @@ import {
 
 function validState() {
   return {
-    schema_version: "reme-demo-state/v2",
+    schema_version: "reme-demo-state/v3",
     room_session_id: "room-1",
     runtime_session_id: "runtime-1",
     state_revision: 4,
@@ -29,18 +29,15 @@ function validState() {
       runtime: { status: "ready", capability: "live", detail: null },
       care: {
         phase: "idle",
-        decision_id: null,
         consent: "none",
-        alarm_authoritative: false,
-        message: null,
-        assessment: null,
+        decision: null,
       },
       media_grant: null,
     },
   };
 }
 
-test("state parser accepts exact v2 shape and rejects extra keys", () => {
+test("state parser accepts exact v3 shape and rejects extra keys", () => {
   const state = validState();
   assert.equal(isDemoState(state), true);
   assert.equal(parseViewerMessage(JSON.stringify(state))?.kind, "demo_state");
@@ -51,33 +48,53 @@ test("state parser accepts exact v2 shape and rejects extra keys", () => {
   }), false);
 });
 
-test("v2 care assessment keeps provenance closed and visual context minimal", () => {
+test("v3 carries the exact CareDecision and rejects invented fields", () => {
   const state = validState();
-  state.state.care.phase = "checking";
-  state.state.care.decision_id = "decision-1";
-  state.state.care.assessment = {
-    verdict: "起身后在客厅缓慢走动，暂未看到需要立即处理的变化。",
-    basis: "姿态与房间内活动节奏综合判断。",
+  state.state.care.decision = {
+    schema_version: "reme-care-decision/v0-experiment",
+    scene_id: "living",
+    decision_id: "decision-1",
+    timestamp_ms: 1_000,
+    state: "observe",
+    risk_level: 1,
+    privacy_mode: "skeleton_only",
+    need_dialogue: false,
+    dialogue_goal: null,
+    elder_message: null,
+    family_notification: null,
+    action: "observe",
+    reason_summary: "姿态与房间内活动节奏综合判断。",
     uncertainty: "medium",
     source: "mimo",
-    action: "observe",
-    suggested_action: "继续留意下一次状态变化。",
-    status: "observing",
+    fallback_used: false,
+    demo_mode: "live",
+    consent_required: false,
+    response_timeout_ms: null,
+    action_card: null,
     visual_context: {
       sent_to_mimo: true,
       type: "keyframes",
+      start_ms: 900,
+      end_ms: 1_000,
       sample_count: 3,
     },
+    alarm: null,
+    voice_asset: null,
+    confirm_channels: null,
   };
 
   assert.equal(isDemoState(state), true);
 
+  const mismatchedPhase = structuredClone(state);
+  mismatchedPhase.state.care.phase = "checking";
+  assert.equal(isDemoState(mismatchedPhase), false);
+
   const inventedSource = structuredClone(state);
-  inventedSource.state.care.assessment.source = "guessed";
+  inventedSource.state.care.decision.source = "guessed";
   assert.equal(isDemoState(inventedSource), false);
 
   const rawVisualPayload = structuredClone(state);
-  rawVisualPayload.state.care.assessment.visual_context.image_url = "data:image/jpeg;base64,no";
+  rawVisualPayload.state.care.decision.visual_context.image_url = "data:image/jpeg;base64,no";
   assert.equal(isDemoState(rawVisualPayload), false);
 });
 

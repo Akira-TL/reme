@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDecisionRuntime } from "../hooks/useDecisionRuntime";
 import { usePerceptionRuntime } from "../hooks/usePerceptionRuntime";
-import { isFallSafetyDecision } from "./phoneState";
+import { mapDecisionStateToPhase } from "./phoneState";
 import { FALL_PHASES } from "./scenes";
 
 // 单机真实链路：A 在全部场景持续产出骨架/姿态/转变，B 按同一会话做决策。
@@ -30,19 +30,8 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
     videoElement,
     enabled: Boolean(enabled && videoElement),
   });
-  const current = decision.decision?.scene_id === sceneId ? decision.decision : null;
-  const latchedSafetyDecision = decision.safetyLatch?.scene_id === sceneId
-    ? decision.safetyLatch
-    : null;
-  const currentAuthority = Boolean(
-    current
-      && ["family_notification_required", "urgent_attention"].includes(current.state),
-  );
-  const fallEpisodeActive = useMemo(
-    () => [current, latchedSafetyDecision, ...decision.history]
-      .some((item) => item?.scene_id === sceneId && isFallSafetyDecision(item)),
-    [current, decision.history, latchedSafetyDecision, sceneId],
-  );
+  const receivedDecision = decision.decision?.scene_id === sceneId ? decision.decision : null;
+  const current = decision.connection === "open" ? receivedDecision : null;
   useEffect(() => {
     const expiresAtMs = decision.mediaAuthorization?.expiresAtMonotonicMs;
     if (!Number.isFinite(expiresAtMs)) return undefined;
@@ -56,6 +45,8 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
 
   const kitchenConsentActive = Boolean(
     decision.mediaAuthorization?.sceneId === "kitchen"
+      && current?.scene_id === "kitchen"
+      && current.decision_id === decision.mediaAuthorization.decisionId
       && decision.mediaAuthorization.expiresAtMonotonicMs > authorizationClockMs,
   );
 
@@ -67,14 +58,8 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
 
   const phase = useMemo(() => {
     if (!enabled) return "idle";
-    if (current && fallEpisodeActive) {
-      if (current.state === "check_in_required") return "checking";
-      if (["family_notification_required", "urgent_attention"].includes(current.state)) {
-        return "emergency";
-      }
-      if (current.state === "resolved") return "resolved";
-    }
-    if (latchedSafetyDecision) return "emergency";
+    const decisionPhase = mapDecisionStateToPhase(current?.state);
+    if (decisionPhase !== "idle") return decisionPhase;
     if (!active) return "idle";
     // 决策尚未跟上最新转移时短暂显示"候选"；check-in 一到即被上面的分支接管。
     const transition = perception.transition;
@@ -85,17 +70,16 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
       return "candidate";
     }
     return "idle";
-  }, [active, current, enabled, fallEpisodeActive, latchedSafetyDecision, perception.transition]);
+  }, [active, current, enabled, perception.transition]);
 
   const fallState = useMemo(() => {
     if (!enabled) return null;
-    const displayDecision = currentAuthority ? current : latchedSafetyDecision || current;
-    const trigger = displayDecision?.alarm
-      ? TRIGGER_LABELS[displayDecision.alarm.trigger] || ""
+    const trigger = current?.alarm
+      ? TRIGGER_LABELS[current.alarm.trigger] || ""
       : "";
-    const decisionMessage = displayDecision?.family_notification
-      || displayDecision?.elder_message
-      || displayDecision?.reason_summary
+    const decisionMessage = current?.family_notification
+      || current?.elder_message
+      || current?.reason_summary
       || "";
     switch (phase) {
       case "checking":
@@ -121,7 +105,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
           message: "统一运行时链路已接入：请在镜头前演示跌倒动作，无需按键触发",
         };
     }
-  }, [current, currentAuthority, enabled, latchedSafetyDecision, phase]);
+  }, [current, enabled, phase]);
 
   const respondSafe = useCallback((decisionId = null) => {
     return decision.respondSafe(decisionId);
@@ -139,7 +123,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
 
   const familyVideoAllowed = Boolean(active && (
     (sceneId === "kitchen" && kitchenConsentActive)
-    || (sceneId === "fall" && phase === "emergency" && currentAuthority)
+    || (sceneId === "fall" && current?.alarm)
   ));
   const emergencyNote = sceneId === "bathroom"
     ? "浴室永不开放原画"
@@ -155,10 +139,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
     showEmergencyVideo: familyVideoAllowed,
     familyVideoAllowed,
     kitchenConsentActive,
-    currentAuthority,
-    safetyDecision: currentAuthority ? current : latchedSafetyDecision,
     mediaAuthorization: decision.mediaAuthorization,
-    fallMediaAuthorization: decision.fallMediaAuthorization,
     connection: decision.connection,
     perceptionState: perception.runtime.state,
     runtime: perception.runtime,

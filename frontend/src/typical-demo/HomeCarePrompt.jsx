@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 const VOICE_STAGE_COPY = Object.freeze({
   tts_request: "正在准备语音…",
   playing: "正在对您说话…",
@@ -74,7 +76,7 @@ function visualContextProgress(visualContext, sceneId, decisionId) {
     return { text: "本次已提交 1 帧用于 MiMo 跌倒确认；确认结果将异步返回。", tone: "complete" };
   }
   if (visualContext.status === "failed") {
-    return { text: "本次视觉确认未发送成功；规则倒计时仍继续。", tone: "error" };
+    return { text: "本次视觉确认未发送成功；等待后端发布下一条权威状态。", tone: "error" };
   }
   return { text: "", tone: "idle" };
 }
@@ -89,15 +91,7 @@ export function deriveHomeCarePrompt(
 ) {
   const liveAvailable = available === true;
   const candidateDecision = currentSceneDecision(scene, live);
-  const candidateState = cleanText(candidateDecision?.state);
-  const retainsSafetyAlert = Boolean(
-    started
-      && !liveAvailable
-      && ["family_notification_required", "urgent_attention"].includes(candidateState),
-  );
-  const decision = liveAvailable || retainsSafetyAlert
-    ? candidateDecision
-    : null;
+  const decision = liveAvailable ? candidateDecision : null;
   const decisionState = cleanText(decision?.state);
   const decisionId = cleanText(decision?.decision_id) || null;
   const elderMessage = cleanText(decision?.elder_message);
@@ -117,12 +111,7 @@ export function deriveHomeCarePrompt(
     && decision?.consent_required !== true;
   const responseKind = consentQuestion ? "consent" : safetyQuestion ? "safety" : null;
   const hasCurrentQuestion = Boolean(responseKind && decisionId && elderMessage);
-  const progress = retainsSafetyAlert
-    ? {
-        text: "当前连接不可用；已发出的安全提醒不会自动取消。",
-        tone: "error",
-      }
-    : voiceProgress(live?.voice);
+  const progress = voiceProgress(live?.voice);
   const visualContext = visualContextProgress(
     live?.decision?.visualContext,
     cleanText(scene?.id),
@@ -133,9 +122,7 @@ export function deriveHomeCarePrompt(
     kicker: started
       ? [cleanText(scene?.room), cleanText(scene?.privacy)].filter(Boolean).join(" · ")
       : "下游 · 事件关怀",
-    title: retainsSafetyAlert
-      ? "安全提醒仍保持"
-      : DECISION_TITLE_COPY[decisionState] || fallbackTitle,
+    title: DECISION_TITLE_COPY[decisionState] || fallbackTitle,
     message: elderMessage
       || DECISION_MESSAGE_COPY[decisionState]
       || fallbackMessage,
@@ -153,11 +140,28 @@ export function deriveHomeCarePrompt(
     progressTone: progress.tone,
     visualContext: visualContext.text,
     visualContextTone: visualContext.tone,
+    responseDeadlineMs: live?.decision?.deadline?.decisionId === decisionId
+      && Number.isFinite(live.decision.deadline.expiresAt)
+      ? live.decision.deadline.expiresAt
+      : null,
   });
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function responseCountdownSeconds(expiresAtMs, nowMs = Date.now()) {
+  if (!Number.isFinite(expiresAtMs) || !Number.isFinite(nowMs)) return null;
+  return Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
 }
 
 export function HomeCarePrompt({ scene, live, started = false, available = Boolean(live?.active) }) {
   const prompt = deriveHomeCarePrompt(scene, live, started, available);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!Number.isFinite(prompt.responseDeadlineMs)) return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [prompt.responseDeadlineMs]);
+  const countdownSeconds = responseCountdownSeconds(prompt.responseDeadlineMs, nowMs);
   const canReplay = prompt.canReplay && typeof live?.replayVoice === "function";
   const canRespondSafe = prompt.canRespond && typeof live?.respondSafe === "function";
   const canRespondNeedHelp = prompt.canRespond
@@ -193,6 +197,12 @@ export function HomeCarePrompt({ scene, live, started = false, available = Boole
           role={prompt.visualContextTone === "error" ? "alert" : "status"}
         >
           {prompt.visualContext}
+        </p>
+      ) : null}
+
+      {countdownSeconds > 0 ? (
+        <p className="home-care-progress" data-tone="active" role="status">
+          回应时限提示 · 剩余 {countdownSeconds} 秒（仅页面显示）
         </p>
       ) : null}
 

@@ -1,6 +1,6 @@
 # 前端去业务判断化 / 权威状态透传实施计划
 
-状态：Explore 完成，等待 Code 阶段确认
+状态：Implemented（2026-08-09；前端/Relay 验证门已通过）
 基线：`bf3c6999`（当前工作分支 `codex/frontend-authority-prompt`；已包含最新 Family care-assessment 集成）
 范围：`frontend/`、`demo-relay/` 与本工作项文档；不修改 `backend/` Python 状态机
 
@@ -123,6 +123,8 @@ rg -n 'submitFor\([^\n]*"none"|source[^\n]*timeout|alarm_authoritative|safetyLat
 ```
 
 允许命中测试中的反例名称或 backend contract-gap 文案；运行时代码不得再有这些重复 authority 路径。
+
+实施结果：上述验证门全部实际通过。前端共 172 项测试通过，Relay 共 22 项测试通过；三角色 production preview、Worker 类型检查与 dry-run 均通过。静态反证在运行时代码中零命中。
 
 ## 5. 提交边界
 

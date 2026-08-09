@@ -33,9 +33,39 @@ function ready(state, room = "room-1") {
   });
 }
 
+function careDecision(scene, overrides = {}) {
+  return {
+    schema_version: "reme-care-decision/v0-experiment",
+    scene_id: scene,
+    decision_id: "decision-1",
+    timestamp_ms: 1_000,
+    state: "observe",
+    risk_level: 1,
+    privacy_mode: "skeleton_only",
+    need_dialogue: false,
+    dialogue_goal: null,
+    elder_message: null,
+    family_notification: null,
+    action: "observe",
+    reason_summary: "当前关怀状态。",
+    uncertainty: "low",
+    fallback_used: false,
+    source: "rule",
+    demo_mode: "live",
+    consent_required: false,
+    response_timeout_ms: null,
+    action_card: null,
+    visual_context: null,
+    alarm: null,
+    voice_asset: null,
+    confirm_channels: null,
+    ...overrides,
+  };
+}
+
 function snapshot({ scene = "kitchen", revision = 1, runtime = "runtime-1" } = {}) {
   return {
-    schema_version: "reme-demo-state/v2",
+    schema_version: "reme-demo-state/v3",
     room_session_id: "room-1",
     runtime_session_id: runtime,
     state_revision: revision,
@@ -53,11 +83,8 @@ function snapshot({ scene = "kitchen", revision = 1, runtime = "runtime-1" } = {
       runtime: { status: "ready", capability: "live", detail: null },
       care: {
         phase: "idle",
-        decision_id: "decision-1",
         consent: scene === "kitchen" ? "granted" : "none",
-        alarm_authoritative: false,
-        message: null,
-        assessment: null,
+        decision: careDecision(scene),
       },
       media_grant: null,
     },
@@ -109,7 +136,7 @@ test("authorized video fails closed for bathroom and high privacy", () => {
     room_session_id: "room-1",
     grant: {
       grant_id: "grant-1",
-      event_id: "event-1",
+      event_id: "decision-1",
       scope: "kitchen_moment",
       expires_at_ms: 5000,
       status: "active",
@@ -129,7 +156,7 @@ test("keepalive state revisions preserve the active grant identity", () => {
   const first = snapshot({ revision: 1 });
   first.state.media_grant = {
     grant_id: "grant-stable",
-    event_id: "event-stable",
+    event_id: "decision-1",
     scope: "kitchen_moment",
     expires_at_ms: 5_000,
     status: "active",
@@ -150,15 +177,18 @@ test("keepalive state revisions preserve the active grant identity", () => {
   assert.equal(state.mediaGrant, grant);
 });
 
-test("fall media stays closed until the current care state is authoritative emergency", () => {
+test("fall media stays closed until the current decision carries an alarm", () => {
   let state = ready(createViewerState());
   const fallState = snapshot({ scene: "fall" });
   fallState.state.care = {
     phase: "checking",
-    decision_id: "decision-1",
     consent: "none",
-    alarm_authoritative: false,
-    message: "正在询问本人",
+    decision: careDecision("fall", {
+      state: "check_in_required",
+      need_dialogue: true,
+      elder_message: "正在询问本人",
+      action: "ask_elder",
+    }),
   };
   state = message(state, "demo_state", fallState);
   state = message(state, "media_grant", {
@@ -166,7 +196,7 @@ test("fall media stays closed until the current care state is authoritative emer
     room_session_id: "room-1",
     grant: {
       grant_id: "grant-fall",
-      event_id: "event-fall",
+      event_id: "decision-1",
       scope: "fall_emergency",
       expires_at_ms: 5000,
       status: "active",
@@ -184,7 +214,13 @@ test("fall media stays closed until the current care state is authoritative emer
         care: {
           ...fallState.state.care,
           phase: "emergency",
-          alarm_authoritative: true,
+          decision: careDecision("fall", {
+            state: "urgent_attention",
+            risk_level: 4,
+            action: "show_urgent_attention",
+            family_notification: "请立即关注",
+            alarm: { channels: ["flash"], trigger: "visual_confirm" },
+          }),
         },
       },
     },
@@ -233,15 +269,19 @@ test("state unavailable clears old normal state and accepts a fresh same-revisio
   assert.equal(state.unavailableReason, null);
 });
 
-test("authoritative emergency is latched but marked stale while state is unavailable", () => {
+test("an unavailable alarm snapshot is retained only as stale history", () => {
   let state = ready(createViewerState());
   const emergency = snapshot({ scene: "fall", revision: 4 });
   emergency.state.care = {
     phase: "emergency",
-    decision_id: "decision-1",
     consent: "none",
-    alarm_authoritative: true,
-    message: "上次收到权威紧急告警",
+    decision: careDecision("fall", {
+      state: "urgent_attention",
+      risk_level: 4,
+      action: "show_urgent_attention",
+      family_notification: "上次收到权威紧急告警",
+      alarm: { channels: ["ring"], trigger: "visual_confirm" },
+    }),
   };
   state = message(state, "demo_state", emergency);
   state = message(state, "state_unavailable", {

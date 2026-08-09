@@ -15,6 +15,42 @@ import {
 
 const TOKEN = "a".repeat(64);
 
+function careDecision(overrides = {}) {
+  return {
+    schema_version: "reme-care-decision/v0-experiment",
+    scene_id: "living",
+    decision_id: "decision-1",
+    timestamp_ms: 1_000,
+    state: "observe",
+    risk_level: 1,
+    privacy_mode: "skeleton_only",
+    need_dialogue: false,
+    dialogue_goal: null,
+    elder_message: null,
+    family_notification: null,
+    action: "observe",
+    reason_summary: "姿态和持续时间综合判断。",
+    uncertainty: "low",
+    fallback_used: false,
+    source: "rule",
+    demo_mode: "live",
+    consent_required: false,
+    response_timeout_ms: null,
+    action_card: null,
+    visual_context: {
+      sent_to_mimo: false,
+      type: null,
+      start_ms: null,
+      end_ms: null,
+      sample_count: null,
+    },
+    alarm: null,
+    voice_asset: null,
+    confirm_channels: null,
+    ...overrides,
+  };
+}
+
 function demoState(revision, runtimeSessionId = "runtime-1") {
   return createDemoStateEnvelope({
     roomSessionId: "room-1",
@@ -34,11 +70,8 @@ function demoState(revision, runtimeSessionId = "runtime-1") {
       runtime: { status: "offline", capability: "unavailable", detail: null },
       care: {
         phase: "idle",
-        decision_id: null,
         consent: "none",
-        alarm_authoritative: false,
-        message: null,
-        assessment: null,
+        decision: null,
       },
       media_grant: null,
     },
@@ -75,29 +108,18 @@ function command(name = "start_capture", overrides = {}) {
   };
 }
 
-test("Monitor accepts only the explicit v2 care assessment provenance", () => {
+test("Monitor accepts only an exact v3 CareDecision snapshot", () => {
   const state = demoState(1);
-  state.state.care.phase = "checking";
-  state.state.care.decision_id = "decision-1";
-  state.state.care.assessment = {
-    verdict: "厨房内持续站立，暂未看到需要立即处理的变化。",
-    basis: "姿态和持续时间综合判断。",
-    uncertainty: "low",
-    source: "rule",
-    action: "observe",
-    suggested_action: "继续观察即可。",
-    status: "observing",
-    visual_context: {
-      sent_to_mimo: false,
-      type: null,
-      sample_count: null,
-    },
-  };
+  state.state.care.decision = careDecision();
 
   assert.equal(validateDemoStateEnvelope(state), true);
 
+  const mismatchedPhase = structuredClone(state);
+  mismatchedPhase.state.care.phase = "emergency";
+  assert.equal(validateDemoStateEnvelope(mismatchedPhase), false);
+
   const inventedSource = structuredClone(state);
-  inventedSource.state.care.assessment.source = "inferred";
+  inventedSource.state.care.decision.source = "inferred";
   assert.equal(validateDemoStateEnvelope(inventedSource), false);
 });
 

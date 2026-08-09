@@ -1,6 +1,11 @@
+import {
+  isCareDecision,
+  mapDecisionStateToPhase,
+} from "../shared-demo/careDecision.js";
+
 const MONITOR_PROTOCOL = "reme-monitor-v1";
 const TOKEN_PROTOCOL_PREFIX = "reme-token-";
-const DEMO_STATE_SCHEMA = "reme-demo-state/v2";
+const DEMO_STATE_SCHEMA = "reme-demo-state/v3";
 const POSE_FRAME_SCHEMA = "reme-pose-frame-17/v1";
 const CONTROL_COMMAND_SCHEMA = "reme-control-command/v1";
 const MEDIA_SIGNAL_SCHEMA = "reme-media-signal/v1";
@@ -31,23 +36,6 @@ const RUNTIME_STATES = new Set(["offline", "connecting", "ready", "degraded", "e
 const RUNTIME_CAPABILITIES = new Set(["live", "scripted", "unavailable"]);
 const CARE_PHASES = new Set(["idle", "checking", "emergency", "resolved"]);
 const CONSENT_STATES = new Set(["none", "pending", "granted", "denied"]);
-const ASSESSMENT_UNCERTAINTIES = new Set(["low", "medium", "high", "unknown"]);
-const ASSESSMENT_SOURCES = new Set(["rule", "mimo", "mock", "record", "degraded"]);
-const ASSESSMENT_ACTIONS = new Set([
-  "none",
-  "observe",
-  "ask_elder",
-  "notify_family",
-  "show_urgent_attention",
-  "mark_resolved",
-]);
-const ASSESSMENT_STATUSES = new Set([
-  "observing",
-  "awaiting_response",
-  "family_notified",
-  "resolved",
-  "degraded",
-]);
 const KEYPOINT_NAMES = [
   "nose",
   "left_eye",
@@ -282,52 +270,10 @@ function validateRuntime(value) {
 }
 
 function validateCare(value) {
-  if (!exactKeys(value, [
-    "phase",
-    "decision_id",
-    "consent",
-    "alarm_authoritative",
-    "message",
-    "assessment",
-  ])) return false;
+  if (!exactKeys(value, ["phase", "consent", "decision"])) return false;
   if (!CARE_PHASES.has(value.phase) || !CONSENT_STATES.has(value.consent)) return false;
-  if (value.decision_id !== null && !isId(value.decision_id)) return false;
-  if (typeof value.alarm_authoritative !== "boolean") return false;
-  if (value.message !== null && !isBoundedString(value.message, 240)) return false;
-  if (value.assessment !== null && !validateCareAssessment(value.assessment)) return false;
-  if (value.assessment !== null && value.decision_id === null) return false;
-  return value.phase === "emergency"
-    ? value.alarm_authoritative && value.decision_id !== null
-    : !value.alarm_authoritative;
-}
-
-function validateCareAssessment(value) {
-  if (!exactKeys(value, [
-    "verdict",
-    "basis",
-    "uncertainty",
-    "source",
-    "action",
-    "suggested_action",
-    "status",
-    "visual_context",
-  ])) return false;
-  if (!isBoundedString(value.verdict, 240) || !isBoundedString(value.basis, 240)) return false;
-  if (!isBoundedString(value.suggested_action, 240)) return false;
-  if (!ASSESSMENT_UNCERTAINTIES.has(value.uncertainty)) return false;
-  if (!ASSESSMENT_SOURCES.has(value.source)) return false;
-  if (!ASSESSMENT_ACTIONS.has(value.action)) return false;
-  if (!ASSESSMENT_STATUSES.has(value.status)) return false;
-  return validateCareVisualContext(value.visual_context);
-}
-
-function validateCareVisualContext(value) {
-  if (!exactKeys(value, ["sent_to_mimo", "type", "sample_count"])) return false;
-  if (typeof value.sent_to_mimo !== "boolean") return false;
-  if (!value.sent_to_mimo) return value.type === null && value.sample_count === null;
-  return ["keyframes", "clip"].includes(value.type)
-    && (value.sample_count === null
-      || (Number.isSafeInteger(value.sample_count) && value.sample_count > 0));
+  if (value.decision !== null && !isCareDecision(value.decision)) return false;
+  return value.phase === mapDecisionStateToPhase(value.decision?.state);
 }
 
 export function validateDemoStateEnvelope(value, roomSessionId = value?.room_session_id) {
@@ -361,6 +307,7 @@ export function validateDemoStateEnvelope(value, roomSessionId = value?.room_ses
     && validateCapture(state.capture)
     && validateRuntime(state.runtime)
     && validateCare(state.care)
+    && (state.care.decision === null || state.care.decision.scene_id === state.scene_id)
     && state.media_grant === null
     && !containsForbiddenRawMedia(value);
 }

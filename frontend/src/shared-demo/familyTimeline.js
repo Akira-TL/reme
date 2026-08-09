@@ -1,3 +1,5 @@
+import { projectCareAssessment } from "./careAssessment.js";
+
 export const FAMILY_TIMELINE_LIMIT = 12;
 
 const MAX_SEEN_ACKS = 48;
@@ -130,15 +132,20 @@ function cloneAssessment(value) {
 
 function projectSnapshot(snapshot) {
   const state = snapshot.state;
+  const decision = state.care.decision;
   return Object.freeze({
     sceneId: state.scene_id,
     captureStatus: state.capture.status,
     runtimeStatus: state.runtime.status,
     carePhase: state.care.phase,
-    careDecisionId: state.care.decision_id,
+    careDecisionId: decision?.decision_id || null,
     careConsent: state.care.consent,
-    careMessage: state.care.message,
-    careAssessment: cloneAssessment(state.care.assessment),
+    careMessage: decision?.family_notification
+      || decision?.elder_message
+      || decision?.reason_summary
+      || null,
+    careAssessment: cloneAssessment(projectCareAssessment(decision)),
+    alarmActive: Boolean(decision?.alarm),
     mediaGrantId: state.media_grant?.grant_id || null,
     mediaGrantScope: state.media_grant?.scope || null,
   });
@@ -157,7 +164,7 @@ function assessmentEvent(snapshot, previous, current) {
   ) return null;
 
   const status = ASSESSMENT_STATUS[assessment.status] || ASSESSMENT_STATUS.degraded;
-  const authoritativeEmergency = current.carePhase === "emergency";
+  const authoritativeEmergency = current.alarmActive;
   return timelineEvent({
     id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:assessment`,
     kind: "assessment",
@@ -194,13 +201,20 @@ function fallbackCareEvent(snapshot, previous, current) {
       suggestedAction: "等待本人回应，暂不把情况定性",
       progress: "问候已发出",
     },
-    emergency: {
+    emergency: current.alarmActive ? {
       title: "确定性安全规则已提醒家人",
       detail: current.careMessage || "当前没有可展示的模型判断依据，请及时联系确认。",
       tone: "danger",
       statusLabel: "需要立即关注",
       suggestedAction: "请立即联系本人或前往查看",
       progress: "等待家人处理",
+    } : {
+      title: "家中端发布了新的关怀状态",
+      detail: current.careMessage || "当前状态没有附带告警指令。",
+      tone: "warning",
+      statusLabel: "关怀状态更新",
+      suggestedAction: "按当前关怀状态留意后续更新",
+      progress: "等待后续状态",
     },
     resolved: {
       title: "本次关怀已经处理",

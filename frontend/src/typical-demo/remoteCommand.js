@@ -1,3 +1,8 @@
+import {
+  mapDecisionStateToPhase,
+  projectCareDecision,
+} from "../shared-demo/careDecision.js";
+
 const COMMAND_SCHEMA = "reme-control-command/v1";
 const ACK_TYPE = "control_ack";
 
@@ -192,15 +197,12 @@ export function buildDemoState({
         : runtime?.state === "error"
           ? "error"
           : "offline";
-  const carePhase = care?.phase === "emergency"
-    ? "emergency"
-    : ["candidate", "checking"].includes(care?.phase)
-      ? "checking"
-      : care?.phase === "resolved"
-        ? "resolved"
-        : "idle";
+  const decision = projectCareDecision(care?.decision);
+  // `phase` is protocol compatibility vocabulary only. Derive it from the
+  // authoritative decision so a local perception candidate cannot reach Family.
+  const carePhase = mapDecisionStateToPhase(decision?.state);
   return {
-    schema_version: "reme-demo-state/v2",
+    schema_version: "reme-demo-state/v3",
     room_session_id: roomSessionId,
     runtime_session_id: runtimeSessionId,
     state_revision: stateRevision,
@@ -224,11 +226,8 @@ export function buildDemoState({
       },
       care: {
         phase: carePhase,
-        decision_id: care?.decisionId || null,
         consent: care?.consent || "none",
-        alarm_authoritative: carePhase === "emergency" && Boolean(care?.alarmAuthoritative),
-        message: care?.message || null,
-        assessment: care?.assessment || null,
+        decision,
       },
       media_grant: null,
     },
@@ -239,7 +238,6 @@ export function mediaGrantEligibility({
   sceneId,
   careDecision,
   kitchenAuthorization = null,
-  fallAuthorization = null,
   now = Date.now(),
 }) {
   if (sceneId === "bathroom") return { allowed: false, code: "bathroom_video_forbidden" };
@@ -262,19 +260,15 @@ export function mediaGrantEligibility({
       : { allowed: false, code: "current_consent_required" };
   }
   if (sceneId === "fall") {
-    const remainingMs = Number(
-      fallAuthorization?.expiresAtMonotonicMs ?? fallAuthorization?.expiresAtMs,
-    ) - now;
-    const escalated = careDecision?.scene_id === "fall"
-      && ["family_notification_required", "urgent_attention"].includes(careDecision?.state)
-      && fallAuthorization?.sceneId === "fall"
-      && fallAuthorization?.decisionId === careDecision?.decision_id
-      && remainingMs >= 1_000;
-    return escalated
+    const alarmAuthorized = careDecision?.scene_id === "fall"
+      && typeof careDecision?.decision_id === "string"
+      && careDecision.alarm !== null
+      && typeof careDecision.alarm === "object";
+    return alarmAuthorized
       ? {
           allowed: true,
           scope: "fall_emergency",
-          durationMs: Math.min(30_000, Math.floor(remainingMs)),
+          durationMs: 30_000,
           now,
         }
       : { allowed: false, code: "authoritative_escalation_required" };

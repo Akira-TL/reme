@@ -31,6 +31,42 @@ const context = {
   sources: [{ id: "front-camera", disabled_reason: null }],
 };
 
+function careDecision(overrides = {}) {
+  return {
+    schema_version: "reme-care-decision/v0-experiment",
+    scene_id: "living",
+    decision_id: "decision-1",
+    timestamp_ms: 1_000,
+    state: "observe",
+    risk_level: 1,
+    privacy_mode: "skeleton_only",
+    need_dialogue: false,
+    dialogue_goal: null,
+    elder_message: null,
+    family_notification: null,
+    action: "observe",
+    reason_summary: "姿态与场景信息综合判断。",
+    uncertainty: "medium",
+    fallback_used: false,
+    source: "mimo",
+    demo_mode: "live",
+    consent_required: false,
+    response_timeout_ms: null,
+    action_card: null,
+    visual_context: {
+      sent_to_mimo: true,
+      type: "keyframes",
+      start_ms: 900,
+      end_ms: 1_000,
+      sample_count: 3,
+    },
+    alarm: null,
+    voice_asset: null,
+    confirm_channels: null,
+    ...overrides,
+  };
+}
+
 test("控制命令使用 exact-shape 且拒绝未知命令", () => {
   assert.ok(parseControlCommand(command("select_scene", { scene_id: "kitchen" })));
   assert.equal(parseControlCommand(command("select_scene", { scene_id: "kitchen", hidden: true })), null);
@@ -133,11 +169,7 @@ test("浴室硬门、厨房当前授权和跌倒权威升级决定 grant", () =>
       scene_id: "fall",
       decision_id: "fall-authority",
       state: "urgent_attention",
-    },
-    fallAuthorization: {
-      sceneId: "fall",
-      decisionId: "fall-authority",
-      expiresAtMonotonicMs: 31_000,
+      alarm: { channels: ["flash"], trigger: "visual_confirm" },
     },
     now: 1_000,
   }).durationMs, 30_000);
@@ -147,45 +179,24 @@ test("浴室硬门、厨房当前授权和跌倒权威升级决定 grant", () =>
       scene_id: "fall",
       decision_id: "fall-authority",
       state: "urgent_attention",
-    },
-    fallAuthorization: {
-      sceneId: "fall",
-      decisionId: "fall-authority",
-      expiresAtMonotonicMs: 31_000,
+      alarm: { channels: ["ring"], trigger: "visual_confirm" },
     },
     now: 11_000,
-  }).durationMs, 20_000);
+  }).durationMs, 30_000);
   assert.equal(mediaGrantEligibility({
     sceneId: "fall",
     careDecision: {
       scene_id: "fall",
       decision_id: "fall-authority",
       state: "urgent_attention",
-    },
-    fallAuthorization: {
-      sceneId: "fall",
-      decisionId: "fall-authority",
-      expiresAtMonotonicMs: 1_500,
+      alarm: null,
     },
     now: 1_000,
   }).allowed, false);
 });
 
 test("权威状态显式区分 room session 与 runtime session", () => {
-  const assessment = {
-    verdict: "客厅内活动节奏较平稳。",
-    basis: "姿态与场景信息综合判断。",
-    uncertainty: "medium",
-    source: "mimo",
-    action: "observe",
-    suggested_action: "继续观察即可。",
-    status: "observing",
-    visual_context: {
-      sent_to_mimo: true,
-      type: "keyframes",
-      sample_count: 3,
-    },
-  };
+  const decision = careDecision();
   const state = buildDemoState({
     roomSessionId: "room-1",
     runtimeSessionId: "runtime-9",
@@ -197,8 +208,7 @@ test("权威状态显式区分 room session 与 runtime session", () => {
     runtime: { state: "running", inputMode: "jpeg", personDetected: true, skeletonSource: "a_backend" },
     care: {
       phase: "checking",
-      decisionId: "decision-1",
-      assessment,
+      decision,
     },
   });
   assert.equal(state.room_session_id, "room-1");
@@ -207,8 +217,44 @@ test("权威状态显式区分 room session 与 runtime session", () => {
   assert.equal(state.state.source_generation, 3);
   assert.equal(state.state.runtime.status, "ready");
   assert.equal(state.state.runtime.capability, "live");
-  assert.equal(state.schema_version, "reme-demo-state/v2");
-  assert.deepEqual(state.state.care.assessment, assessment);
+  assert.equal(state.schema_version, "reme-demo-state/v3");
+  assert.deepEqual(state.state.care.decision, decision);
+  assert.equal(state.state.care.phase, "idle");
+});
+
+test("本地 candidate 与调用方 phase 不能伪造 Relay 关怀状态", () => {
+  const base = {
+    roomSessionId: "room-1",
+    runtimeSessionId: "runtime-9",
+    stateRevision: 8,
+    sceneId: "fall",
+    source: { id: "front-camera", kind: "camera", remote_video: "available" },
+    capture: { active: true },
+    runtime: { state: "running", inputMode: "jpeg" },
+  };
+  const candidate = buildDemoState({
+    ...base,
+    care: { phase: "candidate", consent: "none", decision: null },
+  });
+  assert.equal(candidate.state.care.phase, "idle");
+  assert.equal(candidate.state.care.decision, null);
+
+  const checking = buildDemoState({
+    ...base,
+    care: {
+      phase: "emergency",
+      consent: "none",
+      decision: careDecision({
+        scene_id: "fall",
+        state: "check_in_required",
+        need_dialogue: true,
+        elder_message: "您还好吗？",
+        action: "ask_elder",
+      }),
+    },
+  });
+  assert.equal(checking.state.care.phase, "checking");
+  assert.equal(checking.state.care.decision.state, "check_in_required");
 });
 
 test("ACK 明确区分等待本机确认和终态", () => {

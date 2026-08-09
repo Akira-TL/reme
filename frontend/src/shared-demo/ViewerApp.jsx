@@ -230,14 +230,19 @@ function StatusCard({ snapshot, relay, familySurface = false }) {
   const truth = deriveFamilyTruth(snapshot, relay);
   const sceneId = truth.sceneId;
   const care = snapshot?.state.care;
+  const decision = care?.decision;
+  const careMessage = decision?.family_notification
+    || decision?.elder_message
+    || decision?.reason_summary
+    || null;
   const runtime = snapshot?.state.runtime;
   const capture = snapshot?.state.capture;
   const status = (() => {
-    if (relay.unavailableReason && care?.phase === "emergency") return {
+    if (relay.unavailableReason && decision?.alarm) return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
       title: "上次紧急告警 · 当前状态已过期",
-      body: `${care.message || "曾收到权威紧急告警"}；${unavailableCopy(relay, familySurface)}。请勿把它当作当前现场状态。`,
+      body: `${careMessage || "曾收到权威紧急告警"}；${unavailableCopy(relay, familySurface)}。请勿把它当作当前现场状态。`,
     };
     if (relay.unavailableReason) return {
       tone: "offline",
@@ -253,19 +258,25 @@ function StatusCard({ snapshot, relay, familySurface = false }) {
         ? "连接恢复前不展示旧骨架、旧原画或旧处理结果。"
         : "连接恢复前不展示旧骨架、旧原画或旧控制结果。",
     };
-    if (care?.phase === "emergency") return {
+    if (decision?.alarm) return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
       title: "紧急告警：请立即关注",
-      body: care.message || (familySurface
+      body: careMessage || (familySurface
         ? "安全规则已升级，家属端不能取消或降低本次告警。"
         : "权威安全规则已升级，本次状态不能由远程命令降低。"),
+    };
+    if (["family_notification_required", "urgent_attention"].includes(decision?.state)) return {
+      tone: "warning",
+      Icon: HealthAndSafetyRoundedIcon,
+      title: "家中端发布了新的关怀状态",
+      body: careMessage || "当前状态没有附带告警指令，请留意后续权威状态。",
     };
     if (care?.phase === "checking") return {
       tone: "warning",
       Icon: AlarmRoundedIcon,
       title: "正在先询问本人",
-      body: care.message || "问询阶段保持骨架显示，等待本人回应。",
+      body: careMessage || "问询阶段保持骨架显示，等待本人回应。",
     };
     if (sceneId === "bathroom") return {
       tone: "privacy",
@@ -712,7 +723,8 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
   const desktop = useMediaQuery("(min-width: 900px)");
   const pending = hasPendingCommand(relay);
   const disabled = !relay.ownsControl || !snapshot || pending;
-  const decisionId = snapshot?.state.care.decision_id;
+  const decisionId = snapshot?.state.care.decision?.decision_id;
+  const alarmActive = Boolean(snapshot?.state.care.decision?.alarm);
   const leaseSeconds = relay.ownsControl ? secondsRemaining(relay.lease?.expires_at_ms, nowMs) : 0;
   return (
     <Drawer
@@ -776,7 +788,7 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
           <CommandButton icon={EmergencyRoundedIcon} disabled={disabled || !decisionId} tone="danger" onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "need_help" })}>本人需要帮助</CommandButton>
           <CommandButton icon={VideocamRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_granted" })}>同意分享</CommandButton>
           <CommandButton icon={LockRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_denied" })}>拒绝分享</CommandButton>
-          <CommandButton icon={ShieldRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "confirm_alarm", decision_id: decisionId })}>确认告警</CommandButton>
+          <CommandButton icon={ShieldRoundedIcon} disabled={disabled || !decisionId || !alarmActive} onClick={() => onIssue({ name: "confirm_alarm", decision_id: decisionId })}>确认告警</CommandButton>
           <CommandButton icon={VolumeUpRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "replay_voice", decision_id: decisionId })}>重播语音</CommandButton>
         </div>
       </section>
@@ -799,7 +811,7 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
 function EmergencyDialog({
   open,
   onClose,
-  care,
+  decision,
   activeGrant,
   nowMs,
   ownsControl,
@@ -812,9 +824,12 @@ function EmergencyDialog({
   familySurface = false,
   soundBlocked,
   onRetrySound,
-  stale,
 }) {
-  if (!care) return null;
+  if (!decision?.alarm) return null;
+  const message = decision.family_notification
+    || decision.elder_message
+    || decision.reason_summary
+    || "权威规则已升级并通知家属，请尽快确认。";
   const familyConfirmLabel = familyConfirmApplied
     ? "已确认收到告警"
     : familyConfirmPending
@@ -834,10 +849,9 @@ function EmergencyDialog({
     >
       <IconButton className="emergency-close" onClick={onClose} aria-label="收起紧急提醒"><CloseRoundedIcon /></IconButton>
       <span className="emergency-dialog-mark"><EmergencyRoundedIcon /></span>
-      <small>{stale ? "历史紧急告警 · 当前状态不可用" : "紧急风险提醒"}</small>
-      <h2 id="reme-emergency-title">{stale ? "上次检测到需要关注的安全事件" : "检测到需要关注的安全事件"}</h2>
-      <p id="reme-emergency-message">{care.message || "权威规则已升级并通知家属，请尽快确认。"}</p>
-      {stale && <p role="status">该告警被安全锁存，但已不是当前现场状态；请等待新的权威快照。</p>}
+      <small>紧急风险提醒</small>
+      <h2 id="reme-emergency-title">检测到需要关注的安全事件</h2>
+      <p id="reme-emergency-message">{message}</p>
       <div className="emergency-dialog-context">
         <AlarmRoundedIcon />
         <div>
@@ -851,8 +865,8 @@ function EmergencyDialog({
             variant="contained"
             color="error"
             startIcon={<ShieldRoundedIcon />}
-            disabled={stale || !care.decision_id || familyConfirmPending || familyConfirmApplied || controllerBlocked}
-            onClick={() => onFamilyConfirm(care.decision_id)}
+            disabled={!decision.decision_id || familyConfirmPending || familyConfirmApplied || controllerBlocked}
+            onClick={() => onFamilyConfirm(decision.decision_id)}
           >
             {familyConfirmLabel}
           </Button>
@@ -865,8 +879,8 @@ function EmergencyDialog({
         </>
       ) : (
         <>
-          <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={stale || !ownsControl || !care.decision_id} onClick={() => onIssue({ name: "confirm_alarm", decision_id: care.decision_id })}>确认已收到告警</Button>
-          <Button variant="outlined" startIcon={<VolumeUpRoundedIcon />} disabled={stale || !ownsControl || !care.decision_id} onClick={() => onIssue({ name: "replay_voice", decision_id: care.decision_id })}>重播现场问询</Button>
+          <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={!ownsControl || !decision.decision_id} onClick={() => onIssue({ name: "confirm_alarm", decision_id: decision.decision_id })}>确认已收到告警</Button>
+          <Button variant="outlined" startIcon={<VolumeUpRoundedIcon />} disabled={!ownsControl || !decision.decision_id} onClick={() => onIssue({ name: "replay_voice", decision_id: decision.decision_id })}>重播现场问询</Button>
         </>
       )}
       {soundBlocked && <Button variant="text" onClick={onRetrySound}>点击启用本页告警声音</Button>}
@@ -936,12 +950,17 @@ export function ViewerApp({ surface = "family" }) {
     subscribeMediaSignals: relay.subscribeMediaSignals,
     sendMediaSignal: relay.sendMediaSignal,
   });
-  const emergency = snapshot?.state.care.phase === "emergency";
-  const emergencyStale = Boolean(emergency && (relay.stateStale || relay.unavailableReason));
-  const decisionId = snapshot?.state.care.decision_id;
+  const careDecision = snapshot?.state.care.decision || null;
+  const historicalAlarm = Boolean(careDecision?.alarm);
+  const emergencyStale = Boolean(
+    historicalAlarm && (relay.stateStale || relay.unavailableReason),
+  );
+  const currentAlarm = emergencyStale ? null : careDecision?.alarm || null;
+  const emergency = Boolean(currentAlarm);
+  const decisionId = careDecision?.decision_id || null;
   const alertEffects = useAlertEffects({
     enabled: notificationsEnabled,
-    emergency,
+    alarm: currentAlarm,
     decisionId,
   });
 
@@ -1184,7 +1203,7 @@ export function ViewerApp({ surface = "family" }) {
         {relay.unavailableReason && activeTab !== "timeline" && (
           <aside className={`viewer-state-unavailable ${emergencyStale ? "is-emergency" : ""}`} role="alert">
             <HealthAndSafetyRoundedIcon />
-            <div><b>{emergencyStale ? "历史紧急告警已锁存，当前状态不可用" : "当前状态不可用"}</b><span>{unavailableCopy(relay, familySurface)}</span></div>
+            <div><b>{emergencyStale ? "仅保留历史告警记录，当前状态不可用" : "当前状态不可用"}</b><span>{unavailableCopy(relay, familySurface)}</span></div>
           </aside>
         )}
 
@@ -1234,7 +1253,7 @@ export function ViewerApp({ surface = "family" }) {
       <EmergencyDialog
         open={Boolean(emergency && decisionId !== dismissedEmergency)}
         onClose={() => setDismissedEmergency(decisionId)}
-        care={snapshot?.state.care}
+        decision={careDecision}
         activeGrant={activeGrant}
         nowMs={relayNowMs}
         ownsControl={relay.ownsControl}
@@ -1251,7 +1270,6 @@ export function ViewerApp({ surface = "family" }) {
         familySurface={familySurface}
         soundBlocked={alertEffects.soundBlocked}
         onRetrySound={alertEffects.retrySound}
-        stale={emergencyStale}
       />
     </div>
   );

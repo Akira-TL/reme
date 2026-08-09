@@ -1,5 +1,5 @@
 export const ROOM_NAME = "shared-live-demo";
-export const DEMO_STATE_SCHEMA_VERSION = "reme-demo-state/v2";
+export const DEMO_STATE_SCHEMA_VERSION = "reme-demo-state/v3";
 export const CONTROL_COMMAND_SCHEMA_VERSION = "reme-control-command/v1";
 export const POSE_FRAME_SCHEMA_VERSION = "reme-pose-frame-17/v1";
 export const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
@@ -47,11 +47,26 @@ export interface ActiveMediaGrant {
   status: "active";
 }
 
-export interface CareAssessment {
-  verdict: string;
-  basis: string;
-  uncertainty: "low" | "medium" | "high" | "unknown";
-  source: "rule" | "mimo" | "mock" | "record" | "degraded";
+export interface CareDecision {
+  schema_version: "reme-care-decision/v0-experiment";
+  scene_id: SceneId;
+  decision_id: string;
+  timestamp_ms: number;
+  state:
+    | "normal"
+    | "observe"
+    | "check_in_required"
+    | "consent_required"
+    | "family_notification_required"
+    | "urgent_attention"
+    | "resolved"
+    | "degraded";
+  risk_level: number;
+  privacy_mode: "visible" | "blurred" | "skeleton_only" | "hidden";
+  need_dialogue: boolean;
+  dialogue_goal: string | null;
+  elder_message: string | null;
+  family_notification: string | null;
   action:
     | "none"
     | "observe"
@@ -59,13 +74,40 @@ export interface CareAssessment {
     | "notify_family"
     | "show_urgent_attention"
     | "mark_resolved";
-  suggested_action: string;
-  status: "observing" | "awaiting_response" | "family_notified" | "resolved" | "degraded";
+  reason_summary: string;
+  uncertainty: "low" | "medium" | "high" | "unknown";
+  source: "rule" | "mimo" | "mock" | "record" | "degraded";
+  fallback_used: boolean;
+  demo_mode: "live" | "mock" | "record";
+  consent_required: boolean;
+  response_timeout_ms: number | null;
+  action_card: {
+    event: string;
+    elder_quote: string;
+    system_judgment: string;
+    suggested_action: string;
+    time_window: string;
+    status: "pending" | "confirmed" | "done";
+  } | null;
   visual_context: {
     sent_to_mimo: boolean;
     type: "keyframes" | "clip" | null;
+    start_ms: number | null;
+    end_ms: number | null;
     sample_count: number | null;
-  };
+  } | null;
+  alarm: {
+    channels: Array<"vibrate" | "ring" | "flash">;
+    trigger:
+      | "elder_report"
+      | "voice_intent"
+      | "visual_confirm"
+      | "check_in_timeout"
+      | "unclear_response"
+      | "family_unresponsive";
+  } | null;
+  voice_asset: string | null;
+  confirm_channels: Array<"frame" | "voice"> | null;
 }
 
 export interface DemoState {
@@ -91,11 +133,8 @@ export interface DemoState {
   };
   care: {
     phase: "idle" | "checking" | "emergency" | "resolved";
-    decision_id: string | null;
     consent: "none" | "pending" | "granted" | "denied";
-    alarm_authoritative: boolean;
-    message: string | null;
-    assessment: CareAssessment | null;
+    decision: CareDecision | null;
   };
   media_grant: ActiveMediaGrant | null;
 }
@@ -220,25 +259,52 @@ const STATE_KEYS = [
 ] as const;
 const CAPTURE_KEYS = ["error", "remote_video", "source_id", "source_kind", "status"] as const;
 const RUNTIME_KEYS = ["capability", "detail", "status"] as const;
-const CARE_KEYS = [
-  "alarm_authoritative",
-  "assessment",
-  "consent",
-  "decision_id",
-  "message",
-  "phase",
-] as const;
-const CARE_ASSESSMENT_KEYS = [
+const CARE_KEYS = ["consent", "decision", "phase"] as const;
+const CARE_DECISION_KEYS = [
   "action",
-  "basis",
+  "action_card",
+  "alarm",
+  "confirm_channels",
+  "consent_required",
+  "decision_id",
+  "demo_mode",
+  "dialogue_goal",
+  "elder_message",
+  "fallback_used",
+  "family_notification",
+  "need_dialogue",
+  "privacy_mode",
+  "reason_summary",
+  "response_timeout_ms",
+  "risk_level",
+  "scene_id",
+  "schema_version",
   "source",
+  "state",
+  "timestamp_ms",
+  "uncertainty",
+  "visual_context",
+  "voice_asset",
+] as const;
+const ACTION_CARD_KEYS = [
+  "elder_quote",
+  "event",
   "status",
   "suggested_action",
-  "uncertainty",
-  "verdict",
-  "visual_context",
+  "system_judgment",
+  "time_window",
 ] as const;
-const CARE_VISUAL_CONTEXT_KEYS = ["sample_count", "sent_to_mimo", "type"] as const;
+const CARE_VISUAL_CONTEXT_KEYS = [
+  "end_ms",
+  "sample_count",
+  "sent_to_mimo",
+  "start_ms",
+  "type",
+] as const;
+const ALARM_KEYS = [
+  "channels",
+  "trigger",
+] as const;
 const ACTIVE_GRANT_KEYS = ["event_id", "expires_at_ms", "grant_id", "scope", "status"] as const;
 const POSE_FRAME_KEYS = [
   "frame_sequence",
@@ -470,6 +536,7 @@ function validateStateBody(value: unknown, requireRelayOwnedGrant: boolean): val
   if (!validateCapture(value.capture) || !validateRuntime(value.runtime) || !validateCare(value.care)) {
     return false;
   }
+  if (value.care.decision !== null && value.care.decision.scene_id !== value.scene_id) return false;
   if (requireRelayOwnedGrant) return value.media_grant === null;
   return value.media_grant === null || validateActiveGrant(value.media_grant);
 }
@@ -526,40 +593,51 @@ function validateCare(value: unknown): value is DemoState["care"] {
     && value.phase !== "emergency"
     && value.phase !== "resolved"
   ) return false;
-  if (value.decision_id !== null && !isOpaqueId(value.decision_id)) return false;
   if (
     value.consent !== "none"
     && value.consent !== "pending"
     && value.consent !== "granted"
     && value.consent !== "denied"
   ) return false;
-  if (typeof value.alarm_authoritative !== "boolean") return false;
-  if (value.message !== null && !isBoundedString(value.message, 240)) return false;
-  if (value.assessment !== null && !validateCareAssessment(value.assessment)) return false;
-  if (value.assessment !== null && value.decision_id === null) return false;
-  if (value.phase === "emergency") {
-    return value.alarm_authoritative && value.decision_id !== null;
-  }
-  return !value.alarm_authoritative;
+  if (value.decision !== null && !validateCareDecision(value.decision)) return false;
+  const expectedPhase = value.decision === null
+    ? "idle"
+    : value.decision.state === "check_in_required" || value.decision.state === "consent_required"
+      ? "checking"
+      : value.decision.state === "family_notification_required"
+          || value.decision.state === "urgent_attention"
+        ? "emergency"
+        : value.decision.state === "resolved"
+          ? "resolved"
+          : "idle";
+  return value.phase === expectedPhase;
 }
 
-function validateCareAssessment(value: unknown): value is CareAssessment {
-  if (!isExactObject(value, CARE_ASSESSMENT_KEYS)) return false;
-  if (!isBoundedString(value.verdict, 240) || !isBoundedString(value.basis, 240)) return false;
-  if (!isBoundedString(value.suggested_action, 240)) return false;
+export function validateCareDecision(value: unknown): value is CareDecision {
+  if (!isExactObject(value, CARE_DECISION_KEYS)) return false;
+  if (value.schema_version !== "reme-care-decision/v0-experiment") return false;
+  if (!isSceneId(value.scene_id) || !isOpaqueId(value.decision_id)) return false;
+  if (!isFiniteNonNegativeNumber(value.timestamp_ms)) return false;
   if (
-    value.uncertainty !== "low"
-    && value.uncertainty !== "medium"
-    && value.uncertainty !== "high"
-    && value.uncertainty !== "unknown"
+    value.state !== "normal"
+    && value.state !== "observe"
+    && value.state !== "check_in_required"
+    && value.state !== "consent_required"
+    && value.state !== "family_notification_required"
+    && value.state !== "urgent_attention"
+    && value.state !== "resolved"
+    && value.state !== "degraded"
   ) return false;
+  if (!isNonNegativeSafeInteger(value.risk_level) || value.risk_level > 4) return false;
   if (
-    value.source !== "rule"
-    && value.source !== "mimo"
-    && value.source !== "mock"
-    && value.source !== "record"
-    && value.source !== "degraded"
+    value.privacy_mode !== "visible"
+    && value.privacy_mode !== "blurred"
+    && value.privacy_mode !== "skeleton_only"
+    && value.privacy_mode !== "hidden"
   ) return false;
+  if (typeof value.need_dialogue !== "boolean") return false;
+  if (!isNullableText(value.dialogue_goal) || !isNullableText(value.elder_message)) return false;
+  if (!isNullableText(value.family_notification)) return false;
   if (
     value.action !== "none"
     && value.action !== "observe"
@@ -568,25 +646,87 @@ function validateCareAssessment(value: unknown): value is CareAssessment {
     && value.action !== "show_urgent_attention"
     && value.action !== "mark_resolved"
   ) return false;
-  if (
-    value.status !== "observing"
-    && value.status !== "awaiting_response"
-    && value.status !== "family_notified"
-    && value.status !== "resolved"
-    && value.status !== "degraded"
-  ) return false;
-  return validateCareVisualContext(value.visual_context);
+  if (!isBoundedString(value.reason_summary, 2_000)) return false;
+  if (value.uncertainty !== "low"
+    && value.uncertainty !== "medium"
+    && value.uncertainty !== "high"
+    && value.uncertainty !== "unknown") return false;
+  if (typeof value.fallback_used !== "boolean") return false;
+  if (value.source !== "rule"
+    && value.source !== "mimo"
+    && value.source !== "mock"
+    && value.source !== "record"
+    && value.source !== "degraded") return false;
+  if (value.demo_mode !== "live" && value.demo_mode !== "mock" && value.demo_mode !== "record") {
+    return false;
+  }
+  if (typeof value.consent_required !== "boolean") return false;
+  if (value.response_timeout_ms !== null
+    && (!isNonNegativeSafeInteger(value.response_timeout_ms) || value.response_timeout_ms === 0)) {
+    return false;
+  }
+  if (value.action_card !== null && !validateActionCard(value.action_card)) return false;
+  if (value.visual_context !== null && !validateCareVisualContext(value.visual_context)) return false;
+  if (value.alarm !== null && !validateAlarm(value.alarm)) return false;
+  if (!isNullableText(value.voice_asset, 512)) return false;
+  if (value.confirm_channels !== null
+    && !isUniqueClosedList(value.confirm_channels, ["frame", "voice"])) return false;
+
+  if (!value.need_dialogue && value.elder_message !== null) return false;
+  if (value.action === "notify_family" && value.family_notification === null) return false;
+  if (value.consent_required && value.action === "notify_family") return false;
+  if (value.state === "consent_required"
+    && (value.risk_level !== 2 || value.consent_required !== true)) return false;
+  if (value.state === "degraded" && !value.fallback_used) return false;
+  if (value.source === "degraded" && value.state !== "degraded") return false;
+  if (value.alarm !== null
+    && value.state !== "family_notification_required"
+    && value.state !== "urgent_attention") return false;
+  if (value.voice_asset !== null && value.elder_message === null) return false;
+  if (value.confirm_channels !== null && value.action !== "ask_elder") return false;
+  return !containsForbiddenRawMedia(value);
 }
 
-function validateCareVisualContext(value: unknown): value is CareAssessment["visual_context"] {
+function validateActionCard(value: unknown): value is NonNullable<CareDecision["action_card"]> {
+  if (!isExactObject(value, ACTION_CARD_KEYS)) return false;
+  return isBoundedString(value.event, 2_000)
+    && isBoundedString(value.elder_quote, 2_000)
+    && isBoundedString(value.system_judgment, 2_000)
+    && isBoundedString(value.suggested_action, 2_000)
+    && isBoundedString(value.time_window, 2_000)
+    && (value.status === "pending" || value.status === "confirmed" || value.status === "done");
+}
+
+function validateCareVisualContext(
+  value: unknown,
+): value is NonNullable<CareDecision["visual_context"]> {
   if (!isExactObject(value, CARE_VISUAL_CONTEXT_KEYS)) return false;
   if (typeof value.sent_to_mimo !== "boolean") return false;
-  if (value.sent_to_mimo) {
-    return (value.type === "keyframes" || value.type === "clip")
-      && (value.sample_count === null
-        || (Number.isSafeInteger(value.sample_count) && (value.sample_count as number) > 0));
+  if (!value.sent_to_mimo) {
+    return value.type === null
+      && value.start_ms === null
+      && value.end_ms === null
+      && value.sample_count === null;
   }
-  return value.type === null && value.sample_count === null;
+  if (value.type !== "keyframes" && value.type !== "clip") return false;
+  if (value.start_ms !== null && !isFiniteNonNegativeNumber(value.start_ms)) return false;
+  if (value.end_ms !== null && !isFiniteNonNegativeNumber(value.end_ms)) return false;
+  if (typeof value.start_ms === "number"
+    && typeof value.end_ms === "number"
+    && value.end_ms < value.start_ms) return false;
+  return value.sample_count === null
+    || (isNonNegativeSafeInteger(value.sample_count) && value.sample_count > 0);
+}
+
+function validateAlarm(value: unknown): value is NonNullable<CareDecision["alarm"]> {
+  if (!isExactObject(value, ALARM_KEYS)) return false;
+  if (!isUniqueClosedList(value.channels, ["vibrate", "ring", "flash"])) return false;
+  return value.trigger === "elder_report"
+    || value.trigger === "voice_intent"
+    || value.trigger === "visual_confirm"
+    || value.trigger === "check_in_timeout"
+    || value.trigger === "unclear_response"
+    || value.trigger === "family_unresponsive";
 }
 
 function validateActiveGrant(value: unknown): value is ActiveMediaGrant {
@@ -688,8 +828,24 @@ function isUnitNumber(value: unknown): value is number {
   return isFiniteNonNegativeNumber(value) && value <= 1;
 }
 
+function isNullableText(value: unknown, maxLength = 2_000): value is string | null {
+  return value === null || isBoundedString(value, maxLength);
+}
+
+function isUniqueClosedList<const T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): value is T[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && new Set(value).size === value.length
+    && value.every((item) => (
+      typeof item === "string" && (allowed as readonly string[]).includes(item)
+    ));
+}
+
 function isBoundedString(value: unknown, maxLength: number, allowEmpty = false): value is string {
   return typeof value === "string"
     && value.length <= maxLength
-    && (allowEmpty || value.length > 0);
+    && (allowEmpty || value.trim().length > 0);
 }

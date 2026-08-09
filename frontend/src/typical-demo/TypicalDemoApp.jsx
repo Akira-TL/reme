@@ -10,9 +10,9 @@ import SyncRoundedIcon from "@mui/icons-material/SyncRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import { Button, ButtonBase } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { projectCareDecision } from "../shared-demo/careDecision.js";
 import { relayHttpBase } from "../shared-demo/config";
 import { AcceptanceControls } from "./AcceptanceControls";
-import { projectCareAssessment } from "./careAssessment";
 import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
 import { HomeCarePrompt } from "./HomeCarePrompt";
@@ -26,7 +26,7 @@ import {
 import { createDemoStateEnvelope, createPoseFrame } from "./monitorRelay";
 import { createBoundedMediaSignalDispatcher } from "./monitorMedia";
 import { RuntimeDebugPanel } from "./RuntimeDebugPanel";
-import { shouldAutoOpenFamilyVideo, shouldCloseFamilyVideo } from "./phoneState";
+import { shouldAutoOpenFamilyVideo } from "./phoneState";
 import { buildDemoState, mediaGrantEligibility } from "./remoteCommand";
 import { getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus";
 import { DEMO_SCENES } from "./scenes";
@@ -49,7 +49,6 @@ const SCENE_ICONS = {
   fall: EmergencyRoundedIcon,
 };
 
-const ACTIVE_SAFETY_PHASES = new Set(["candidate", "checking", "emergency"]);
 const LOCAL_RTC_CONFIGURATION = Object.freeze({ iceServers: [] });
 
 function careConsent(decision, kitchenAuthorized) {
@@ -59,18 +58,11 @@ function careConsent(decision, kitchenAuthorized) {
   return "none";
 }
 
-function careMessage(decision) {
-  return decision?.family_notification
-    || decision?.elder_message
-    || decision?.reason_summary
-    || null;
-}
-
 export function TypicalDemoApp({ surface = "debug" }) {
   const normalizedSurface = normalizeSurface(surface);
   const debugInterface = exposesDebugInterface(normalizedSurface);
   const [sceneId, setSceneId] = useState(() => initialSceneForSurface(normalizedSurface));
-  const [familyViewOpen, setFamilyViewOpen] = useState(false);
+  const [familyViewDecisionId, setFamilyViewDecisionId] = useState(null);
   const [videoElement, setVideoElement] = useState(null);
   const [pendingScenario, setPendingScenario] = useState(null);
   const [demoStarted, setDemoStarted] = useState(false);
@@ -165,10 +157,13 @@ export function TypicalDemoApp({ surface = "debug" }) {
     startDemoConversation,
     switchScene,
   } = live;
-  // Transport loss degrades availability, but it must not silently lower an
-  // already authoritative safety decision. Stopping the demo is the explicit
-  // boundary that clears the latched phase.
   const effectivePhase = demoStarted ? live.phase : "idle";
+  const currentDecision = live.decision?.decision || null;
+  const projectedDecision = useMemo(
+    () => projectCareDecision(currentDecision),
+    [currentDecision],
+  );
+  const alarmActive = Boolean(projectedDecision?.alarm);
   const kitchenShareDecision = useMemo(
     () => [live.decision?.decision, ...(live.decision?.history || [])]
       .find((item) => (
@@ -199,9 +194,11 @@ export function TypicalDemoApp({ surface = "debug" }) {
       ),
   );
   const deviceViewMode = sceneId === "bathroom" ? "skeleton" : "video_skeleton";
-  const autoFamilyViewOpen = shouldAutoOpenFamilyVideo(sceneId, effectivePhase);
-  const effectiveFamilyViewOpen = familyViewOpen
-    && !shouldCloseFamilyVideo(effectivePhase);
+  const autoFamilyViewOpen = shouldAutoOpenFamilyVideo(sceneId, projectedDecision);
+  const effectiveFamilyViewOpen = Boolean(
+    projectedDecision?.decision_id
+      && familyViewDecisionId === projectedDecision.decision_id,
+  );
   const phoneViewMode = (autoFamilyViewOpen || effectiveFamilyViewOpen) && familyGrantActive
     ? "video_skeleton"
     : "skeleton";
@@ -293,71 +290,40 @@ export function TypicalDemoApp({ surface = "debug" }) {
   const modelHealth = getModelHealth(cameraState);
   const linkHealth = getLinkHealth(live);
 
-  const currentDecision = live.decision?.decision || null;
-  const authorizedKitchenDecision = kitchenAuthorizationActive
-    ? [currentDecision, ...live.decision.history].find(
-        (item) => item?.decision_id === kitchenAuthorization?.decisionId,
-      ) || null
-    : null;
-  const authorityDecision = sceneId === "kitchen" && authorizedKitchenDecision
-    ? authorizedKitchenDecision
-    : sceneId === "fall" && effectivePhase === "emergency"
-      ? live.safetyDecision || currentDecision
-      : currentDecision;
-  const careAssessment = useMemo(
-    () => projectCareAssessment(authorityDecision),
-    [authorityDecision],
-  );
   const consent = careConsent(currentDecision, kitchenAuthorizationActive);
-  const alarmAuthoritative = effectivePhase === "emergency"
-    && ["family_notification_required", "urgent_attention"].includes(authorityDecision?.state);
-  const currentFallAuthority = Boolean(
-    sceneId === "fall"
-      && liveActive
-      && live.connection === "open"
-      && live.currentAuthority,
-  );
   const mediaAuthorityEligibility = useMemo(() => mediaGrantEligibility({
     sceneId,
-    careDecision: authorityDecision,
+    careDecision: projectedDecision,
     kitchenAuthorization,
-    fallAuthorization: live.fallMediaAuthorization,
     now: authorizationClockMs,
   }), [
-    authorityDecision,
     authorizationClockMs,
     kitchenAuthorization,
-    live.fallMediaAuthorization,
+    projectedDecision,
     sceneId,
   ]);
   const mediaAuthorityKey = mediaAuthorityEligibility.allowed
-    && authorityDecision?.decision_id
-    ? `${mediaAuthorityEligibility.scope}:${authorityDecision.decision_id}`
+    && projectedDecision?.decision_id
+    ? `${mediaAuthorityEligibility.scope}:${projectedDecision.decision_id}`
     : null;
   const mediaAuthorityActive = Boolean(
     mediaAuthorityKey
       && liveActive
-      && live.connection === "open"
-      && (sceneId !== "fall" || currentFallAuthority),
+      && live.connection === "open",
   );
   const relayRuntime = useMemo(() => {
     if (!demoStarted) return liveRuntime;
-    if (
-      liveActive
-      && media.ready
-      && live.connection === "open"
-      && (effectivePhase !== "emergency" || currentFallAuthority)
-    ) return liveRuntime;
+    if (liveActive && media.ready && live.connection === "open") return liveRuntime;
     return {
       ...liveRuntime,
       state: "degraded",
       reason: !media.ready
-        ? "本机媒体源不可用；既有安全状态保持锁定，事件原画已关闭"
+        ? "本机媒体源不可用；当前实时状态与事件原画均不可用"
         : live.connection !== "open"
-          ? "决策链路不可用；既有安全状态保持锁定，事件原画已关闭"
-          : "感知链路不可用；既有安全状态保持锁定，事件原画已关闭",
+          ? "决策链路不可用；当前实时状态与事件原画均不可用"
+          : "感知链路不可用；当前实时状态与事件原画均不可用",
     };
-  }, [currentFallAuthority, demoStarted, effectivePhase, live.connection, liveActive, liveRuntime, media.ready]);
+  }, [demoStarted, live.connection, liveActive, liveRuntime, media.ready]);
   const stateFingerprint = JSON.stringify([
     liveRuntime?.sessionId || null,
     sceneId,
@@ -370,13 +336,9 @@ export function TypicalDemoApp({ surface = "debug" }) {
     relayRuntime?.state || null,
     relayRuntime?.inputMode || null,
     relayRuntime?.reason || null,
-    effectivePhase,
-    authorityDecision?.decision_id || null,
     kitchenAuthorization?.expiresAtMs || null,
     consent,
-    alarmAuthoritative,
-    careMessage(authorityDecision),
-    careAssessment,
+    projectedDecision,
   ]);
 
   useEffect(() => {
@@ -410,12 +372,8 @@ export function TypicalDemoApp({ surface = "debug" }) {
       },
       runtime: relayRuntime,
       care: {
-        phase: effectivePhase,
-        decisionId: authorityDecision?.decision_id || null,
         consent,
-        alarmAuthoritative,
-        message: careMessage(authorityDecision),
-        assessment: careAssessment,
+        decision: projectedDecision,
       },
     });
     return createDemoStateEnvelope({
@@ -426,16 +384,13 @@ export function TypicalDemoApp({ surface = "debug" }) {
       timestampMs: built.timestamp_ms,
     });
   }, [
-    alarmAuthoritative,
-    authorityDecision,
-    careAssessment,
     consent,
-    effectivePhase,
     liveRuntime,
     media.ready,
     media.sourceError?.message,
     media.sourceGeneration,
     media.sourceStatus,
+    projectedDecision,
     sceneId,
     sourceDescriptor,
     relayRuntime,
@@ -575,7 +530,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     pendingCommandGenerationsRef.current.clear();
     setGrantMessage(null);
     mediaSignalDispatcher.clear();
-    setFamilyViewOpen(false);
+    setFamilyViewDecisionId(null);
   }, [media, mediaProducer, mediaSignalDispatcher, monitor]);
 
   const revokeRemoteControl = useCallback(() => {
@@ -631,14 +586,11 @@ export function TypicalDemoApp({ surface = "debug" }) {
       execution,
       commitScene(committedScene) {
         setSceneId(committedScene);
-        setFamilyViewOpen(false);
+        setFamilyViewDecisionId(null);
         autoConversationRef.current = null;
       },
     })
   ), [switchScene]);
-
-
-  const markSafe = live.respondSafe;
 
   const requestManualScenario = useCallback((scenario, targetScene) => {
     if (!liveActive) return;
@@ -712,8 +664,8 @@ export function TypicalDemoApp({ surface = "debug" }) {
       roomSessionId: monitor.roomSessionId,
       stateRevision,
       sceneId,
-      decisionId: authorityDecision?.decision_id || null,
-      activeSafetyEvent: ACTIVE_SAFETY_PHASES.has(effectivePhase),
+      decisionId: projectedDecision?.decision_id || null,
+      activeSafetyEvent: alarmActive,
       sources: debugInterface ? media.availableSources : [],
     };
     commandActionsRef.current = remoteActionsForSurface(normalizedSurface, {
@@ -729,15 +681,15 @@ export function TypicalDemoApp({ surface = "debug" }) {
       replayVoice: live.replayVoice,
     });
   }, [
-    authorityDecision?.decision_id,
+    alarmActive,
     debugInterface,
-    effectivePhase,
     live.confirmAlarm,
     live.replayVoice,
     media.availableSources,
     media.stop,
     monitor.roomSessionId,
     normalizedSurface,
+    projectedDecision?.decision_id,
     resetAcceptance,
     runRemoteScenario,
     sceneId,
@@ -854,10 +806,9 @@ export function TypicalDemoApp({ surface = "debug" }) {
       !monitor.connected
       || !liveActive
       || live.connection !== "open"
-      || (sceneId === "fall" && !currentFallAuthority)
       || !runtimeSessionId
       || !eligibility.allowed
-      || !authorityDecision?.decision_id
+      || !projectedDecision?.decision_id
       || !media.ready
       || sourceDescriptor?.remote_video !== "available"
       || stateFingerprintRef.current !== stateFingerprint
@@ -868,7 +819,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
       runtimeSessionId,
       media.sourceGeneration,
       eligibility.scope,
-      authorityDecision.decision_id,
+      projectedDecision.decision_id,
     ].join(":");
     const previousAttempt = grantAttemptsRef.current.get(eventKey);
     if (previousAttempt?.status === "accepted") return undefined;
@@ -878,7 +829,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     ) return undefined;
     const sent = requestMonitorGrant({
       runtimeSessionId,
-      eventId: authorityDecision.decision_id,
+      eventId: projectedDecision.decision_id,
       scope: eligibility.scope,
       expiresInMs: eligibility.durationMs,
     });
@@ -887,9 +838,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     const retryTimer = window.setTimeout(() => setGrantClockMs(relayNow()), 1_550);
     return () => window.clearTimeout(retryTimer);
   }, [
-    authorityDecision,
     grantClockMs,
-    currentFallAuthority,
     live.connection,
     liveActive,
     liveRuntime?.sessionId,
@@ -899,6 +848,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     monitor.connected,
     monitor.acceptedStateRevision,
     monitor.roomSessionId,
+    projectedDecision,
     requestMonitorGrant,
     relayNow,
     sceneId,
@@ -1109,6 +1059,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
             <ChildPhone
               scene={scene}
               fallPhase={effectivePhase}
+              alarmActive={alarmActive}
               fallStateOverride={liveActive ? live.fallState : null}
               emergencyNote={liveActive ? live.emergencyNote : null}
               kitchenShared={kitchenShared}
@@ -1119,9 +1070,12 @@ export function TypicalDemoApp({ surface = "debug" }) {
               familyViewOpen={effectiveFamilyViewOpen}
               autoFamilyViewOpen={autoFamilyViewOpen}
               familyVideoAllowed={familyGrantActive}
-              onToggleFamilyView={() => setFamilyViewOpen((current) => !current)}
+              onToggleFamilyView={() => setFamilyViewDecisionId((current) => (
+                current === projectedDecision?.decision_id
+                  ? null
+                  : projectedDecision?.decision_id || null
+              ))}
               onContact={contactEmergency}
-              onSafe={markSafe}
             />
           </>
         ) : (

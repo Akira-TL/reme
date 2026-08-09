@@ -52,19 +52,18 @@ function mergeAck(acks, nextAck) {
   return next.slice(0, MAX_ACKS);
 }
 
-function isAuthoritativeEmergency(snapshot) {
-  return snapshot?.state?.care?.phase === "emergency"
-    && snapshot.state.care.alarm_authoritative === true;
+function hasAlarmSnapshot(snapshot) {
+  return Boolean(snapshot?.state?.care?.decision?.alarm);
 }
 
 function unavailableState(state, reason) {
-  const latchedEmergency = isAuthoritativeEmergency(state.state)
+  const historicalAlarmState = hasAlarmSnapshot(state.state)
     ? state.state
     : null;
   return {
     ...state,
-    state: latchedEmergency,
-    stateStale: Boolean(latchedEmergency),
+    state: historicalAlarmState,
+    stateStale: Boolean(historicalAlarmState),
     pose: null,
     mediaGrant: null,
     unavailableReason: reason,
@@ -321,6 +320,7 @@ export function selectActiveMediaGrant(
 ) {
   const grant = state.mediaGrant;
   const snapshot = state.state;
+  const decision = snapshot?.state.care.decision;
   if (state.unavailableReason
     || state.stateStale
     || !grant
@@ -330,7 +330,8 @@ export function selectActiveMediaGrant(
     || snapshot.room_session_id !== state.roomSessionId
     || snapshot.state.scene_id === "bathroom"
     || snapshot.state.capture.status !== "active"
-    || snapshot.state.capture.remote_video !== "available") return null;
+    || snapshot.state.capture.remote_video !== "available"
+    || grant.event_id !== decision?.decision_id) return null;
   if (grant.scope === "kitchen_moment") {
     return snapshot.state.scene_id === "kitchen"
       && snapshot.state.care.consent === "granted"
@@ -338,8 +339,7 @@ export function selectActiveMediaGrant(
       : null;
   }
   return grant.scope === "fall_emergency"
-    && snapshot.state.care.phase === "emergency"
-    && snapshot.state.care.alarm_authoritative
+    && decision.alarm !== null
     ? grant
     : null;
 }

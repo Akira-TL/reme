@@ -25,10 +25,7 @@ import {
   Switch,
 } from "@mui/material";
 import { useState } from "react";
-import {
-  isActiveFallDanger,
-  shouldShowEmergencySheet,
-} from "./phoneState";
+import { isActiveFallDanger } from "./phoneState";
 import { FALL_PHASES } from "./scenes";
 import { SceneViewport } from "./SceneViewport";
 
@@ -78,7 +75,7 @@ function FamilySettings({ privacyEnabled, notificationsEnabled, onPrivacyChange,
           <strong className="text-xs">隐私与提醒</strong>
         </div>
         <p className="mt-1 text-[9px] leading-relaxed text-stone-500">
-          原视频默认关闭；只有主动查看或紧急阶段才临时开放。
+          原视频默认关闭；只有当前事件获得明确授权时才临时开放。
         </p>
       </div>
       <div className="rounded-xl border border-stone-200 bg-white px-3 py-1">
@@ -100,6 +97,7 @@ function FamilySettings({ privacyEnabled, notificationsEnabled, onPrivacyChange,
 export function ChildPhone({
   scene,
   fallPhase,
+  alarmActive = false,
   fallStateOverride = null,
   emergencyNote = null,
   kitchenShared,
@@ -112,13 +110,13 @@ export function ChildPhone({
   familyVideoAllowed,
   onToggleFamilyView,
   onContact,
-  onSafe,
 }) {
   const [activeTab, setActiveTab] = useState("home");
   const [privacyEnabled, setPrivacyEnabled] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
-  const danger = isActiveFallDanger(fallPhase);
-  const emergency = shouldShowEmergencySheet(fallPhase);
+  const danger = alarmActive
+    || (isActiveFallDanger(fallPhase) && fallPhase !== "emergency");
+  const emergency = alarmActive;
   const resolved = fallPhase === "resolved";
   const hasFallState = fallPhase !== "idle";
   const fallState = fallStateOverride || FALL_PHASES[fallPhase];
@@ -265,7 +263,6 @@ export function ChildPhone({
               <LockRoundedIcon /> {emergencyNote || "已按预授权临时开放现场画面"}
             </div>
             <Button variant="contained" color="error" startIcon={<CallRoundedIcon />} onClick={onContact}>联系紧急联系人</Button>
-            <Button variant="text" startIcon={<CheckCircleRoundedIcon />} onClick={onSafe}>老人已确认安全</Button>
           </div>
         )}
       </div>

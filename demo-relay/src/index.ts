@@ -1400,17 +1400,17 @@ export class DemoRoom extends DurableObject<Env> {
   private revokeGrantIfAuthorityLost(state: DemoStateEnvelope, nowMs: number): void {
     const grant = this.activeGrantRow(nowMs);
     if (grant === null) return;
+    const decision = state.state.care.decision;
     const valid = grant.runtime_session_id === state.runtime_session_id
       && state.state.runtime.status === "ready"
       && state.state.capture.status === "active"
       && state.state.capture.remote_video === "available"
       && state.state.scene_id !== "bathroom"
-      && state.state.care.decision_id === grant.event_id
+      && decision?.decision_id === grant.event_id
       && (grant.scope === "kitchen_moment"
         ? state.state.scene_id === "kitchen" && state.state.care.consent === "granted"
         : state.state.scene_id === "fall"
-          && state.state.care.phase === "emergency"
-          && state.state.care.alarm_authoritative);
+          && decision.alarm !== null);
     if (!valid) this.revokeActiveGrants(nowMs, "grant_authority_lost", "revoked");
   }
 
@@ -1988,15 +1988,15 @@ function grantRejection(
     state.state.capture.status !== "active"
     || state.state.capture.remote_video !== "available"
   ) return "remote_video_unavailable";
-  if (state.state.care.decision_id !== request.event_id) return "event_authority_mismatch";
+  const decision = state.state.care.decision;
+  if (decision?.decision_id !== request.event_id) return "event_authority_mismatch";
   if (request.scope === "kitchen_moment") {
     return state.state.scene_id === "kitchen" && state.state.care.consent === "granted"
       ? null
       : "kitchen_consent_required";
   }
   return state.state.scene_id === "fall"
-    && state.state.care.phase === "emergency"
-    && state.state.care.alarm_authoritative
+    && decision.alarm !== null
     ? null
     : "authoritative_fall_required";
 }
@@ -2010,9 +2010,12 @@ function commandSafetyRejection(
     (body.name === "submit_response"
       || body.name === "confirm_alarm"
       || body.name === "replay_voice")
-    && body.decision_id !== state.state.care.decision_id
+    && body.decision_id !== state.state.care.decision?.decision_id
   ) return "decision_id_mismatch";
-  if (state.state.care.phase !== "emergency") return null;
+  if (body.name === "confirm_alarm" && state.state.care.decision?.alarm === null) {
+    return "alarm_not_current";
+  }
+  if (state.state.care.decision?.alarm === null || state.state.care.decision === null) return null;
   if (
     body.name === "reset_demo"
     || body.name === "stop_capture"
