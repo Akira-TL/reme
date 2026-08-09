@@ -87,7 +87,15 @@ function drawJoint(context, point, radius, color) {
   context.shadowBlur = 10;
 }
 
-export function drawSkeleton(context, points, width, height, video, color = "#ff5a00") {
+export function drawSkeleton(
+  context,
+  points,
+  width,
+  height,
+  video,
+  color = "#ff5a00",
+  mirror = true,
+) {
   if (points.length !== 17) return;
 
   const videoWidth = video?.videoWidth || 1280;
@@ -98,7 +106,7 @@ export function drawSkeleton(context, points, width, height, video, color = "#ff
   const offsetX = (width - drawWidth) / 2;
   const offsetY = (height - drawHeight) / 2;
   const mapped = points.map((point) => ({
-    x: (1 - point.x) * drawWidth + offsetX,
+    x: (mirror ? 1 - point.x : point.x) * drawWidth + offsetX,
     y: point.y * drawHeight + offsetY,
     score: point.score,
   }));

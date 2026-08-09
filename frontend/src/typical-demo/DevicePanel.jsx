@@ -6,17 +6,33 @@ import { Button } from "@mui/material";
 import { SceneViewport } from "./SceneViewport";
 import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
-export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
+export function DevicePanel({
+  scene,
+  canvasRef,
+  camera,
+  viewMode,
+  surface = "debug",
+  started = true,
+}) {
+  const homeSurface = surface === "home";
+  const homeIdle = homeSurface && !started;
   const cameraHealth = getCameraHealth(camera);
   const modelHealth = getModelHealth(camera);
   const skeletonSource = describeSkeletonSource(camera.skeletonSource);
+  const retryLabel = camera.errorCode === "permission_denied"
+    ? "请先在网站设置中允许，再重试"
+    : "重试媒体请求";
+  const retryCannotHelp = camera.errorCode === "insecure_context";
 
   return (
-    <section className={`device-panel tone-${scene.tone}`} aria-label="家中实时画面">
+    <section
+      className={`device-panel ${homeSurface ? "is-home-stage" : ""} tone-${scene.tone}`}
+      aria-label={homeIdle ? "等待开启的本机视频源" : "家中实时画面"}
+    >
       <header className="panel-heading device-panel-heading-simple">
         <div>
-          <span>家中实时画面</span>
-          <h2>{scene.title}</h2>
+          <span>{homeIdle ? "当前采集源 · 本机视频" : "家中实时画面"}</span>
+          <h2>{homeIdle ? "视频源尚未开启" : scene.title}</h2>
         </div>
       </header>
 
@@ -34,7 +50,7 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
 
       <SceneViewport
         sceneId={scene.id}
-        backgroundImage={scene.backgroundImage}
+        backgroundImage={homeSurface ? null : scene.backgroundImage}
         aspectRatio={camera.aspectRatio}
         canvasRef={canvasRef}
         cameraReady={camera.cameraReady}
@@ -44,10 +60,18 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
         perceptionReason={camera.perceptionReason}
         viewMode={viewMode}
         skeletonSource={camera.skeletonSource}
-        showStatus={false}
+        showStatus={homeSurface}
+        decorativeSet={!homeSurface}
+        waitingForStart={homeIdle}
       />
 
-      {camera.error && (
+      {camera.error && retryCannotHelp && (
+        <p className="camera-error is-static" role="alert">
+          {camera.error}
+        </p>
+      )}
+
+      {camera.error && !retryCannotHelp && (
         <Button
           className="camera-error"
           color="error"
@@ -55,7 +79,7 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
           startIcon={<RestartAltRoundedIcon />}
           onClick={camera.retry}
         >
-          {camera.error} · 点击重试
+          {camera.error} · {retryLabel}
         </Button>
       )}
     </section>

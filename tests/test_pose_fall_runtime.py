@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from reme.runtime.perception.fall_mil import (
     FallMILModel,
     FallMILScore,
@@ -57,6 +58,10 @@ def _transition_event(transition: str = "uncertain_transition") -> RuntimeEvent:
     )
 
 
+@pytest.mark.skipif(
+    not _SAMPLES_PATH.is_file(),
+    reason="requires the out-of-band fall bootstrap sample dataset",
+)
 def test_mil_v3_scores_known_positive_training_bag() -> None:
     model = FallMILModel.load(_MODEL_PATH)
 
