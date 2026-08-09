@@ -26,6 +26,7 @@ from reme.runtime.decision.config import (
     ServerConfig,
     ServerConfigError,
     build_danger_controller,
+    build_diary_summary_service,
     build_miloco_emergency_publisher,
     build_mimo_client,
     build_policy_config,
@@ -38,6 +39,8 @@ from reme.runtime.decision.family_event import (
     FamilyEventAuthority,
     build_relay_family_transport_from_env,
 )
+from reme.runtime.decision.mimo.adapter import MimoTransportError
+from reme.runtime.decision.mimo.diary import DiarySummaryError, MimoDiarySummaryService
 from reme.runtime.decision.policy import (
     DecisionPublisher,
     DecisionRejectedError,
@@ -126,6 +129,7 @@ def build_decision_handler(
     voice_dialogue: VoiceDialogueController | None = None,
     voice_dir: Path | None = None,
     family_authority: FamilyEventAuthority | None = None,
+    diary_summary: MimoDiarySummaryService | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Create the request handler bound to one DecisionService.
 
@@ -226,6 +230,8 @@ def build_decision_handler(
                     self._handle_danger_frame(payload)
                 elif path == "/api/danger/voice":
                     self._handle_danger_voice(payload)
+                elif path == "/api/diary/summary":
+                    self._handle_diary_summary(payload)
                 else:
                     self._send_error_json(HTTPStatus.NOT_FOUND, "not_found", path)
             except UnknownSceneError as exc:
@@ -251,6 +257,30 @@ def build_decision_handler(
             except IngestError as exc:
                 status = _INGEST_STATUS.get(exc.code, HTTPStatus.UNPROCESSABLE_ENTITY)
                 self._send_error_json(status, exc.code, str(exc))
+            except DiarySummaryError as exc:
+                status = (
+                    HTTPStatus.UNPROCESSABLE_ENTITY
+                    if exc.code == "diary_contract_violation"
+                    else HTTPStatus.BAD_GATEWAY
+                )
+                self._send_error_json(status, exc.code, str(exc))
+            except MimoTransportError as exc:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "mimo_unavailable",
+                    str(exc),
+                )
+
+        def _handle_diary_summary(self, payload: dict[str, Any]) -> None:
+            if diary_summary is None:
+                self._send_error_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    "mimo_summary_disabled",
+                    "the live MiMo diary summarizer is disabled",
+                )
+                return
+            summary = diary_summary.generate(payload)
+            self._send_json(HTTPStatus.OK, summary.to_payload())
 
         def _handle_decision(self, payload: dict[str, Any]) -> None:
             scene_id = payload.get("scene_id")
@@ -910,6 +940,7 @@ class DecisionRuntime:
     ingest: EventIngest
     danger: DangerConfirmController | None
     voice_dialogue: VoiceDialogueController
+    diary_summary: MimoDiarySummaryService | None
     emergency_publisher: EmergencyDecisionPublisher | None
     family_authority: FamilyEventAuthority
     deadline_scheduler: MonotonicDeadlineScheduler
@@ -962,6 +993,7 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
         service=service,
         speech=build_speech_client(config),
     )
+    diary_summary = build_diary_summary_service(config)
     return DecisionRuntime(
         config=config,
         service=service,
@@ -970,6 +1002,7 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
         ingest=ingest,
         danger=danger,
         voice_dialogue=voice_dialogue,
+        diary_summary=diary_summary,
         emergency_publisher=emergency_publisher,
         family_authority=family_authority,
         deadline_scheduler=deadline_scheduler,

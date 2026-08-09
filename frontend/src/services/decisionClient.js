@@ -81,6 +81,14 @@ export function startDemoConversation(httpBase, { sceneId, scenario, timestampMs
   });
 }
 
+export function requestMimoDiarySummary(httpBase, payload, signal) {
+  return request(httpBase, "/api/diary/summary", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
 export function requestDecisionVoice(httpBase, { sceneId, decisionId }) {
   return request(httpBase, "/api/voice/tts", {
     method: "POST",

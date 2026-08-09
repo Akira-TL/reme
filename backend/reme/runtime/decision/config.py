@@ -23,6 +23,7 @@ from reme.runtime.decision.home import (
 )
 from reme.runtime.decision.memory import BehaviorMemoryStore
 from reme.runtime.decision.mimo.adapter import MimoClient, config_from_environment
+from reme.runtime.decision.mimo.diary import MimoDiarySummaryService
 from reme.runtime.decision.mimo.prompts import PersonaConfig
 from reme.runtime.decision.mimo.speech import (
     MimoSpeechClient,
@@ -55,6 +56,8 @@ DEFAULT_VOICE_DIR = Path("examples/decision/voice_presets")
 # waiting right behind them (ADR-0005).
 DANGER_CONFIRM_TIMEOUT_SECONDS = 6.0
 DANGER_CONFIRM_MAX_ATTEMPTS = 1
+DIARY_SUMMARY_TIMEOUT_SECONDS = 20.0
+DIARY_SUMMARY_MAX_ATTEMPTS = 1
 
 
 class ServerConfigError(ValueError):
@@ -291,6 +294,27 @@ def build_mimo_client(config: ServerConfig) -> MimoDecisionClient | None:
         # degrade visibly instead of crashing the demo host.
         pass
     return LiveMimoDecisionClient(MimoClient(client_config))
+
+
+def build_diary_summary_service(config: ServerConfig) -> MimoDiarySummaryService | None:
+    """Build the real-only MiMo diary summarizer.
+
+    Mock and recorded modes deliberately expose no generated substitute: the
+    frontend must show that the live model is unavailable in those modes.
+    """
+
+    if config.demo_mode is not DemoMode.LIVE:
+        return None
+    client_config = replace(
+        config_from_environment(),
+        timeout_seconds=DIARY_SUMMARY_TIMEOUT_SECONDS,
+        max_attempts=DIARY_SUMMARY_MAX_ATTEMPTS,
+        max_completion_tokens=300,
+    )
+    return MimoDiarySummaryService(
+        MimoClient(client_config),
+        model=client_config.model,
+    )
 
 
 def build_speech_client(config: ServerConfig) -> MimoSpeechClient | None:

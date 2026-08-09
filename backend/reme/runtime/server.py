@@ -8,9 +8,10 @@ leave the process; only browser/device traffic crosses the HTTP boundary.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
+from typing import cast
 from urllib.parse import urlparse
 
 from reme.runtime.decision.config import ServerConfigError, server_config_from_namespace
@@ -42,6 +43,23 @@ _PERCEPTION_GET_PATHS = frozenset(
 _PERCEPTION_POST_PATHS = frozenset({"/api/runtime/start", "/api/runtime/stop"})
 
 
+def _call_http_method(
+    handler: type[BaseHTTPRequestHandler],
+    method_name: str,
+    request: BaseHTTPRequestHandler,
+) -> None:
+    """Call a concrete verb implemented by a generated handler class.
+
+    ``BaseHTTPRequestHandler`` intentionally does not declare ``do_*``
+    methods, while both generated handlers do. Keep that dynamic boundary in
+    one checked adapter instead of spreading ``Any`` or ignores through the
+    unified router.
+    """
+
+    method = cast(Callable[[BaseHTTPRequestHandler], None], getattr(handler, method_name))
+    method(request)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build one parser covering decision and perception configuration."""
 
@@ -68,19 +86,19 @@ def build_unified_handler(
             perception_handler.handle(self)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
-            perception_handler.do_OPTIONS(self)
+            _call_http_method(perception_handler, "do_OPTIONS", self)
 
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             if path in _PERCEPTION_GET_PATHS:
-                perception_handler.do_GET(self)
+                _call_http_method(perception_handler, "do_GET", self)
                 return
-            decision_handler.do_GET(self)
+            _call_http_method(decision_handler, "do_GET", self)
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             if path in _PERCEPTION_POST_PATHS:
-                perception_handler.do_POST(self)
+                _call_http_method(perception_handler, "do_POST", self)
                 return
             if path == "/api/events":
                 self._send_error_json(
@@ -89,10 +107,10 @@ def build_unified_handler(
                     "perception events are delivered in-process; HTTP ingest is disabled",
                 )
                 return
-            decision_handler.do_POST(self)
+            _call_http_method(decision_handler, "do_POST", self)
 
         def do_HEAD(self) -> None:  # noqa: N802
-            decision_handler.do_HEAD(self)
+            _call_http_method(decision_handler, "do_HEAD", self)
 
         def log_message(self, format_string: str, *args: object) -> None:
             decision_handler.log_message(self, format_string, *args)
@@ -128,6 +146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             bridge=bridge,
             danger=decision.danger,
             voice_dialogue=decision.voice_dialogue,
+            diary_summary=decision.diary_summary,
             voice_dir=(
                 decision_config.voice_dir if decision_config.voice_dir.is_dir() else None
             ),

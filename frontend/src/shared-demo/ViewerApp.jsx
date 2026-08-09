@@ -1,4 +1,5 @@
 import AlarmRoundedIcon from "@mui/icons-material/AlarmRounded";
+import AcUnitRoundedIcon from "@mui/icons-material/AcUnitRounded";
 import ArrowForwardIosRoundedIcon from "@mui/icons-material/ArrowForwardIosRounded";
 import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
 import BedRoundedIcon from "@mui/icons-material/BedRounded";
@@ -10,9 +11,11 @@ import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineR
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import ChevronLeftRoundedIcon from "@mui/icons-material/ChevronLeftRounded";
 import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
+import CleaningServicesRoundedIcon from "@mui/icons-material/CleaningServicesRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import DashboardRoundedIcon from "@mui/icons-material/DashboardRounded";
 import DirectionsWalkRoundedIcon from "@mui/icons-material/DirectionsWalkRounded";
+import DoorFrontRoundedIcon from "@mui/icons-material/DoorFrontRounded";
 import EmergencyRoundedIcon from "@mui/icons-material/EmergencyRounded";
 import EventBusyRoundedIcon from "@mui/icons-material/EventBusyRounded";
 import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
@@ -23,7 +26,10 @@ import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
 import HealthAndSafetyRoundedIcon from "@mui/icons-material/HealthAndSafetyRounded";
 import HomeRoundedIcon from "@mui/icons-material/HomeRounded";
 import LockRoundedIcon from "@mui/icons-material/LockRounded";
+import LightbulbRoundedIcon from "@mui/icons-material/LightbulbRounded";
+import LocalLaundryServiceRoundedIcon from "@mui/icons-material/LocalLaundryServiceRounded";
 import MicRoundedIcon from "@mui/icons-material/MicRounded";
+import NightsStayRoundedIcon from "@mui/icons-material/NightsStayRounded";
 import NotificationsActiveRoundedIcon from "@mui/icons-material/NotificationsActiveRounded";
 import PauseCircleRoundedIcon from "@mui/icons-material/PauseCircleRounded";
 import PlayCircleRoundedIcon from "@mui/icons-material/PlayCircleRounded";
@@ -34,6 +40,8 @@ import ScreenShareRoundedIcon from "@mui/icons-material/ScreenShareRounded";
 import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
+import ShowerRoundedIcon from "@mui/icons-material/ShowerRounded";
+import SpeakerRoundedIcon from "@mui/icons-material/SpeakerRounded";
 import SoupKitchenRoundedIcon from "@mui/icons-material/SoupKitchenRounded";
 import SubdirectoryArrowRightRoundedIcon from "@mui/icons-material/SubdirectoryArrowRightRounded";
 import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
@@ -43,6 +51,7 @@ import VolumeUpRoundedIcon from "@mui/icons-material/VolumeUpRounded";
 import WbSunnyRoundedIcon from "@mui/icons-material/WbSunnyRounded";
 import WbTwilightRoundedIcon from "@mui/icons-material/WbTwilightRounded";
 import WindowRoundedIcon from "@mui/icons-material/WindowRounded";
+import KitchenRoundedIcon from "@mui/icons-material/KitchenRounded";
 import {
   BottomNavigation,
   BottomNavigationAction,
@@ -54,6 +63,7 @@ import {
   useMediaQuery,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { getDecisionUrls, requestMimoDiarySummary } from "../services/decisionClient.js";
 import { relayAvailabilityCopy } from "./config.js";
 import {
   isFamilyConfirmationTimedOut,
@@ -72,6 +82,10 @@ import {
   getFamilyTimelineMockDay,
   isFamilyTimelineMockDate,
 } from "./familyTimelineMock.js";
+import {
+  buildMimoDiarySummaryRequest,
+  parseMimoDiarySummaryResponse,
+} from "./familyTimelineMimoSummary.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
   buildWeekDays,
@@ -656,10 +670,19 @@ function TimelineEventCard({ event }) {
 }
 
 const REME_ACTIVITY_ICONS = Object.freeze({
+  aircon: AcUnitRoundedIcon,
   bed: BedRoundedIcon,
+  cleaning: CleaningServicesRoundedIcon,
+  door: DoorFrontRoundedIcon,
+  fridge: KitchenRoundedIcon,
   walk: DirectionsWalkRoundedIcon,
   kitchen: SoupKitchenRoundedIcon,
+  laundry: LocalLaundryServiceRoundedIcon,
+  light: LightbulbRoundedIcon,
+  night: NightsStayRoundedIcon,
   seat: ChairRoundedIcon,
+  shower: ShowerRoundedIcon,
+  speaker: SpeakerRoundedIcon,
   window: WindowRoundedIcon,
 });
 
@@ -668,7 +691,7 @@ function RemeActivityRow({ entry }) {
   const ActivityIcon = REME_ACTIVITY_ICONS[entry.icon] || DirectionsWalkRoundedIcon;
   const dateTime = new Date(entry.timestampMs).toISOString();
   return (
-    <article className="reme-life-event">
+    <article className={`reme-life-event ${entry.kind === "device" ? "is-device" : "is-activity"}`}>
       <button
         type="button"
         className="reme-life-event-summary"
@@ -682,8 +705,10 @@ function RemeActivityRow({ entry }) {
       </button>
       {expanded && (
         <div className="reme-life-event-detail">
-          <b>Mock 生活片段 · 非真实家庭历史</b>
-          <p>{entry.detail} 不包含原始画面、音频或可识别人物影像。</p>
+          <b>{entry.label} · 非真实家庭历史</b>
+          <p>{entry.detail} {entry.kind === "device"
+            ? "设备名称与状态均为固定演示数据。"
+            : "不包含原始画面、音频或可识别人物影像。"}</p>
           {entry.related.length > 0 && (
             <ul>
               {entry.related.map((related) => (
@@ -702,9 +727,12 @@ function RemeActivityRow({ entry }) {
 
 function RemeCareThread({ event }) {
   const [expanded, setExpanded] = useState(false);
+  const [materialExpanded, setMaterialExpanded] = useState(false);
   const response = event.linkedResponse;
+  const material = event.familyMaterial;
   const dateTime = new Date(event.timestampMs).toISOString();
   const responseDateTime = response ? new Date(response.timestampMs).toISOString() : null;
+  const materialDateTime = material ? new Date(material.deliveredAtMs).toISOString() : null;
   return (
     <article className={`reme-care-thread is-${event.tone} ${response ? "has-response" : ""}`}>
       <button
@@ -715,9 +743,15 @@ function RemeCareThread({ event }) {
       >
         <span className="reme-care-icon"><FavoriteRoundedIcon /></span>
         <span className="reme-care-copy">
-          <span className="reme-care-meta"><time dateTime={dateTime}>{formatTime(event.timestampMs)}</time><b>主动关怀判词</b></span>
+          <span className="reme-care-meta"><time dateTime={dateTime}>{formatTime(event.timestampMs)}</time><b>主动关怀</b></span>
           <strong>{event.title}</strong>
-          <small>依据：{event.detail} · 不确定性{TIMELINE_UNCERTAINTY_COPY[event.uncertainty] || "未知"}</small>
+          {event.checkIn && (
+            <span className="reme-care-question-copy">
+              <VolumeUpRoundedIcon />
+              <span><small>MiMo 发问</small><b>“{event.checkIn.prompt}”</b></span>
+            </span>
+          )}
+          <small className="reme-care-basis">依据：{event.detail} · 不确定性{TIMELINE_UNCERTAINTY_COPY[event.uncertainty] || "未知"}</small>
         </span>
         <span className="reme-care-status">{event.statusLabel}</span>
       </button>
@@ -743,6 +777,41 @@ function RemeCareThread({ event }) {
           <ArrowForwardIosRoundedIcon className={expanded ? "is-expanded" : ""} />
         </button>
       )}
+      {material && (
+        <>
+          <button
+            type="button"
+            className="reme-care-material"
+            aria-expanded={materialExpanded}
+            onClick={() => setMaterialExpanded((value) => !value)}
+          >
+            <span className="reme-care-material-icon"><AutoAwesomeRoundedIcon /></span>
+            <span className="reme-care-material-copy"><small>MiMo 已整理</small><b>{material.label}</b></span>
+            <span className="reme-care-material-meta">
+              <small><VideocamRoundedIcon />{material.attachment.durationSeconds} 秒</small>
+              <em>{material.deliveryStatus}</em>
+            </span>
+            <ArrowForwardIosRoundedIcon className={materialExpanded ? "is-expanded" : ""} />
+          </button>
+          {materialExpanded && (
+            <div className="reme-care-material-details">
+              <p>{material.summary}</p>
+              <div><span>问候对话</span><b>1 问 1 答</b></div>
+              <div><span>姿态依据</span><b>{material.evidence}</b></div>
+              <div><span>随附片段</span><b>{material.attachment.label} · {material.attachment.durationSeconds} 秒 · Mock</b></div>
+              <div><span>整理来源</span><b>{material.modelLabel}</b></div>
+              <div><span>送达对象</span><b>{material.recipient}</b></div>
+              <div><span>家属送达</span><b><time dateTime={materialDateTime}>{formatTime(material.deliveredAtMs)}</time> · {material.deliveryStatus}</b></div>
+              {material.facts.length > 0 && (
+                <ol className="reme-care-material-facts" aria-label="全屋设备事实">
+                  {material.facts.map((fact) => <li key={fact}>{fact}</li>)}
+                </ol>
+              )}
+              <small>演示材料只保留结构化摘要和匿名骨架短片元数据，不代表真实视频已上传或形成跨会话家庭档案。</small>
+            </div>
+          )}
+        </>
+      )}
     </article>
   );
 }
@@ -750,9 +819,16 @@ function RemeCareThread({ event }) {
 function RemeDaypartSection({ section, filter, expanded, onToggle }) {
   const entries = filter === "care"
     ? section.entries.filter((entry) => entry.kind === "assessment")
-    : section.entries;
+    : filter === "device"
+      ? section.entries.filter((entry) => entry.kind === "device")
+      : section.entries;
   if (entries.length === 0) return null;
-  const DaypartIcon = section.icon === "sunset" ? WbTwilightRoundedIcon : WbSunnyRoundedIcon;
+  const DaypartIcon = section.icon === "moon"
+    ? NightsStayRoundedIcon
+    : section.icon === "sunset" ? WbTwilightRoundedIcon : WbSunnyRoundedIcon;
+  const filteredCount = filter === "care"
+    ? `${section.careCount} 次关怀`
+    : filter === "device" ? `${section.deviceCount} 条设备` : `${section.count} 条`;
   const contentId = `reme-daypart-${section.id}`;
   return (
     <section className={`reme-daypart ${expanded ? "is-expanded" : "is-collapsed"}`}>
@@ -766,7 +842,7 @@ function RemeDaypartSection({ section, filter, expanded, onToggle }) {
         <span className="reme-daypart-icon"><DaypartIcon /></span>
         <span className="reme-daypart-name">{section.label}</span>
         <span className="reme-daypart-range">{section.range}</span>
-        <span className="reme-daypart-count">· {filter === "care" ? `${section.careCount} 次关怀` : `${section.count} 条`}</span>
+        <span className="reme-daypart-count">· {filteredCount}</span>
         {!expanded && section.careCount > 0 && filter === "all" && (
           <span className="reme-daypart-care-count">含 {section.careCount} 次关怀</span>
         )}
@@ -785,14 +861,95 @@ function RemeDaypartSection({ section, filter, expanded, onToggle }) {
   );
 }
 
+const MIMO_DIARY_UNCERTAINTY_COPY = Object.freeze({
+  low: "低不确定性",
+  medium: "中等不确定性",
+  high: "高不确定性",
+});
+
+function mimoDiaryUnavailableCopy(error) {
+  if (error?.code === "mimo_invalid_diary_summary") {
+    return "MiMo 返回内容未通过 JSON 结构校验，本次结果未采用。";
+  }
+  if (["mimo_unavailable", "mimo_summary_disabled"].includes(error?.code)) {
+    return "本地 MiMo 服务尚未连接，当前不显示替代摘要。";
+  }
+  return "暂时无法连接本地 MiMo 摘要接口，当前不显示替代摘要。";
+}
+
 function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
   const [filter, setFilter] = useState("all");
   const [expandedDayparts, setExpandedDayparts] = useState(() => new Set(["early", "morning"]));
-  const [weekNoteExpanded, setWeekNoteExpanded] = useState(false);
+  const { httpBase } = useMemo(() => getDecisionUrls(), []);
+  const diaryRequestJson = JSON.stringify(buildMimoDiarySummaryRequest(day, liveEvents));
+  const diaryRequest = JSON.parse(diaryRequestJson);
+  const [daySummary, setDaySummary] = useState(() => ({
+    requestKey: null,
+    status: "loading",
+    data: null,
+    message: "MiMo 正在读取今天的结构化生活记录。",
+  }));
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const requestPayload = JSON.parse(diaryRequestJson);
+    let active = true;
+    const timeoutId = window.setTimeout(() => {
+      setDaySummary({
+        requestKey: diaryRequestJson,
+        status: "loading",
+        data: null,
+        message: "MiMo 正在读取今天的结构化生活记录。",
+      });
+      requestMimoDiarySummary(httpBase, requestPayload, controller.signal)
+        .then(parseMimoDiarySummaryResponse)
+        .then((summary) => {
+          if (!active) return;
+          if (summary.date !== requestPayload.date) {
+            throw new TypeError("MiMo 摘要日期与请求不一致");
+          }
+          setDaySummary({ requestKey: diaryRequestJson, status: "live", data: summary, message: "" });
+        })
+        .catch((error) => {
+          if (!active || error?.name === "AbortError") return;
+          setDaySummary({
+            requestKey: diaryRequestJson,
+            status: "unavailable",
+            data: null,
+            message: mimoDiaryUnavailableCopy(error),
+          });
+        });
+    }, 180);
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [diaryRequestJson, httpBase]);
+
+  const summaryIsCurrent = daySummary.requestKey === diaryRequestJson;
+  const summaryState = summaryIsCurrent ? daySummary.status : "loading";
+  const liveSummary = summaryState === "live" ? daySummary.data : null;
+  const summaryHeadline = liveSummary
+    ? liveSummary.headline
+    : summaryState === "loading" ? "正在生成本日动态摘要…" : "本日动态摘要暂不可用";
+  const summaryCopy = liveSummary
+    ? liveSummary.summary
+    : summaryState === "loading" ? "MiMo 正在读取今天的结构化生活记录。" : daySummary.message;
+  const summaryStatus = summaryState === "live"
+    ? "MiMo 实时生成"
+    : summaryState === "loading" ? "正在生成" : "MiMo 未连接";
 
   const selectFilter = (nextFilter) => {
     setFilter(nextFilter);
-    if (nextFilter === "care") setExpandedDayparts(new Set(["morning", "afternoon"]));
+    if (nextFilter === "all") {
+      setExpandedDayparts(new Set(["early", "morning"]));
+      return;
+    }
+    const countKey = nextFilter === "device" ? "deviceCount" : "careCount";
+    setExpandedDayparts(new Set(
+      day.sections.filter((section) => section[countKey] > 0).map((section) => section.id),
+    ));
   };
   const toggleDaypart = (daypartId) => {
     setExpandedDayparts((current) => {
@@ -805,7 +962,7 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
 
   return (
     <main className="viewer-page timeline-page reme-timeline-page">
-      <section className="reme-week-strip" aria-label="Mock 记忆周日期">
+      <section className="reme-week-strip" aria-label="8 天 Mock 记录日期">
         <div className="reme-week-days">
           {FAMILY_TIMELINE_MOCK_DAYS.map((mockDay) => (
             <button
@@ -823,32 +980,50 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
         </div>
       </section>
 
-      <aside className={`reme-memory-week ${weekNoteExpanded ? "is-expanded" : ""}`}>
-        <button
-          type="button"
-          className="reme-memory-week-summary"
-          aria-expanded={weekNoteExpanded}
-          onClick={() => setWeekNoteExpanded((value) => !value)}
-        >
-          <AutoAwesomeRoundedIcon />
-          <b>Mock 记忆周</b>
-          <span>8月4—11日 · 非真实家庭历史</span>
-          <ArrowForwardIosRoundedIcon className={weekNoteExpanded ? "is-expanded" : ""} />
-        </button>
-        <ol className="reme-memory-week-progress" aria-label={`已选择 8 月 ${day.day} 日`}>
-          {FAMILY_TIMELINE_MOCK_DAYS.map((mockDay) => (
-            <li key={mockDay.dateKey} className={mockDay.dateKey === day.dateKey ? "is-selected" : ""} />
-          ))}
-        </ol>
-        {weekNoteExpanded && (
-          <p>这些记录只用于演示 reme 如何把可观察到的琐事与主动关怀串在一起；判词不会自动变成行动卡或告警，也不会写入真实家庭历史。</p>
-        )}
-      </aside>
+      <section
+        className="reme-mimo-summary"
+        aria-labelledby="reme-day-summary-title"
+        aria-live="polite"
+        aria-atomic="true"
+        data-summary-schema={liveSummary?.schema_version || "pending"}
+      >
+          <div className="reme-mimo-summary-heading">
+            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>MiMo 本日动态摘要</b></span>
+            <span className={`reme-mimo-summary-status is-${summaryState}`}><FiberManualRecordRoundedIcon />{summaryStatus}</span>
+          </div>
+          <h2 id="reme-day-summary-title">{summaryHeadline}</h2>
+          <p>{summaryCopy}</p>
+          {liveSummary?.highlights.length > 0 && (
+            <ol className="reme-mimo-highlights" aria-label="MiMo 提取的重点片段">
+              {liveSummary.highlights.map((item) => (
+                <li key={`${item.time}:${item.text}`}><time>{item.time}</time><span>{item.text}</span></li>
+              ))}
+            </ol>
+          )}
+          {liveSummary?.care_note && <p className="reme-mimo-care-note">关怀进展 · {liveSummary.care_note}</p>}
+          <div className="reme-mimo-summary-footer">
+            {liveSummary ? (
+              <time dateTime={new Date(liveSummary.generated_at_ms).toISOString()}>生成于 {formatTime(liveSummary.generated_at_ms)}</time>
+            ) : <span>未使用 Mock 摘要</span>}
+            <span>{liveSummary
+              ? `已吸收 ${liveSummary.input_event_count} 条结构化演示记录 · ${liveSummary.model} · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty]}`
+              : `已准备 ${diaryRequest.events.length} 条结构化演示记录`}</span>
+          </div>
+      </section>
 
-      <section className="reme-day-summary" aria-labelledby="reme-day-summary-title">
-        <h2 id="reme-day-summary-title">今天记录到 {day.totalCount} 个生活片段，有两次值得关心的停顿。</h2>
+      <section className="reme-day-summary" aria-label="今日记录统计">
+        <div className="reme-day-statistics">
+          <span>今日 24 小时</span>
+          <p><b>{day.totalCount}</b> 个生活片段</p>
+        </div>
+        <div className="reme-source-mix" aria-label="记录来源">
+          <span><DirectionsWalkRoundedIcon /><b>{day.activityCount}</b> 人体与空间</span>
+          <span><SensorsRoundedIcon /><b>{day.deviceCount}</b> 全屋设备</span>
+          <span><FavoriteRoundedIcon /><b>{day.careCount}</b> 主动关怀</span>
+        </div>
         <div className="reme-timeline-filter" role="group" aria-label="筛选时间线记录">
           <button type="button" className={filter === "all" ? "is-selected" : ""} aria-pressed={filter === "all"} onClick={() => selectFilter("all")}>全部 <b>{day.totalCount}</b></button>
+          <button type="button" className={filter === "device" ? "is-selected" : ""} aria-pressed={filter === "device"} onClick={() => selectFilter("device")}>设备 <b>{day.deviceCount}</b></button>
           <button type="button" className={filter === "care" ? "is-selected" : ""} aria-pressed={filter === "care"} onClick={() => selectFilter("care")}>关怀 <b>{day.careCount}</b></button>
         </div>
       </section>
@@ -867,7 +1042,7 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
 
       {liveEvents.length > 0 && (
         <section className="reme-live-session">
-          <div className="timeline-section-heading"><div><h2>本次会话关怀</h2><p>以下来自当前 Relay 会话，不计入 Mock 记忆周。</p></div><span>{liveEvents.length} 条</span></div>
+          <div className="timeline-section-heading"><div><h2>本次会话关怀</h2><p>以下来自当前 Relay 会话，不计入上方 8 天 Mock 记录。</p></div><span>{liveEvents.length} 条</span></div>
           <div className="timeline-event-list">
             {liveEvents.map((event) => <TimelineEventCard event={event} key={event.id} />)}
           </div>
