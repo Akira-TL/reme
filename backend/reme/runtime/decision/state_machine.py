@@ -1,8 +1,9 @@
 """Pure per-scene session state machine: ticks and responses in, directives out.
 
-B is request-driven (contract: C renders the countdown and submits
-``response=none/source=timeout``), so this module holds no timers, no IO and
-no MiMo calls — those live in the policy layer. Every function returns a new
+Timeout scheduling, IO and MiMo calls live in the policy/runtime layers. This
+module only consumes the same explicit ``response=none/source=timeout`` record
+for both backend-owned deadlines and legacy C submissions, keeping the state
+transition itself deterministic and reusable. Every function returns a new
 immutable :class:`SessionState` plus instructions for the policy layer.
 """
 
@@ -293,9 +294,9 @@ def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerCon
             # Contract section 10 ("需要回应时使用 response_timeout_ms"): every
             # decision that leaves the episode awaiting the elder carries the
             # same countdown, so silence always reaches the timeout escalation
-            # below. Without it C renders no countdown, never submits
-            # response=none/source=timeout, and the concern episode — the one
-            # live_camera hits most often — hangs unescalated forever.
+            # below. The policy layer owns the authoritative deadline; C may
+            # render the same duration but is no longer required to submit the
+            # timeout transition.
             response_timeout_ms=config.check_in_timeout_ms,
             template=TemplateId.CONCERN_CHECK_IN,
         )

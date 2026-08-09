@@ -201,8 +201,9 @@ interaction_response
 - `timestamp_ms`、`start_ms`、`end_ms` 表示感知时间；
 - 实时摄像头以当前 session 启动为 `0 ms`；
 - 预录视频以视频起点为 `0 ms`；
-- `response_timeout_ms` 表示从 C 收到 CareDecision 起计算的相对交互时长；
-- 预录视频暂停或结束后，`response_timeout_ms` 仍然有效；
+- `response_timeout_ms` 表示该 CareDecision 的相对交互时长；C 只负责渲染倒计时，B 负责权威到期与状态推进；
+- B 默认从决策发出后计时；若该决策的 TTS synthesis 已开始，则暂停旧窗口，并在 synthesis 结束后重新给予完整 `response_timeout_ms`；
+- 预录视频暂停、结束或 C 断线后，`response_timeout_ms` 仍然有效且由 B 独立推进；
 - 当前不使用绝对截止时间；未来需要审计时采用“墙上时间锚点 + 相对时长”双字段，而不是替换 `response_timeout_ms`。
 
 ## 6. 统一枚举

@@ -38,7 +38,7 @@ curl -s localhost:8100/api/response -H 'Content-Type: application/json' \
        "source":"timeout","demo_mode":"live","text":null}'
 ```
 
-要点：`decision_id` 必须是触发本次询问的那条决策；倒计时由 C 按 `response_timeout_ms`（相对毫秒）渲染，超时提交 `response=none, source=timeout`；老人原话放 `text`（仅 `user_input|script` 可非空）；家属确认行动卡用 `response=card_confirmed, source=family_input`。
+要点：`decision_id` 必须是触发本次询问的那条决策；C 可按 `response_timeout_ms`（相对毫秒）渲染倒计时，但**不得再依赖浏览器 timer 产生业务超时**，B 会独立到期并从 `/ws` 推送下一条 CareDecision。`response=none, source=timeout` 端点暂时保留给旧前端兼容，重复/迟到提交会按 stale/resolved 规则拒绝且不得产生第二次告警；老人原话放 `text`（仅 `user_input|script` 可非空）；家属确认行动卡用 `response=card_confirmed, source=family_input`。
 
 ### `POST /api/scene/reset` — 重置场景会话
 

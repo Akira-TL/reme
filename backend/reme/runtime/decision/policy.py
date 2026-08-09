@@ -89,6 +89,11 @@ from reme.runtime.decision.state_machine import (
     on_response,
     on_tick,
 )
+from reme.runtime.decision.timeouts import (
+    ThreadingTimeoutScheduler,
+    TimeoutHandle,
+    TimeoutScheduler,
+)
 from reme.runtime.decision.visual import (
     load_visual_asset,
     visual_context_record,
@@ -354,6 +359,8 @@ class _SceneRuntime:
     voice_prompt_decision_id: str | None = None
     voice_prompt_inflight: bool = False
     voice_prompt_ready_monotonic: float | None = None
+    timeout_handle: TimeoutHandle | None = None
+    timeout_generation: int = 0
 
 
 class DecisionService:
@@ -368,6 +375,8 @@ class DecisionService:
         audit: AuditLog | None = None,
         publisher: DecisionPublisher | None = None,
         live_streams: Callable[[str], PerceptionStreams | None] | None = None,
+        timeout_scheduler: TimeoutScheduler | None = None,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
         self._scenes = dict(scenes)
         self._config = config
@@ -375,6 +384,9 @@ class DecisionService:
         self._audit = audit
         self._publisher = publisher
         self._live_streams = live_streams
+        self._timeout_scheduler = timeout_scheduler or ThreadingTimeoutScheduler()
+        self._monotonic = monotonic or time.monotonic
+        self._closed = False
         self._lock = threading.Lock()
         self._runtimes: dict[str, _SceneRuntime] = {}
         self._replays: dict[str, tuple[CareDecision, ...]] = {}
@@ -390,6 +402,22 @@ class DecisionService:
     def demo_mode(self) -> DemoMode:
         return self._config.demo_mode
 
+    def close(self) -> None:
+        """Cancel decision deadlines and stop the owned scheduler."""
+
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            for scene_id, runtime in list(self._runtimes.items()):
+                self._cancel_timeout_locked(runtime)
+                self._runtimes[scene_id] = _SceneRuntime(
+                    session=SessionState(scene_id=scene_id),
+                    sequence=runtime.sequence,
+                    epoch=runtime.epoch + 1,
+                )
+        self._timeout_scheduler.close()
+
     def reset_all_scenes(self) -> None:
         """Invalidate every episode and in-flight MiMo call (session switches).
 
@@ -400,6 +428,7 @@ class DecisionService:
 
         with self._lock:
             for scene_id, runtime in list(self._runtimes.items()):
+                self._cancel_timeout_locked(runtime)
                 self._runtimes[scene_id] = _SceneRuntime(
                     session=SessionState(scene_id=scene_id),
                     sequence=runtime.sequence,
@@ -440,9 +469,10 @@ class DecisionService:
             runtime.voice_prompt_decision_id = decision_id
             runtime.voice_prompt_inflight = True
             runtime.voice_prompt_ready_monotonic = None
+            self._cancel_timeout_locked(runtime)
 
     def mark_decision_voice_ready(self, *, scene_id: str, decision_id: str) -> None:
-        """Mark that the elder-facing prompt audio is ready to be played by C."""
+        """Mark the TTS attempt complete and restart the full reply window."""
 
         self._streams(scene_id)
         with self._lock:
@@ -453,7 +483,8 @@ class DecisionService:
                 return
             runtime.voice_prompt_decision_id = decision_id
             runtime.voice_prompt_inflight = False
-            runtime.voice_prompt_ready_monotonic = time.monotonic()
+            runtime.voice_prompt_ready_monotonic = self._monotonic()
+            self._arm_timeout_locked(runtime, runtime.pending)
 
     def get_decision(self, *, scene_id: str, timestamp_ms: float) -> CareDecision:
         """Evaluate the scene at one video timestamp and return the live decision."""
@@ -651,6 +682,7 @@ class DecisionService:
             runtime = self._runtimes.get(scene_id)
             if runtime is None:
                 return
+            self._cancel_timeout_locked(runtime)
             # The epoch bump invalidates every in-flight MiMo call started
             # before the reset (their CAS snapshots carry the old epoch).
             self._runtimes[scene_id] = _SceneRuntime(
@@ -688,6 +720,114 @@ class DecisionService:
         if runtime.pending is None:
             raise DecisionRejectedError("no_pending_decision")
         return runtime.pending
+
+    def _cancel_timeout_locked(self, runtime: _SceneRuntime) -> None:
+        runtime.timeout_generation += 1
+        handle = runtime.timeout_handle
+        runtime.timeout_handle = None
+        if handle is not None:
+            handle.cancel()
+
+    def _arm_timeout_locked(
+        self,
+        runtime: _SceneRuntime,
+        decision: CareDecision,
+        *,
+        delay_ms: float | None = None,
+    ) -> None:
+        """Register one backend-owned deadline for the current pending decision."""
+
+        self._cancel_timeout_locked(runtime)
+        if self._closed or decision.response_timeout_ms is None:
+            return
+        effective_delay_ms = (
+            float(decision.response_timeout_ms) if delay_ms is None else max(0.0, delay_ms)
+        )
+        generation = runtime.timeout_generation
+        epoch = runtime.epoch
+        scene_id = decision.scene_id
+        decision_id = decision.decision_id
+        runtime.timeout_handle = self._timeout_scheduler.call_later(
+            effective_delay_ms / 1000.0,
+            lambda: self._handle_timeout_due(
+                scene_id=scene_id,
+                decision_id=decision_id,
+                epoch=epoch,
+                generation=generation,
+            ),
+        )
+
+    def _handle_timeout_due(
+        self,
+        *,
+        scene_id: str,
+        decision_id: str,
+        epoch: int,
+        generation: int,
+    ) -> None:
+        """Turn one still-current deadline into the existing timeout response path."""
+
+        with self._lock:
+            if self._closed:
+                return
+            runtime = self._runtimes.get(scene_id)
+            if (
+                runtime is None
+                or runtime.epoch != epoch
+                or runtime.timeout_generation != generation
+                or runtime.pending is None
+                or runtime.pending.decision_id != decision_id
+                or runtime.pending.response_timeout_ms is None
+            ):
+                return
+            pending = runtime.pending
+            timeout_ms = pending.response_timeout_ms
+            assert timeout_ms is not None
+            # Consume this callback before dropping the lock. Any concurrent
+            # response/new decision will advance the generation and stale it.
+            runtime.timeout_handle = None
+            runtime.timeout_generation += 1
+
+            if runtime.voice_prompt_decision_id == decision_id:
+                if runtime.voice_prompt_inflight or runtime.voice_prompt_ready_monotonic is None:
+                    return
+                elapsed_ms = (
+                    self._monotonic() - runtime.voice_prompt_ready_monotonic
+                ) * 1000.0
+                if elapsed_ms < timeout_ms:
+                    self._arm_timeout_locked(
+                        runtime,
+                        pending,
+                        delay_ms=timeout_ms - elapsed_ms,
+                    )
+                    return
+
+            # Interaction timeout survives paused/ended video. Keep the
+            # decision timestamp in the scene timeline instead of importing a
+            # wall-clock/browser performance timestamp into perception time.
+            timestamp_ms = max(runtime.session.context_high_water_ms, pending.timestamp_ms)
+            demo_mode = pending.demo_mode
+
+        response = InteractionResponse(
+            scene_id=scene_id,
+            decision_id=decision_id,
+            timestamp_ms=timestamp_ms,
+            response=ResponseValue.NONE,
+            source=ResponseSource.TIMEOUT,
+            demo_mode=demo_mode,
+        )
+        try:
+            self.submit_response(response)
+        except DecisionRejectedError as exc:
+            if exc.code not in {
+                "stale_decision",
+                "no_pending_decision",
+                "episode_resolved",
+                REJECT_RESPONSE_TOO_EARLY,
+            }:
+                print(
+                    f"warning: backend timeout rejected for {scene_id}/{decision_id}: {exc.code}"
+                )
 
     def _publish(self, decision: CareDecision, previous_id: str | None) -> None:
         """Push a newly emitted decision to the runtime stream, best-effort.
@@ -728,7 +868,7 @@ class DecisionService:
             return
         if runtime.voice_prompt_inflight or runtime.voice_prompt_ready_monotonic is None:
             raise DecisionRejectedError(REJECT_RESPONSE_TOO_EARLY)
-        ready_elapsed_ms = (time.monotonic() - runtime.voice_prompt_ready_monotonic) * 1000
+        ready_elapsed_ms = (self._monotonic() - runtime.voice_prompt_ready_monotonic) * 1000
         if ready_elapsed_ms < pending.response_timeout_ms:
             raise DecisionRejectedError(REJECT_RESPONSE_TOO_EARLY)
 
@@ -1030,6 +1170,7 @@ class DecisionService:
         runtime.voice_prompt_decision_id = None
         runtime.voice_prompt_inflight = False
         runtime.voice_prompt_ready_monotonic = None
+        self._arm_timeout_locked(runtime, decision)
         self._record_capture(runtime, decision)
         self._memory_milestones(directive, decision, previous_complaint)
 

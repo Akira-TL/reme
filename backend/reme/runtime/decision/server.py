@@ -899,6 +899,7 @@ class DecisionRuntime:
     def shutdown(self, bridge: PerceptionBridgeLike | None = None) -> None:
         if bridge is not None:
             bridge.stop()
+        self.service.close()
         if self.emergency_publisher is not None:
             self.emergency_publisher.close()
         self.hub.close_all()

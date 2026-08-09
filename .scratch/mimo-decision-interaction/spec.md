@@ -214,7 +214,8 @@ MiMoDecisionAdapter 负责：
 - 输入不可用时进入 `degraded`；
 - 高置信异常转变可触发 `check_in_required`；
 - 需要回应时输出 `response_timeout_ms`；
-- 超时无回应后通过 `source = rule` 升级家属通知；
+- `response_timeout_ms` 的权威到期由 B 自己调度，C 只渲染倒计时；浏览器断线、暂停或不提交 timeout response 都不能阻止升级；
+- 超时无回应后复用 `ResponseValue.NONE / ResponseSource.TIMEOUT` 状态机路径，并通过 `source = rule` 升级家属通知；
 - 超时升级不得等待 MiMo；
 - MiMo 后到结果不得撤销、降低或推迟已经发出的规则通知；
 - MiMo 只能补充解释文本。
