@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { runnerImport } from "vite";
 
 const frontendRoot = fileURLToPath(new URL("../../", import.meta.url));
 const componentPath = fileURLToPath(new URL("./HomeCarePrompt.jsx", import.meta.url));
-const { module: { deriveHomeCarePrompt } } = await runnerImport(componentPath, {
+const { module: { HomeCarePrompt, deriveHomeCarePrompt } } = await runnerImport(componentPath, {
   root: frontendRoot,
   logLevel: "silent",
 });
@@ -44,7 +46,7 @@ test("未开始或链路离线时不把静态场景文案当作实时事实", ()
   const unavailable = deriveHomeCarePrompt(FALL_SCENE, liveWith(null, { active: false }), true);
 
   assert.equal(notStarted.title, "尚未开始关怀");
-  assert.equal(notStarted.message, "请先点击上方“开始关怀”，并在本机选择媒体源。");
+  assert.equal(notStarted.message, "请先在上方开始关怀。");
   assert.equal(unavailable.title, "关怀能力暂不可用");
   assert.equal(unavailable.message, "当前没有可靠的实时关怀结果，请检查本机媒体源和运行时连接。");
 });
@@ -75,6 +77,55 @@ test("真实安全询问仅启用我没事和我需要帮助这一组回答", ()
   assert.equal(prompt.canRespond, true);
   assert.equal(prompt.canReplay, true);
   assert.equal(prompt.source, "本地安全规则");
+});
+
+test("安全询问只有需要帮助使用实心危险色", () => {
+  const live = liveWith({
+    scene_id: "fall",
+    decision_id: "decision-fall-colors",
+    state: "check_in_required",
+    consent_required: false,
+    elder_message: "您还好吗？",
+  }, {
+    replayVoice() {},
+    respondSafe() {},
+    respondNeedHelp() {},
+  });
+  const html = renderToStaticMarkup(createElement(HomeCarePrompt, {
+    scene: FALL_SCENE,
+    live,
+    started: true,
+    available: true,
+  }));
+
+  assert.equal((html.match(/<button/g) || []).length, 3);
+  assert.match(html, /class="home-care-safe">我没事<\/button>/);
+  assert.match(html, /class="home-care-danger">我需要帮助<\/button>/);
+  assert.doesNotMatch(html, /home-care-primary[^>]*>我没事/);
+});
+
+test("分享同意询问只有同意动作使用品牌主色", () => {
+  const live = liveWith({
+    scene_id: "fall",
+    decision_id: "decision-consent-colors",
+    state: "consent_required",
+    consent_required: true,
+    elder_message: "是否同意分享？",
+  }, {
+    replayVoice() {},
+    respondConsentGranted() {},
+    respondConsentDenied() {},
+  });
+  const html = renderToStaticMarkup(createElement(HomeCarePrompt, {
+    scene: FALL_SCENE,
+    live,
+    started: true,
+    available: true,
+  }));
+
+  assert.equal((html.match(/<button/g) || []).length, 3);
+  assert.match(html, /class="home-care-primary">同意分享<\/button>/);
+  assert.match(html, /class="home-care-secondary">这次不分享<\/button>/);
 });
 
 test("真实同意询问只启用分享回答且离线时不继续冒充当前问题", () => {

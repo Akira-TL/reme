@@ -107,7 +107,7 @@ export function deriveHomeCarePrompt(
       ? "关怀已就绪"
       : "关怀能力暂不可用";
   const fallbackMessage = !started
-    ? "请先点击上方“开始关怀”，并在本机选择媒体源。"
+    ? "请先在上方开始关怀。"
     : liveAvailable
       ? "系统正在安静等待可靠事件，需要时才会出现。"
       : "当前没有可靠的实时关怀结果，请检查本机媒体源和运行时连接。";
@@ -228,7 +228,7 @@ export function HomeCarePrompt({ scene, live, started = false, available = Boole
             <>
               <button
                 type="button"
-                className="home-care-primary"
+                className="home-care-safe"
                 disabled={!canRespondSafe}
                 onClick={() => live.respondSafe(prompt.decisionId)}
               >

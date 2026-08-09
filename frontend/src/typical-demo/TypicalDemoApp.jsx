@@ -996,7 +996,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
 
   return (
     <main
-      className={`typical-demo is-${normalizedSurface}-surface scene-tone-${scene.tone}`}
+      className={`typical-demo is-${normalizedSurface}-surface scene-tone-${scene.tone} ${!debugInterface && !demoStarted ? "is-home-idle" : ""}`}
       data-app-role={normalizedSurface}
     >
       <video ref={videoRef} className="capture-video" autoPlay muted playsInline aria-hidden="true" />
@@ -1012,27 +1012,35 @@ export function TypicalDemoApp({ surface = "debug" }) {
           </div>
           {debugInterface && <b className="debug-surface-badge">DEBUG · 非产品界面</b>}
         </div>
-        <div className="topbar-actions">
-          <span
-            className={`camera-health status-${cameraHealth.state}`}
-            title={cameraHealth.detail}
-          >
-            <VideocamRoundedIcon />{cameraHealth.label}
-          </span>
-          <span
-            className={`camera-health status-${modelHealth.state}`}
-            title={modelHealth.detail}
-          >
-            <MemoryRoundedIcon />{modelHealth.label}
-          </span>
-          <span
-            className={`camera-health live-link-health status-${linkHealth.state}`}
-            title={linkHealth.detail}
-          >
-            <HubRoundedIcon />{linkHealth.label}
-          </span>
-          <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>进入全屏</Button>
-        </div>
+        {(debugInterface || demoStarted) && (
+          <div className="topbar-actions">
+            {debugInterface && (
+              <>
+                <span
+                  className={`camera-health status-${cameraHealth.state}`}
+                  title={cameraHealth.detail}
+                >
+                  <VideocamRoundedIcon />{cameraHealth.label}
+                </span>
+                <span
+                  className={`camera-health status-${modelHealth.state}`}
+                  title={modelHealth.detail}
+                >
+                  <MemoryRoundedIcon />{modelHealth.label}
+                </span>
+              </>
+            )}
+            <span
+              className={`camera-health live-link-health status-${linkHealth.state}`}
+              title={linkHealth.detail}
+            >
+              <HubRoundedIcon />{linkHealth.label}
+            </span>
+            {debugInterface && (
+              <Button variant="outlined" startIcon={<FullscreenRoundedIcon />} onClick={enterFullscreen}>进入全屏</Button>
+            )}
+          </div>
+        )}
       </header>
 
       <MonitorControlPanel
@@ -1073,17 +1081,17 @@ export function TypicalDemoApp({ surface = "debug" }) {
         </nav>
       )}
 
-      <div className="demo-workspace">
-        <DevicePanel
-          surface={normalizedSurface}
-          scene={scene}
-          canvasRef={deviceCanvasRef}
-          camera={cameraState}
-          viewMode={deviceViewMode}
-        />
-
+      {(debugInterface || demoStarted) && <div className="demo-workspace">
         {debugInterface ? (
           <>
+            <DevicePanel
+              surface={normalizedSurface}
+              scene={scene}
+              canvasRef={deviceCanvasRef}
+              camera={cameraState}
+              viewMode={deviceViewMode}
+            />
+
             <div className="sync-rail" aria-hidden="true">
               <span /><i /><span />
               <SyncRoundedIcon className="text-orange-500" sx={{ fontSize: 18 }} />
@@ -1109,14 +1117,23 @@ export function TypicalDemoApp({ surface = "debug" }) {
             />
           </>
         ) : (
-          <HomeCarePrompt
-            scene={scene}
-            live={live}
-            started={demoStarted}
-            available={Boolean(liveActive && media.ready)}
-          />
+          <>
+            <HomeCarePrompt
+              scene={scene}
+              live={live}
+              started={demoStarted}
+              available={Boolean(liveActive && media.ready)}
+            />
+            <DevicePanel
+              surface={normalizedSurface}
+              scene={scene}
+              canvasRef={deviceCanvasRef}
+              camera={cameraState}
+              viewMode={deviceViewMode}
+            />
+          </>
         )}
-      </div>
+      </div>}
 
       {debugInterface && (
         <>
