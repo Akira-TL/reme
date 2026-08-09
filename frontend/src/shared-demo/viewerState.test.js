@@ -35,7 +35,7 @@ function ready(state, room = "room-1") {
 
 function snapshot({ scene = "kitchen", revision = 1, runtime = "runtime-1" } = {}) {
   return {
-    schema_version: "reme-demo-state/v1",
+    schema_version: "reme-demo-state/v2",
     room_session_id: "room-1",
     runtime_session_id: runtime,
     state_revision: revision,
@@ -57,6 +57,7 @@ function snapshot({ scene = "kitchen", revision = 1, runtime = "runtime-1" } = {
         consent: scene === "kitchen" ? "granted" : "none",
         alarm_authoritative: false,
         message: null,
+        assessment: null,
       },
       media_grant: null,
     },

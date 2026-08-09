@@ -29,3 +29,12 @@ test("date filtering accepts projected events with timestamps", () => {
 
   assert.deepEqual(filterTimelineEventsByDate(events, "2026-08-09"), [events[0]]);
 });
+
+test("a bounded demo range can expose dates after the local today", () => {
+  const now = new Date(2026, 7, 9, 12, 0).getTime();
+  const days = buildWeekDays("2026-08-11", now, "2026-08-11");
+
+  assert.equal(days.find((day) => day.key === "2026-08-10")?.disabled, false);
+  assert.equal(days.find((day) => day.key === "2026-08-11")?.disabled, false);
+  assert.equal(days.find((day) => day.key === "2026-08-12")?.disabled, true);
+});

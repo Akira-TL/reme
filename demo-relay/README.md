@@ -77,7 +77,7 @@ Viewer lifecycle and controller lease:
 {"type":"controller_status","room_session_id":"room-...","controller":{"viewer_id":"viewer-...","lease_id":"lease-...","expires_at_ms":0},"server_time_ms":0}
 ```
 
-State and pose are the exact `reme-demo-state/v1` and
+State and pose are the exact `reme-demo-state/v2` and
 `reme-pose-frame-17/v1` contracts exported by `src/protocol.ts`. Monitor state
 must publish `state.media_grant=null`; the Relay projects its own active grant
 for Viewers. A new Viewer receives the current state and only a pose received

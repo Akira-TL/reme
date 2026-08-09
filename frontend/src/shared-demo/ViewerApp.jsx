@@ -1,5 +1,6 @@
 import AlarmRoundedIcon from "@mui/icons-material/AlarmRounded";
 import ArrowForwardIosRoundedIcon from "@mui/icons-material/ArrowForwardIosRounded";
+import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
 import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import CameraFrontRoundedIcon from "@mui/icons-material/CameraFrontRounded";
 import CameraRearRoundedIcon from "@mui/icons-material/CameraRearRounded";
@@ -29,6 +30,7 @@ import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
 import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
+import TipsAndUpdatesRoundedIcon from "@mui/icons-material/TipsAndUpdatesRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import VolumeUpRoundedIcon from "@mui/icons-material/VolumeUpRounded";
 import {
@@ -52,6 +54,11 @@ import {
   createFamilyTimelineState,
   reduceFamilyTimeline,
 } from "./familyTimeline.js";
+import {
+  FAMILY_TIMELINE_MOCK_END_DATE,
+  FAMILY_TIMELINE_MOCK_EVENTS,
+  isFamilyTimelineMockDate,
+} from "./familyTimelineMock.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
   buildWeekDays,
@@ -354,20 +361,53 @@ function HomePage({
           <CheckCircleRoundedIcon className="care-moment-check" />
         </article>
       )}
+      {familySurface && (
+        <div className="family-home-dashboard">
+          <DashboardContent
+            relay={relay}
+            snapshot={snapshot}
+            activeGrant={activeGrant}
+            nowMs={relayNowMs}
+            familySurface
+          />
+        </div>
+      )}
     </main>
   );
 }
 
 const TIMELINE_ICONS = Object.freeze({
-  sync: SensorsRoundedIcon,
+  assessment: AutoAwesomeRoundedIcon,
   care: HealthAndSafetyRoundedIcon,
   media: VideocamRoundedIcon,
   consent: PrivacyTipRoundedIcon,
-  scene: HomeRoundedIcon,
-  capture: CameraFrontRoundedIcon,
-  runtime: HealthAndSafetyRoundedIcon,
   acknowledgement: CheckCircleRoundedIcon,
 });
+
+const TIMELINE_SOURCE_COPY = Object.freeze({
+  rule: { short: "安全规则", detail: "确定性安全规则" },
+  mimo: { short: "MiMo", detail: "MiMo 综合关怀判断" },
+  mock: { short: "演示", detail: "演示脚本（非实时模型）" },
+  record: { short: "回放", detail: "已记录的关怀决策回放" },
+  degraded: { short: "降级", detail: "本地降级策略" },
+});
+
+const TIMELINE_UNCERTAINTY_COPY = Object.freeze({
+  low: "低",
+  medium: "中",
+  high: "高",
+  unknown: "未知",
+});
+
+function visualContextCopy(visualContext) {
+  if (!visualContext?.sentToMimo) return "未向 MiMo 发送视觉上下文";
+  if (visualContext.type === "keyframes") {
+    return Number.isSafeInteger(visualContext.sampleCount)
+      ? `已使用 ${visualContext.sampleCount} 张最小关键帧`
+      : "已使用最小关键帧";
+  }
+  return "已使用最小事件短片";
+}
 
 function TimelineEventCard({ event }) {
   const [expanded, setExpanded] = useState(false);
@@ -376,19 +416,47 @@ function TimelineEventCard({ event }) {
     ? new Date(event.timestampMs).toISOString()
     : undefined;
   const details = [
+    ...(event.assessmentSource
+      ? [{
+        label: "判断来源",
+        value: TIMELINE_SOURCE_COPY[event.assessmentSource]?.detail || event.assessmentSource,
+      }]
+      : []),
+    ...(event.uncertainty
+      ? [{
+        label: "判断不确定性",
+        value: TIMELINE_UNCERTAINTY_COPY[event.uncertainty] || "未知",
+      }]
+      : []),
+    ...(event.visualContext
+      ? [{ label: "视觉上下文", value: visualContextCopy(event.visualContext) }]
+      : []),
     {
       label: "数据来源",
-      value: event.source === "command_ack" ? "Relay 命令回执" : "Relay 权威快照",
+      value: event.source === "command_ack"
+        ? "Relay 命令回执"
+        : event.source === "mock_fixture"
+          ? "固定 Mock 演示数据（非真实家庭历史）"
+          : "Relay 权威快照",
     },
     ...(Number.isSafeInteger(event.stateRevision)
       ? [{ label: "状态版本", value: `revision ${event.stateRevision}` }]
       : []),
-    ...(event.sceneId
-      ? [{ label: "演示场景", value: SCENE_COPY[event.sceneId]?.label || event.sceneId }]
+    ...(event.sceneLabel
+      ? [{ label: "家中端上下文", value: event.sceneLabel }]
+      : []),
+    ...(event.captureLabel
+      ? [{ label: "采集状态", value: event.captureLabel }]
+      : []),
+    ...(event.runtimeLabel
+      ? [{ label: "本地能力", value: event.runtimeLabel }]
       : []),
   ];
+  const sourceChip = event.assessmentSource
+    ? TIMELINE_SOURCE_COPY[event.assessmentSource]?.short || event.assessmentSource
+    : null;
   return (
-    <article className={`timeline-event-card is-${event.tone}`}>
+    <article className={`timeline-event-card is-${event.tone} ${event.source === "mock_fixture" ? "is-mock" : ""}`}>
       <button
         className="timeline-event-summary"
         type="button"
@@ -396,8 +464,33 @@ function TimelineEventCard({ event }) {
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="timeline-event-marker"><EventIcon /></span>
-        <span className="timeline-event-time"><time dateTime={dateTime}>{formatTime(event.timestampMs)}</time><small>{event.label}</small></span>
-        <span className="timeline-event-copy"><b>{event.title}</b><span>{event.detail}</span></span>
+        <span className="timeline-event-content">
+          <span className="timeline-event-meta">
+            <span className="timeline-event-time"><time dateTime={dateTime}>{formatTime(event.timestampMs)}</time><small>{event.label}</small></span>
+            {event.statusLabel && <strong>{event.statusLabel}</strong>}
+          </span>
+          <span className="timeline-event-copy">
+            <b>{event.title}</b>
+            {event.detail && event.detail !== event.title && <span><em>判断依据</em>{event.detail}</span>}
+          </span>
+          {(sourceChip || event.uncertainty || event.visualContext?.sentToMimo) && (
+            <span className="timeline-event-chips" aria-label="判断标签">
+              {sourceChip && <small>{sourceChip}</small>}
+              {event.uncertainty && <small>不确定性 {TIMELINE_UNCERTAINTY_COPY[event.uncertainty] || "未知"}</small>}
+              {event.visualContext?.sentToMimo && <small>{event.visualContext.type === "clip" ? "最小短片" : "最小关键帧"}</small>}
+            </span>
+          )}
+          {(event.suggestedAction || event.progress) && (
+            <span className="timeline-event-actions">
+              {event.suggestedAction && (
+                <span><TipsAndUpdatesRoundedIcon /><small>建议动作</small><b>{event.suggestedAction}</b></span>
+              )}
+              {event.progress && (
+                <span><CheckCircleRoundedIcon /><small>处理进展</small><b>{event.progress}</b></span>
+              )}
+            </span>
+          )}
+        </span>
         <ExpandMoreRoundedIcon className={expanded ? "is-expanded" : ""} />
       </button>
       {expanded && (
@@ -405,7 +498,7 @@ function TimelineEventCard({ event }) {
           {details.map((detail) => (
             <div key={detail.label}><span>{detail.label}</span><b>{detail.value}</b></div>
           ))}
-          <p>只记录本次公开演示会话中的结构化状态，不包含原始画面、音频或骨架正文。</p>
+          <p>关怀判断不等于医疗诊断；这里只记录本次公开演示会话中的结构化结论，不包含原始画面、音频、骨架正文或完整对话。</p>
         </div>
       )}
     </article>
@@ -413,18 +506,25 @@ function TimelineEventCard({ event }) {
 }
 
 function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs }) {
-  const weekDays = buildWeekDays(selectedDateKey, nowMs);
   const todayKey = dateKeyFromTimestamp(nowMs);
-  const events = filterTimelineEventsByDate(timeline.events, selectedDateKey);
+  const selectableThrough = todayKey > FAMILY_TIMELINE_MOCK_END_DATE
+    ? todayKey
+    : FAMILY_TIMELINE_MOCK_END_DATE;
+  const weekDays = buildWeekDays(selectedDateKey, nowMs, selectableThrough);
+  const liveEvents = filterTimelineEventsByDate(timeline.events, selectedDateKey);
+  const mockEvents = filterTimelineEventsByDate(FAMILY_TIMELINE_MOCK_EVENTS, selectedDateKey);
+  const events = [...liveEvents, ...mockEvents]
+    .sort((left, right) => right.timestampMs - left.timestampMs || left.id.localeCompare(right.id));
+  const mockDateSelected = isFamilyTimelineMockDate(selectedDateKey);
   const interrupted = Boolean(
     relay.unavailableReason
       || !relay.monitorOnline
       || relay.connection !== "connected",
   );
-  const canGoForward = shiftDateKey(selectedDateKey, 7) <= todayKey;
+  const canGoForward = shiftDateKey(selectedDateKey, 7) <= selectableThrough;
   const changeWeek = (offset) => {
     const candidate = shiftDateKey(selectedDateKey, offset * 7);
-    onSelectDate(candidate > todayKey ? todayKey : candidate);
+    onSelectDate(candidate > selectableThrough ? selectableThrough : candidate);
   };
   return (
     <main className="viewer-page timeline-page">
@@ -452,20 +552,29 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
         </div>
       </section>
 
-      <aside className={`timeline-session-note ${interrupted ? "is-interrupted" : ""}`}>
-        {interrupted ? <RefreshRoundedIcon /> : <LockRoundedIcon />}
+      <section className="timeline-care-intro" aria-label="主动关怀说明">
+        <span><AutoAwesomeRoundedIcon /></span>
+        <div><small>reme · remember me</small><h2>记住每一次值得关心的变化</h2><p>把可靠事件变成可行动的关怀判断，并标明来源、证据边界与不确定性。</p></div>
+      </section>
+
+      <aside className={`timeline-session-note ${mockDateSelected ? "is-mock" : interrupted ? "is-interrupted" : ""}`}>
+        {mockDateSelected ? <AutoAwesomeRoundedIcon /> : interrupted ? <RefreshRoundedIcon /> : <LockRoundedIcon />}
         <div>
-          <b>{interrupted ? "同步已中断，以下不是当前现场" : "仅显示当前房间会话"}</b>
-          <span>{interrupted
-            ? "保留本页此前收到的记录；恢复后继续追加权威更新。"
-            : "公开演示不保存跨天家庭历史；刷新或换房间后清空。"}</span>
+          <b>{mockDateSelected
+            ? "Mock 演示时间线 · 非真实家庭历史"
+            : interrupted ? "同步已中断，以下不是当前现场" : "当前关怀记录 · 仅本次会话"}</b>
+          <span>{mockDateSelected
+            ? `8 月 4 日至 11 日用于展示 reme；${interrupted ? "家中端当前离线，" : ""}每张卡片都保留 Mock 标识。`
+            : interrupted
+              ? "保留本页此前收到的记录；恢复后继续追加权威更新。"
+              : "公开演示不保存跨天家庭历史；刷新或换房间后清空。"}</span>
         </div>
         <strong>{events.length} 条</strong>
       </aside>
 
       {events.length > 0 ? (
         <section className="timeline-event-section">
-          <div className="timeline-section-heading"><div><h2>{timelineDateHeading(selectedDateKey, nowMs)}</h2><p>点击条目可查看来源与状态版本</p></div><span>最新在前</span></div>
+          <div className="timeline-section-heading"><div><h2>主动关怀记录</h2><p>{timelineDateHeading(selectedDateKey, nowMs)} · 点击查看判断来源、不确定性与隐私边界</p></div><span>最新在前</span></div>
           <div className="timeline-event-list">
             {events.map((event) => <TimelineEventCard event={event} key={event.id} />)}
           </div>
@@ -474,12 +583,12 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
         <section className="timeline-empty-state" role="status">
           <span><EventBusyRoundedIcon /></span>
           <h2>{selectedDateKey === todayKey
-            ? interrupted ? "正在连接家中端" : "等待本次会话事件"
+            ? interrupted ? "家中端暂未连接" : "等待可靠的关怀判断"
             : "这一天没有可用记录"}</h2>
           <p>{selectedDateKey === todayKey
             ? interrupted
-              ? "收到第一个权威状态后，时间线会从这里开始。"
-              : "Monitor 发布新的权威状态后，关键变化会出现在这里。"
+              ? "恢复同步后，新的关怀判断会继续出现在这里。"
+              : "发现可靠事件后，MiMo 或确定性安全规则才会生成一条有来源的判断。"
             : "跨天历史服务尚未接入，因此不会用演示文案填充真实时间线。"}</p>
         </section>
       )}
@@ -487,12 +596,12 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
   );
 }
 
-function DashboardPage({ relay, snapshot, activeGrant, nowMs, familySurface = false }) {
+function DashboardContent({ relay, snapshot, activeGrant, nowMs, familySurface = false }) {
   const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
   const scene = sceneId ? SCENE_COPY[sceneId] : null;
   const SceneIcon = scene?.Icon || SensorsRoundedIcon;
   return (
-    <main className="viewer-page dashboard-page">
+    <>
       <section className="dashboard-summary">
         <h2>本次同步摘要</h2>
         <div className="summary-metrics">
@@ -523,8 +632,12 @@ function DashboardPage({ relay, snapshot, activeGrant, nowMs, familySurface = fa
           <div><span className={snapshot?.state.runtime.status === "ready" ? "truth-dot is-ok" : "truth-dot"} /><p><b>{familySurface ? "本地感知" : "本地运行时"}</b><small>{snapshot?.state.runtime.detail || RUNTIME_COPY[snapshot?.state.runtime.status] || "未发布"}</small></p></div>
         </div>
       </section>
-    </main>
+    </>
   );
+}
+
+function DashboardPage(props) {
+  return <main className="viewer-page dashboard-page"><DashboardContent {...props} /></main>;
 }
 
 function SettingsRow({ icon: Icon, title, detail, action, muted = false }) {
@@ -774,7 +887,9 @@ export function ViewerApp({ surface = "family" }) {
     viewerId,
   } = relay;
   const [activeTab, setActiveTab] = useState("home");
-  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => dateKeyFromTimestamp(Date.now()));
+  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => (
+    familySurface ? FAMILY_TIMELINE_MOCK_END_DATE : dateKeyFromTimestamp(Date.now())
+  ));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [issueError, setIssueError] = useState("");
   const [familyConfirmFailure, setFamilyConfirmFailure] = useState(null);
@@ -1030,14 +1145,16 @@ export function ViewerApp({ surface = "family" }) {
 
   const pageHeader = (() => {
     if (activeTab === "home") return {
-      title: "外婆家",
+      title: familySurface ? "家" : "外婆家",
       subtitle: relay.unavailableReason
         ? `${familySurface ? "家属端" : "Viewer"} · 当前状态不可用，等待恢复`
         : `${SCENE_COPY[sceneId]?.label || "家庭关怀"} · ${relay.connection === "connected" ? (familySurface ? "家属端已连接" : "Relay 已连接") : "正在重连"}`,
     };
     if (activeTab === "timeline") return {
-      title: "时间线",
-      subtitle: `外婆 · ${timelineDateHeading(selectedTimelineDate, nowMs)}`,
+      title: familySurface ? "reme" : "主动关怀",
+      subtitle: familySurface
+        ? `remember me · ${timelineDateHeading(selectedTimelineDate, nowMs)}`
+        : `外婆 · ${timelineDateHeading(selectedTimelineDate, nowMs)} · MiMo 关怀时间线`,
     };
     if (activeTab === "dashboard") return {
       title: "关怀看板",
@@ -1064,7 +1181,7 @@ export function ViewerApp({ surface = "family" }) {
           )}
         </header>
 
-        {relay.unavailableReason && (
+        {relay.unavailableReason && activeTab !== "timeline" && (
           <aside className={`viewer-state-unavailable ${emergencyStale ? "is-emergency" : ""}`} role="alert">
             <HealthAndSafetyRoundedIcon />
             <div><b>{emergencyStale ? "历史紧急告警已锁存，当前状态不可用" : "当前状态不可用"}</b><span>{unavailableCopy(relay, familySurface)}</span></div>
@@ -1094,10 +1211,16 @@ export function ViewerApp({ surface = "family" }) {
         )}
 
         <BottomNavigation className="viewer-bottom-nav" showLabels value={activeTab} onChange={(_, value) => setActiveTab(value)}>
-          <BottomNavigationAction label="首页" value="home" icon={<HomeRoundedIcon />} />
-          <BottomNavigationAction label="时间线" value="timeline" icon={<CalendarMonthRoundedIcon />} />
-          <BottomNavigationAction label="看板" value="dashboard" icon={<FavoriteRoundedIcon />} />
-          <BottomNavigationAction label="设置" value="settings" icon={<SettingsRoundedIcon />} />
+          {familySurface ? [
+            <BottomNavigationAction key="home" label="家" value="home" icon={<HomeRoundedIcon />} />,
+            <BottomNavigationAction key="timeline" label="reme" value="timeline" icon={<FavoriteRoundedIcon />} />,
+            <BottomNavigationAction key="settings" label="设置" value="settings" icon={<SettingsRoundedIcon />} />,
+          ] : [
+            <BottomNavigationAction key="home" label="首页" value="home" icon={<HomeRoundedIcon />} />,
+            <BottomNavigationAction key="timeline" label="时间线" value="timeline" icon={<CalendarMonthRoundedIcon />} />,
+            <BottomNavigationAction key="dashboard" label="看板" value="dashboard" icon={<FavoriteRoundedIcon />} />,
+            <BottomNavigationAction key="settings" label="设置" value="settings" icon={<SettingsRoundedIcon />} />,
+          ]}
         </BottomNavigation>
       </div>
 

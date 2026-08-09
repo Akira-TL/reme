@@ -1,5 +1,5 @@
 export const ROOM_NAME = "shared-live-demo";
-export const DEMO_STATE_SCHEMA_VERSION = "reme-demo-state/v1";
+export const DEMO_STATE_SCHEMA_VERSION = "reme-demo-state/v2";
 export const CONTROL_COMMAND_SCHEMA_VERSION = "reme-control-command/v1";
 export const POSE_FRAME_SCHEMA_VERSION = "reme-pose-frame-17/v1";
 export const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
@@ -47,6 +47,27 @@ export interface ActiveMediaGrant {
   status: "active";
 }
 
+export interface CareAssessment {
+  verdict: string;
+  basis: string;
+  uncertainty: "low" | "medium" | "high" | "unknown";
+  source: "rule" | "mimo" | "mock" | "record" | "degraded";
+  action:
+    | "none"
+    | "observe"
+    | "ask_elder"
+    | "notify_family"
+    | "show_urgent_attention"
+    | "mark_resolved";
+  suggested_action: string;
+  status: "observing" | "awaiting_response" | "family_notified" | "resolved" | "degraded";
+  visual_context: {
+    sent_to_mimo: boolean;
+    type: "keyframes" | "clip" | null;
+    sample_count: number | null;
+  };
+}
+
 export interface DemoState {
   scene_id: SceneId;
   source_generation: number;
@@ -74,6 +95,7 @@ export interface DemoState {
     consent: "none" | "pending" | "granted" | "denied";
     alarm_authoritative: boolean;
     message: string | null;
+    assessment: CareAssessment | null;
   };
   media_grant: ActiveMediaGrant | null;
 }
@@ -198,7 +220,25 @@ const STATE_KEYS = [
 ] as const;
 const CAPTURE_KEYS = ["error", "remote_video", "source_id", "source_kind", "status"] as const;
 const RUNTIME_KEYS = ["capability", "detail", "status"] as const;
-const CARE_KEYS = ["alarm_authoritative", "consent", "decision_id", "message", "phase"] as const;
+const CARE_KEYS = [
+  "alarm_authoritative",
+  "assessment",
+  "consent",
+  "decision_id",
+  "message",
+  "phase",
+] as const;
+const CARE_ASSESSMENT_KEYS = [
+  "action",
+  "basis",
+  "source",
+  "status",
+  "suggested_action",
+  "uncertainty",
+  "verdict",
+  "visual_context",
+] as const;
+const CARE_VISUAL_CONTEXT_KEYS = ["sample_count", "sent_to_mimo", "type"] as const;
 const ACTIVE_GRANT_KEYS = ["event_id", "expires_at_ms", "grant_id", "scope", "status"] as const;
 const POSE_FRAME_KEYS = [
   "frame_sequence",
@@ -495,10 +535,58 @@ function validateCare(value: unknown): value is DemoState["care"] {
   ) return false;
   if (typeof value.alarm_authoritative !== "boolean") return false;
   if (value.message !== null && !isBoundedString(value.message, 240)) return false;
+  if (value.assessment !== null && !validateCareAssessment(value.assessment)) return false;
+  if (value.assessment !== null && value.decision_id === null) return false;
   if (value.phase === "emergency") {
     return value.alarm_authoritative && value.decision_id !== null;
   }
   return !value.alarm_authoritative;
+}
+
+function validateCareAssessment(value: unknown): value is CareAssessment {
+  if (!isExactObject(value, CARE_ASSESSMENT_KEYS)) return false;
+  if (!isBoundedString(value.verdict, 240) || !isBoundedString(value.basis, 240)) return false;
+  if (!isBoundedString(value.suggested_action, 240)) return false;
+  if (
+    value.uncertainty !== "low"
+    && value.uncertainty !== "medium"
+    && value.uncertainty !== "high"
+    && value.uncertainty !== "unknown"
+  ) return false;
+  if (
+    value.source !== "rule"
+    && value.source !== "mimo"
+    && value.source !== "mock"
+    && value.source !== "record"
+    && value.source !== "degraded"
+  ) return false;
+  if (
+    value.action !== "none"
+    && value.action !== "observe"
+    && value.action !== "ask_elder"
+    && value.action !== "notify_family"
+    && value.action !== "show_urgent_attention"
+    && value.action !== "mark_resolved"
+  ) return false;
+  if (
+    value.status !== "observing"
+    && value.status !== "awaiting_response"
+    && value.status !== "family_notified"
+    && value.status !== "resolved"
+    && value.status !== "degraded"
+  ) return false;
+  return validateCareVisualContext(value.visual_context);
+}
+
+function validateCareVisualContext(value: unknown): value is CareAssessment["visual_context"] {
+  if (!isExactObject(value, CARE_VISUAL_CONTEXT_KEYS)) return false;
+  if (typeof value.sent_to_mimo !== "boolean") return false;
+  if (value.sent_to_mimo) {
+    return (value.type === "keyframes" || value.type === "clip")
+      && (value.sample_count === null
+        || (Number.isSafeInteger(value.sample_count) && (value.sample_count as number) > 0));
+  }
+  return value.type === null && value.sample_count === null;
 }
 
 function validateActiveGrant(value: unknown): value is ActiveMediaGrant {

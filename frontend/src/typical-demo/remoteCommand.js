@@ -200,7 +200,7 @@ export function buildDemoState({
         ? "resolved"
         : "idle";
   return {
-    schema_version: "reme-demo-state/v1",
+    schema_version: "reme-demo-state/v2",
     room_session_id: roomSessionId,
     runtime_session_id: runtimeSessionId,
     state_revision: stateRevision,
@@ -228,6 +228,7 @@ export function buildDemoState({
         consent: care?.consent || "none",
         alarm_authoritative: carePhase === "emergency" && Boolean(care?.alarmAuthoritative),
         message: care?.message || null,
+        assessment: care?.assessment || null,
       },
       media_grant: null,
     },

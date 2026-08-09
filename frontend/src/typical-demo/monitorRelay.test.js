@@ -10,6 +10,7 @@ import {
   createPoseFrame,
   createSessionClaimStore,
   resolveMonitorRelayEndpoints,
+  validateDemoStateEnvelope,
 } from "./monitorRelay.js";
 
 const TOKEN = "a".repeat(64);
@@ -37,6 +38,7 @@ function demoState(revision, runtimeSessionId = "runtime-1") {
         consent: "none",
         alarm_authoritative: false,
         message: null,
+        assessment: null,
       },
       media_grant: null,
     },
@@ -72,6 +74,32 @@ function command(name = "start_capture", overrides = {}) {
     ...overrides,
   };
 }
+
+test("Monitor accepts only the explicit v2 care assessment provenance", () => {
+  const state = demoState(1);
+  state.state.care.phase = "checking";
+  state.state.care.decision_id = "decision-1";
+  state.state.care.assessment = {
+    verdict: "厨房内持续站立，暂未看到需要立即处理的变化。",
+    basis: "姿态和持续时间综合判断。",
+    uncertainty: "low",
+    source: "rule",
+    action: "observe",
+    suggested_action: "继续观察即可。",
+    status: "observing",
+    visual_context: {
+      sent_to_mimo: false,
+      type: null,
+      sample_count: null,
+    },
+  };
+
+  assert.equal(validateDemoStateEnvelope(state), true);
+
+  const inventedSource = structuredClone(state);
+  inventedSource.state.care.assessment.source = "inferred";
+  assert.equal(validateDemoStateEnvelope(inventedSource), false);
+});
 
 class FakeSocket {
   static instances = [];

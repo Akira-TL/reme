@@ -172,6 +172,20 @@ test("浴室硬门、厨房当前授权和跌倒权威升级决定 grant", () =>
 });
 
 test("权威状态显式区分 room session 与 runtime session", () => {
+  const assessment = {
+    verdict: "客厅内活动节奏较平稳。",
+    basis: "姿态与场景信息综合判断。",
+    uncertainty: "medium",
+    source: "mimo",
+    action: "observe",
+    suggested_action: "继续观察即可。",
+    status: "observing",
+    visual_context: {
+      sent_to_mimo: true,
+      type: "keyframes",
+      sample_count: 3,
+    },
+  };
   const state = buildDemoState({
     roomSessionId: "room-1",
     runtimeSessionId: "runtime-9",
@@ -181,7 +195,11 @@ test("权威状态显式区分 room session 与 runtime session", () => {
     source: { id: "front-camera", kind: "camera", label: "前置", remote_video: "available" },
     capture: { active: true },
     runtime: { state: "running", inputMode: "jpeg", personDetected: true, skeletonSource: "a_backend" },
-    care: { phase: "idle" },
+    care: {
+      phase: "checking",
+      decisionId: "decision-1",
+      assessment,
+    },
   });
   assert.equal(state.room_session_id, "room-1");
   assert.equal(state.runtime_session_id, "runtime-9");
@@ -189,6 +207,8 @@ test("权威状态显式区分 room session 与 runtime session", () => {
   assert.equal(state.state.source_generation, 3);
   assert.equal(state.state.runtime.status, "ready");
   assert.equal(state.state.runtime.capability, "live");
+  assert.equal(state.schema_version, "reme-demo-state/v2");
+  assert.deepEqual(state.state.care.assessment, assessment);
 });
 
 test("ACK 明确区分等待本机确认和终态", () => {

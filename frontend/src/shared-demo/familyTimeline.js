@@ -26,22 +26,28 @@ const RUNTIME_LABELS = Object.freeze({
   error: "本地运行时异常",
 });
 
-const CARE_LABELS = Object.freeze({
-  idle: "日常关怀",
-  checking: "正在确认情况",
-  emergency: "需要关注的安全事件",
-  resolved: "关怀事件已处理",
+const ASSESSMENT_SOURCE_LABELS = Object.freeze({
+  rule: "安全规则判断",
+  mimo: "MiMo 关怀判断",
+  mock: "演示判断",
+  record: "回放判断",
+  degraded: "降级判断",
+});
+
+const ASSESSMENT_STATUS = Object.freeze({
+  observing: { label: "安静观察", tone: "neutral" },
+  awaiting_response: { label: "等待回应", tone: "warning" },
+  family_notified: { label: "建议关怀", tone: "warning" },
+  resolved: { label: "已经处理", tone: "success" },
+  degraded: { label: "信息不足", tone: "warning" },
 });
 
 const EVENT_PRIORITY = Object.freeze({
   acknowledgement: 100,
-  care: 90,
-  media: 80,
+  assessment: 90,
+  care: 80,
   consent: 70,
-  scene: 60,
-  capture: 50,
-  runtime: 40,
-  sync: 10,
+  media: 60,
 });
 
 function timelineTimestamp(value) {
@@ -56,9 +62,17 @@ function timelineEvent({
   detail,
   timestampMs,
   tone = "neutral",
+  statusLabel = null,
+  suggestedAction = null,
+  progress = null,
+  assessmentSource = null,
+  uncertainty = null,
+  visualContext = null,
   source = "demo_state",
   stateRevision = null,
   sceneId = null,
+  captureStatus = null,
+  runtimeStatus = null,
 }) {
   return Object.freeze({
     id,
@@ -68,19 +82,50 @@ function timelineEvent({
     detail,
     timestampMs: timelineTimestamp(timestampMs),
     tone,
+    statusLabel,
+    suggestedAction,
+    progress,
+    assessmentSource,
+    uncertainty,
+    visualContext,
     source,
     stateRevision,
     sceneId,
+    sceneLabel: SCENE_LABELS[sceneId] || null,
+    captureStatus,
+    captureLabel: CAPTURE_LABELS[captureStatus] || null,
+    runtimeStatus,
+    runtimeLabel: RUNTIME_LABELS[runtimeStatus] || null,
     priority: EVENT_PRIORITY[kind] || 0,
   });
 }
 
-function snapshotMetadata(snapshot) {
+function snapshotMetadata(snapshot, current) {
   return {
     source: "demo_state",
     stateRevision: snapshot.state_revision,
-    sceneId: snapshot.state.scene_id,
+    sceneId: current.sceneId,
+    captureStatus: current.captureStatus,
+    runtimeStatus: current.runtimeStatus,
   };
+}
+
+function cloneAssessment(value) {
+  if (!value) return null;
+  return Object.freeze({
+    verdict: value.verdict,
+    basis: value.basis,
+    uncertainty: value.uncertainty,
+    source: value.source,
+    action: value.action,
+    suggestedAction: value.suggested_action,
+    status: value.status,
+    visualContext: Object.freeze({
+      sentToMimo: value.visual_context.sent_to_mimo,
+      type: value.visual_context.type,
+      sampleCount: value.visual_context.sample_count,
+    }),
+  });
 }
 
 function projectSnapshot(snapshot) {
@@ -88,223 +133,176 @@ function projectSnapshot(snapshot) {
   return Object.freeze({
     sceneId: state.scene_id,
     captureStatus: state.capture.status,
-    captureError: state.capture.error,
     runtimeStatus: state.runtime.status,
-    runtimeDetail: state.runtime.detail,
     carePhase: state.care.phase,
     careDecisionId: state.care.decision_id,
     careConsent: state.care.consent,
     careMessage: state.care.message,
+    careAssessment: cloneAssessment(state.care.assessment),
     mediaGrantId: state.media_grant?.grant_id || null,
     mediaGrantScope: state.media_grant?.scope || null,
   });
 }
 
-function baselineDetail(current) {
-  return [
-    SCENE_LABELS[current.sceneId] || "场景待确认",
-    CAPTURE_LABELS[current.captureStatus] || "采集状态待确认",
-    RUNTIME_LABELS[current.runtimeStatus] || "本地能力待确认",
-    CARE_LABELS[current.carePhase] || "关怀状态待确认",
-  ].join(" · ");
+function assessmentSignature(assessment) {
+  return assessment ? JSON.stringify(assessment) : null;
 }
 
-function initialEvent(snapshot, current) {
-  const emergency = current.carePhase === "emergency";
+function assessmentEvent(snapshot, previous, current) {
+  const assessment = current.careAssessment;
+  if (!assessment) return null;
+  if (
+    current.careDecisionId === previous?.careDecisionId
+    && assessmentSignature(assessment) === assessmentSignature(previous?.careAssessment)
+  ) return null;
+
+  const status = ASSESSMENT_STATUS[assessment.status] || ASSESSMENT_STATUS.degraded;
+  const authoritativeEmergency = current.carePhase === "emergency";
   return timelineEvent({
-    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:sync`,
-    kind: "sync",
-    label: "开始同步",
-    title: emergency ? "已同步一项需要关注的安全事件" : "已同步家中端当前状态",
-    detail: current.carePhase === "idle"
-      ? baselineDetail(current)
-      : current.careMessage || baselineDetail(current),
+    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:assessment`,
+    kind: "assessment",
+    label: ASSESSMENT_SOURCE_LABELS[assessment.source] || "关怀判断",
+    title: assessment.verdict,
+    detail: assessment.basis,
     timestampMs: snapshot.timestamp_ms,
-    tone: emergency ? "danger" : "neutral",
-    ...snapshotMetadata(snapshot),
+    tone: authoritativeEmergency ? "danger" : status.tone,
+    statusLabel: authoritativeEmergency ? "需要立即关注" : status.label,
+    suggestedAction: assessment.suggestedAction,
+    progress: status.label,
+    assessmentSource: assessment.source,
+    uncertainty: assessment.uncertainty,
+    visualContext: assessment.visualContext,
+    ...snapshotMetadata(snapshot, current),
   });
 }
 
-function careEvent(snapshot, previous, current) {
-  if (current.carePhase === "idle" && previous.carePhase === "idle") return null;
+function fallbackCareEvent(snapshot, previous, current) {
+  if (current.careAssessment) return null;
+  if (current.carePhase === "idle") return null;
   if (
-    current.carePhase === previous.carePhase
-    && current.careDecisionId === previous.careDecisionId
-    && current.careMessage === previous.careMessage
+    current.carePhase === previous?.carePhase
+    && current.careDecisionId === previous?.careDecisionId
+    && current.careMessage === previous?.careMessage
   ) return null;
 
   const copy = {
-    idle: {
-      title: "关怀流程已回到日常状态",
-      detail: "家中端已结束上一项关怀流程。",
-      tone: "success",
-    },
     checking: {
-      title: "家中端正在确认情况",
-      detail: "等待本人回应或家中端给出下一步状态。",
+      title: "家中端已经发起关怀问候",
+      detail: current.careMessage || "正在等待本人回应；当前没有可展示的模型判断依据。",
       tone: "warning",
+      statusLabel: "等待回应",
+      suggestedAction: "等待本人回应，暂不把情况定性",
+      progress: "问候已发出",
     },
     emergency: {
-      title: "收到需要关注的安全事件",
-      detail: "请按家中端发布的最新权威状态及时关注。",
+      title: "确定性安全规则已提醒家人",
+      detail: current.careMessage || "当前没有可展示的模型判断依据，请及时联系确认。",
       tone: "danger",
+      statusLabel: "需要立即关注",
+      suggestedAction: "请立即联系本人或前往查看",
+      progress: "等待家人处理",
     },
     resolved: {
-      title: "本次关怀事件已处理",
-      detail: "家中端已将本次关怀流程标记为处理完成。",
+      title: "本次关怀已经处理",
+      detail: current.careMessage || "家中端已将本次关怀流程标记为处理完成。",
       tone: "success",
+      statusLabel: "已经处理",
+      suggestedAction: "无需继续操作",
+      progress: "流程已结束",
     },
   }[current.carePhase];
   if (!copy) return null;
   return timelineEvent({
     id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:care`,
     kind: "care",
-    label: "关怀",
-    title: copy.title,
-    detail: current.careMessage || copy.detail,
+    label: "关怀进展",
     timestampMs: snapshot.timestamp_ms,
-    tone: copy.tone,
-    ...snapshotMetadata(snapshot),
+    ...copy,
+    ...snapshotMetadata(snapshot, current),
   });
 }
 
 function consentEvent(snapshot, previous, current) {
-  if (current.careConsent === previous.careConsent) return null;
+  if (current.careConsent === (previous?.careConsent || "none")) return null;
   const copy = {
     none: {
-      title: "本次分享授权已结束",
+      title: "本次分享授权已经结束",
       detail: "家属端不再显示本次事件的授权原画。",
-      tone: "neutral",
+      tone: "privacy",
+      statusLabel: "授权结束",
+      progress: "恢复隐私展示",
     },
     pending: {
-      title: "家中端正在征求分享授权",
+      title: "已经向本人征求分享授权",
       detail: "本人回应前，原画保持关闭。",
       tone: "warning",
+      statusLabel: "等待回应",
+      progress: "授权确认中",
     },
     granted: {
-      title: "本人已同意本次限时分享",
+      title: "本人同意本次限时分享",
       detail: "授权只适用于当前事件，并会按时自动结束。",
       tone: "success",
+      statusLabel: "本人已同意",
+      progress: "授权已记录",
     },
     denied: {
-      title: "本人未同意本次分享",
-      detail: "原画保持关闭。",
+      title: "本人没有同意本次分享",
+      detail: "原画保持关闭，继续使用隐私化信息。",
       tone: "privacy",
+      statusLabel: "保持隐私",
+      progress: "授权已拒绝",
     },
   }[current.careConsent];
   if (!copy) return null;
   return timelineEvent({
     id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:consent`,
     kind: "consent",
-    label: "授权",
-    title: copy.title,
-    detail: copy.detail,
+    label: "关怀授权",
     timestampMs: snapshot.timestamp_ms,
-    tone: copy.tone,
-    ...snapshotMetadata(snapshot),
+    ...copy,
+    ...snapshotMetadata(snapshot, current),
   });
 }
 
 function mediaEvent(snapshot, previous, current) {
-  if (current.mediaGrantId === previous.mediaGrantId) return null;
+  if (current.mediaGrantId === (previous?.mediaGrantId || null)) return null;
   if (!current.mediaGrantId) {
     return timelineEvent({
       id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:media`,
       kind: "media",
-      label: "隐私",
-      title: "事件期原画已关闭",
+      label: "隐私处理",
+      title: "事件期原画已经关闭",
       detail: "家属端恢复为匿名骨架与必要状态。",
       timestampMs: snapshot.timestamp_ms,
       tone: "privacy",
-      ...snapshotMetadata(snapshot),
+      statusLabel: "原画已关闭",
+      progress: "恢复隐私展示",
+      ...snapshotMetadata(snapshot, current),
     });
   }
   return timelineEvent({
     id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:media`,
     kind: "media",
-    label: "隐私",
-    title: "事件期原画已限时开放",
+    label: "隐私处理",
+    title: "事件期原画已经限时开放",
     detail: current.mediaGrantScope === "fall_emergency"
-      ? "安全事件授权窗口已开启，并会按时自动关闭。"
-      : "生活片段授权窗口已开启，并会按时自动关闭。",
+      ? "确定性安全事件授权窗口已经开启，并会按时自动关闭。"
+      : "本人授权的生活片段窗口已经开启，并会按时自动关闭。",
     timestampMs: snapshot.timestamp_ms,
     tone: "warning",
-    ...snapshotMetadata(snapshot),
-  });
-}
-
-function sceneEvent(snapshot, previous, current) {
-  if (current.sceneId === previous.sceneId) return null;
-  return timelineEvent({
-    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:scene`,
-    kind: "scene",
-    label: "场景",
-    title: `家中端场景更新为${SCENE_LABELS[current.sceneId] || "待确认状态"}`,
-    detail: "这是家中端发布的演示场景，不等同于对人员位置的判断。",
-    timestampMs: snapshot.timestamp_ms,
-    ...snapshotMetadata(snapshot),
-  });
-}
-
-function captureEvent(snapshot, previous, current) {
-  if (
-    current.captureStatus === previous.captureStatus
-    && current.captureError === previous.captureError
-  ) return null;
-  const copy = {
-    idle: ["家中端采集已停止", "现场输入当前未在采集。", "neutral"],
-    awaiting_local_confirmation: ["等待家中端确认采集", "首次授权或敏感来源必须在家中端本机确认。", "warning"],
-    starting: ["家中端正在启动采集", "现场输入尚未就绪。", "warning"],
-    active: ["家中端采集已开始", "现场输入已由家中端标记为运行中。", "success"],
-    stopping: ["家中端正在停止采集", "停止完成前保持能力状态可见。", "warning"],
-    error: ["家中端采集出现异常", "现场输入暂不可用。", "danger"],
-  }[current.captureStatus];
-  if (!copy) return null;
-  return timelineEvent({
-    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:capture`,
-    kind: "capture",
-    label: "采集",
-    title: copy[0],
-    detail: current.captureError || copy[1],
-    timestampMs: snapshot.timestamp_ms,
-    tone: copy[2],
-    ...snapshotMetadata(snapshot),
-  });
-}
-
-function runtimeEvent(snapshot, previous, current) {
-  if (
-    current.runtimeStatus === previous.runtimeStatus
-    && current.runtimeDetail === previous.runtimeDetail
-  ) return null;
-  const copy = {
-    offline: ["本地运行时已离线", "家中端当前不能发布可靠的处理结果。", "danger"],
-    connecting: ["正在连接本地运行时", "本地能力尚未就绪。", "warning"],
-    ready: ["本地运行时已就绪", "家中端恢复发布本地处理状态。", "success"],
-    degraded: ["本地运行时进入降级状态", "部分本地能力暂不可用。", "warning"],
-    error: ["本地运行时出现异常", "不会用模拟结果替代现场处理事实。", "danger"],
-  }[current.runtimeStatus];
-  if (!copy) return null;
-  return timelineEvent({
-    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:runtime`,
-    kind: "runtime",
-    label: "能力",
-    title: copy[0],
-    detail: current.runtimeDetail || copy[1],
-    timestampMs: snapshot.timestamp_ms,
-    tone: copy[2],
-    ...snapshotMetadata(snapshot),
+    statusLabel: "限时授权中",
+    progress: "到期自动关闭",
+    ...snapshotMetadata(snapshot, current),
   });
 }
 
 function transitionEvents(snapshot, previous, current) {
   return [
-    careEvent(snapshot, previous, current),
-    mediaEvent(snapshot, previous, current),
+    assessmentEvent(snapshot, previous, current),
+    fallbackCareEvent(snapshot, previous, current),
     consentEvent(snapshot, previous, current),
-    sceneEvent(snapshot, previous, current),
-    captureEvent(snapshot, previous, current),
-    runtimeEvent(snapshot, previous, current),
+    mediaEvent(snapshot, previous, current),
   ].filter(Boolean);
 }
 
@@ -323,11 +321,13 @@ function acknowledgementEvents(roomSessionId, acks, seenAckIds) {
     events.push(timelineEvent({
       id: `ack:${roomSessionId}:${ack.command_id}`,
       kind: "acknowledgement",
-      label: "家属操作",
-      title: "家属端已确认收到告警",
-      detail: "家中端已应用本次处理确认。",
+      label: "处理结果",
+      title: "家属已经确认收到告警",
+      detail: "家中端已应用本次处理回执。",
       timestampMs: ack.timestamp_ms,
       tone: "success",
+      statusLabel: "家属已确认",
+      progress: "回执已同步",
       source: "command_ack",
       stateRevision: Number.isSafeInteger(ack.state_revision) ? ack.state_revision : null,
     }));
@@ -386,11 +386,7 @@ export function reduceFamilyTimeline(state, action) {
     )
   ) {
     const current = projectSnapshot(snapshot);
-    newEvents.push(...(
-      next.lastSnapshot
-        ? transitionEvents(snapshot, next.lastSnapshot, current)
-        : [initialEvent(snapshot, current)]
-    ));
+    newEvents.push(...transitionEvents(snapshot, next.lastSnapshot, current));
     next = {
       ...next,
       lastStateRevision: snapshot.state_revision,
