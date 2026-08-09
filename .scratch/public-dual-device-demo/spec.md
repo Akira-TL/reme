@@ -23,7 +23,7 @@
 - 日常默认只向 Viewer 发布骨架与结构化状态；浴室无论命令、重连或迟到事件都不发布原画。
 - 厨房只有当前运行时决策明确记录 `consent_granted` 后才可签发最长 60 秒原画 grant。
 - 跌倒只有当前运行时的权威告警已升级后才可签发最长 30 秒原画 grant。
-- 原画 grant 面向最多 5 名全部在线 Viewer；厨房 grant 的晚到 Viewer 可加入剩余窗口。
+- 原画 grant 面向最多 5 名全部在线 Viewer；厨房与跌倒 grant 的晚到 Viewer 都可加入剩余窗口。
 - 原始视频 RTP 只走 WebRTC；Worker 消息、SQLite、日志和事件 payload 禁止包含 JPEG、base64、Blob、音频或视频正文。
 - 摄像头/麦克风、屏幕捕获、文件选择和全屏都必须由 Monitor 设备上的真实用户手势完成。远程命令只能进入等待本机确认状态。
 - Viewer 不能取消、降低、伪造或延迟规则告警；MiMo 迟到结果仍受 ADR-0005/0007 约束。

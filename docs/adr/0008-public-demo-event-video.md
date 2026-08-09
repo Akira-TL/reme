@@ -17,7 +17,7 @@ This intentionally conflicts with the previous blanket statement that judge/fami
 - Routine presentation remains skeleton/structured state. Bathroom presentation always denies clear video.
 - A kitchen grant requires an explicit current-event consent result and lasts no more than 60 seconds.
 - A fall grant requires the current authoritative escalated alarm and lasts no more than 30 seconds.
-- Every online Viewer, including a Viewer joining during the remaining kitchen grant, is in the grant audience. The UI must disclose the public audience count and remaining clear-video time.
+- Every online Viewer, including a Viewer joining during the remaining kitchen or fall grant, is in the grant audience. The UI must disclose the public audience count and remaining clear-video time.
 - Clear video uses grant-bound WebRTC. RTP is not proxied, persisted or logged by the Relay. WebSocket and storage payloads reject raw-media fields.
 - All grants are revoked on expiry, scene/source/runtime-session change, capture stop, producer loss or Relay authority loss.
 - Browser media permissions and local file selection remain local user gestures. Viewer commands cannot bypass them.
