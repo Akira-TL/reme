@@ -46,6 +46,7 @@ function sourceStatusLabel(status) {
 }
 
 export function MonitorControlPanel({
+  surface = "debug",
   started,
   starting = false,
   onStart,
@@ -59,6 +60,7 @@ export function MonitorControlPanel({
   onRevokeControl,
   nowMs,
 }) {
+  const homeSurface = surface === "home";
   const fileInputRef = useRef(null);
   const pendingFileCommandRef = useRef(null);
   const filePickerIntentRef = useRef(null);
@@ -145,14 +147,19 @@ export function MonitorControlPanel({
   }
 
   return (
-    <section className="monitor-control-panel" aria-label="公开演示房间与媒体源">
+    <section
+      className={`monitor-control-panel ${homeSurface ? "is-home-control" : ""}`}
+      aria-label={homeSurface ? "家中关怀与本机媒体源" : "公开演示房间与媒体源"}
+    >
       <Alert
-        severity="warning"
+        severity={homeSurface ? "info" : "warning"}
         icon={<WarningAmberRoundedIcon fontSize="inherit" />}
         className="public-room-warning"
       >
-        <strong>公开演示房间</strong>
-        <span>无身份认证 · 事件期原画会发给全部在线 Viewer · 不代表生产隐私方案</span>
+        <strong>{homeSurface ? "公开双端演示" : "公开演示房间"}</strong>
+        <span>{homeSurface
+          ? "无账号验证 · 启动会请求本机相机与麦克风；麦克风默认禁用，仅在问询窗口录制并按需把问询语音送 MiMo；跌倒确认等事件可按需选定单帧或短片送 MiMo（非连续上传）；事件期原画仅在当前授权窗口对全部在线 Viewer 开放"
+          : "无身份认证 · 事件期原画会发给全部在线 Viewer · 不代表生产隐私方案"}</span>
       </Alert>
 
       <div className="monitor-control-grid">
@@ -161,11 +168,13 @@ export function MonitorControlPanel({
             {started ? <CastRoundedIcon /> : <LockOpenRoundedIcon />}
           </span>
           <div>
-            <small>MONITOR PRODUCER</small>
-            <strong>{started ? "演示控制端在线" : "准备进入固定公开房间"}</strong>
+            <small>{homeSurface ? "HOME CARE" : "MONITOR PRODUCER"}</small>
+            <strong>{started
+              ? homeSurface ? "家中关怀正在运行" : "演示控制端在线"
+              : homeSurface ? "开始本机关怀" : "准备进入固定公开房间"}</strong>
             <p>{started
-              ? `房间会话 ${room.roomSessionId || "正在建立"}`
-              : "点击后先取得唯一 producer 租约，再由本机确认媒体权限"}</p>
+              ? homeSurface ? "感知、关怀和家庭同步都以当前会话为准" : `房间会话 ${room.roomSessionId || "正在建立"}`
+              : homeSurface ? "点击后由本机请求相机与麦克风权限；任一能力不可用都会明确显示" : "点击后先取得唯一 producer 租约，再由本机确认媒体权限"}</p>
           </div>
           {started ? (
             <Button color="inherit" variant="outlined" startIcon={<StopRoundedIcon />} onClick={onStop}>
@@ -179,7 +188,7 @@ export function MonitorControlPanel({
               disabled={starting}
               onClick={onStart}
             >
-              {starting ? "正在进入…" : "开始演示"}
+              {starting ? "正在连接…" : homeSurface ? "开始关怀" : "开始演示"}
             </Button>
           )}
         </div>
@@ -248,19 +257,21 @@ export function MonitorControlPanel({
 
         <div className="monitor-room-block">
           <div className="monitor-section-heading">
-            <div><small>RELAY</small><strong>{room.connectionLabel}</strong></div>
+            <div><small>{homeSurface ? "公开演示连接" : "RELAY"}</small><strong>{room.connectionLabel}</strong></div>
             <Chip
               size="small"
               icon={<GroupsRoundedIcon />}
-              label={`${room.viewerCount || 0}/${room.maxViewers || 5} Viewer`}
+              label={homeSurface
+                ? `${room.viewerCount || 0} 个 Viewer 在线`
+                : `${room.viewerCount || 0}/${room.maxViewers || 5} Viewer`}
               color={room.monitorOnline ? "success" : "default"}
             />
           </div>
           <dl>
             <div>
-              <dt>控制权</dt>
+              <dt>{homeSurface ? "家属处理" : "控制权"}</dt>
               <dd className="monitor-controller-value">
-                <span>{room.controllerLabel || "尚无 Viewer 接管"}</span>
+                <span>{room.controllerLabel || (homeSurface ? "尚无家属端接管" : "尚无 Viewer 接管")}</span>
                 {room.controllerActive && (
                   <Button size="small" color="warning" onClick={onRevokeControl}>
                     收回
@@ -268,7 +279,7 @@ export function MonitorControlPanel({
                 )}
               </dd>
             </div>
-            <div><dt>权威状态</dt><dd>revision {room.stateRevision ?? 0}</dd></div>
+            {!homeSurface && <div><dt>权威状态</dt><dd>revision {room.stateRevision ?? 0}</dd></div>}
             <div><dt>事件原画</dt><dd>{room.mediaGrantLabel || "未开放"}</dd></div>
           </dl>
         </div>
@@ -276,10 +287,10 @@ export function MonitorControlPanel({
 
       <div className={`monitor-confirmation-queue ${pendingCommands.length ? "has-pending" : ""}`}>
         <div>
-          <small>远程命令与本机确认</small>
+          <small>{homeSurface ? "本机权限确认" : "远程命令与本机确认"}</small>
           <strong>{pendingCommands.length
             ? `${pendingCommands.length} 条命令等待本机操作`
-            : "当前没有等待确认的权限操作"}</strong>
+            : homeSurface ? "没有等待确认的权限操作" : "当前没有等待确认的权限操作"}</strong>
         </div>
         {pendingCommands.map((pending) => (
           <article key={pending.command_id}>

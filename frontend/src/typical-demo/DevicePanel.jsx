@@ -6,13 +6,14 @@ import { Button } from "@mui/material";
 import { SceneViewport } from "./SceneViewport";
 import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
-export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
+export function DevicePanel({ scene, canvasRef, camera, viewMode, surface = "debug" }) {
+  const homeSurface = surface === "home";
   const cameraHealth = getCameraHealth(camera);
   const modelHealth = getModelHealth(camera);
   const skeletonSource = describeSkeletonSource(camera.skeletonSource);
 
   return (
-    <section className={`device-panel tone-${scene.tone}`} aria-label="家中实时画面">
+    <section className={`device-panel ${homeSurface ? "is-home-stage" : ""} tone-${scene.tone}`} aria-label="家中实时画面">
       <header className="panel-heading device-panel-heading-simple">
         <div>
           <span>家中实时画面</span>
@@ -34,7 +35,7 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
 
       <SceneViewport
         sceneId={scene.id}
-        backgroundImage={scene.backgroundImage}
+        backgroundImage={homeSurface ? null : scene.backgroundImage}
         aspectRatio={camera.aspectRatio}
         canvasRef={canvasRef}
         cameraReady={camera.cameraReady}
@@ -44,7 +45,8 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode }) {
         perceptionReason={camera.perceptionReason}
         viewMode={viewMode}
         skeletonSource={camera.skeletonSource}
-        showStatus={false}
+        showStatus={homeSurface}
+        decorativeSet={!homeSurface}
       />
 
       {camera.error && (

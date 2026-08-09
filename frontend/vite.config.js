@@ -52,10 +52,12 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   envDir: "..",
   build: {
+    manifest: true,
     rollupOptions: {
       input: {
-        monitor: `${frontendRoot}index.html`,
-        viewer: `${frontendRoot}viewer.html`,
+        app: `${frontendRoot}index.html`,
+        viewerLegacy: `${frontendRoot}viewer.html`,
+        debugLegacy: `${frontendRoot}typical-demo.html`,
       },
     },
   },

@@ -14,6 +14,7 @@ import { relayHttpBase } from "../shared-demo/config";
 import { AcceptanceControls } from "./AcceptanceControls";
 import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
+import { HomeCarePrompt } from "./HomeCarePrompt";
 import { MonitorControlPanel } from "./MonitorControlPanel";
 import {
   confirmLocalMonitorCommand,
@@ -27,6 +28,13 @@ import { shouldAutoOpenFamilyVideo, shouldCloseFamilyVideo } from "./phoneState"
 import { buildDemoState, mediaGrantEligibility } from "./remoteCommand";
 import { getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus";
 import { DEMO_SCENES } from "./scenes";
+import {
+  allowsRemoteCommand,
+  exposesDebugInterface,
+  initialSceneForSurface,
+  normalizeSurface,
+  remoteActionsForSurface,
+} from "./surfacePolicy";
 import { useFallLiveLink } from "./useFallLiveLink";
 import { useLiveVideoSource } from "./useLiveVideoSource";
 import { useMonitorMediaProducer } from "./useMonitorMediaProducer";
@@ -56,8 +64,10 @@ function careMessage(decision) {
     || null;
 }
 
-export function TypicalDemoApp() {
-  const [sceneId, setSceneId] = useState("fall");
+export function TypicalDemoApp({ surface = "debug" }) {
+  const normalizedSurface = normalizeSurface(surface);
+  const debugInterface = exposesDebugInterface(normalizedSurface);
+  const [sceneId, setSceneId] = useState(() => initialSceneForSurface(normalizedSurface));
   const [familyViewOpen, setFamilyViewOpen] = useState(false);
   const [videoElement, setVideoElement] = useState(null);
   const [pendingScenario, setPendingScenario] = useState(null);
@@ -103,6 +113,9 @@ export function TypicalDemoApp() {
   );
 
   const handleRemoteCommand = useCallback(async (envelope) => {
+    if (!allowsRemoteCommand(normalizedSurface, envelope?.command?.name)) {
+      return { phase: "rejected", code: "command_not_supported_on_surface" };
+    }
     const expectedControlGeneration = controlGenerationRef.current;
     const result = await executeMonitorCommand(envelope, {
       getContext: () => commandContextRef.current || {},
@@ -128,7 +141,7 @@ export function TypicalDemoApp() {
     }
     if (result.authoritativeStateCommitted) bumpStateRevision();
     return result;
-  }, [bumpStateRevision, relayNow]);
+  }, [bumpStateRevision, normalizedSurface, relayNow]);
 
   const relayUrl = useMemo(() => relayHttpBase().toString(), []);
 
@@ -322,17 +335,20 @@ export function TypicalDemoApp() {
     if (!demoStarted) return liveRuntime;
     if (
       liveActive
+      && media.ready
       && live.connection === "open"
       && (effectivePhase !== "emergency" || currentFallAuthority)
     ) return liveRuntime;
     return {
       ...liveRuntime,
       state: "degraded",
-      reason: live.connection !== "open"
-        ? "决策链路不可用；既有安全状态保持锁定，事件原画已关闭"
-        : "感知链路不可用；既有安全状态保持锁定，事件原画已关闭",
+      reason: !media.ready
+        ? "本机媒体源不可用；既有安全状态保持锁定，事件原画已关闭"
+        : live.connection !== "open"
+          ? "决策链路不可用；既有安全状态保持锁定，事件原画已关闭"
+          : "感知链路不可用；既有安全状态保持锁定，事件原画已关闭",
     };
-  }, [currentFallAuthority, demoStarted, effectivePhase, live.connection, liveActive, liveRuntime]);
+  }, [currentFallAuthority, demoStarted, effectivePhase, live.connection, liveActive, liveRuntime, media.ready]);
   const stateFingerprint = JSON.stringify([
     liveRuntime?.sessionId || null,
     sceneId,
@@ -686,9 +702,9 @@ export function TypicalDemoApp() {
       sceneId,
       decisionId: authorityDecision?.decision_id || null,
       activeSafetyEvent: ACTIVE_SAFETY_PHASES.has(effectivePhase),
-      sources: media.availableSources,
+      sources: debugInterface ? media.availableSources : [],
     };
-    commandActionsRef.current = {
+    commandActionsRef.current = remoteActionsForSurface(normalizedSurface, {
       selectScene,
       selectSource: selectRemoteSource,
       startCapture: startRemoteCapture,
@@ -699,15 +715,17 @@ export function TypicalDemoApp() {
       submitResponse: submitRemoteResponse,
       confirmAlarm: live.confirmAlarm,
       replayVoice: live.replayVoice,
-    };
+    });
   }, [
     authorityDecision?.decision_id,
+    debugInterface,
     effectivePhase,
     live.confirmAlarm,
     live.replayVoice,
     media.availableSources,
     media.stop,
     monitor.roomSessionId,
+    normalizedSurface,
     resetAcceptance,
     runRemoteScenario,
     sceneId,
@@ -913,6 +931,7 @@ export function TypicalDemoApp() {
   ]);
 
   useEffect(() => {
+    if (!debugInterface) return undefined;
     const sessionId = liveRuntime?.sessionId;
     const scenario = scene.conversationScenario;
     const requestKey = sessionId && scenario ? `${sessionId}:${scene.id}:${scenario}` : null;
@@ -945,6 +964,7 @@ export function TypicalDemoApp() {
 
     return () => window.clearTimeout(timer);
   }, [
+    debugInterface,
     kitchenShared,
     live.connection,
     liveActive,
@@ -956,13 +976,14 @@ export function TypicalDemoApp() {
   const contactEmergency = live.confirmAlarm;
 
   useEffect(() => {
+    if (!debugInterface) return undefined;
     function onKeyDown(event) {
       if (["INPUT", "TEXTAREA", "BUTTON"].includes(document.activeElement?.tagName)) return;
       if (/^[1-4]$/.test(event.key)) selectScene(DEMO_SCENES[Number(event.key) - 1].id);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectScene]);
+  }, [debugInterface, selectScene]);
 
   async function enterFullscreen() {
     if (!document.fullscreenElement) await document.documentElement.requestFullscreen?.();
@@ -970,13 +991,22 @@ export function TypicalDemoApp() {
   }
 
   return (
-    <main className={`typical-demo scene-tone-${scene.tone}`}>
+    <main
+      className={`typical-demo is-${normalizedSurface}-surface scene-tone-${scene.tone}`}
+      data-app-role={normalizedSurface}
+    >
       <video ref={videoRef} className="capture-video" autoPlay muted playsInline aria-hidden="true" />
 
       <header className="demo-topbar">
         <div className="brand-lockup">
           <span className="reme-word">Reme</span>
-          <div><h1>Reme 家庭关怀演示</h1><p>在本地理解日常状态，需要时再主动询问并提醒家人</p></div>
+          <div>
+            <h1>{debugInterface ? "Reme ABC 工程验收" : "Reme 家中关怀"}</h1>
+            <p>{debugInterface
+              ? "同屏核对本机感知、MiMo 决策、家属呈现与失败状态"
+              : "在家中安静理解日常，需要时先问本人，再把必要信息告诉家人"}</p>
+          </div>
+          {debugInterface && <b className="debug-surface-badge">DEBUG · 非产品界面</b>}
         </div>
         <div className="topbar-actions">
           <span
@@ -1002,6 +1032,7 @@ export function TypicalDemoApp() {
       </header>
 
       <MonitorControlPanel
+        surface={normalizedSurface}
         started={demoStarted}
         starting={demoStarting}
         onStart={startLocalDemo}
@@ -1016,73 +1047,91 @@ export function TypicalDemoApp() {
         nowMs={grantClockMs}
       />
 
-      <nav className="scene-tabs" aria-label="选择典型演示场景">
-        {DEMO_SCENES.map((item, index) => {
-          const SceneIcon = SCENE_ICONS[item.id];
-          return (
-            <ButtonBase
-              key={item.id}
-              className={sceneId === item.id ? "is-active" : ""}
-              onClick={() => selectScene(item.id)}
-            >
-              <small>0{index + 1}</small>
-              <span className="flex items-center gap-2">
-                <SceneIcon sx={{ fontSize: 17 }} />
-                {item.nav.replace(/^场景.：/, "")}
-              </span>
-              <kbd>{index + 1}</kbd>
-            </ButtonBase>
-          );
-        })}
-      </nav>
+      {debugInterface && (
+        <nav className="scene-tabs" aria-label="选择典型演示场景">
+          {DEMO_SCENES.map((item, index) => {
+            const SceneIcon = SCENE_ICONS[item.id];
+            return (
+              <ButtonBase
+                key={item.id}
+                className={sceneId === item.id ? "is-active" : ""}
+                onClick={() => selectScene(item.id)}
+              >
+                <small>0{index + 1}</small>
+                <span className="flex items-center gap-2">
+                  <SceneIcon sx={{ fontSize: 17 }} />
+                  {item.nav.replace(/^场景.：/, "")}
+                </span>
+                <kbd>{index + 1}</kbd>
+              </ButtonBase>
+            );
+          })}
+        </nav>
+      )}
 
       <div className="demo-workspace">
         <DevicePanel
+          surface={normalizedSurface}
           scene={scene}
           canvasRef={deviceCanvasRef}
           camera={cameraState}
           viewMode={deviceViewMode}
         />
 
-        <div className="sync-rail" aria-hidden="true">
-          <span /><i /><span />
-          <SyncRoundedIcon className="text-orange-500" sx={{ fontSize: 18 }} />
-          <b>实时同步</b>
-        </div>
+        {debugInterface ? (
+          <>
+            <div className="sync-rail" aria-hidden="true">
+              <span /><i /><span />
+              <SyncRoundedIcon className="text-orange-500" sx={{ fontSize: 18 }} />
+              <b>实时同步</b>
+            </div>
 
-        <ChildPhone
-          scene={scene}
-          fallPhase={effectivePhase}
-          fallStateOverride={liveActive ? live.fallState : null}
-          emergencyNote={liveActive ? live.emergencyNote : null}
-          kitchenShared={kitchenShared}
-          kitchenNotification={kitchenNotification}
-          canvasRef={phoneCanvasRef}
-          camera={cameraState}
-          viewMode={phoneViewMode}
-          familyViewOpen={effectiveFamilyViewOpen}
-          autoFamilyViewOpen={autoFamilyViewOpen}
-          familyVideoAllowed={familyGrantActive}
-          onToggleFamilyView={() => setFamilyViewOpen((current) => !current)}
-          onContact={contactEmergency}
-          onSafe={markSafe}
-        />
+            <ChildPhone
+              scene={scene}
+              fallPhase={effectivePhase}
+              fallStateOverride={liveActive ? live.fallState : null}
+              emergencyNote={liveActive ? live.emergencyNote : null}
+              kitchenShared={kitchenShared}
+              kitchenNotification={kitchenNotification}
+              canvasRef={phoneCanvasRef}
+              camera={cameraState}
+              viewMode={phoneViewMode}
+              familyViewOpen={effectiveFamilyViewOpen}
+              autoFamilyViewOpen={autoFamilyViewOpen}
+              familyVideoAllowed={familyGrantActive}
+              onToggleFamilyView={() => setFamilyViewOpen((current) => !current)}
+              onContact={contactEmergency}
+              onSafe={markSafe}
+            />
+          </>
+        ) : (
+          <HomeCarePrompt
+            scene={scene}
+            live={live}
+            started={demoStarted}
+            available={Boolean(liveActive && media.ready)}
+          />
+        )}
       </div>
 
-      <AcceptanceControls
-        scene={scene}
-        live={live}
-        onTriggerFall={() => requestManualScenario("fall", "fall")}
-        onReset={resetAcceptance}
-      />
+      {debugInterface && (
+        <>
+          <AcceptanceControls
+            scene={scene}
+            live={live}
+            onTriggerFall={() => requestManualScenario("fall", "fall")}
+            onReset={resetAcceptance}
+          />
 
-      <RuntimeDebugPanel camera={cameraState} live={live} scene={scene} />
+          <RuntimeDebugPanel camera={cameraState} live={live} scene={scene} />
 
-      <footer className="demo-footer">
-        <Button size="small" variant="text" startIcon={<RestartAltRoundedIcon />} onClick={resetAcceptance}>
-          重新开始当前场景
-        </Button>
-      </footer>
+          <footer className="demo-footer">
+            <Button size="small" variant="text" startIcon={<RestartAltRoundedIcon />} onClick={resetAcceptance}>
+              重新开始当前场景
+            </Button>
+          </footer>
+        </>
+      )}
     </main>
   );
 }

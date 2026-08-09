@@ -16,6 +16,7 @@ export function SceneViewport({
   skeletonSource = "unavailable",
   compact = false,
   showStatus = true,
+  decorativeSet = true,
 }) {
   const privacy = sceneId === "bathroom";
   const night = sceneId === "fall";
@@ -36,19 +37,23 @@ export function SceneViewport({
         aspectRatio: aspectRatio || 16 / 9,
       }}
     >
-      <div className="room-wall" />
-      <div className="room-floor" />
-      <div className="set-window"><i /><i /></div>
-      <div className="set-console"><i /></div>
-      <div className="set-sofa"><i /><i /></div>
-      <div className="set-rug" />
-      <div className="set-lamp"><i /></div>
-      <div className="set-counter"><i /><i /><i /></div>
-      <div className="set-cabinets"><i /><i /><i /></div>
-      <div className="set-island"><i /><i /></div>
-      <div className="set-shower"><i /><i /></div>
-      <div className="set-tiles" />
-      <div className="set-bath-shelf"><i /><i /></div>
+      {decorativeSet && (
+        <>
+          <div className="room-wall" />
+          <div className="room-floor" />
+          <div className="set-window"><i /><i /></div>
+          <div className="set-console"><i /></div>
+          <div className="set-sofa"><i /><i /></div>
+          <div className="set-rug" />
+          <div className="set-lamp"><i /></div>
+          <div className="set-counter"><i /><i /><i /></div>
+          <div className="set-cabinets"><i /><i /><i /></div>
+          <div className="set-island"><i /><i /></div>
+          <div className="set-shower"><i /><i /></div>
+          <div className="set-tiles" />
+          <div className="set-bath-shelf"><i /><i /></div>
+        </>
+      )}
 
       <canvas
         ref={canvasRef}
@@ -84,7 +89,7 @@ export function SceneViewport({
           </div>
         </>
       )}
-      {night && <div className="night-time">23:47</div>}
+      {night && decorativeSet && <div className="night-time">23:47</div>}
       {privacy && <div className="privacy-curtain"><span>{compact ? "浴室隐私保护" : "隐私幕布"}</span></div>}
     </div>
   );
