@@ -1005,10 +1005,10 @@ export function TypicalDemoApp({ surface = "debug" }) {
         <div className="brand-lockup">
           <span className="reme-word">Reme</span>
           <div>
-            <h1>{debugInterface ? "Reme ABC 工程验收" : "Reme 家中关怀"}</h1>
+            <h1>{debugInterface ? "Reme ABC 工程验收" : "Reme 家中摄像头"}</h1>
             <p>{debugInterface
               ? "同屏核对本机感知、MiMo 决策、家属呈现与失败状态"
-              : "在家中安静理解日常，需要时先问本人，再把必要信息告诉家人"}</p>
+              : "采集本机视频并实时提取姿态；可靠事件出现后，才进入关怀与家庭同步"}</p>
           </div>
           {debugInterface && <b className="debug-surface-badge">DEBUG · 非产品界面</b>}
         </div>
@@ -1081,7 +1081,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
         </nav>
       )}
 
-      {(debugInterface || demoStarted) && <div className="demo-workspace">
+      <div className="demo-workspace">
         {debugInterface ? (
           <>
             <DevicePanel
@@ -1118,22 +1118,23 @@ export function TypicalDemoApp({ surface = "debug" }) {
           </>
         ) : (
           <>
+            <DevicePanel
+              surface={normalizedSurface}
+              started={demoStarted}
+              scene={scene}
+              canvasRef={deviceCanvasRef}
+              camera={cameraState}
+              viewMode={deviceViewMode}
+            />
             <HomeCarePrompt
               scene={scene}
               live={live}
               started={demoStarted}
               available={Boolean(liveActive && media.ready)}
             />
-            <DevicePanel
-              surface={normalizedSurface}
-              scene={scene}
-              canvasRef={deviceCanvasRef}
-              camera={cameraState}
-              viewMode={deviceViewMode}
-            />
           </>
         )}
-      </div>}
+      </div>
 
       {debugInterface && (
         <>

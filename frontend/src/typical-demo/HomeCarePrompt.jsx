@@ -102,12 +102,12 @@ export function deriveHomeCarePrompt(
   const decisionId = cleanText(decision?.decision_id) || null;
   const elderMessage = cleanText(decision?.elder_message);
   const fallbackTitle = !started
-    ? "尚未开始关怀"
+    ? "事件关怀在需要时出现"
     : liveAvailable
       ? "关怀已就绪"
       : "关怀能力暂不可用";
   const fallbackMessage = !started
-    ? "请先在上方开始关怀。"
+    ? "视频采集运行后，本机只在出现可靠事件时先问本人，再把必要信息告诉家人。"
     : liveAvailable
       ? "系统正在安静等待可靠事件，需要时才会出现。"
       : "当前没有可靠的实时关怀结果，请检查本机媒体源和运行时连接。";
@@ -130,7 +130,9 @@ export function deriveHomeCarePrompt(
   );
 
   return Object.freeze({
-    kicker: [cleanText(scene?.room), cleanText(scene?.privacy)].filter(Boolean).join(" · "),
+    kicker: started
+      ? [cleanText(scene?.room), cleanText(scene?.privacy)].filter(Boolean).join(" · ")
+      : "第二步 · 事件关怀",
     title: retainsSafetyAlert
       ? "安全提醒仍保持"
       : DECISION_TITLE_COPY[decisionState] || fallbackTitle,

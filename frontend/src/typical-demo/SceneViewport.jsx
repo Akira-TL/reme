@@ -17,6 +17,7 @@ export function SceneViewport({
   compact = false,
   showStatus = true,
   decorativeSet = true,
+  waitingForStart = false,
 }) {
   const privacy = sceneId === "bathroom";
   const night = sceneId === "fall";
@@ -60,6 +61,14 @@ export function SceneViewport({
         className="live-output"
         aria-label={viewMode === "video_skeleton" ? "现场画面与姿态识别叠加" : "实时姿态画面"}
       />
+
+      {waitingForStart ? (
+        <div className="viewport-waiting-state" role="status">
+          <LockOutlinedIcon />
+          <strong>开启后显示实时视频与姿态叠加</strong>
+          <span>当前摄像头与麦克风均未启用</span>
+        </div>
+      ) : null}
 
       {showStatus && (
         <>

@@ -6,8 +6,16 @@ import { Button } from "@mui/material";
 import { SceneViewport } from "./SceneViewport";
 import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
-export function DevicePanel({ scene, canvasRef, camera, viewMode, surface = "debug" }) {
+export function DevicePanel({
+  scene,
+  canvasRef,
+  camera,
+  viewMode,
+  surface = "debug",
+  started = true,
+}) {
   const homeSurface = surface === "home";
+  const homeIdle = homeSurface && !started;
   const cameraHealth = getCameraHealth(camera);
   const modelHealth = getModelHealth(camera);
   const skeletonSource = describeSkeletonSource(camera.skeletonSource);
@@ -17,11 +25,14 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode, surface = "deb
   const retryCannotHelp = camera.errorCode === "insecure_context";
 
   return (
-    <section className={`device-panel ${homeSurface ? "is-home-stage" : ""} tone-${scene.tone}`} aria-label="家中实时画面">
+    <section
+      className={`device-panel ${homeSurface ? "is-home-stage" : ""} tone-${scene.tone}`}
+      aria-label={homeIdle ? "等待开启的本机摄像头" : "家中实时画面"}
+    >
       <header className="panel-heading device-panel-heading-simple">
         <div>
-          <span>家中实时画面</span>
-          <h2>{scene.title}</h2>
+          <span>{homeIdle ? "本机视频采集" : "家中实时画面"}</span>
+          <h2>{homeIdle ? "摄像头尚未开启" : scene.title}</h2>
         </div>
       </header>
 
@@ -51,6 +62,7 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode, surface = "deb
         skeletonSource={camera.skeletonSource}
         showStatus={homeSurface}
         decorativeSet={!homeSurface}
+        waitingForStart={homeIdle}
       />
 
       {camera.error && retryCannotHelp && (

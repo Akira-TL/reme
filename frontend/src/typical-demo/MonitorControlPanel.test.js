@@ -54,12 +54,12 @@ function renderControl(surface, started = false) {
   }));
 }
 
-test("home 未启动时只有开始关怀一个按钮且不渲染禁用工具", () => {
+test("home 未启动时只有开启摄像头一个按钮且不渲染禁用工具", () => {
   const html = renderControl("home", false);
 
   assert.equal((html.match(/<button/g) || []).length, 1);
   assert.match(html, /home-primary-action/);
-  assert.match(html, />开始关怀<\/button>/);
+  assert.match(html, />开启摄像头<\/button>/);
   assert.doesNotMatch(html, /选择相机或视频/);
   assert.doesNotMatch(html, /前后切换/);
   assert.doesNotMatch(html, /本机权限确认/);
@@ -68,7 +68,7 @@ test("home 未启动时只有开始关怀一个按钮且不渲染禁用工具", 
 test("home 启动后恢复真实媒体与连接事实但不恢复冗余摄像头按钮", () => {
   const html = renderControl("home", true);
 
-  assert.match(html, />停止关怀<\/button>/);
+  assert.match(html, />停止采集<\/button>/);
   assert.match(html, /选择相机或视频/);
   assert.match(html, /公开演示连接/);
   assert.match(html, /Viewer 处理/);
