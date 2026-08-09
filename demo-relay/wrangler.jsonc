@@ -7,8 +7,14 @@
   "compatibility_date": "2026-08-06",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "relay.reme.maniforld.com",
+      "custom_domain": true
+    }
+  ],
   "vars": {
-    "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:4174,http://127.0.0.1:4174"
+    "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:4174,http://127.0.0.1:4174,https://reme.maniforld.com,https://monitor.reme.maniforld.com,https://reme-sage.vercel.app"
   },
   "secrets": {
     "required": [
