@@ -27,12 +27,12 @@ export function DevicePanel({
   return (
     <section
       className={`device-panel ${homeSurface ? "is-home-stage" : ""} tone-${scene.tone}`}
-      aria-label={homeIdle ? "等待开启的本机摄像头" : "家中实时画面"}
+      aria-label={homeIdle ? "等待开启的本机视频源" : "家中实时画面"}
     >
       <header className="panel-heading device-panel-heading-simple">
         <div>
-          <span>{homeIdle ? "本机视频采集" : "家中实时画面"}</span>
-          <h2>{homeIdle ? "摄像头尚未开启" : scene.title}</h2>
+          <span>{homeIdle ? "当前采集源 · 本机视频" : "家中实时画面"}</span>
+          <h2>{homeIdle ? "视频源尚未开启" : scene.title}</h2>
         </div>
       </header>
 

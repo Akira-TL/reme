@@ -45,9 +45,9 @@ test("未开始或链路离线时不把静态场景文案当作实时事实", ()
   const notStarted = deriveHomeCarePrompt(FALL_SCENE, liveWith(null, { active: false }), false);
   const unavailable = deriveHomeCarePrompt(FALL_SCENE, liveWith(null, { active: false }), true);
 
-  assert.equal(notStarted.title, "事件关怀在需要时出现");
-  assert.equal(notStarted.kicker, "第二步 · 事件关怀");
-  assert.equal(notStarted.message, "视频采集运行后，本机只在出现可靠事件时先问本人，再把必要信息告诉家人。");
+  assert.equal(notStarted.title, "可靠事件才触发关怀");
+  assert.equal(notStarted.kicker, "下游 · 事件关怀");
+  assert.equal(notStarted.message, "视频数据先在本地转为姿态和事件；只有可靠事件才进入问询与家庭同步。");
   assert.equal(unavailable.title, "关怀能力暂不可用");
   assert.equal(unavailable.message, "当前没有可靠的实时关怀结果，请检查本机媒体源和运行时连接。");
 });

@@ -151,7 +151,7 @@ export function MonitorControlPanel({
   return (
     <section
       className={`monitor-control-panel ${homeSurface ? "is-home-control" : ""} ${homeSurface && !started ? "is-idle" : ""}`}
-      aria-label={homeSurface ? "家中视频采集与本机媒体源" : "公开演示房间与媒体源"}
+      aria-label={homeSurface ? "家中数据采集与本机媒体源" : "公开演示房间与媒体源"}
     >
       <Alert
         severity={homeSurface ? "info" : "warning"}
@@ -172,17 +172,17 @@ export function MonitorControlPanel({
             {started ? <CastRoundedIcon /> : <LockOpenRoundedIcon />}
           </span>
           <div>
-            <small>{homeSurface ? "摄像头端" : "MONITOR PRODUCER"}</small>
+            <small>{homeSurface ? "当前通道 · 本机视频" : "MONITOR PRODUCER"}</small>
             <strong>{started
-              ? homeSurface ? "本机视频采集正在运行" : "演示控制端在线"
-              : homeSurface ? "开启本机摄像头" : "准备进入固定公开房间"}</strong>
+              ? homeSurface ? "视频通道采集中" : "演示控制端在线"
+              : homeSurface ? "开启本机视频采集" : "准备进入固定公开房间"}</strong>
             <p>{started
               ? homeSurface ? "视频采集、姿态感知和事件同步都以当前会话为准" : `房间会话 ${room.roomSessionId || "正在建立"}`
               : homeSurface ? "点击后先请求本机相机权限；Relay 或后端离线时会明确降级，不阻断本机采集" : "点击后先请求本机媒体权限；producer 租约会并行建立"}</p>
           </div>
           {started ? (
             <Button color="inherit" variant="outlined" startIcon={<StopRoundedIcon />} onClick={onStop}>
-              {homeSurface ? "停止采集" : "停止演示"}
+              {homeSurface ? "停止视频采集" : "停止演示"}
             </Button>
           ) : (
             <Button
@@ -193,7 +193,7 @@ export function MonitorControlPanel({
               disabled={starting}
               onClick={onStart}
             >
-              {starting ? homeSurface ? "正在开启…" : "正在连接…" : homeSurface ? "开启摄像头" : "开始演示"}
+              {starting ? homeSurface ? "正在开启…" : "正在连接…" : homeSurface ? "开启视频采集" : "开始演示"}
             </Button>
           )}
         </div>

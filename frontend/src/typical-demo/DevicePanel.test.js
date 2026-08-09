@@ -44,9 +44,9 @@ function renderPanel(props = {}) {
 test("Home 未启动时显示真实等待状态而不是默认场景事实", () => {
   const html = renderPanel({ surface: "home", started: false });
 
-  assert.match(html, /aria-label="等待开启的本机摄像头"/);
-  assert.match(html, />本机视频采集</);
-  assert.match(html, />摄像头尚未开启</);
+  assert.match(html, /aria-label="等待开启的本机视频源"/);
+  assert.match(html, />当前采集源 · 本机视频</);
+  assert.match(html, />视频源尚未开启</);
   assert.match(html, />开启后显示实时视频与姿态叠加</);
   assert.match(html, />当前摄像头与麦克风均未启用</);
   assert.doesNotMatch(html, />客厅日常</);
