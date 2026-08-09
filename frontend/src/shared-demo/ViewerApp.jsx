@@ -36,13 +36,17 @@ import {
   Switch,
   useMediaQuery,
 } from "@mui/material";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { relayAvailabilityCopy } from "./config.js";
 import {
   isFamilyConfirmationTimedOut,
   resolveFamilyConfirmationError,
 } from "./familyConfirmation.js";
 import { deriveFamilyTruth } from "./familyPresentation.js";
+import {
+  createFamilyTimelineState,
+  reduceFamilyTimeline,
+} from "./familyTimeline.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import { useAlertEffects } from "./useAlertEffects.js";
 import { useViewerMedia } from "./useViewerMedia.js";
@@ -292,47 +296,73 @@ function StatusCard({ snapshot, relay, familySurface = false }) {
   );
 }
 
-function FamilyTimeline({ snapshot, relay, familySurface = false }) {
-  const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
-  const scene = SCENE_COPY[sceneId];
-  const care = snapshot?.state.care;
-  const capture = snapshot?.state.capture;
-  const unavailable = Boolean(relay.unavailableReason);
-  const rows = [
-    {
-      time: unavailable ? "状态" : formatTime(snapshot?.timestamp_ms),
-      text: unavailable
-        ? unavailableCopy(relay, familySurface)
-        : care?.message || `当前位于${scene?.room || "未确认空间"}，${captureCopy(capture?.status, familySurface) || "等待状态"}`,
-      active: true,
-    },
-    {
-      time: "当前",
-      text: unavailable
-        ? "旧状态、旧骨架与旧原画均不作为当前事实"
-        : relay.monitorOnline
-          ? RUNTIME_COPY[snapshot?.state.runtime.status] || "等待本地运行时"
-          : familySurface ? "家中端当前离线" : "Monitor 当前离线",
-    },
-    {
-      time: familySurface ? "连接" : "房间",
-      text: familySurface
-        ? `${relay.viewerCount} 个在线访问端 · 无账号验证`
-        : `${relay.viewerCount} 位 Viewer 在线 · ${relay.controller ? "已有远程控制者" : "当前无人控制"}`,
-    },
-  ];
+const TIMELINE_ICON = Object.freeze({
+  sync: SensorsRoundedIcon,
+  care: HealthAndSafetyRoundedIcon,
+  media: VideocamRoundedIcon,
+  consent: PrivacyTipRoundedIcon,
+  scene: HomeRoundedIcon,
+  capture: CameraFrontRoundedIcon,
+  runtime: DashboardRoundedIcon,
+  acknowledgement: CheckCircleRoundedIcon,
+});
+
+function FamilyTimeline({ timeline, relay }) {
+  const events = timeline.events;
+  const interrupted = Boolean(
+    relay.unavailableReason
+      || !relay.monitorOnline
+      || relay.connection !== "connected",
+  );
   return (
-    <section className="family-timeline">
-      <h2>时间线</h2>
-      <div className="timeline-list">
-        {rows.map((row, index) => (
-          <div className="timeline-row" key={`${row.time}-${index}`}>
-            <span className={`timeline-marker ${row.active ? "is-active" : ""}`} />
-            <time>{row.time}</time>
-            <p>{row.text}</p>
+    <section className="family-timeline" aria-labelledby="family-timeline-title">
+      <header className="timeline-heading">
+        <div>
+          <span>本次连接</span>
+          <h2 id="family-timeline-title">时间线</h2>
+        </div>
+        <b>{events.length > 0 ? `${events.length} 条记录` : "等待事件"}</b>
+      </header>
+      <p className="timeline-disclosure">仅记录本页打开后收到的权威更新 · 刷新后重新开始</p>
+      {interrupted && events.length > 0 && (
+        <div className="timeline-interrupted" role="status">
+          <RefreshRoundedIcon />
+          <span>同步已中断；以下仅是本页此前收到的记录，不代表当前现场。</span>
+        </div>
+      )}
+      {events.length === 0 ? (
+        <div className="timeline-empty" role="status">
+          <SensorsRoundedIcon />
+          <div>
+            <b>{interrupted ? "正在连接家中端" : "等待首个家中事件"}</b>
+            <p>{interrupted
+              ? "收到第一个权威状态后，时间线会从这里开始。"
+              : "状态发生变化后会自动出现在这里。"}</p>
           </div>
-        ))}
-      </div>
+        </div>
+      ) : (
+        <ol className="timeline-list">
+          {events.map((event, index) => {
+            const TimelineIcon = TIMELINE_ICON[event.kind] || SensorsRoundedIcon;
+            const dateTime = event.timestampMs > 0
+              ? new Date(event.timestampMs).toISOString()
+              : undefined;
+            return (
+              <li className={`timeline-row is-${event.tone} ${index === 0 ? "is-latest" : ""}`} key={event.id}>
+                <span className="timeline-marker" aria-hidden="true"><TimelineIcon /></span>
+                <article className="timeline-event-card">
+                  <header>
+                    <span>{event.label}</span>
+                    <time dateTime={dateTime}>{formatTime(event.timestampMs)}</time>
+                  </header>
+                  <h3>{event.title}</h3>
+                  <p>{event.detail}</p>
+                </article>
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </section>
   );
 }
@@ -346,6 +376,7 @@ function HomePage({
   highPrivacyEnabled,
   localNowMs,
   relayNowMs,
+  timeline,
   familySurface = false,
 }) {
   const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
@@ -383,7 +414,7 @@ function HomePage({
           <CheckCircleRoundedIcon className="care-moment-check" />
         </article>
       )}
-      <FamilyTimeline snapshot={snapshot} relay={relay} familySurface={familySurface} />
+      <FamilyTimeline timeline={timeline} relay={relay} />
     </main>
   );
 }
@@ -681,6 +712,11 @@ export function ViewerApp({ surface = "family" }) {
   const [pendingFamilyConfirmation, setPendingFamilyConfirmation] = useState(null);
   const [sentFamilyConfirmation, setSentFamilyConfirmation] = useState(null);
   const [dismissedEmergency, setDismissedEmergency] = useState(null);
+  const [timeline, dispatchTimeline] = useReducer(
+    reduceFamilyTimeline,
+    undefined,
+    createFamilyTimelineState,
+  );
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [highPrivacyEnabled, setHighPrivacyEnabled] = useStoredBoolean("reme.viewer.highPrivacy", true);
   const [notificationsEnabled, setNotificationsEnabled] = useStoredBoolean("reme.viewer.notifications", true);
@@ -691,6 +727,14 @@ export function ViewerApp({ surface = "family" }) {
   }, []);
 
   const snapshot = relay.state;
+  useEffect(() => {
+    dispatchTimeline({
+      type: "observe",
+      roomSessionId: relay.roomSessionId,
+      snapshot,
+      acks: relay.acks,
+    });
+  }, [relay.acks, relay.roomSessionId, snapshot]);
   const relayNowMs = nowMs + (relay.serverTimeOffsetMs || 0);
   const sceneId = deriveFamilyTruth(snapshot, relay).sceneId
     || (familySurface ? null : "living");
@@ -948,7 +992,7 @@ export function ViewerApp({ surface = "family" }) {
           </aside>
         )}
 
-        {activeTab === "home" && <HomePage relay={relay} snapshot={snapshot} pose={relay.pose} media={media} activeGrant={activeGrant} highPrivacyEnabled={highPrivacyEnabled} localNowMs={nowMs} relayNowMs={relayNowMs} familySurface={familySurface} />}
+        {activeTab === "home" && <HomePage relay={relay} snapshot={snapshot} pose={relay.pose} media={media} activeGrant={activeGrant} highPrivacyEnabled={highPrivacyEnabled} localNowMs={nowMs} relayNowMs={relayNowMs} timeline={timeline} familySurface={familySurface} />}
         {activeTab === "dashboard" && <DashboardPage relay={relay} snapshot={snapshot} activeGrant={activeGrant} nowMs={relayNowMs} familySurface={familySurface} />}
         {activeTab === "settings" && (
           <SettingsPage
