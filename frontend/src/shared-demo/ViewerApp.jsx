@@ -1,11 +1,16 @@
 import AlarmRoundedIcon from "@mui/icons-material/AlarmRounded";
 import ArrowForwardIosRoundedIcon from "@mui/icons-material/ArrowForwardIosRounded";
+import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import CameraFrontRoundedIcon from "@mui/icons-material/CameraFrontRounded";
 import CameraRearRoundedIcon from "@mui/icons-material/CameraRearRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import ChevronLeftRoundedIcon from "@mui/icons-material/ChevronLeftRounded";
+import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import DashboardRoundedIcon from "@mui/icons-material/DashboardRounded";
 import EmergencyRoundedIcon from "@mui/icons-material/EmergencyRounded";
+import EventBusyRoundedIcon from "@mui/icons-material/EventBusyRounded";
+import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import FavoriteRoundedIcon from "@mui/icons-material/FavoriteRounded";
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
@@ -38,6 +43,13 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { relayAvailabilityCopy } from "./config.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
+import {
+  buildWeekDays,
+  dateKeyFromTimestamp,
+  filterTimelineEventsByDate,
+  shiftDateKey,
+  timelineDateHeading,
+} from "./timeline.js";
 import { useAlertEffects } from "./useAlertEffects.js";
 import { useViewerMedia } from "./useViewerMedia.js";
 import { useViewerRelay } from "./useViewerRelay.js";
@@ -232,47 +244,6 @@ function StatusCard({ snapshot, relay }) {
   );
 }
 
-function FamilyTimeline({ snapshot, relay }) {
-  const sceneId = snapshot?.state.scene_id || "living";
-  const scene = SCENE_COPY[sceneId];
-  const care = snapshot?.state.care;
-  const capture = snapshot?.state.capture;
-  const unavailable = Boolean(relay.unavailableReason);
-  const rows = [
-    {
-      time: unavailable ? "状态" : formatTime(snapshot?.timestamp_ms),
-      text: unavailable
-        ? unavailableCopy(relay)
-        : care?.message || `当前位于${scene.room}，${CAPTURE_COPY[capture?.status] || "等待状态"}`,
-      active: true,
-    },
-    {
-      time: "当前",
-      text: unavailable
-        ? "旧状态、旧骨架与旧原画均不作为当前事实"
-        : relay.monitorOnline ? RUNTIME_COPY[snapshot?.state.runtime.status] || "等待本地运行时" : "Monitor 当前离线",
-    },
-    {
-      time: "房间",
-      text: `${relay.viewerCount} 位 Viewer 在线 · ${relay.controller ? "已有远程控制者" : "当前无人控制"}`,
-    },
-  ];
-  return (
-    <section className="family-timeline">
-      <h2>时间线</h2>
-      <div className="timeline-list">
-        {rows.map((row, index) => (
-          <div className="timeline-row" key={`${row.time}-${index}`}>
-            <span className={`timeline-marker ${row.active ? "is-active" : ""}`} />
-            <time>{row.time}</time>
-            <p>{row.text}</p>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function HomePage({
   relay,
   snapshot,
@@ -316,7 +287,104 @@ function HomePage({
           <CheckCircleRoundedIcon className="care-moment-check" />
         </article>
       )}
-      <FamilyTimeline snapshot={snapshot} relay={relay} />
+    </main>
+  );
+}
+
+const TIMELINE_ICONS = Object.freeze({
+  care: FavoriteRoundedIcon,
+  privacy: LockRoundedIcon,
+  scene: HomeRoundedIcon,
+  device: VideocamRoundedIcon,
+  runtime: HealthAndSafetyRoundedIcon,
+  session: DashboardRoundedIcon,
+});
+
+function TimelineEventCard({ event }) {
+  const [expanded, setExpanded] = useState(false);
+  const EventIcon = TIMELINE_ICONS[event.kind] || CalendarMonthRoundedIcon;
+  return (
+    <article className={`timeline-event-card is-${event.tone}`}>
+      <button
+        className="timeline-event-summary"
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="timeline-event-marker"><EventIcon /></span>
+        <span className="timeline-event-time"><time>{formatTime(event.occurredAtMs)}</time><small>{event.category}</small></span>
+        <span className="timeline-event-copy"><b>{event.title}</b><span>{event.summary}</span></span>
+        <ExpandMoreRoundedIcon className={expanded ? "is-expanded" : ""} />
+      </button>
+      {expanded && (
+        <div className="timeline-event-details">
+          {event.details.map((detail) => (
+            <div key={detail.label}><span>{detail.label}</span><b>{detail.value}</b></div>
+          ))}
+          <p>只记录本次公开演示会话中的结构化状态，不包含原始画面、音频或骨架正文。</p>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function TimelinePage({ timeline, selectedDateKey, onSelectDate, nowMs }) {
+  const weekDays = buildWeekDays(selectedDateKey, nowMs);
+  const todayKey = dateKeyFromTimestamp(nowMs);
+  const events = filterTimelineEventsByDate(timeline.events, selectedDateKey);
+  const canGoForward = shiftDateKey(selectedDateKey, 7) <= todayKey;
+  const changeWeek = (offset) => {
+    const candidate = shiftDateKey(selectedDateKey, offset * 7);
+    onSelectDate(candidate > todayKey ? todayKey : candidate);
+  };
+  return (
+    <main className="viewer-page timeline-page">
+      <section className="timeline-calendar" aria-label="选择时间线日期">
+        <div className="timeline-week-controls">
+          <IconButton onClick={() => changeWeek(-1)} aria-label="查看上一周"><ChevronLeftRoundedIcon /></IconButton>
+          <div><CalendarMonthRoundedIcon /><span>{timelineDateHeading(selectedDateKey, nowMs)}</span></div>
+          <IconButton onClick={() => changeWeek(1)} disabled={!canGoForward} aria-label="查看下一周"><ChevronRightRoundedIcon /></IconButton>
+        </div>
+        <div className="timeline-weekdays">
+          {weekDays.map((day) => (
+            <button
+              type="button"
+              key={day.key}
+              className={`${day.selected ? "is-selected" : ""} ${day.today ? "is-today" : ""}`}
+              disabled={day.disabled}
+              aria-pressed={day.selected}
+              onClick={() => onSelectDate(day.key)}
+            >
+              <span>周{day.weekday}</span>
+              <b>{day.day}</b>
+              {day.today && <small>今</small>}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <aside className="timeline-session-note">
+        <LockRoundedIcon />
+        <div><b>仅显示当前房间会话</b><span>公开演示不保存跨天家庭历史；刷新或换房间后清空。</span></div>
+        <strong>{events.length} 条</strong>
+      </aside>
+
+      {events.length > 0 ? (
+        <section className="timeline-event-section">
+          <div className="timeline-section-heading"><div><h2>{timelineDateHeading(selectedDateKey, nowMs)}</h2><p>点击条目可查看来源与状态版本</p></div><span>最新在前</span></div>
+          <div className="timeline-event-list">
+            {events.map((event) => <TimelineEventCard event={event} key={event.id} />)}
+          </div>
+        </section>
+      ) : (
+        <section className="timeline-empty-state" role="status">
+          <span><EventBusyRoundedIcon /></span>
+          <h2>{selectedDateKey === todayKey ? "等待本次会话事件" : "这一天没有可用记录"}</h2>
+          <p>{selectedDateKey === todayKey
+            ? "Monitor 发布新的权威状态后，关键变化会出现在这里。"
+            : "跨天历史服务尚未接入，因此不会用演示文案填充真实时间线。"}</p>
+        </section>
+      )}
     </main>
   );
 }
@@ -528,6 +596,7 @@ function EmergencyDialog({ open, onClose, care, activeGrant, nowMs, ownsControl,
 export function ViewerApp() {
   const relay = useViewerRelay();
   const [activeTab, setActiveTab] = useState("home");
+  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => dateKeyFromTimestamp(Date.now()));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [issueError, setIssueError] = useState("");
   const [dismissedEmergency, setDismissedEmergency] = useState(null);
@@ -573,13 +642,20 @@ export function ViewerApp() {
     return result;
   };
 
-  const headerSubtitle = activeTab === "home"
-    ? relay.unavailableReason
-      ? "当前权威状态不可用 · 等待恢复"
-      : `${SCENE_COPY[sceneId].label} · ${relay.connection === "connected" ? "Relay 已连接" : "正在重连"}`
-    : activeTab === "dashboard"
-      ? "外婆 · 本次公开演示"
-      : "管理本页显示与提醒";
+  const pageHeader = (() => {
+    if (activeTab === "home") return {
+      title: "外婆家",
+      subtitle: relay.unavailableReason
+        ? "当前权威状态不可用 · 等待恢复"
+        : `${SCENE_COPY[sceneId].label} · ${relay.connection === "connected" ? "Relay 已连接" : "正在重连"}`,
+    };
+    if (activeTab === "timeline") return {
+      title: "时间线",
+      subtitle: `外婆 · ${timelineDateHeading(selectedTimelineDate, nowMs)}`,
+    };
+    if (activeTab === "dashboard") return { title: "关怀看板", subtitle: "外婆 · 本次公开演示" };
+    return { title: "设置", subtitle: "管理本页显示与提醒" };
+  })();
 
   return (
     <div className={`viewer-app ${alertEffects.flashActive ? "is-flashing" : ""}`}>
@@ -587,7 +663,7 @@ export function ViewerApp() {
       <ConnectionBanner relay={relay} grant={activeGrant} nowMs={relayNowMs} />
       <div className="viewer-shell">
         <header className="viewer-header">
-          <div><h1>{activeTab === "home" ? "外婆家" : activeTab === "dashboard" ? "关怀看板" : "设置"}</h1><p>{headerSubtitle}</p></div>
+          <div><h1>{pageHeader.title}</h1><p>{pageHeader.subtitle}</p></div>
           <IconButton className="viewer-control-trigger" onClick={() => setDrawerOpen(true)} aria-label="打开远程控制">
             <TuneRoundedIcon />
             {relay.ownsControl && <span />}
@@ -602,6 +678,14 @@ export function ViewerApp() {
         )}
 
         {activeTab === "home" && <HomePage relay={relay} snapshot={snapshot} pose={relay.pose} media={media} activeGrant={activeGrant} highPrivacyEnabled={highPrivacyEnabled} localNowMs={nowMs} relayNowMs={relayNowMs} />}
+        {activeTab === "timeline" && (
+          <TimelinePage
+            timeline={relay.timeline}
+            selectedDateKey={selectedTimelineDate}
+            onSelectDate={setSelectedTimelineDate}
+            nowMs={nowMs}
+          />
+        )}
         {activeTab === "dashboard" && <DashboardPage relay={relay} snapshot={snapshot} activeGrant={activeGrant} nowMs={relayNowMs} />}
         {activeTab === "settings" && (
           <SettingsPage
@@ -615,6 +699,7 @@ export function ViewerApp() {
 
         <BottomNavigation className="viewer-bottom-nav" showLabels value={activeTab} onChange={(_, value) => setActiveTab(value)}>
           <BottomNavigationAction label="首页" value="home" icon={<HomeRoundedIcon />} />
+          <BottomNavigationAction label="时间线" value="timeline" icon={<CalendarMonthRoundedIcon />} />
           <BottomNavigationAction label="看板" value="dashboard" icon={<FavoriteRoundedIcon />} />
           <BottomNavigationAction label="设置" value="settings" icon={<SettingsRoundedIcon />} />
         </BottomNavigation>
