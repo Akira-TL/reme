@@ -100,6 +100,7 @@ class ResponseValue(StrEnum):
     NONE = "none"
     CONSENT_GRANTED = "consent_granted"
     CONSENT_DENIED = "consent_denied"
+    ALARM_ACKNOWLEDGED = "alarm_acknowledged"
     CARD_CONFIRMED = "card_confirmed"
 
 
@@ -409,24 +410,33 @@ class InteractionResponse:
         if self.text is not None and self.source not in _TEXT_BEARING_RESPONSE_SOURCES:
             raise DecisionRecordError("text is only allowed when source is user_input or script")
         # Full response x source cross-whitelist: a timeout can only say "none",
-        # the family view can only confirm cards, and elder answers (including
-        # consent) must come from the elder's own input or an explicit script.
+        # family input can acknowledge an alarm or confirm an action card, and
+        # elder answers (including consent) must come from elder input/script/voice.
         if self.response is ResponseValue.NONE and self.source not in _NONE_RESPONSE_SOURCES:
             raise DecisionRecordError("response=none is only valid from timeout or script sources")
         if self.source is ResponseSource.TIMEOUT and self.response is not ResponseValue.NONE:
             raise DecisionRecordError("source=timeout can only carry response=none")
         if (
-            self.response is ResponseValue.CARD_CONFIRMED
+            self.response in (ResponseValue.ALARM_ACKNOWLEDGED, ResponseValue.CARD_CONFIRMED)
             and self.source is not ResponseSource.FAMILY_INPUT
         ):
-            raise DecisionRecordError("response=card_confirmed must come from family_input")
-        if (
-            self.source is ResponseSource.FAMILY_INPUT
-            and self.response is not ResponseValue.CARD_CONFIRMED
+            raise DecisionRecordError(
+                "family acknowledgements must come from family_input"
+            )
+        if self.source is ResponseSource.FAMILY_INPUT and self.response not in (
+            ResponseValue.ALARM_ACKNOWLEDGED,
+            ResponseValue.CARD_CONFIRMED,
         ):
-            raise DecisionRecordError("source=family_input can only confirm the action card")
+            raise DecisionRecordError(
+                "source=family_input can only acknowledge alarms or confirm action cards"
+            )
         if (
-            self.response not in (ResponseValue.NONE, ResponseValue.CARD_CONFIRMED)
+            self.response
+            not in (
+                ResponseValue.NONE,
+                ResponseValue.ALARM_ACKNOWLEDGED,
+                ResponseValue.CARD_CONFIRMED,
+            )
             and self.source not in _ELDER_RESPONSE_SOURCES
         ):
             raise DecisionRecordError("elder responses must come from user_input or script sources")

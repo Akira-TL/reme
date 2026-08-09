@@ -100,7 +100,7 @@ REJECT_DANGER_NOT_APPLICABLE = "danger_not_applicable"
 # Danger link: keep the elder check-in first.  Visual confirmation is not
 # accepted during the first question, otherwise C's automatic frame upload
 # turns "lying -> ask" into an immediate family alert.
-FALL_CONFIRM_CHANNELS = ("voice",)
+FALL_CONFIRM_CHANNELS = ("frame", "voice")
 
 
 @dataclass(frozen=True, slots=True)
@@ -574,9 +574,14 @@ def _on_consent_response(state: SessionState, response: InteractionResponse) -> 
 
 def _on_family_notified_response(state: SessionState, response: InteractionResponse) -> Directive:
     value = response.response
+    if value is ResponseValue.ALARM_ACKNOWLEDGED:
+        if state.escalation is not EscalationKind.FALL:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED)
     if value is ResponseValue.CARD_CONFIRMED:
-        include_card = CardStatus.CONFIRMED if state.card_draft is not None else None
-        return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=include_card)
+        if state.card_draft is None:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=CardStatus.CONFIRMED)
     if value is ResponseValue.NONE:
         skeleton = DecisionSkeleton(
             state=DecisionState.URGENT_ATTENTION,
@@ -609,9 +614,14 @@ def _on_family_notified_response(state: SessionState, response: InteractionRespo
 
 def _on_urgent_response(state: SessionState, response: InteractionResponse) -> Directive:
     value = response.response
+    if value is ResponseValue.ALARM_ACKNOWLEDGED:
+        if state.escalation is not EscalationKind.FALL:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED)
     if value is ResponseValue.CARD_CONFIRMED:
-        include_card = CardStatus.CONFIRMED if state.card_draft is not None else None
-        return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=include_card)
+        if state.card_draft is None:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=CardStatus.CONFIRMED)
     if value is ResponseValue.SAFE:
         return _resolve(state, TemplateId.LATE_SAFE_RESOLVED)
     if value in (ResponseValue.NONE, ResponseValue.NEED_HELP):

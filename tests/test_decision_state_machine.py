@@ -543,6 +543,50 @@ def test_card_confirmed_by_family_resolves_episode() -> None:
     assert directive.skeleton.template is TemplateId.RECEIPT_RESOLVED
 
 
+def test_card_confirmed_without_action_card_is_rejected() -> None:
+    directive = on_response(
+        _family_notified(escalation=EscalationKind.FALL),
+        _response(
+            ResponseValue.CARD_CONFIRMED,
+            ResponseSource.FAMILY_INPUT,
+            decision_id="decision-0003",
+        ),
+        config=_CONFIG,
+    )
+    assert directive.reject_code == REJECT_INVALID_RESPONSE
+    assert directive.skeleton is None
+
+
+def test_alarm_acknowledged_resolves_fall_family_alert() -> None:
+    directive = on_response(
+        _family_notified(escalation=EscalationKind.FALL),
+        _response(
+            ResponseValue.ALARM_ACKNOWLEDGED,
+            ResponseSource.FAMILY_INPUT,
+            decision_id="decision-0003",
+        ),
+        config=_CONFIG,
+    )
+    assert directive.skeleton is not None
+    assert directive.skeleton.state is DecisionState.RESOLVED
+    assert directive.skeleton.include_card is None
+    assert directive.skeleton.template is TemplateId.RECEIPT_RESOLVED
+
+
+def test_alarm_acknowledged_is_rejected_for_non_alarm_family_notification() -> None:
+    directive = on_response(
+        _family_notified(escalation=EscalationKind.CONCERN),
+        _response(
+            ResponseValue.ALARM_ACKNOWLEDGED,
+            ResponseSource.FAMILY_INPUT,
+            decision_id="decision-0003",
+        ),
+        config=_CONFIG,
+    )
+    assert directive.reject_code == REJECT_INVALID_RESPONSE
+    assert directive.skeleton is None
+
+
 def test_late_safe_after_family_alert_resolves_with_dedicated_template() -> None:
     directive = on_response(
         _family_notified(),

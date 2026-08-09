@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-02
-- Owner: B（决策层）
+- Owner: Runtime / Decision
 - Depends on: ADR-0005（询问先行·规则升级·不可取消）、ADR-0003（最小视觉上下文）
 
 ## 背景与定调
@@ -22,7 +22,7 @@ B 有两条主线：生活线与危险时期线。用户定调**先做危险时�
 
 **任一路判定危险即刻升级**——竞速在服务锁内自然裁决：后到的确认发现事件已升级/已关闭，丢弃并审计，绝不二次告警、绝不撤销。
 
-**家属端告警通道**：源于跌倒的家属告警决策带 `alarm` 可空字段 `{channels: [vibrate, ring, flash], trigger}`，C 家属端按能力渲染（震动循环/响铃/爆闪）。`trigger` 枚举记录触发路（elder_report/voice_intent/visual_confirm/check_in_timeout/unclear_response/family_unresponsive），审计与叙事同源。
+**家属端告警通道**：源于跌倒的家属告警决策带 `alarm` 可空字段 `{channels: [vibrate, ring, flash], trigger}`，家属端按能力渲染（震动循环/响铃/爆闪）。`trigger` 枚举记录触发路（elder_report/voice_intent/visual_confirm/check_in_timeout/unclear_response/family_unresponsive），审计与叙事同源。家属确认告警使用独立 `alarm_acknowledged` 语义；`card_confirmed` 仅用于真实存在的待确认行动卡。
 
 ## 边界（继承 ADR-0005，一条不破）
 

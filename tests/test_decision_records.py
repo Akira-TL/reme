@@ -170,6 +170,19 @@ def test_interaction_response_rejects_card_confirmed_from_user_input() -> None:
         _response(response=ResponseValue.CARD_CONFIRMED, source=ResponseSource.USER_INPUT)
 
 
+def test_interaction_response_accepts_alarm_acknowledged_from_family_input() -> None:
+    response = _response(
+        response=ResponseValue.ALARM_ACKNOWLEDGED,
+        source=ResponseSource.FAMILY_INPUT,
+    )
+    assert parse_interaction_response(response.to_payload()) == response
+
+
+def test_interaction_response_rejects_alarm_acknowledged_from_user_input() -> None:
+    with pytest.raises(DecisionRecordError, match="family_input"):
+        _response(response=ResponseValue.ALARM_ACKNOWLEDGED, source=ResponseSource.USER_INPUT)
+
+
 def test_parse_care_decision_rejects_unknown_field() -> None:
     payload = _decision().to_payload()
     payload["surprise"] = 1

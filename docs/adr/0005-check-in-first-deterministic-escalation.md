@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-01
-- Owner: B (decision layer)
+- Owner: Runtime / Decision
 - Related: ADR-0003 (minimal visual context), `.scratch/abc-interface/spec.md` sections 10-11,
   `.scratch/handoff/2026-08-01-spec-crosscheck.md` section 8.2
 
@@ -24,10 +24,12 @@ Three invariants, in order:
 1. **Check-in first.** A high-confidence fall-like transition produces a
    rule-sourced check-in decision immediately, with a mandatory
    `response_timeout_ms` countdown. MiMo is not consulted on this path.
-2. **Deterministic escalation.** When the countdown expires and C submits
-   `response = none / source = timeout`, the rules emit
+2. **Deterministic escalation.** The decision runtime owns the interaction
+   deadline. When it expires without a valid response, the runtime internally
+   applies the same `response = none / source = timeout` transition and emits
    `family_notification_required` (and `urgent_attention` after a second
-   timeout) with `source = rule`, without waiting for any in-flight MiMo call.
+   timeout) with `source = rule`, without waiting for a browser timer or any
+   in-flight MiMo call.
 3. **No model cancellation.** A MiMo result that arrives after a rule
    escalation is discarded. MiMo output can never lower, cancel, or delay an
    escalation; it may only contribute wording on non-escalation paths.
