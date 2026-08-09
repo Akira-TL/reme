@@ -977,6 +977,9 @@ describe("public dual-device relay", () => {
       makeFamilyEvent("runtime-family", 1, "decision-family"),
     );
     expect(published).toMatchObject({ ok: true, revision: 1 });
+    const preMonitorRoom = published.room_session_id;
+    const claim = await claimMonitor();
+    expect(claim.room_session_id).not.toBe(preMonitorRoom);
 
     const viewer = await connectViewerV2();
     await nextType(viewer, "viewer_ready");
@@ -990,7 +993,7 @@ describe("public dual-device relay", () => {
         state: "family_notification_required",
       },
     });
-    expect(field(event, "room_session_id")).toMatch(/^room-/);
+    expect(field(event, "room_session_id")).toBe(claim.room_session_id);
 
     await expect(roomStub().publishFamilyEvent(
       makeFamilyEvent("runtime-family", 1, "decision-stale"),

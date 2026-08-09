@@ -226,12 +226,22 @@ export class DemoRoom extends DurableObject<Env> {
       };
     }
 
-    this.failPendingCommands(nowMs, "monitor_reconnected");
-    this.revokeActiveGrants(nowMs, "monitor_reconnected", "revoked");
-    this.closeMonitorSockets(1012, "monitor_reconnected");
+    this.failPendingCommands(nowMs, "room_session_replaced");
+    this.revokeActiveGrants(nowMs, "room_session_replaced", "revoked");
+    this.closeMonitorSockets(1012, "room_session_replaced");
 
-    const roomSessionId = this.ensureRoom(nowMs).room_session_id;
+    const roomSessionId = `room-${crypto.randomUUID()}`;
     const expiresAtMs = nowMs + LEASE_TTL_MS;
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO room (singleton, room_session_id, created_at_ms)
+       VALUES (1, ?, ?)`,
+      roomSessionId,
+      nowMs,
+    );
+    this.ctx.storage.sql.exec(
+      `UPDATE latest_family_event SET room_session_id = ? WHERE singleton = 1`,
+      roomSessionId,
+    );
     this.ctx.storage.sql.exec(
       `INSERT OR REPLACE INTO producer_lease
          (singleton, token_hash, room_session_id, expires_at_ms, socket_id)
