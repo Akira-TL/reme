@@ -54,7 +54,7 @@ afterEach(async () => {
 });
 
 describe("public dual-device relay", () => {
-  it("accepts an exact v3 CareDecision and rejects invented provenance", () => {
+  it("accepts an exact v4 CareDecision and rejects invented provenance", () => {
     const claim = { room_session_id: "room-assessment" } as Claim;
     const state = makeState(claim, 1, {
       care: {
@@ -217,7 +217,7 @@ describe("public dual-device relay", () => {
     const viewerB = await connectViewerAndReady();
     monitor.send(JSON.stringify(makeState(claim, 1)));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewerA, "reme-demo-state/v3");
+    await nextSchema(viewerA, "reme-demo-state/v4");
     await claimControl(viewerA, claim.room_session_id);
 
     const pending = makeCommand(claim, 1, 1, "cmd-monitor-revoke");
@@ -266,7 +266,7 @@ describe("public dual-device relay", () => {
     const observer = await connectViewerAndReady();
     monitor.send(JSON.stringify(makeState(claim, 1)));
     await nextType(monitor, "state_accepted");
-    await nextSchema(controller, "reme-demo-state/v3");
+    await nextSchema(controller, "reme-demo-state/v4");
     const firstLeaseId = await claimControl(controller, claim.room_session_id);
 
     const releasedCommand = makeCommand(claim, 1, 1, "cmd-controller-release");
@@ -329,10 +329,10 @@ describe("public dual-device relay", () => {
     const viewer = await connectViewerAndReady();
     const state = makeState(claim, 1);
     monitor.send(JSON.stringify(state));
-    await expect(nextSchema(viewer, "reme-demo-state/v3")).resolves.toEqual(state);
+    await expect(nextSchema(viewer, "reme-demo-state/v4")).resolves.toEqual(state);
     await expect(nextType(monitor, "state_accepted")).resolves.toMatchObject({ state_revision: 1 });
     monitor.send(JSON.stringify(state));
-    await expect(nextSchema(viewer, "reme-demo-state/v3")).resolves.toEqual(state);
+    await expect(nextSchema(viewer, "reme-demo-state/v4")).resolves.toEqual(state);
     await expect(nextType(monitor, "state_accepted")).resolves.toMatchObject({ state_revision: 1 });
     monitor.send(JSON.stringify({ ...state, timestamp_ms: state.timestamp_ms + 1 }));
     await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({
@@ -347,7 +347,7 @@ describe("public dual-device relay", () => {
     await expect(nextType(monitor, "pose_accepted")).resolves.toMatchObject({ frame_sequence: 1 });
 
     const late = await connectViewerAndReady();
-    await expect(nextSchema(late, "reme-demo-state/v3")).resolves.toEqual(state);
+    await expect(nextSchema(late, "reme-demo-state/v4")).resolves.toEqual(state);
     await expect(nextSchema(late, "reme-pose-frame-17/v1")).resolves.toEqual(pose);
 
     monitor.send(JSON.stringify({ ...makeState(claim, 2), image: "data:image/jpeg;base64,AA==" }));
@@ -364,16 +364,16 @@ describe("public dual-device relay", () => {
 
     const previous = makeState(claim, 7, { runtimeSession: "runtime-before-refresh" });
     monitor.send(JSON.stringify(previous));
-    await expect(nextSchema(viewer, "reme-demo-state/v3")).resolves.toEqual(previous);
+    await expect(nextSchema(viewer, "reme-demo-state/v4")).resolves.toEqual(previous);
     await expect(nextType(monitor, "state_accepted")).resolves.toMatchObject({ state_revision: 7 });
 
     const refreshed = makeState(claim, 0, { runtimeSession: "runtime-after-refresh" });
     monitor.send(JSON.stringify(refreshed));
-    await expect(nextSchema(viewer, "reme-demo-state/v3")).resolves.toEqual(refreshed);
+    await expect(nextSchema(viewer, "reme-demo-state/v4")).resolves.toEqual(refreshed);
     await expect(nextType(monitor, "state_accepted")).resolves.toMatchObject({ state_revision: 0 });
 
     const lateViewer = await connectViewerAndReady();
-    await expect(nextSchema(lateViewer, "reme-demo-state/v3")).resolves.toEqual(refreshed);
+    await expect(nextSchema(lateViewer, "reme-demo-state/v4")).resolves.toEqual(refreshed);
   });
 
   it("forwards exact commands, enforces revision and sequence, and replays idempotent ACKs", async () => {
@@ -384,7 +384,7 @@ describe("public dual-device relay", () => {
     const state = makeState(claim, 4);
     monitor.send(JSON.stringify(state));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     const leaseId = await claimControl(viewer, claim.room_session_id);
     expect(leaseId).toMatch(/^lease-/);
 
@@ -415,7 +415,7 @@ describe("public dual-device relay", () => {
     const state5 = makeState(claim, 5);
     monitor.send(JSON.stringify(state5));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     const applied: ControlAck = {
       type: "control_ack",
       room_session_id: claim.room_session_id,
@@ -454,7 +454,7 @@ describe("public dual-device relay", () => {
     const viewer = await connectViewerAndReady();
     monitor.send(JSON.stringify(makeState(claim, 1)));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
 
     const unauthorized = makeCommand(claim, 1, 1, "cmd-before-lease");
     viewer.send(JSON.stringify(unauthorized));
@@ -490,7 +490,7 @@ describe("public dual-device relay", () => {
     });
     monitor.send(JSON.stringify(emergency));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     await claimControl(viewer, claim.room_session_id);
 
     const command = {
@@ -512,15 +512,16 @@ describe("public dual-device relay", () => {
     const statusOnly = makeState(claim, 1, {
       scene: "fall",
       care: {
-        phase: "emergency",
+        phase: "attention",
         decision: "decision-status-only",
         consent: "none",
         authoritative: false,
+        delivery: "notification",
       },
     });
     monitor.send(JSON.stringify(statusOnly));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
 
     monitor.send(JSON.stringify({
       type: "media_grant_request",
@@ -562,10 +563,11 @@ describe("public dual-device relay", () => {
     const cardState = makeState(claim, 1, {
       scene: "living",
       care: {
-        phase: "emergency",
+        phase: "attention",
         decision: "decision-card",
         consent: "granted",
         authoritative: false,
+        delivery: "action_card",
       },
     });
     if (cardState.state.care.decision === null) throw new Error("decision fixture missing");
@@ -579,7 +581,7 @@ describe("public dual-device relay", () => {
     };
     monitor.send(JSON.stringify(cardState));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     await claimControl(viewer, claim.room_session_id);
 
     const command = {
@@ -599,15 +601,16 @@ describe("public dual-device relay", () => {
     const notificationState = makeState(claim, 1, {
       scene: "living",
       care: {
-        phase: "emergency",
+        phase: "attention",
         decision: "decision-notification",
         consent: "none",
         authoritative: false,
+        delivery: "notification",
       },
     });
     monitor.send(JSON.stringify(notificationState));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     await claimControl(viewer, claim.room_session_id);
 
     const command = {
@@ -630,7 +633,7 @@ describe("public dual-device relay", () => {
     const state = makeState(claim, 1);
     monitor.send(JSON.stringify(state));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     await claimControl(viewer, claim.room_session_id);
     const command = makeCommand(claim, 1, 1, "cmd-pending-loss");
     viewer.send(JSON.stringify(command));
@@ -652,7 +655,7 @@ describe("public dual-device relay", () => {
     const viewer = await connectViewerAndReady();
     monitor.send(JSON.stringify(makeState(claim, 1)));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     await claimControl(viewer, claim.room_session_id);
     const command = {
       ...makeCommand(claim, 1, 1, "cmd-alarm-expiry"),
@@ -683,7 +686,7 @@ describe("public dual-device relay", () => {
     });
     monitor.send(JSON.stringify(bathroom));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewerA, "reme-demo-state/v3");
+    await nextSchema(viewerA, "reme-demo-state/v4");
     monitor.send(JSON.stringify({
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
@@ -707,7 +710,7 @@ describe("public dual-device relay", () => {
     });
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewerA, "reme-demo-state/v3");
+    await nextSchema(viewerA, "reme-demo-state/v4");
     monitor.send(JSON.stringify({
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
@@ -724,7 +727,7 @@ describe("public dual-device relay", () => {
     const grantId = stringField(objectField(grantA, "grant"), "grant_id");
 
     const late = await connectViewerAndReady();
-    await nextSchema(late, "reme-demo-state/v3");
+    await nextSchema(late, "reme-demo-state/v4");
     await expect(nextWhere(late, (value) => typeOf(value) === "media_grant"
       && stringField(objectField(value, "grant"), "grant_id") === grantId)).resolves.toMatchObject({
         grant: { status: "active" },
@@ -749,7 +752,7 @@ describe("public dual-device relay", () => {
     });
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     monitor.send(JSON.stringify({
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
@@ -813,7 +816,7 @@ describe("public dual-device relay", () => {
     });
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     const request = {
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
@@ -867,7 +870,7 @@ describe("public dual-device relay", () => {
     });
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     const request = {
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
@@ -920,7 +923,7 @@ describe("public dual-device relay", () => {
     });
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     const leaseId = await claimControl(viewer, claim.room_session_id);
     const request = {
       type: "media_grant_request",
@@ -968,7 +971,7 @@ describe("public dual-device relay", () => {
 
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     monitor.send(JSON.stringify(request));
     const resumedGrant = await nextWhere(viewer, (value) => typeOf(value) === "media_grant"
       && field(objectField(value, "grant"), "status") === "active");
@@ -1000,7 +1003,7 @@ describe("public dual-device relay", () => {
     });
     monitor.send(JSON.stringify(fall));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     monitor.send(JSON.stringify({
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
@@ -1025,7 +1028,7 @@ describe("public dual-device relay", () => {
     const late = await connectViewerAndReady();
     const lateReady = await latestQueuedType(late, "viewer_ready");
     const lateViewerId = stringField(lateReady, "viewer_id");
-    const lateState = await nextSchema(late, "reme-demo-state/v3");
+    const lateState = await nextSchema(late, "reme-demo-state/v4");
     expect(field(objectField(objectField(lateState, "state"), "media_grant"), "grant_id"))
       .toBe(grantId);
     await expect(nextWhere(late, (value) => typeOf(value) === "media_grant"
@@ -1073,7 +1076,7 @@ describe("public dual-device relay", () => {
     });
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
-    await nextSchema(viewer, "reme-demo-state/v3");
+    await nextSchema(viewer, "reme-demo-state/v4");
     monitor.send(JSON.stringify({
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
@@ -1191,10 +1194,11 @@ function makeState(
     runtimeSession?: string;
     sourceGeneration?: number;
     care?: {
-      phase: "idle" | "checking" | "emergency" | "resolved";
+      phase: "idle" | "checking" | "attention" | "emergency" | "resolved";
       decision: string | null;
       consent: "none" | "pending" | "granted" | "denied";
       authoritative: boolean;
+      delivery?: CareDecision["family_delivery"];
     };
   } = {},
 ): DemoStateEnvelope {
@@ -1205,33 +1209,41 @@ function makeState(
     authoritative: false,
   };
   const scene = options.scene ?? "living";
+  const familyDelivery: CareDecision["family_delivery"] = care.authoritative
+    ? "alarm"
+    : care.delivery ?? "none";
   const decisionState: CareDecision["state"] = care.phase === "checking"
     ? care.consent === "pending" ? "consent_required" : "check_in_required"
-    : care.phase === "emergency"
+    : care.phase === "attention" || care.phase === "emergency"
       ? "family_notification_required"
       : care.phase === "resolved"
         ? "resolved"
         : "observe";
   const needDialogue = care.phase === "checking";
   const decision = care.decision === null ? null : {
-    schema_version: "reme-care-decision/v0-experiment" as const,
+    schema_version: "reme-care-decision/v1-experiment" as const,
     scene_id: scene,
     decision_id: care.decision,
     timestamp_ms: Date.now(),
     state: decisionState,
-    risk_level: care.consent === "pending" ? 2 : care.phase === "emergency" ? 3 : 1,
+    risk_level: care.consent === "pending" || familyDelivery === "action_card"
+      ? 2
+      : familyDelivery === "alarm" ? 3 : 1,
     privacy_mode: "skeleton_only" as const,
     need_dialogue: needDialogue,
     dialogue_goal: needDialogue ? "understand_need" : null,
     elder_message: needDialogue ? "演示状态" : null,
-    family_notification: care.phase === "emergency" ? "演示状态" : null,
+    family_notification: familyDelivery === "none" ? null : "演示状态",
     action: care.phase === "checking"
       ? "ask_elder" as const
-      : care.phase === "emergency"
-        ? "notify_family" as const
+      : familyDelivery === "alarm"
+        ? "show_urgent_attention" as const
+        : familyDelivery === "action_card" || familyDelivery === "notification"
+          ? "notify_family" as const
         : care.phase === "resolved"
           ? "mark_resolved" as const
           : "observe" as const,
+    family_delivery: familyDelivery,
     reason_summary: "演示状态",
     uncertainty: "low" as const,
     fallback_used: false,
@@ -1240,16 +1252,23 @@ function makeState(
     consent_required: care.consent === "pending",
     response_timeout_ms: needDialogue ? 8_000 : null,
     response_deadline_ms: needDialogue ? 1_008_000 : null,
-    action_card: null,
+    action_card: familyDelivery === "action_card" ? {
+      event: "需要家属协助",
+      elder_quote: "请帮我处理一下。",
+      system_judgment: "本人表达了具体生活需要",
+      suggested_action: "今天联系本人",
+      time_window: "今天",
+      status: "pending" as const,
+    } : null,
     visual_context: null,
-    alarm: care.authoritative
+    alarm: familyDelivery === "alarm"
       ? { channels: ["vibrate", "ring", "flash"] as Array<"vibrate" | "ring" | "flash">, trigger: "visual_confirm" as const }
       : null,
     voice_asset: null,
     confirm_channels: needDialogue ? ["frame", "voice"] as Array<"frame" | "voice"> : null,
   };
   return {
-    schema_version: "reme-demo-state/v3",
+    schema_version: "reme-demo-state/v4",
     room_session_id: claim.room_session_id,
     runtime_session_id: options.runtimeSession ?? "runtime-current",
     state_revision: revision,

@@ -53,7 +53,8 @@ function mergeAck(acks, nextAck) {
 }
 
 function hasAlarmSnapshot(snapshot) {
-  return Boolean(snapshot?.state?.care?.decision?.alarm);
+  const decision = snapshot?.state?.care?.decision;
+  return Boolean(decision?.family_delivery === "alarm" && decision?.alarm);
 }
 
 function unavailableState(state, reason) {
@@ -339,6 +340,7 @@ export function selectActiveMediaGrant(
       : null;
   }
   return grant.scope === "fall_emergency"
+    && decision.family_delivery === "alarm"
     && decision.alarm !== null
     ? grant
     : null;

@@ -31,32 +31,40 @@ function careDecision({
   careMessage,
   assessment,
   alarm,
+  delivery = "none",
   timestampMs,
 }) {
   if (!decisionId) return null;
   const state = care === "checking"
     ? "check_in_required"
-    : care === "emergency"
+    : ["notification", "action_card", "alarm"].includes(delivery)
       ? "family_notification_required"
       : care === "resolved"
         ? "resolved"
         : "observe";
-  const action = assessment?.action || (care === "checking" ? "ask_elder" : "observe");
+  const action = delivery === "alarm"
+    ? "show_urgent_attention"
+    : ["notification", "action_card"].includes(delivery)
+      ? "notify_family"
+      : assessment?.action || (care === "checking" ? "ask_elder" : "observe");
   const needDialogue = action === "ask_elder";
   return {
-    schema_version: "reme-care-decision/v0-experiment",
+    schema_version: "reme-care-decision/v1-experiment",
     scene_id: scene,
     decision_id: decisionId,
     timestamp_ms: timestampMs,
     state,
-    risk_level: care === "emergency" ? 3 : 1,
+    risk_level: delivery === "alarm" ? 3 : delivery === "action_card" ? 2 : 1,
     privacy_mode: "skeleton_only",
     need_dialogue: needDialogue,
     dialogue_goal: needDialogue ? "understand_need" : null,
     elder_message: needDialogue ? careMessage || "奶奶，您还好吗？" : null,
-    family_notification: assessment?.verdict || (care === "emergency" ? careMessage : null),
+    family_notification: delivery === "none"
+      ? null
+      : careMessage || assessment?.verdict || "请家人查看最新关怀信息。",
     action,
-    reason_summary: assessment?.basis || careMessage || "当前关怀状态已更新。",
+    family_delivery: delivery,
+    reason_summary: assessment?.verdict || assessment?.basis || careMessage || "当前关怀状态已更新。",
     uncertainty: assessment?.uncertainty || "unknown",
     fallback_used: false,
     source: assessment?.source || "rule",
@@ -64,7 +72,7 @@ function careDecision({
     consent_required: false,
     response_timeout_ms: null,
     response_deadline_ms: null,
-    action_card: assessment ? {
+    action_card: delivery === "action_card" ? {
       event: assessment.verdict,
       elder_quote: "暂无本人补充",
       system_judgment: assessment.basis,
@@ -77,7 +85,7 @@ function careDecision({
       start_ms: null,
       end_ms: null,
     } : null,
-    alarm,
+    alarm: delivery === "alarm" ? alarm : null,
     voice_asset: null,
     confirm_channels: null,
   };
@@ -98,6 +106,7 @@ function snapshot({
   careMessage = null,
   assessment = null,
   alarm = null,
+  delivery = alarm ? "alarm" : "none",
   grant = null,
 } = {}) {
   const decision = careDecision({
@@ -107,10 +116,11 @@ function snapshot({
     careMessage,
     assessment,
     alarm,
+    delivery,
     timestampMs,
   });
   return {
-    schema_version: "reme-demo-state/v3",
+    schema_version: "reme-demo-state/v4",
     room_session_id: room,
     runtime_session_id: "runtime-1",
     state_revision: revision,
@@ -171,7 +181,7 @@ test("an authoritative assessment becomes a family-facing care judgment", () => 
   }));
 
   assert.equal(state.events.length, 1);
-  assert.equal(state.events[0].kind, "assessment");
+  assert.equal(state.events[0].kind, "judgment");
   assert.equal(state.events[0].label, "MiMo 关怀判断");
   assert.equal(state.events[0].statusLabel, "等待回应");
   assert.match(state.events[0].title, /建议先问候/);
@@ -183,6 +193,43 @@ test("an authoritative assessment becomes a family-facing care judgment", () => 
   });
   assert.equal(state.events[0].captureLabel, "采集未开始");
   assert.equal(state.events[0].runtimeLabel, "本地运行时降级");
+});
+
+test("judgment, action card and alarm remain three distinct timeline products", () => {
+  let state = observe(createFamilyTimelineState(), snapshot({
+    revision: 1,
+    decisionId: "decision-judgment",
+    assessment: careAssessment(),
+  }));
+  state = observe(state, snapshot({
+    revision: 2,
+    timestampMs: 2_000,
+    care: "attention",
+    decisionId: "decision-card",
+    delivery: "action_card",
+    assessment: careAssessment({ verdict: "牙齿不舒服，需要家属协助" }),
+  }));
+  state = observe(state, snapshot({
+    revision: 3,
+    timestampMs: 3_000,
+    scene: "fall",
+    care: "emergency",
+    decisionId: "decision-alarm",
+    careMessage: "检测到确定性安全风险，请立即联系本人。",
+    delivery: "alarm",
+    alarm: { channels: ["ring", "flash"], trigger: "visual_confirm" },
+  }));
+
+  assert.deepEqual(state.events.map((event) => event.kind), [
+    "alarm",
+    "action_card",
+    "judgment",
+  ]);
+  assert.equal(state.events[0].label, "安全告警");
+  assert.equal(state.events[0].tone, "danger");
+  assert.equal(state.events[1].label, "家属行动卡");
+  assert.equal(state.events[1].actionCard.event, "牙齿不舒服，需要家属协助");
+  assert.equal(state.events[2].label, "MiMo 关怀判断");
 });
 
 test("keepalives and system-only changes do not become household judgments", () => {
@@ -242,7 +289,7 @@ test("assessment, authorization and privacy results keep care-first priority", (
 
   assert.deepEqual(
     state.events.map((event) => event.kind),
-    ["assessment", "consent", "media"],
+    ["judgment", "consent", "media"],
   );
   assert.equal(state.events.some((event) => event.kind === "scene"), false);
   assert.equal(state.events.some((event) => event.kind === "capture"), false);
@@ -258,7 +305,7 @@ test("Family derives a sourced assessment from the current CareDecision", () => 
     careMessage: "奶奶，您还好吗？",
   }));
 
-  assert.equal(state.events[0].kind, "assessment");
+  assert.equal(state.events[0].kind, "judgment");
   assert.equal(state.events[0].label, "安全规则判断");
   assert.doesNotMatch(state.events[0].title, /MiMo/);
   assert.equal(state.events[0].assessmentSource, "rule");

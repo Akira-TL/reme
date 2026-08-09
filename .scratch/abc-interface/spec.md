@@ -30,7 +30,9 @@ C 采集实时摄像头与音频
 → C 按同一接口稳定展示
 ```
 
-具体比赛视频内容、剧情和录制计划后续单独讨论，不进入当前核心接口。牙疼、授权、行动卡、家属确认等故事字段不属于本版合同。
+具体比赛视频内容、剧情和录制计划不进入核心接口。合同只定义通用的授权、
+行动卡与家属确认语义；“牙疼”是可替换的脚本/用户原话示例，不是协议字段、
+检测能力或安全告警条件。
 
 ## 2. 模块职责
 
@@ -390,7 +392,7 @@ SceneManifest 只用于 `recorded_video`，不用于实时摄像头会话。
 
 ```json
 {
-  "schema_version": "reme-care-decision/v0-experiment",
+  "schema_version": "reme-care-decision/v1-experiment",
   "scene_id": "live-camera-001",
   "decision_id": "decision-0007",
   "timestamp_ms": 12800.0,
@@ -401,20 +403,27 @@ SceneManifest 只用于 `recorded_video`，不用于实时摄像头会话。
   "dialogue_goal": "confirm_safety",
   "elder_message": "您还好吗？需要我帮您联系家人吗？",
   "family_notification": null,
-  "response_timeout_ms": 8000,
-  "response_deadline_ms": 1786276808000,
   "action": "ask_elder",
+  "family_delivery": "none",
   "reason_summary": "检测到异常动作变化，建议确认安全状态。",
   "uncertainty": "medium",
   "fallback_used": false,
   "source": "mimo",
+  "demo_mode": "live",
+  "consent_required": false,
+  "response_timeout_ms": 8000,
+  "response_deadline_ms": 1786276808000,
+  "action_card": null,
   "visual_context": {
     "sent_to_mimo": true,
     "type": "keyframes",
     "start_ms": 11100.0,
     "end_ms": 12700.0,
     "sample_count": 3
-  }
+  },
+  "alarm": null,
+  "voice_asset": null,
+  "confirm_channels": ["frame", "voice"]
 }
 ```
 
@@ -451,6 +460,15 @@ show_urgent_attention
 mark_resolved
 ```
 
+`family_delivery`（B 对家属侧产品形态的唯一判别字段）：
+
+```text
+none
+notification
+action_card
+alarm
+```
+
 `source`：
 
 ```text
@@ -463,6 +481,11 @@ degraded
 约束：
 
 - B 的状态机持续实时运行，但 MiMo 只在事件触发时调用，不持续逐帧调用；
+- `family_delivery=none` 表示 CareDecision 仅作为关怀判词/过程状态展示，不能触发家属通知、行动卡或告警副作用；
+- `family_delivery=notification` 是普通消息，不包含行动卡，也不产生声、光、振动、紧急弹窗或跌倒原画授权；
+- `family_delivery=action_card` 只承载本人表达的具体非紧急需要，并要求非空 `action_card`；pending 卡固定 `risk_level=2`，且与 `alarm` 互斥；
+- `family_delivery=alarm` 要求非空 `alarm`、`risk_level>=3` 和家属文案；只有这一形态可驱动告警通道及紧急媒体授权；
+- C 和 Relay 只能透传与展示 `family_delivery`，不得根据 `state`、`risk_level` 或文案重新判断产品形态；
 - 正常稳定状态不调用 MiMo；
 - 姿态变化先经过确定性规则，再决定是否调用 MiMo；
 - 视觉上下文只在确有必要时显式抽取最小关键帧或短片段；
@@ -649,7 +672,7 @@ A侧当前实验URL已在`2026-08-02-a-runtime-frontend-interface.md`中冻结�
 
 - 比赛最终录制几个视频；
 - 每个视频的故事内容；
-- 牙疼、授权、行动卡等产品叙事；
+- 最终使用牙疼还是其他具体生活需要作为行动卡叙事；通用授权与行动卡语义已由 ADR-0009 冻结；
 - 最终姿态模型类型和准确率；
 - Conv1D窗口和阈值；
 - Structured或Visual哪条是MiMo主路径；

@@ -7,11 +7,16 @@ from threading import Event
 from typing import Any
 
 from reme.runtime.decision.records import (
+    ActionCard,
+    AlarmSignal,
+    AlarmTrigger,
+    CardStatus,
     CareDecision,
     DecisionAction,
     DecisionSource,
     DecisionState,
     DemoMode,
+    FamilyDelivery,
     PrivacyMode,
     Uncertainty,
 )
@@ -38,6 +43,7 @@ def _decision(**overrides: Any) -> CareDecision:
         "elder_message": "您还好吗？需要我帮您联系家人吗？",
         "family_notification": None,
         "action": DecisionAction.ASK_ELDER,
+        "family_delivery": FamilyDelivery.NONE,
         "reason_summary": "内部原因不得出域",
         "uncertainty": Uncertainty.MEDIUM,
         "fallback_used": False,
@@ -49,18 +55,29 @@ def _decision(**overrides: Any) -> CareDecision:
     return CareDecision(**fields)
 
 
+def _alarm_decision(**overrides: Any) -> CareDecision:
+    fields: dict[str, Any] = {
+        "state": DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+        "risk_level": 3,
+        "need_dialogue": False,
+        "dialogue_goal": None,
+        "elder_message": None,
+        "family_notification": "内部家属通知文案不得直接出域",
+        "action": DecisionAction.NOTIFY_FAMILY,
+        "family_delivery": FamilyDelivery.ALARM,
+        "alarm": AlarmSignal(
+            channels=("vibrate", "ring", "flash"),
+            trigger=AlarmTrigger.CHECK_IN_TIMEOUT,
+        ),
+        "response_timeout_ms": None,
+    }
+    fields.update(overrides)
+    return _decision(**fields)
+
+
 def test_family_alert_projects_to_exact_minimal_emergency_payload() -> None:
     occurred_at = datetime(2026, 8, 7, 11, 39, tzinfo=UTC)
-    decision = _decision(
-        state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
-        risk_level=3,
-        need_dialogue=False,
-        dialogue_goal=None,
-        elder_message=None,
-        family_notification="内部家属通知文案不得直接出域",
-        action=DecisionAction.NOTIFY_FAMILY,
-        response_timeout_ms=None,
-    )
+    decision = _alarm_decision()
 
     event = emergency_event_from_decision(decision, occurred_at=occurred_at)
 
@@ -83,14 +100,10 @@ def test_family_alert_projects_to_exact_minimal_emergency_payload() -> None:
 
 
 def test_urgent_attention_projects_to_critical_emergency() -> None:
-    decision = _decision(
+    decision = _alarm_decision(
         state=DecisionState.URGENT_ATTENTION,
         risk_level=4,
-        need_dialogue=False,
-        dialogue_goal=None,
-        elder_message=None,
         action=DecisionAction.SHOW_URGENT_ATTENTION,
-        response_timeout_ms=None,
     )
 
     event = emergency_event_from_decision(
@@ -105,14 +118,10 @@ def test_urgent_attention_projects_to_critical_emergency() -> None:
 
 
 def test_event_id_is_stable_for_retries_and_distinct_across_scenes() -> None:
-    decision = _decision(
+    decision = _alarm_decision(
         state=DecisionState.URGENT_ATTENTION,
         risk_level=4,
-        need_dialogue=False,
-        dialogue_goal=None,
-        elder_message=None,
         action=DecisionAction.SHOW_URGENT_ATTENTION,
-        response_timeout_ms=None,
     )
     first = emergency_event_from_decision(
         decision, occurred_at=datetime(2026, 8, 7, 11, 40, tzinfo=UTC)
@@ -121,15 +130,11 @@ def test_event_id_is_stable_for_retries_and_distinct_across_scenes() -> None:
         decision, occurred_at=datetime(2026, 8, 7, 11, 41, tzinfo=UTC)
     )
     other_scene = emergency_event_from_decision(
-        _decision(
+        _alarm_decision(
             scene_id="kitchen",
             state=DecisionState.URGENT_ATTENTION,
             risk_level=4,
-            need_dialogue=False,
-            dialogue_goal=None,
-            elder_message=None,
             action=DecisionAction.SHOW_URGENT_ATTENTION,
-            response_timeout_ms=None,
         ),
         occurred_at=datetime(2026, 8, 7, 11, 40, tzinfo=UTC),
     )
@@ -194,15 +199,45 @@ class _FailingTransport:
 
 
 def _urgent_decision() -> CareDecision:
-    return _decision(
+    return _alarm_decision(
         state=DecisionState.URGENT_ATTENTION,
         risk_level=4,
+        action=DecisionAction.SHOW_URGENT_ATTENTION,
+    )
+
+
+def test_action_card_and_plain_notification_never_project_as_emergencies() -> None:
+    occurred_at = datetime(2026, 8, 7, 11, 41, tzinfo=UTC)
+    card = _decision(
+        state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+        risk_level=2,
+        family_notification="老人已同意告知家人，请查看行动卡。",
+        action=DecisionAction.NOTIFY_FAMILY,
+        family_delivery=FamilyDelivery.ACTION_CARD,
+        action_card=ActionCard(
+            event="老人主诉牙齿不适",
+            elder_quote="牙疼，饭咬不动。",
+            system_judgment="具体需求已确认，非紧急",
+            suggested_action="联系老人并协助预约口腔门诊",
+            time_window="3 天内",
+            status=CardStatus.PENDING,
+        ),
+        response_timeout_ms=None,
+    )
+    notification = _decision(
+        state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+        risk_level=3,
         need_dialogue=False,
         dialogue_goal=None,
         elder_message=None,
-        action=DecisionAction.SHOW_URGENT_ATTENTION,
+        family_notification="一次普通关怀通知。",
+        action=DecisionAction.NOTIFY_FAMILY,
+        family_delivery=FamilyDelivery.NOTIFICATION,
         response_timeout_ms=None,
     )
+
+    assert emergency_event_from_decision(card, occurred_at=occurred_at) is None
+    assert emergency_event_from_decision(notification, occurred_at=occurred_at) is None
 
 
 def test_emergency_publisher_is_non_blocking_and_deduplicates_decisions() -> None:

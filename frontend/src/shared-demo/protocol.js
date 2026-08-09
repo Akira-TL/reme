@@ -1,10 +1,10 @@
 import {
   isCareDecision,
-  mapDecisionStateToPhase,
+  mapCareDecisionToPhase,
 } from "./careDecision.js";
 
 export const VIEWER_PROTOCOL = "reme-viewer-v1";
-export const DEMO_STATE_SCHEMA = "reme-demo-state/v3";
+export const DEMO_STATE_SCHEMA = "reme-demo-state/v4";
 export const CONTROL_COMMAND_SCHEMA = "reme-control-command/v1";
 export const POSE_FRAME_SCHEMA = "reme-pose-frame-17/v1";
 export const MEDIA_SIGNAL_SCHEMA = "reme-media-signal/v1";
@@ -135,10 +135,10 @@ function isRuntimeState(value) {
 
 function isCareState(value) {
   if (!hasExactKeys(value, ["phase", "consent", "decision"])
-    || !["idle", "checking", "emergency", "resolved"].includes(value.phase)
+    || !["idle", "checking", "attention", "emergency", "resolved"].includes(value.phase)
     || !["none", "pending", "granted", "denied"].includes(value.consent)
     || (value.decision !== null && !isCareDecision(value.decision))) return false;
-  return value.phase === mapDecisionStateToPhase(value.decision?.state);
+  return value.phase === mapCareDecisionToPhase(value.decision);
 }
 
 export function isDemoState(value) {

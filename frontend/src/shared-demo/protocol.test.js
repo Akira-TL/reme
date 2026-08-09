@@ -11,7 +11,7 @@ import {
 
 function validState() {
   return {
-    schema_version: "reme-demo-state/v3",
+    schema_version: "reme-demo-state/v4",
     room_session_id: "room-1",
     runtime_session_id: "runtime-1",
     state_revision: 4,
@@ -37,7 +37,7 @@ function validState() {
   };
 }
 
-test("state parser accepts exact v3 shape and rejects extra keys", () => {
+test("state parser accepts exact v4 shape and rejects extra keys", () => {
   const state = validState();
   assert.equal(isDemoState(state), true);
   assert.equal(parseViewerMessage(JSON.stringify(state))?.kind, "demo_state");
@@ -48,10 +48,10 @@ test("state parser accepts exact v3 shape and rejects extra keys", () => {
   }), false);
 });
 
-test("v3 carries the exact CareDecision and rejects invented fields", () => {
+test("v4 carries the exact CareDecision and rejects invented fields", () => {
   const state = validState();
   state.state.care.decision = {
-    schema_version: "reme-care-decision/v0-experiment",
+    schema_version: "reme-care-decision/v1-experiment",
     scene_id: "living",
     decision_id: "decision-1",
     timestamp_ms: 1_000,
@@ -63,6 +63,7 @@ test("v3 carries the exact CareDecision and rejects invented fields", () => {
     elder_message: null,
     family_notification: null,
     action: "observe",
+    family_delivery: "none",
     reason_summary: "姿态与房间内活动节奏综合判断。",
     uncertainty: "medium",
     source: "mimo",

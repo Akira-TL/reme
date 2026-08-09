@@ -1,7 +1,7 @@
 # B 决策服务 · 给 C 的接入文档
 
 - 服务：`reme-decision-server`（stdlib，零依赖），默认 `127.0.0.1:8100`
-- 合同：`reme-care-decision/v0-experiment` / `reme-interaction-response/v0-experiment`（唯一出处 `.scratch/abc-interface/spec.md` §10/§11；本文只讲怎么调）
+- 合同：`reme-care-decision/v1-experiment` / `reme-interaction-response/v0-experiment`（唯一出处 `.scratch/abc-interface/spec.md` §11/§12；本文只讲怎么调）
 - 启动（live 模式，key 在服务端环境变量，不进浏览器）：
 
 ```bash
@@ -27,7 +27,10 @@ curl -s localhost:8100/api/decision -H 'Content-Type: application/json' \
   -d '{"scene_id":"fall_demo_01","timestamp_ms":13000}'
 ```
 
-返回完整 CareDecision JSON（合同 §10 全字段）。**幂等语义**：同一会话阶段内重复调用返回**同一 `decision_id`**（C 按 id 去重渲染即可、可随播放进度轮询）；只有状态变迁才产生新 id。`timestamp_ms` 是视频毫秒偏移；大幅回退（>3s）而未 reset 会得到 409 `timeline_rewind`——seek 前先调 reset。
+返回完整 CareDecision JSON（合同 §11 全字段）。`family_delivery` 是 B
+给出的家属侧产品形态，C 必须直接透传，不能根据 state/risk/文案重算：
+`none` 是只读判词，`notification` 是普通通知，`action_card` 是非紧急
+家庭待办，只有 `alarm` 可触发告警副作用。**幂等语义**：同一会话阶段内重复调用返回**同一 `decision_id`**（C 按 id 去重渲染即可、可随播放进度轮询）；只有状态变迁才产生新 id。`timestamp_ms` 是视频毫秒偏移；大幅回退（>3s）而未 reset 会得到 409 `timeline_rewind`——seek 前先调 reset。
 
 ### `POST /api/response` — 提交回应，返回下一条决策（submitInteractionResponse）
 

@@ -4,6 +4,12 @@
 基线：`bf3c6999`（当前工作分支 `codex/frontend-authority-prompt`；已包含最新 Family care-assessment 集成）
 范围：`frontend/`、`demo-relay/` 与本工作项文档；不修改 `backend/` Python 状态机
 
+> 后续合同：本文件记录 v3 首次权威透传的实施过程。当前运行合同已由
+> ADR-0009 升级为 `reme-demo-state/v4` +
+> `reme-care-decision/v1-experiment`，并以 `family_delivery` 区分判词、普通
+> 通知、行动卡和告警；当前实现与验收以
+> `.scratch/family-care-semantics/` 为准。
+
 ## 1. 调查结论
 
 ### 1.1 当前权威事实源

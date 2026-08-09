@@ -24,6 +24,7 @@ from reme.runtime.decision.records import (
     DecisionSource,
     DecisionState,
     DemoMode,
+    FamilyDelivery,
     InteractionResponse,
     PrivacyMode,
     ResponseSource,
@@ -292,6 +293,9 @@ def test_toothache_scene_completes_action_card_loop(tmp_path: Path) -> None:
         )
     )
     assert notify.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
+    assert notify.risk_level == 2
+    assert notify.family_delivery is FamilyDelivery.ACTION_CARD
+    assert notify.alarm is None
     assert notify.family_notification is not None
     assert notify.action_card is not None
     assert notify.action_card.status is CardStatus.PENDING
@@ -309,6 +313,7 @@ def test_toothache_scene_completes_action_card_loop(tmp_path: Path) -> None:
     )
     assert resolved.state is DecisionState.RESOLVED
     assert resolved.source is DecisionSource.RULE
+    assert resolved.family_delivery is FamilyDelivery.ACTION_CARD
     assert resolved.action_card is not None
     assert resolved.action_card.status is CardStatus.CONFIRMED
 

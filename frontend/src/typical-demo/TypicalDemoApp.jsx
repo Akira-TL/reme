@@ -164,13 +164,17 @@ export function TypicalDemoApp({ surface = "debug" }) {
     () => projectCareDecision(currentDecision),
     [currentDecision],
   );
-  const alarmActive = Boolean(projectedDecision?.alarm);
+  const alarmActive = projectedDecision?.family_delivery === "alarm"
+    && Boolean(projectedDecision?.alarm);
   const kitchenShareDecision = useMemo(
     () => [live.decision?.decision, ...(live.decision?.history || [])]
       .find((item) => (
         item?.scene_id === "kitchen"
+        && item.family_delivery === "notification"
         && item.action === "notify_family"
         && item.family_notification
+        && item.action_card === null
+        && item.alarm === null
       )),
     [live.decision?.decision, live.decision?.history],
   );

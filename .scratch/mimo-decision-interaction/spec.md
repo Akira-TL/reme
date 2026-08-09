@@ -41,7 +41,7 @@ B 不负责：
 - 让 C 根据自然语言猜测业务状态；
 - 持续逐帧调用 MiMo；
 - 自动呼叫急救或报警机构；
-- 牙疼、授权、行动卡等尚未确定的产品故事字段。
+- 从姿态或模型文案中臆造牙疼等具体主诉，或把非紧急主诉解释成安全告警。
 
 ## 3. 运行模式
 
@@ -93,7 +93,7 @@ B 默认不消费逐帧17点。只有需要抽取视觉上下文时，才根据�
 
 ```json
 {
-  "schema_version": "reme-care-decision/v0-experiment",
+  "schema_version": "reme-care-decision/v1-experiment",
   "scene_id": "live-camera-001",
   "decision_id": "decision-0007",
   "timestamp_ms": 12800.0,
@@ -104,19 +104,27 @@ B 默认不消费逐帧17点。只有需要抽取视觉上下文时，才根据�
   "dialogue_goal": "confirm_safety",
   "elder_message": "您还好吗？需要我帮您联系家人吗？",
   "family_notification": null,
-  "response_timeout_ms": 8000,
   "action": "ask_elder",
+  "family_delivery": "none",
   "reason_summary": "检测到异常动作变化，建议确认安全状态。",
   "uncertainty": "medium",
   "fallback_used": false,
   "source": "mimo",
+  "demo_mode": "live",
+  "consent_required": false,
+  "response_timeout_ms": 8000,
+  "response_deadline_ms": null,
+  "action_card": null,
   "visual_context": {
     "sent_to_mimo": true,
     "type": "keyframes",
     "start_ms": 11100.0,
     "end_ms": 12700.0,
     "sample_count": 3
-  }
+  },
+  "alarm": null,
+  "voice_asset": null,
+  "confirm_channels": ["frame", "voice"]
 }
 ```
 
@@ -126,6 +134,7 @@ B 默认不消费逐帧17点。只有需要抽取视觉上下文时，才根据�
 normal
 observe
 check_in_required
+consent_required
 family_notification_required
 urgent_attention
 resolved
@@ -143,7 +152,21 @@ show_urgent_attention
 mark_resolved
 ```
 
-### 5.3 `source`
+### 5.3 `family_delivery`
+
+```text
+none
+notification
+action_card
+alarm
+```
+
+这是 B 输出的家属侧产品形态，C 不得从 `state`、风险等级或文案反推。
+`none` 只展示判词；`notification` 是普通消息；`action_card` 是本人同意后
+形成的具体非紧急待办；只有 `alarm` 可触发声、光、振动、紧急弹窗和
+跌倒事件媒体授权。行动卡与告警互斥。
+
+### 5.4 `source`
 
 ```text
 rule
@@ -178,7 +201,9 @@ family_notification_required
   └─ 风险继续上升或二次超时 → urgent_attention
 ```
 
-“家属告警”只表示向家属端推送信息，不表示呼叫外部急救或报警服务。
+`family_notification_required` 只是 B 的流程状态，不等于产品告警；具体
+展示必须读取 `family_delivery`。即使 `family_delivery=alarm`，也只表示
+Reme 家属侧安全告警，不表示已经呼叫外部急救或报警服务。
 
 ## 7. MiMo 调用原则
 
@@ -219,7 +244,9 @@ MiMoDecisionAdapter 负责：
 - MiMo 后到结果不得撤销、降低或推迟已经发出的规则通知；
 - MiMo 只能补充解释文本。
 
-当前采用相对 `response_timeout_ms`。未来需要绝对审计截止时间时，增加“墙上时间锚点 + 相对时长”，不替换现有字段。
+`response_timeout_ms` 描述时长，`response_deadline_ms` 是供 C 重连后继续
+显示的墙上时间元数据；B 的实际调度使用单调时钟，C 倒计时归零不得
+自行提交超时回应或升级状态。
 
 ## 9. InteractionResponse
 
@@ -302,7 +329,7 @@ timeout
 - [ ] 超时无回应由规则升级，且后到MiMo不能撤销；
 - [ ] 连续实时运行10分钟无阻断错误；
 - [ ] `recorded_video` 不现场调用MiMo；
-- [ ] 输出中不存在牙疼、授权或行动卡强制字段。
+- [ ] “牙疼”只可来自真实/脚本化老人原话；行动卡必须先有具体需要与授权，且永不因此生成安全告警。
 
 ## 16. 认知增强层（S10，ADR-0006）
 

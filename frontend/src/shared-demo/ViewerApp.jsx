@@ -254,7 +254,9 @@ function StatusCard({ snapshot, relay, familySurface = false }) {
   const runtime = snapshot?.state.runtime;
   const capture = snapshot?.state.capture;
   const status = (() => {
-    if (relay.unavailableReason && decision?.alarm) return {
+    if (relay.unavailableReason
+      && decision?.family_delivery === "alarm"
+      && decision?.alarm) return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
       title: "上次紧急告警 · 当前状态已过期",
@@ -274,7 +276,7 @@ function StatusCard({ snapshot, relay, familySurface = false }) {
         ? "连接恢复前不展示旧骨架、旧原画或旧处理结果。"
         : "连接恢复前不展示旧骨架、旧原画或旧控制结果。",
     };
-    if (decision?.alarm) return {
+    if (decision?.family_delivery === "alarm" && decision?.alarm) return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
       title: "紧急告警：请立即关注",
@@ -282,11 +284,17 @@ function StatusCard({ snapshot, relay, familySurface = false }) {
         ? "安全规则已升级，家属端不能取消或降低本次告警。"
         : "权威安全规则已升级，本次状态不能由远程命令降低。"),
     };
-    if (["family_notification_required", "urgent_attention"].includes(decision?.state)) return {
+    if (decision?.family_delivery === "action_card") return {
+      tone: "warning",
+      Icon: TipsAndUpdatesRoundedIcon,
+      title: "家属行动卡待处理",
+      body: careMessage || "本人已同意把具体生活需要同步给家属；这不是安全告警。",
+    };
+    if (decision?.family_delivery === "notification") return {
       tone: "warning",
       Icon: HealthAndSafetyRoundedIcon,
-      title: "家中端发布了新的关怀状态",
-      body: careMessage || "当前状态没有附带告警指令，请留意后续权威状态。",
+      title: "家属收到普通关怀通知",
+      body: careMessage || "这条通知不附带行动卡或安全告警。",
     };
     if (care?.phase === "checking") return {
       tone: "warning",
@@ -414,8 +422,8 @@ function FamilyActionCard({
   onConfirm,
 }) {
   const card = decision?.action_card;
-  if (!card) return null;
-  const canConfirm = card.status === "pending" && !decision.alarm;
+  if (decision?.family_delivery !== "action_card" || !card) return null;
+  const canConfirm = card.status === "pending";
   const label = applied
     ? "已确认收到行动卡"
     : pending
@@ -427,9 +435,10 @@ function FamilyActionCard({
     <article className="care-moment-card family-action-card">
       <span><TipsAndUpdatesRoundedIcon /></span>
       <div>
-        <small>家属行动卡 · {card.status === "pending" ? "待确认" : "已更新"}</small>
+        <small>非紧急家庭待办 · {card.status === "pending" ? "待确认" : "已更新"}</small>
         <b>{card.event}</b>
-        <p>{card.suggested_action} · {card.time_window}</p>
+        <p>关怀判断：{card.system_judgment}</p>
+        <p>建议动作：{card.suggested_action} · {card.time_window}</p>
         <p>本人原话：{card.elder_quote}</p>
         {canConfirm && (
           <Button
@@ -486,10 +495,23 @@ function FamilyNotificationCard({
 
 const TIMELINE_ICONS = Object.freeze({
   assessment: AutoAwesomeRoundedIcon,
+  judgment: AutoAwesomeRoundedIcon,
+  notification: NotificationsActiveRoundedIcon,
+  action_card: TipsAndUpdatesRoundedIcon,
+  alarm: EmergencyRoundedIcon,
   care: HealthAndSafetyRoundedIcon,
   media: VideocamRoundedIcon,
   consent: PrivacyTipRoundedIcon,
   acknowledgement: CheckCircleRoundedIcon,
+});
+
+const TIMELINE_ALARM_TRIGGER_COPY = Object.freeze({
+  elder_report: "本人明确求助",
+  voice_intent: "语音确认求助",
+  visual_confirm: "危险画面确认",
+  check_in_timeout: "安全询问无回应",
+  unclear_response: "无法确认本人状态",
+  family_unresponsive: "家属未确认",
 });
 
 const TIMELINE_SOURCE_COPY = Object.freeze({
@@ -559,12 +581,28 @@ function TimelineEventCard({ event }) {
     ...(event.runtimeLabel
       ? [{ label: "本地能力", value: event.runtimeLabel }]
       : []),
+    ...(event.actionCard
+      ? [
+          { label: "本人原话", value: event.actionCard.elder_quote },
+          { label: "系统判断", value: event.actionCard.system_judgment },
+          { label: "处理时效", value: event.actionCard.time_window },
+        ]
+      : []),
+    ...(event.alarm
+      ? [
+          {
+            label: "告警触发",
+            value: TIMELINE_ALARM_TRIGGER_COPY[event.alarm.trigger] || event.alarm.trigger,
+          },
+          { label: "告警通道", value: event.alarm.channels.join("、") },
+        ]
+      : []),
   ];
   const sourceChip = event.assessmentSource
     ? TIMELINE_SOURCE_COPY[event.assessmentSource]?.short || event.assessmentSource
     : null;
   return (
-    <article className={`timeline-event-card is-${event.tone} ${event.source === "mock_fixture" ? "is-mock" : ""}`}>
+    <article className={`timeline-event-card kind-${event.kind} is-${event.tone} ${event.source === "mock_fixture" ? "is-mock" : ""}`}>
       <button
         className="timeline-event-summary"
         type="button"
@@ -606,7 +644,11 @@ function TimelineEventCard({ event }) {
           {details.map((detail) => (
             <div key={detail.label}><span>{detail.label}</span><b>{detail.value}</b></div>
           ))}
-          <p>关怀判断不等于医疗诊断；这里只记录本次公开演示会话中的结构化结论，不包含原始画面、音频、骨架正文或完整对话。</p>
+          <p>{event.kind === "alarm"
+            ? "这是确定性安全规则发布的告警；MiMo 不能降低、取消或延迟它。"
+            : event.kind === "action_card"
+              ? "这是本人明确表达并授权告知家人后生成的非紧急待办，不是医疗诊断或安全告警。"
+              : "关怀判词只解释本次结构化结论，不等于医疗诊断，也不会自动变成行动卡或告警。"}</p>
         </div>
       )}
     </article>
@@ -799,7 +841,7 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
           ))}
         </ol>
         {weekNoteExpanded && (
-          <p>这些记录只用于演示 reme 如何把可观察到的琐事与主动关怀串在一起；不会写入家庭历史或改变实时告警。</p>
+          <p>这些记录只用于演示 reme 如何把可观察到的琐事与主动关怀串在一起；判词不会自动变成行动卡或告警，也不会写入真实家庭历史。</p>
         )}
       </aside>
 
@@ -1047,9 +1089,10 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
   const pending = hasPendingCommand(relay);
   const disabled = !relay.ownsControl || !snapshot || pending;
   const decisionId = snapshot?.state.care.decision?.decision_id;
-  const alarmActive = Boolean(snapshot?.state.care.decision?.alarm);
-  const actionCardPending = snapshot?.state.care.decision?.action_card?.status === "pending"
-    && !alarmActive;
+  const decision = snapshot?.state.care.decision;
+  const alarmActive = decision?.family_delivery === "alarm" && Boolean(decision?.alarm);
+  const actionCardPending = decision?.family_delivery === "action_card"
+    && decision?.action_card?.status === "pending";
   const familyNotificationPending = selectFamilyAcknowledgementCommand(
     snapshot?.state.care.decision,
   ) === "confirm_family_notification";
@@ -1155,7 +1198,7 @@ function EmergencyDialog({
   soundBlocked,
   onRetrySound,
 }) {
-  if (!decision?.alarm) return null;
+  if (decision?.family_delivery !== "alarm" || !decision?.alarm) return null;
   const message = decision.family_notification
     || decision.elder_message
     || decision.reason_summary
@@ -1285,11 +1328,12 @@ export function ViewerApp({ surface = "family" }) {
     sendMediaSignal: relay.sendMediaSignal,
   });
   const careDecision = snapshot?.state.care.decision || null;
-  const historicalAlarm = Boolean(careDecision?.alarm);
+  const historicalAlarm = careDecision?.family_delivery === "alarm"
+    && Boolean(careDecision?.alarm);
   const emergencyStale = Boolean(
     historicalAlarm && (relay.stateStale || relay.unavailableReason),
   );
-  const currentAlarm = emergencyStale ? null : careDecision?.alarm || null;
+  const currentAlarm = !emergencyStale && historicalAlarm ? careDecision.alarm : null;
   const emergency = Boolean(currentAlarm);
   const decisionId = careDecision?.decision_id || null;
   const familyAcknowledgementCommand = selectFamilyAcknowledgementCommand(careDecision);

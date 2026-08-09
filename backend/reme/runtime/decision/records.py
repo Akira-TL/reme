@@ -8,7 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-DECISION_SCHEMA_VERSION = "reme-care-decision/v0-experiment"
+DECISION_SCHEMA_VERSION = "reme-care-decision/v1-experiment"
 RESPONSE_SCHEMA_VERSION = "reme-interaction-response/v0-experiment"
 
 
@@ -17,7 +17,7 @@ class DecisionRecordError(ValueError):
 
 
 class DecisionState(StrEnum):
-    """Business state attached to one care decision (contract section 10.1)."""
+    """Business state attached to one care decision (contract section 11.1)."""
 
     NORMAL = "normal"
     OBSERVE = "observe"
@@ -30,7 +30,7 @@ class DecisionState(StrEnum):
 
 
 class PrivacyMode(StrEnum):
-    """Rendering instruction for source imagery (contract section 10.2)."""
+    """Rendering instruction for source imagery (contract section 11.2)."""
 
     VISIBLE = "visible"
     BLURRED = "blurred"
@@ -39,7 +39,7 @@ class PrivacyMode(StrEnum):
 
 
 class DecisionAction(StrEnum):
-    """Current action C must render (contract section 10.3)."""
+    """Current action C must render (contract section 11.3)."""
 
     NONE = "none"
     OBSERVE = "observe"
@@ -50,7 +50,7 @@ class DecisionAction(StrEnum):
 
 
 class DecisionSource(StrEnum):
-    """Provenance of one care decision (contract section 10.4)."""
+    """Provenance of one care decision (contract section 11.4)."""
 
     RULE = "rule"
     MIMO = "mimo"
@@ -60,11 +60,20 @@ class DecisionSource(StrEnum):
 
 
 class DemoMode(StrEnum):
-    """Demo adapter mode the decision was produced under (contract section 10.5)."""
+    """Demo adapter mode the decision was produced under (contract section 11.5)."""
 
     LIVE = "live"
     MOCK = "mock"
     RECORD = "record"
+
+
+class FamilyDelivery(StrEnum):
+    """B-owned family delivery semantics; never inferred by C from prose."""
+
+    NONE = "none"
+    NOTIFICATION = "notification"
+    ACTION_CARD = "action_card"
+    ALARM = "alarm"
 
 
 class Uncertainty(StrEnum):
@@ -77,7 +86,7 @@ class Uncertainty(StrEnum):
 
 
 class CardStatus(StrEnum):
-    """Action card handling status (contract section 10.6)."""
+    """Action card handling status (contract section 11.6)."""
 
     PENDING = "pending"
     CONFIRMED = "confirmed"
@@ -92,7 +101,7 @@ class VisualContextType(StrEnum):
 
 
 class ResponseValue(StrEnum):
-    """Elder/family response values (contract section 11.1)."""
+    """Elder/family response values (contract section 12.1)."""
 
     SAFE = "safe"
     NEED_HELP = "need_help"
@@ -106,7 +115,7 @@ class ResponseValue(StrEnum):
 
 
 class ResponseSource(StrEnum):
-    """Who produced the response (contract section 11.2)."""
+    """Who produced the response (contract section 12.2)."""
 
     USER_INPUT = "user_input"
     FAMILY_INPUT = "family_input"
@@ -164,7 +173,7 @@ def _require_timestamp(value: float, label: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class ActionCard:
-    """Six mandatory elements of one family action card (contract section 10.6)."""
+    """Six mandatory elements of one family action card (contract section 11.6)."""
 
     event: str
     elder_quote: str
@@ -266,7 +275,7 @@ class AlarmSignal:
 
 @dataclass(frozen=True, slots=True)
 class CareDecision:
-    """One outbound decision for C (contract section 10)."""
+    """One outbound decision for C (contract section 11)."""
 
     scene_id: str
     decision_id: str
@@ -279,6 +288,7 @@ class CareDecision:
     elder_message: str | None
     family_notification: str | None
     action: DecisionAction
+    family_delivery: FamilyDelivery
     reason_summary: str
     uncertainty: Uncertainty
     fallback_used: bool
@@ -344,6 +354,7 @@ class CareDecision:
             DecisionState.URGENT_ATTENTION,
         ):
             raise DecisionRecordError("alarm is only valid on family-alert or urgent decisions")
+        self._validate_family_delivery()
         _require_optional_text(self.voice_asset, "voice_asset")
         if self.voice_asset is not None and self.elder_message is None:
             raise DecisionRecordError("voice_asset requires a spoken elder_message")
@@ -362,6 +373,96 @@ class CareDecision:
             if self.action is not DecisionAction.ASK_ELDER:
                 raise DecisionRecordError("confirm_channels is only valid on ask_elder decisions")
 
+    def _validate_family_delivery(self) -> None:
+        if not isinstance(self.family_delivery, FamilyDelivery):
+            raise DecisionRecordError("family_delivery must be a FamilyDelivery")
+        has_card = self.action_card is not None
+        has_alarm = self.alarm is not None
+        if has_card and has_alarm:
+            raise DecisionRecordError("action_card and alarm are mutually exclusive")
+
+        if self.family_delivery is FamilyDelivery.ACTION_CARD:
+            if not has_card:
+                raise DecisionRecordError("family_delivery=action_card requires action_card")
+            if has_alarm:
+                raise DecisionRecordError("family_delivery=action_card forbids alarm")
+            assert self.action_card is not None
+            if self.action_card.status is CardStatus.PENDING:
+                if (
+                    self.state is not DecisionState.FAMILY_NOTIFICATION_REQUIRED
+                    or self.action is not DecisionAction.NOTIFY_FAMILY
+                    or self.family_notification is None
+                    or self.risk_level != 2
+                ):
+                    raise DecisionRecordError(
+                        "a pending action card requires family notification at risk_level 2"
+                    )
+            elif (
+                self.state is not DecisionState.RESOLVED
+                or self.action is not DecisionAction.MARK_RESOLVED
+                or self.risk_level != 0
+            ):
+                raise DecisionRecordError(
+                    "a confirmed or done action card requires mark_resolved at risk_level 0"
+                )
+            return
+
+        if has_card:
+            raise DecisionRecordError("action_card requires family_delivery=action_card")
+
+        if self.family_delivery is FamilyDelivery.ALARM:
+            if not has_alarm:
+                raise DecisionRecordError("family_delivery=alarm requires alarm")
+            if self.risk_level < 3:
+                raise DecisionRecordError("family_delivery=alarm requires risk_level >= 3")
+            if self.family_notification is None:
+                raise DecisionRecordError("family_delivery=alarm requires family_notification")
+            if self.action not in (
+                DecisionAction.NOTIFY_FAMILY,
+                DecisionAction.SHOW_URGENT_ATTENTION,
+            ):
+                raise DecisionRecordError("family_delivery=alarm requires a family-facing action")
+            return
+
+        if has_alarm:
+            raise DecisionRecordError("alarm requires family_delivery=alarm")
+
+        if self.family_delivery is FamilyDelivery.NOTIFICATION:
+            if self.family_notification is None:
+                raise DecisionRecordError(
+                    "family_delivery=notification requires family_notification"
+                )
+            if self.action not in (
+                DecisionAction.NOTIFY_FAMILY,
+                DecisionAction.SHOW_URGENT_ATTENTION,
+            ):
+                raise DecisionRecordError(
+                    "family_delivery=notification requires a family-facing action"
+                )
+            if self.state not in (
+                DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+                DecisionState.URGENT_ATTENTION,
+                DecisionState.RESOLVED,
+            ):
+                raise DecisionRecordError(
+                    "family_delivery=notification requires a family-facing state"
+                )
+            return
+
+        if (
+            self.family_notification is not None
+            or self.action
+            in (DecisionAction.NOTIFY_FAMILY, DecisionAction.SHOW_URGENT_ATTENTION)
+            or self.state
+            in (
+                DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+                DecisionState.URGENT_ATTENTION,
+            )
+        ):
+            raise DecisionRecordError(
+                "family-facing content requires an explicit family_delivery"
+            )
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
@@ -376,6 +477,7 @@ class CareDecision:
             "elder_message": self.elder_message,
             "family_notification": self.family_notification,
             "action": self.action.value,
+            "family_delivery": self.family_delivery.value,
             "reason_summary": self.reason_summary,
             "uncertainty": self.uncertainty.value,
             "fallback_used": self.fallback_used,
@@ -398,7 +500,7 @@ class CareDecision:
 
 @dataclass(frozen=True, slots=True)
 class InteractionResponse:
-    """One elder/family response submitted by C (contract section 11)."""
+    """One elder/family response submitted by C (contract section 12)."""
 
     scene_id: str
     decision_id: str
@@ -516,6 +618,7 @@ _DECISION_FIELDS = {
     "elder_message",
     "family_notification",
     "action",
+    "family_delivery",
     "reason_summary",
     "uncertainty",
     "fallback_used",
@@ -622,6 +725,7 @@ def parse_care_decision(data: object) -> CareDecision:
         elder_message=payload.get("elder_message"),
         family_notification=payload.get("family_notification"),
         action=_enum_value(payload, "action", DecisionAction),
+        family_delivery=_enum_value(payload, "family_delivery", FamilyDelivery),
         reason_summary=payload.get("reason_summary", ""),
         uncertainty=_enum_value(payload, "uncertainty", Uncertainty),
         fallback_used=_bool_value(payload, "fallback_used"),
@@ -665,7 +769,7 @@ def parse_interaction_response(data: object) -> InteractionResponse:
 
 
 def as_recorded(decision: CareDecision) -> CareDecision:
-    """Rewrite provenance for replaying a captured decision (contract section 10.5)."""
+    """Rewrite provenance for replaying a captured decision (contract section 11.5)."""
 
     return replace(decision, source=DecisionSource.RECORD, demo_mode=DemoMode.RECORD)
 

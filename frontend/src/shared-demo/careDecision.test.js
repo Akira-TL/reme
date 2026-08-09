@@ -4,13 +4,13 @@ import {
   careDecisionMessage,
   hasCurrentAlarm,
   isCareDecision,
-  mapDecisionStateToPhase,
+  mapCareDecisionToPhase,
   projectCareDecision,
 } from "./careDecision.js";
 
 function validDecision(overrides = {}) {
   return {
-    schema_version: "reme-care-decision/v0-experiment",
+    schema_version: "reme-care-decision/v1-experiment",
     scene_id: "fall",
     decision_id: "decision-1",
     timestamp_ms: 1_000,
@@ -22,6 +22,7 @@ function validDecision(overrides = {}) {
     elder_message: null,
     family_notification: "请家人立即确认。",
     action: "show_urgent_attention",
+    family_delivery: "alarm",
     reason_summary: "当前决策要求立即关注。",
     uncertainty: "low",
     fallback_used: false,
@@ -30,14 +31,7 @@ function validDecision(overrides = {}) {
     consent_required: false,
     response_timeout_ms: null,
     response_deadline_ms: null,
-    action_card: {
-      event: "疑似跌倒",
-      elder_quote: "没有回应",
-      system_judgment: "需要立即关注",
-      suggested_action: "立即联系本人",
-      time_window: "现在",
-      status: "pending",
-    },
+    action_card: null,
     visual_context: {
       sent_to_mimo: true,
       type: "keyframes",
@@ -71,6 +65,8 @@ test("CareDecision rejects invented fields and invalid alarm semantics", () => {
   })), false);
   assert.equal(isCareDecision(validDecision({
     state: "family_notification_required",
+    action: "notify_family",
+    family_delivery: "notification",
     alarm: null,
   })), true);
   assert.equal(isCareDecision(validDecision({
@@ -88,13 +84,61 @@ test("CareDecision rejects invented fields and invalid alarm semantics", () => {
     response_timeout_ms: null,
     response_deadline_ms: 9_000,
   })), false);
+  assert.equal(isCareDecision(validDecision({
+    family_delivery: "action_card",
+    state: "family_notification_required",
+    risk_level: 2,
+    action: "notify_family",
+    alarm: null,
+    action_card: {
+      event: "牙齿不舒服",
+      elder_quote: "饭咬不动",
+      system_judgment: "本人表达了具体生活困难",
+      suggested_action: "今天联系本人并协助预约",
+      time_window: "今天",
+      status: "pending",
+    },
+  })), true);
+  assert.equal(isCareDecision(validDecision({
+    action_card: {
+      event: "疑似跌倒",
+      elder_quote: "没有回应",
+      system_judgment: "需要立即关注",
+      suggested_action: "立即联系本人",
+      time_window: "现在",
+      status: "pending",
+    },
+  })), false);
+  assert.equal(isCareDecision(validDecision({
+    state: "family_notification_required",
+    risk_level: 1,
+    family_notification: null,
+    action: "observe",
+    family_delivery: "none",
+    alarm: null,
+  })), false);
 });
 
-test("presentation helpers map state without inventing alarm authority", () => {
-  assert.equal(mapDecisionStateToPhase("check_in_required"), "checking");
-  assert.equal(mapDecisionStateToPhase("family_notification_required"), "emergency");
-  assert.equal(mapDecisionStateToPhase("normal"), "idle");
-  const statusOnly = validDecision({ state: "family_notification_required", alarm: null });
+test("presentation helpers map explicit delivery without inventing alarm authority", () => {
+  assert.equal(mapCareDecisionToPhase({
+    state: "check_in_required",
+    family_delivery: "none",
+  }), "checking");
+  assert.equal(mapCareDecisionToPhase({
+    state: "family_notification_required",
+    family_delivery: "notification",
+  }), "attention");
+  assert.equal(mapCareDecisionToPhase({
+    state: "urgent_attention",
+    family_delivery: "alarm",
+  }), "emergency");
+  assert.equal(mapCareDecisionToPhase({ state: "normal", family_delivery: "none" }), "idle");
+  const statusOnly = validDecision({
+    state: "family_notification_required",
+    action: "notify_family",
+    family_delivery: "notification",
+    alarm: null,
+  });
   assert.equal(hasCurrentAlarm(statusOnly), false);
   assert.equal(careDecisionMessage(statusOnly), "请家人立即确认。");
 });

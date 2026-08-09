@@ -11,7 +11,9 @@ function decision(overrides = {}) {
     uncertainty: "medium",
     source: "mimo",
     action: "ask_elder",
+    family_delivery: "none",
     action_card: null,
+    alarm: null,
     visual_context: null,
     ...overrides,
   };
@@ -19,6 +21,7 @@ function decision(overrides = {}) {
 
 test("projects a minimal structured MiMo assessment without raw media", () => {
   assert.deepEqual(projectCareAssessment(decision()), {
+    presentation_kind: "judgment",
     verdict: "午间活动低于个人近期基线，值得先问候确认",
     basis: "午间活动低于个人近期基线，值得先问候确认",
     uncertainty: "medium",
@@ -26,6 +29,8 @@ test("projects a minimal structured MiMo assessment without raw media", () => {
     action: "ask_elder",
     suggested_action: "已发起轻量问候，等待本人回应",
     status: "awaiting_response",
+    action_card: null,
+    alarm: null,
     visual_context: {
       sent_to_mimo: false,
       type: null,
@@ -39,13 +44,38 @@ test("prefers the family verdict and an explicit action-card suggestion", () => 
     state: "family_notification_required",
     family_notification: "外婆说牙齿不舒服，已经同意告诉家人。",
     action: "notify_family",
-    action_card: { suggested_action: "今天帮外婆预约口腔科" },
+    family_delivery: "action_card",
+    action_card: {
+      event: "牙齿不舒服",
+      elder_quote: "饭咬不动",
+      system_judgment: "本人表达了具体生活困难",
+      suggested_action: "今天帮外婆预约口腔科",
+      time_window: "今天",
+      status: "pending",
+    },
   }));
 
-  assert.equal(assessment.verdict, "外婆说牙齿不舒服，已经同意告诉家人。");
-  assert.equal(assessment.basis, "午间活动低于个人近期基线，值得先问候确认");
+  assert.equal(assessment.presentation_kind, "action_card");
+  assert.equal(assessment.verdict, "牙齿不舒服");
+  assert.equal(assessment.basis, "本人表达了具体生活困难");
   assert.equal(assessment.suggested_action, "今天帮外婆预约口腔科");
   assert.equal(assessment.status, "family_notified");
+  assert.equal(assessment.action_card.elder_quote, "饭咬不动");
+});
+
+test("keeps a deterministic alarm distinct from a care judgment", () => {
+  const assessment = projectCareAssessment(decision({
+    state: "urgent_attention",
+    family_notification: "检测到确定性安全风险，请立即联系本人。",
+    action: "show_urgent_attention",
+    family_delivery: "alarm",
+    alarm: { channels: ["ring", "flash"], trigger: "visual_confirm" },
+  }));
+
+  assert.equal(assessment.presentation_kind, "alarm");
+  assert.equal(assessment.verdict, "检测到确定性安全风险，请立即联系本人。");
+  assert.deepEqual(assessment.alarm.channels, ["ring", "flash"]);
+  assert.equal(assessment.action_card, null);
 });
 
 test("records minimal visual provenance without carrying image data", () => {

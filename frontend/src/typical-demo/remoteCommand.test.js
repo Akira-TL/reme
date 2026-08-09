@@ -33,7 +33,7 @@ const context = {
 
 function careDecision(overrides = {}) {
   return {
-    schema_version: "reme-care-decision/v0-experiment",
+    schema_version: "reme-care-decision/v1-experiment",
     scene_id: "living",
     decision_id: "decision-1",
     timestamp_ms: 1_000,
@@ -45,6 +45,7 @@ function careDecision(overrides = {}) {
     elder_message: null,
     family_notification: null,
     action: "observe",
+    family_delivery: "none",
     reason_summary: "姿态与场景信息综合判断。",
     uncertainty: "medium",
     fallback_used: false,
@@ -176,6 +177,7 @@ test("浴室硬门、厨房当前授权和跌倒权威升级决定 grant", () =>
       scene_id: "fall",
       decision_id: "hidden-fall",
       privacy_mode: "hidden",
+      family_delivery: "alarm",
       alarm: { channels: ["ring"], trigger: "visual_confirm" },
     },
   }).code, "decision_privacy_hidden");
@@ -185,6 +187,7 @@ test("浴室硬门、厨房当前授权和跌倒权威升级决定 grant", () =>
       scene_id: "fall",
       decision_id: "fall-authority",
       state: "urgent_attention",
+      family_delivery: "alarm",
       alarm: { channels: ["flash"], trigger: "visual_confirm" },
     },
     now: 1_000,
@@ -195,6 +198,7 @@ test("浴室硬门、厨房当前授权和跌倒权威升级决定 grant", () =>
       scene_id: "fall",
       decision_id: "fall-authority",
       state: "urgent_attention",
+      family_delivery: "alarm",
       alarm: { channels: ["ring"], trigger: "visual_confirm" },
     },
     now: 11_000,
@@ -233,7 +237,7 @@ test("权威状态显式区分 room session 与 runtime session", () => {
   assert.equal(state.state.source_generation, 3);
   assert.equal(state.state.runtime.status, "ready");
   assert.equal(state.state.runtime.capability, "live");
-  assert.equal(state.schema_version, "reme-demo-state/v3");
+  assert.equal(state.schema_version, "reme-demo-state/v4");
   assert.deepEqual(state.state.care.decision, decision);
   assert.equal(state.state.care.phase, "idle");
 });

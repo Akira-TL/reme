@@ -7,19 +7,15 @@
 
 Reme 是安全判断的唯一事实源。Miloco 不参与摄像头感知、姿态判断、跌倒判断、模型评分或普通生活状态判断。
 
-第一版只允许以下两个 `CareDecision.state` 出域：
+第一版只允许同时满足以下条件的 CareDecision 出域：
 
-- `family_notification_required`
-- `urgent_attention`
+- `family_delivery = alarm`；
+- `alarm` 为非空的权威告警指令。
 
-以下状态一律不发布：
-
-- `normal`
-- `observe`
-- `check_in_required`
-- `consent_required`
-- `resolved`
-- `degraded`
+`state`、`risk_level`、`family_notification` 或自然语言文案都不能单独授权
+外部紧急事件。普通通知和行动卡即使处于
+`family_notification_required`，也一律不发布；`state` 只在已经满足 alarm
+门槛后用于选择最小事件类型。
 
 Miloco 不获得 Reme 的任何查询接口；Reme 不新增 `/status`、`/history`、`/camera`、骨架或姿态查询端点。
 
@@ -131,7 +127,8 @@ decision state machine
    ↓
 CareDecision
    ├─→ RuntimeDecisionPublisher → C / WebSocket
-   └─→ EmergencyDecisionPublisher → bounded queue → OpenClaw hook → Miloco
+   └─ `family_delivery=alarm` + `alarm!=null`
+      └─→ EmergencyDecisionPublisher → bounded queue → OpenClaw hook → Miloco
 ```
 
 外部 HTTP 永远不在 DecisionService 的同步安全路径中执行。Miloco 超时、5xx、认证错误或下线都不能回滚或降低 Reme 的本地告警结果。

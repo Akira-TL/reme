@@ -1,11 +1,11 @@
 import {
   isCareDecision,
-  mapDecisionStateToPhase,
+  mapCareDecisionToPhase,
 } from "../shared-demo/careDecision.js";
 
 const MONITOR_PROTOCOL = "reme-monitor-v1";
 const TOKEN_PROTOCOL_PREFIX = "reme-token-";
-const DEMO_STATE_SCHEMA = "reme-demo-state/v3";
+const DEMO_STATE_SCHEMA = "reme-demo-state/v4";
 const POSE_FRAME_SCHEMA = "reme-pose-frame-17/v1";
 const CONTROL_COMMAND_SCHEMA = "reme-control-command/v1";
 const MEDIA_SIGNAL_SCHEMA = "reme-media-signal/v1";
@@ -34,7 +34,7 @@ const CAPTURE_STATES = new Set([
 const REMOTE_VIDEO_STATES = new Set(["available", "local_only", "unavailable"]);
 const RUNTIME_STATES = new Set(["offline", "connecting", "ready", "degraded", "error"]);
 const RUNTIME_CAPABILITIES = new Set(["live", "scripted", "unavailable"]);
-const CARE_PHASES = new Set(["idle", "checking", "emergency", "resolved"]);
+const CARE_PHASES = new Set(["idle", "checking", "attention", "emergency", "resolved"]);
 const CONSENT_STATES = new Set(["none", "pending", "granted", "denied"]);
 const KEYPOINT_NAMES = [
   "nose",
@@ -273,7 +273,7 @@ function validateCare(value) {
   if (!exactKeys(value, ["phase", "consent", "decision"])) return false;
   if (!CARE_PHASES.has(value.phase) || !CONSENT_STATES.has(value.consent)) return false;
   if (value.decision !== null && !isCareDecision(value.decision)) return false;
-  return value.phase === mapDecisionStateToPhase(value.decision?.state);
+  return value.phase === mapCareDecisionToPhase(value.decision);
 }
 
 export function validateDemoStateEnvelope(value, roomSessionId = value?.room_session_id) {

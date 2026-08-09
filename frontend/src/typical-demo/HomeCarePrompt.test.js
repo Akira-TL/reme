@@ -174,6 +174,50 @@ test("离线时不把上一条安全提醒继续冒充当前权威状态", () =>
   assert.equal(prompt.canRespond, false);
 });
 
+test("普通通知、行动卡和告警使用不同且不过度承诺的老人端文案", () => {
+  const notification = deriveHomeCarePrompt(FALL_SCENE, liveWith({
+    scene_id: "fall",
+    decision_id: "decision-notification",
+    state: "family_notification_required",
+    family_delivery: "notification",
+    elder_message: null,
+    source: "rule",
+  }));
+  const card = deriveHomeCarePrompt(FALL_SCENE, liveWith({
+    scene_id: "fall",
+    decision_id: "decision-card",
+    state: "family_notification_required",
+    family_delivery: "action_card",
+    elder_message: null,
+    source: "rule",
+  }));
+  const alarm = deriveHomeCarePrompt(FALL_SCENE, liveWith({
+    scene_id: "fall",
+    decision_id: "decision-alarm",
+    state: "urgent_attention",
+    family_delivery: "alarm",
+    elder_message: null,
+    source: "rule",
+  }));
+  const confirmedCard = deriveHomeCarePrompt(FALL_SCENE, liveWith({
+    scene_id: "fall",
+    decision_id: "decision-card-confirmed",
+    state: "resolved",
+    family_delivery: "action_card",
+    action_card: { status: "confirmed" },
+    elder_message: null,
+    source: "rule",
+  }));
+
+  assert.equal(notification.title, "已经通知家人");
+  assert.match(notification.message, /不是安全告警/);
+  assert.equal(card.title, "家庭行动卡已送达");
+  assert.match(card.message, /等待家人确认处理/);
+  assert.equal(alarm.title, "安全告警已发送");
+  assert.doesNotMatch(alarm.message, /正在赶来/);
+  assert.equal(confirmedCard.title, "家庭行动卡已确认");
+});
+
 test("跌倒确认窗口明确显示单帧送 MiMo 的成功或失败状态", () => {
   const decision = {
     scene_id: "fall",

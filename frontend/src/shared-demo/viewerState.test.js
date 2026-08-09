@@ -35,7 +35,7 @@ function ready(state, room = "room-1") {
 
 function careDecision(scene, overrides = {}) {
   return {
-    schema_version: "reme-care-decision/v0-experiment",
+    schema_version: "reme-care-decision/v1-experiment",
     scene_id: scene,
     decision_id: "decision-1",
     timestamp_ms: 1_000,
@@ -47,6 +47,7 @@ function careDecision(scene, overrides = {}) {
     elder_message: null,
     family_notification: null,
     action: "observe",
+    family_delivery: "none",
     reason_summary: "当前关怀状态。",
     uncertainty: "low",
     fallback_used: false,
@@ -66,7 +67,7 @@ function careDecision(scene, overrides = {}) {
 
 function snapshot({ scene = "kitchen", revision = 1, runtime = "runtime-1" } = {}) {
   return {
-    schema_version: "reme-demo-state/v3",
+    schema_version: "reme-demo-state/v4",
     room_session_id: "room-1",
     runtime_session_id: runtime,
     state_revision: revision,
@@ -220,6 +221,7 @@ test("fall media stays closed until the current decision carries an alarm", () =
             risk_level: 4,
             action: "show_urgent_attention",
             family_notification: "请立即关注",
+            family_delivery: "alarm",
             alarm: { channels: ["flash"], trigger: "visual_confirm" },
           }),
         },
@@ -281,6 +283,7 @@ test("an unavailable alarm snapshot is retained only as stale history", () => {
       risk_level: 4,
       action: "show_urgent_attention",
       family_notification: "上次收到权威紧急告警",
+      family_delivery: "alarm",
       alarm: { channels: ["ring"], trigger: "visual_confirm" },
     }),
   };

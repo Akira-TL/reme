@@ -15,15 +15,26 @@ const VOICE_STAGE_COPY = Object.freeze({
 const DECISION_TITLE_COPY = Object.freeze({
   check_in_required: "想问您一句",
   consent_required: "想征求您的同意",
-  family_notification_required: "已经联系家人",
-  urgent_attention: "家人正在赶来",
   resolved: "这一轮关怀已结束",
 });
 
 const DECISION_MESSAGE_COPY = Object.freeze({
-  family_notification_required: "家人已经收到消息，请您安心等待。",
-  urgent_attention: "家人已经收到紧急提醒，请您先不要着急起身。",
   resolved: "这件事已经处理好了。",
+});
+
+const FAMILY_DELIVERY_COPY = Object.freeze({
+  notification: {
+    title: "已经通知家人",
+    message: "家人已收到一条普通关怀消息；这不是安全告警。",
+  },
+  action_card: {
+    title: "家庭行动卡已送达",
+    message: "已按您的同意把具体需要告诉家人，等待家人确认处理。",
+  },
+  alarm: {
+    title: "安全告警已发送",
+    message: "家人已收到紧急提醒，请您先不要着急起身。",
+  },
 });
 
 function cleanText(value) {
@@ -95,6 +106,14 @@ export function deriveHomeCarePrompt(
   const decisionState = cleanText(decision?.state);
   const decisionId = cleanText(decision?.decision_id) || null;
   const elderMessage = cleanText(decision?.elder_message);
+  const familyDelivery = cleanText(decision?.family_delivery) || "none";
+  const deliveryCopy = familyDelivery === "action_card"
+    && ["confirmed", "done"].includes(decision?.action_card?.status)
+    ? {
+        title: "家庭行动卡已确认",
+        message: "家人已经确认收到这项具体需要，本次行动卡正在按结果收尾。",
+      }
+    : FAMILY_DELIVERY_COPY[familyDelivery] || null;
   const fallbackTitle = !started
     ? "可靠事件才触发关怀"
     : liveAvailable
@@ -122,8 +141,9 @@ export function deriveHomeCarePrompt(
     kicker: started
       ? [cleanText(scene?.room), cleanText(scene?.privacy)].filter(Boolean).join(" · ")
       : "下游 · 事件关怀",
-    title: DECISION_TITLE_COPY[decisionState] || fallbackTitle,
+    title: deliveryCopy?.title || DECISION_TITLE_COPY[decisionState] || fallbackTitle,
     message: elderMessage
+      || deliveryCopy?.message
       || DECISION_MESSAGE_COPY[decisionState]
       || fallbackMessage,
     source: decision?.source === "mimo"
@@ -133,6 +153,7 @@ export function deriveHomeCarePrompt(
         : "",
     decisionId,
     decisionState,
+    familyDelivery,
     responseKind: hasCurrentQuestion ? responseKind : null,
     canRespond: Boolean(hasCurrentQuestion && liveAvailable),
     canReplay: Boolean(hasCurrentQuestion && liveAvailable),

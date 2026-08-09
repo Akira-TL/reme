@@ -46,7 +46,11 @@ const ASSESSMENT_STATUS = Object.freeze({
 
 const EVENT_PRIORITY = Object.freeze({
   acknowledgement: 100,
+  alarm: 95,
+  action_card: 92,
+  judgment: 90,
   assessment: 90,
+  notification: 85,
   care: 80,
   consent: 70,
   media: 60,
@@ -70,6 +74,8 @@ function timelineEvent({
   assessmentSource = null,
   uncertainty = null,
   visualContext = null,
+  actionCard = null,
+  alarm = null,
   source = "demo_state",
   stateRevision = null,
   sceneId = null,
@@ -90,6 +96,8 @@ function timelineEvent({
     assessmentSource,
     uncertainty,
     visualContext,
+    actionCard,
+    alarm,
     source,
     stateRevision,
     sceneId,
@@ -115,6 +123,7 @@ function snapshotMetadata(snapshot, current) {
 function cloneAssessment(value) {
   if (!value) return null;
   return Object.freeze({
+    presentationKind: value.presentation_kind,
     verdict: value.verdict,
     basis: value.basis,
     uncertainty: value.uncertainty,
@@ -122,6 +131,15 @@ function cloneAssessment(value) {
     action: value.action,
     suggestedAction: value.suggested_action,
     status: value.status,
+    actionCard: value.action_card === null
+      ? null
+      : Object.freeze({ ...value.action_card }),
+    alarm: value.alarm === null
+      ? null
+      : Object.freeze({
+          channels: Object.freeze([...value.alarm.channels]),
+          trigger: value.alarm.trigger,
+        }),
     visualContext: Object.freeze({
       sentToMimo: value.visual_context.sent_to_mimo,
       type: value.visual_context.type,
@@ -145,7 +163,7 @@ function projectSnapshot(snapshot) {
       || decision?.reason_summary
       || null,
     careAssessment: cloneAssessment(projectCareAssessment(decision)),
-    alarmActive: Boolean(decision?.alarm),
+    alarmActive: decision?.family_delivery === "alarm" && Boolean(decision?.alarm),
     mediaGrantId: state.media_grant?.grant_id || null,
     mediaGrantScope: state.media_grant?.scope || null,
   });
@@ -164,21 +182,44 @@ function assessmentEvent(snapshot, previous, current) {
   ) return null;
 
   const status = ASSESSMENT_STATUS[assessment.status] || ASSESSMENT_STATUS.degraded;
-  const authoritativeEmergency = current.alarmActive;
+  const authoritativeEmergency = assessment.presentationKind === "alarm"
+    && current.alarmActive;
+  const presentationLabel = {
+    judgment: ASSESSMENT_SOURCE_LABELS[assessment.source] || "关怀判词",
+    notification: "家属通知",
+    action_card: "家属行动卡",
+    alarm: "安全告警",
+  }[assessment.presentationKind] || "关怀记录";
+  const statusLabel = authoritativeEmergency
+    ? "需要立即关注"
+    : assessment.presentationKind === "action_card"
+      ? assessment.actionCard?.status === "pending" ? "待家属处理" : "行动卡已更新"
+      : assessment.presentationKind === "notification"
+        ? "普通关怀通知"
+        : status.label;
+  const progress = assessment.presentationKind === "alarm"
+    ? "等待家属确认"
+    : assessment.presentationKind === "action_card"
+      ? assessment.actionCard?.status === "pending" ? "等待家属确认" : "家属已确认"
+      : assessment.presentationKind === "notification"
+        ? "通知已送达"
+        : status.label;
   return timelineEvent({
-    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:assessment`,
-    kind: "assessment",
-    label: ASSESSMENT_SOURCE_LABELS[assessment.source] || "关怀判断",
+    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:presentation`,
+    kind: assessment.presentationKind,
+    label: presentationLabel,
     title: assessment.verdict,
     detail: assessment.basis,
     timestampMs: snapshot.timestamp_ms,
     tone: authoritativeEmergency ? "danger" : status.tone,
-    statusLabel: authoritativeEmergency ? "需要立即关注" : status.label,
+    statusLabel,
     suggestedAction: assessment.suggestedAction,
-    progress: status.label,
+    progress,
     assessmentSource: assessment.source,
     uncertainty: assessment.uncertainty,
     visualContext: assessment.visualContext,
+    actionCard: assessment.actionCard,
+    alarm: assessment.alarm,
     ...snapshotMetadata(snapshot, current),
   });
 }

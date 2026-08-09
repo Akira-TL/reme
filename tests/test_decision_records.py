@@ -15,6 +15,7 @@ from reme.runtime.decision.records import (
     DecisionSource,
     DecisionState,
     DemoMode,
+    FamilyDelivery,
     InteractionResponse,
     PrivacyMode,
     ResponseSource,
@@ -56,6 +57,7 @@ def _decision(**overrides: Any) -> CareDecision:
         "elder_message": "您还好吗？需要我帮您联系家人吗？",
         "family_notification": None,
         "action": DecisionAction.ASK_ELDER,
+        "family_delivery": FamilyDelivery.NONE,
         "reason_summary": "检测到跌倒式转变，随后处于低运动状态。",
         "uncertainty": Uncertainty.MEDIUM,
         "fallback_used": False,
@@ -82,6 +84,12 @@ def _response(**overrides: Any) -> InteractionResponse:
 
 def test_care_decision_payload_round_trips_contract_fields() -> None:
     decision = _decision(
+        state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+        risk_level=2,
+        family_notification="老人已同意告知家人，请查看行动卡。",
+        action=DecisionAction.NOTIFY_FAMILY,
+        family_delivery=FamilyDelivery.ACTION_CARD,
+        response_timeout_ms=None,
         action_card=_action_card(),
         visual_context=VisualContext(
             sent_to_mimo=True,
@@ -114,6 +122,7 @@ def test_care_decision_rejects_notify_family_while_consent_pending() -> None:
         _decision(
             action=DecisionAction.NOTIFY_FAMILY,
             family_notification="需要关注",
+            family_delivery=FamilyDelivery.NOTIFICATION,
             consent_required=True,
         )
 
@@ -219,6 +228,7 @@ def test_recorded_decisions_append_and_reload_round_trip(tmp_path: Path) -> None
         elder_message=None,
         action=DecisionAction.NOTIFY_FAMILY,
         family_notification="疑似跌倒后无回应，请尽快联系。",
+        family_delivery=FamilyDelivery.NOTIFICATION,
         response_timeout_ms=None,
     )
     append_recorded_decision(target, first)
@@ -238,6 +248,41 @@ def test_as_recorded_rewrites_source_and_demo_mode() -> None:
     assert replayed.source is DecisionSource.RECORD
     assert replayed.demo_mode is DemoMode.RECORD
     assert replayed.decision_id == "decision-0007"
+
+
+def test_family_delivery_rejects_card_alarm_and_risk_mismatches() -> None:
+    with pytest.raises(DecisionRecordError, match="family_delivery=action_card"):
+        _decision(action_card=_action_card())
+    with pytest.raises(DecisionRecordError, match="risk_level 2"):
+        _decision(
+            state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+            risk_level=3,
+            family_notification="请查看行动卡。",
+            action=DecisionAction.NOTIFY_FAMILY,
+            family_delivery=FamilyDelivery.ACTION_CARD,
+            response_timeout_ms=None,
+            action_card=_action_card(),
+        )
+
+
+def test_family_delivery_rejects_implicit_family_notification() -> None:
+    with pytest.raises(DecisionRecordError, match="explicit family_delivery"):
+        _decision(
+            state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+            risk_level=3,
+            family_notification="请家人留意。",
+            action=DecisionAction.NOTIFY_FAMILY,
+            response_timeout_ms=None,
+        )
+    with pytest.raises(DecisionRecordError, match="explicit family_delivery"):
+        _decision(
+            state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
+            need_dialogue=False,
+            dialogue_goal=None,
+            elder_message=None,
+            action=DecisionAction.OBSERVE,
+            response_timeout_ms=None,
+        )
 
 
 def test_interaction_response_rejects_consent_from_timeout_source() -> None:

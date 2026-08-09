@@ -92,7 +92,7 @@ class ServerConfig:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Reme B decision service (contract reme-care-decision/v0-experiment)"
+        description="Reme B decision service (contract reme-care-decision/v1-experiment)"
     )
     parser.add_argument(
         "scenes_dir",

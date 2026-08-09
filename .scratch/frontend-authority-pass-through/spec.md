@@ -2,6 +2,10 @@
 
 你现在负责小米黑客松 Reme 项目的“前端去业务判断化 / 权威状态透传”。目标是让前端回归展示层，不再承担安全状态机职责。
 
+当前合同基线是 `reme-care-decision/v1-experiment` 与
+`reme-demo-state/v4`；家属侧产品形态以 B 输出的 `family_delivery` 为准。
+语义详见 `docs/adr/0009-family-care-delivery-semantics.md`。
+
 ## 0. 当前工作区与 Git 边界
 
 本任务只能在启动任务时已经分配给你的当前 Git worktree 中完成。不要切换到任何写死的绝对目录，也不要进入其他成员或其他 Agent 的工作区。
@@ -154,14 +158,16 @@ response=none / source=timeout
 UI vocabulary 映射可以保留，例如：
 
 - `check_in_required` → `checking`
-- `family_notification_required` → `emergency`
-- `urgent_attention` → `emergency`
+- `consent_required` → `checking`
+- `family_delivery=notification | action_card` → `attention`
+- `family_delivery=alarm` → `emergency`
 - `resolved` → `resolved`
+- 其他无家属投递的状态 → `idle`
 
 但它必须是可测试的纯展示映射，例如：
 
 ```js
-const displayPhase = mapDecisionStateToPhase(decision.state);
+const displayPhase = mapCareDecisionToPhase(decision);
 ```
 
 不要综合 history、latch、connection、perception 或旧 phase，重新判断当前是不是 authoritative emergency。
@@ -202,6 +208,8 @@ const displayPhase = mapDecisionStateToPhase(decision.state);
 - `state`
 - `action`
 - `risk_level`
+- `family_delivery`
+- `action_card`（完整对象，允许为 `null`）
 - `alarm`（完整保留 `trigger` 与 `channels`，允许为 `null`）
 - `family_notification`
 - `privacy_mode`
@@ -212,8 +220,11 @@ const displayPhase = mapDecisionStateToPhase(decision.state);
 
 Family Viewer 必须根据 authoritative 字段渲染：
 
-- `care.decision.alarm != null`（或等价的一一透传字段）才展示 alarm UI，并按 `alarm.channels` 执行对应副作用。
-- `state=family_notification_required` 但 `alarm=null` 时，可以展示通知文本或普通状态，但不能凭 phase 制造声、光、振动或紧急 modal。
+- `family_delivery=none` 只展示判词或过程状态，不能制造通知、行动卡或告警。
+- `family_delivery=notification` 展示普通通知，不制造待办或告警副作用。
+- `family_delivery=action_card` 且 `action_card != null` 时展示非紧急家庭待办；牙疼只是这一流程的脚本示例，不是检测器或安全警告。
+- 只有 `family_delivery=alarm` 且 `alarm != null` 才展示 alarm UI，并按 `alarm.channels` 执行对应副作用。
+- `state=family_notification_required` 但 `family_delivery!=alarm` 时，不能凭 phase 制造声、光、振动、紧急 modal 或跌倒原画授权。
 - 如果兼容 UI 暂时保留 `phase`，它只能是 derived presentation field；关键操作不得依赖它。
 
 保留并正确使用 Relay 的 transport freshness 事实：

@@ -182,10 +182,11 @@ def _resolve(
     return Directive(next_state=next_state, skeleton=skeleton)
 
 
-def _family_alert(
+def _family_delivery(
     state: SessionState,
     template: TemplateId,
     *,
+    risk_level: int = 3,
     response_timeout_ms: int | None,
     need_dialogue: bool,
     timeout_count: int | None = None,
@@ -195,7 +196,7 @@ def _family_alert(
 ) -> Directive:
     skeleton = DecisionSkeleton(
         state=DecisionState.FAMILY_NOTIFICATION_REQUIRED,
-        risk_level=3,
+        risk_level=risk_level,
         action=DecisionAction.NOTIFY_FAMILY,
         need_dialogue=need_dialogue,
         dialogue_goal=None,
@@ -208,7 +209,7 @@ def _family_alert(
     next_state = replace(
         _mark_emitted(state, skeleton),
         phase=SessionPhase.FAMILY_NOTIFIED,
-        risk_floor=3,
+        risk_floor=risk_level,
         timeout_count=state.timeout_count if timeout_count is None else timeout_count,
     )
     return Directive(next_state=next_state, skeleton=skeleton, mimo_task=mimo_task)
@@ -302,6 +303,11 @@ def on_tick(state: SessionState, context: DecisionContext, *, config: TriggerCon
             _mark_emitted(advanced, skeleton),
             phase=SessionPhase.AWAITING_ELDER,
             escalation=EscalationKind.CONCERN,
+            clarification_used=False,
+            timeout_count=0,
+            complaint_text=None,
+            conversation_kind=None,
+            card_draft=None,
         )
         return Directive(
             next_state=next_state, skeleton=skeleton, mimo_task=MimoTask.COMPOSE_CHECK_IN
@@ -387,7 +393,7 @@ def on_demo_conversation(
         phase=SessionPhase.AWAITING_ELDER,
         escalation=EscalationKind.CONCERN,
         clarification_used=False,
-        complaint_text="现场场景手动触发一次自然、简短的主动关怀询问",
+        complaint_text=None,
         conversation_kind=kind,
         card_draft=None,
     )
@@ -421,7 +427,7 @@ def _on_elder_response(
         return _resolve(state, TemplateId.SAFE_RESOLVED)
     if value is ResponseValue.NEED_HELP:
         if state.escalation is EscalationKind.FALL:
-            return _family_alert(
+            return _family_delivery(
                 state,
                 TemplateId.FALL_HELP_ALERT,
                 response_timeout_ms=config.family_ack_timeout_ms,
@@ -452,7 +458,7 @@ def _on_elder_response(
                 )
                 next_state = replace(_mark_emitted(state, skeleton), clarification_used=True)
                 return Directive(next_state=next_state, skeleton=skeleton)
-            return _family_alert(
+            return _family_delivery(
                 state,
                 TemplateId.UNCLEAR_FAMILY_ALERT,
                 response_timeout_ms=config.family_ack_timeout_ms,
@@ -495,7 +501,7 @@ def _on_elder_response(
             )
             next_state = replace(_mark_emitted(state, skeleton), clarification_used=True)
             return Directive(next_state=next_state, skeleton=skeleton)
-        return _family_alert(
+        return _family_delivery(
             state,
             TemplateId.UNCLEAR_FAMILY_ALERT,
             response_timeout_ms=config.family_ack_timeout_ms,
@@ -512,7 +518,7 @@ def _on_elder_timeout(state: SessionState, *, config: TriggerConfig) -> Directiv
 
     # Deliberately blind to `state.escalation` for severity: a silent concern
     # check-in escalates like a silent fall; only the fall additionally alarms.
-    return _family_alert(
+    return _family_delivery(
         state,
         TemplateId.TIMEOUT_FAMILY_ALERT,
         response_timeout_ms=config.family_ack_timeout_ms,
@@ -532,9 +538,10 @@ def _on_consent_response(
     if value is ResponseValue.CONSENT_GRANTED:
         if kitchen_share:
             return _kitchen_share_notification(state)
-        return _family_alert(
+        return _family_delivery(
             state,
             TemplateId.CARD_FAMILY_NOTIFY,
+            risk_level=2,
             response_timeout_ms=None,
             need_dialogue=True,
             include_card=CardStatus.PENDING,
@@ -728,7 +735,7 @@ def on_danger_confirmed(
         or advanced.pending_decision_id is None
     ):
         return Directive(next_state=advanced, reject_code=REJECT_DANGER_NOT_APPLICABLE)
-    return _family_alert(
+    return _family_delivery(
         advanced,
         TemplateId.DANGER_CONFIRMED_ALERT,
         response_timeout_ms=config.family_ack_timeout_ms,

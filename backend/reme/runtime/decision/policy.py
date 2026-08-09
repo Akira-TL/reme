@@ -68,6 +68,7 @@ from reme.runtime.decision.records import (
     DecisionSource,
     DecisionState,
     DemoMode,
+    FamilyDelivery,
     InteractionResponse,
     PrivacyMode,
     ResponseSource,
@@ -96,6 +97,23 @@ from reme.runtime.decision.visual import (
     visual_context_record,
     visual_payload,
 )
+
+
+def _family_delivery_for(
+    *,
+    family_notification: str | None,
+    action_card: ActionCard | None,
+    alarm: AlarmSignal | None,
+) -> FamilyDelivery:
+    """Choose the one B-owned family delivery kind from authoritative payloads."""
+
+    if alarm is not None:
+        return FamilyDelivery.ALARM
+    if action_card is not None:
+        return FamilyDelivery.ACTION_CARD
+    if family_notification is not None:
+        return FamilyDelivery.NOTIFICATION
+    return FamilyDelivery.NONE
 
 
 class DecisionRejectedError(ValueError):
@@ -1142,6 +1160,11 @@ class DecisionService:
             alarm = AlarmSignal(
                 channels=self._config.alarm_channels, trigger=skeleton.alarm_trigger
             )
+        family_delivery = _family_delivery_for(
+            family_notification=family_notification,
+            action_card=card,
+            alarm=alarm,
+        )
         # A preset voice clip is advertised only when the spoken text is
         # exactly the recorded template wording — MiMo-composed wording must
         # never play under a mismatched recording.
@@ -1171,6 +1194,7 @@ class DecisionService:
             elder_message=elder_message,
             family_notification=family_notification,
             action=skeleton.action,
+            family_delivery=family_delivery,
             reason_summary=reason_summary,
             uncertainty=uncertainty,
             fallback_used=False,
@@ -1227,6 +1251,7 @@ class DecisionService:
             elder_message=None,
             family_notification=None,
             action=DecisionAction.OBSERVE,
+            family_delivery=FamilyDelivery.NONE,
             reason_summary="认知服务暂不可用，已降级为持续观察，可切换演示模式后重试",
             uncertainty=Uncertainty.HIGH,
             fallback_used=True,

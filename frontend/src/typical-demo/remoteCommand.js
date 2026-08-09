@@ -1,5 +1,5 @@
 import {
-  mapDecisionStateToPhase,
+  mapCareDecisionToPhase,
   projectCareDecision,
 } from "../shared-demo/careDecision.js";
 import { privacyAllowsEventVideo } from "./privacyPresentation.js";
@@ -209,9 +209,9 @@ export function buildDemoState({
   const decision = projectCareDecision(care?.decision);
   // `phase` is protocol compatibility vocabulary only. Derive it from the
   // authoritative decision so a local perception candidate cannot reach Family.
-  const carePhase = mapDecisionStateToPhase(decision?.state);
+  const carePhase = mapCareDecisionToPhase(decision);
   return {
-    schema_version: "reme-demo-state/v3",
+    schema_version: "reme-demo-state/v4",
     room_session_id: roomSessionId,
     runtime_session_id: runtimeSessionId,
     state_revision: stateRevision,
@@ -274,6 +274,7 @@ export function mediaGrantEligibility({
   if (sceneId === "fall") {
     const alarmAuthorized = careDecision?.scene_id === "fall"
       && typeof careDecision?.decision_id === "string"
+      && careDecision.family_delivery === "alarm"
       && careDecision.alarm !== null
       && typeof careDecision.alarm === "object";
     return alarmAuthorized

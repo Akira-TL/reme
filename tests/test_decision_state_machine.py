@@ -514,6 +514,21 @@ def test_manual_proactive_check_in_uses_normal_mimo_question_path() -> None:
     assert directive.skeleton.state is DecisionState.CHECK_IN_REQUIRED
     assert directive.mimo_task is MimoTask.COMPOSE_CHECK_IN
     assert directive.next_state.phase is SessionPhase.AWAITING_ELDER
+    assert directive.next_state.complaint_text is None
+
+    awaiting = replace(directive.next_state, pending_decision_id="decision-0002")
+    generic_help = on_response(
+        awaiting,
+        _response(
+            ResponseValue.NEED_HELP,
+            ResponseSource.USER_INPUT,
+            decision_id="decision-0002",
+        ),
+        config=_CONFIG,
+    )
+    assert generic_help.skeleton is not None
+    assert generic_help.skeleton.template is TemplateId.CLARIFY
+    assert generic_help.next_state.phase is SessionPhase.AWAITING_ELDER
 
 
 def test_consent_granted_notifies_family_with_card_task() -> None:
@@ -526,9 +541,10 @@ def test_consent_granted_notifies_family_with_card_task() -> None:
     )
     assert directive.skeleton is not None
     assert directive.skeleton.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
+    assert directive.skeleton.risk_level == 2
     assert directive.skeleton.include_card is CardStatus.PENDING
     assert directive.mimo_task is MimoTask.COMPOSE_CARD
-    assert directive.next_state.risk_floor == 3
+    assert directive.next_state.risk_floor == 2
 
 
 def test_consent_granted_reuses_cached_card_draft() -> None:

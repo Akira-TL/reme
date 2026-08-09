@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDecisionRuntime } from "../hooks/useDecisionRuntime";
 import { usePerceptionRuntime } from "../hooks/usePerceptionRuntime";
-import { mapDecisionStateToPhase } from "./phoneState";
+import { mapCareDecisionToPhase } from "./phoneState";
 import { FALL_PHASES } from "./scenes";
 
 // 单机真实链路：A 在全部场景持续产出骨架/姿态/转变，B 按同一会话做决策。
@@ -58,7 +58,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
 
   const phase = useMemo(() => {
     if (!enabled) return "idle";
-    const decisionPhase = mapDecisionStateToPhase(current?.state);
+    const decisionPhase = mapCareDecisionToPhase(current);
     if (decisionPhase !== "idle") return decisionPhase;
     if (!active) return "idle";
     // 决策尚未跟上最新转移时短暂显示"候选"；check-in 一到即被上面的分支接管。
@@ -74,7 +74,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
 
   const fallState = useMemo(() => {
     if (!enabled) return null;
-    const trigger = current?.alarm
+    const trigger = current?.family_delivery === "alarm" && current?.alarm
       ? TRIGGER_LABELS[current.alarm.trigger] || ""
       : "";
     const decisionMessage = current?.family_notification
@@ -91,6 +91,13 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
         return {
           status: trigger ? `已通知家属 · ${trigger}` : "已通知家属",
           message: decisionMessage || FALL_PHASES.emergency.message,
+        };
+      case "attention":
+        return {
+          status: current?.family_delivery === "action_card"
+            ? "家属行动卡已送达"
+            : "家属关怀信息已送达",
+          message: decisionMessage || "这是一条普通关怀信息，不是安全告警。",
         };
       case "resolved":
         return {
@@ -115,6 +122,10 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
     return decision.respondNeedHelp(decisionId);
   }, [decision]);
 
+  const respondNeedHelpWithText = useCallback((text, decisionId = null) => {
+    return decision.respondNeedHelpWithText(text, decisionId);
+  }, [decision]);
+
   const triggerDebugScenario = perception.triggerDebugScenario;
 
   const confirmAlarm = useCallback((decisionId = null) => {
@@ -123,7 +134,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
 
   const familyVideoAllowed = Boolean(active && (
     (sceneId === "kitchen" && kitchenConsentActive)
-    || (sceneId === "fall" && current?.alarm)
+    || (sceneId === "fall" && current?.family_delivery === "alarm" && current?.alarm)
   ));
   const emergencyNote = sceneId === "bathroom"
     ? "浴室永不开放原画"
@@ -149,6 +160,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
     triggerDebugScenario,
     respondSafe,
     respondNeedHelp,
+    respondNeedHelpWithText,
     respondConsentGranted: decision.respondConsentGranted,
     respondConsentDenied: decision.respondConsentDenied,
     startDemoConversation: decision.startDemoConversation,

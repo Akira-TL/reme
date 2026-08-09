@@ -638,7 +638,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     }
 
     async function playDecisionVoice(payload, { force = false, autoReply = true } = {}) {
-      if (payload?.alarm) return false;
+      if (payload?.family_delivery === "alarm" && payload?.alarm) return false;
       if (!payload?.elder_message) return false;
       if (!force && spokenDecisionIds.has(payload.decision_id)) return false;
       const playbackGeneration = sceneGeneration;
@@ -774,8 +774,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
               response === "consent_granted"
               && target.scene_id === "kitchen"
               && next.scene_id === "kitchen"
+              && next.family_delivery === "notification"
               && next.action === "notify_family"
               && next.family_notification
+              && next.action_card === null
+              && next.alarm === null
             ) {
               const issuedAtMs = Date.now();
               const issuedAtMonotonicMs = performance.now();
@@ -836,15 +839,18 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       // 每条新 CareDecision 完整替换上一条告警指令。
       clearAlarmState();
 
-      if (!payload.alarm && !suppressVoice && voiceTurnDecisionId === null) {
+      const authoritativeAlarm = payload.family_delivery === "alarm" ? payload.alarm : null;
+      if (!authoritativeAlarm && !suppressVoice && voiceTurnDecisionId === null) {
         void playDecisionVoice(payload);
       }
 
-      if (payload.alarm) {
-        const alarmChannels = Array.isArray(payload.alarm.channels) ? payload.alarm.channels : [];
+      if (authoritativeAlarm) {
+        const alarmChannels = Array.isArray(authoritativeAlarm.channels)
+          ? authoritativeAlarm.channels
+          : [];
         setAlarm({
           channels: alarmChannels,
-          trigger: payload.alarm.trigger || "",
+          trigger: authoritativeAlarm.trigger || "",
           decision: payload,
         });
         startAlarmLocal(alarmChannels);
@@ -1058,7 +1064,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         if (expectedDecisionId && target.decision_id !== expectedDecisionId) {
           return Promise.resolve({ ok: false, code: "stale_decision" });
         }
-        if (!target.alarm) return Promise.resolve({ ok: false, code: "alarm_not_current" });
+        if (target.family_delivery !== "alarm" || !target.alarm) {
+          return Promise.resolve({ ok: false, code: "alarm_not_current" });
+        }
         markResponded(target.decision_id);
         return submitFor(target, "alarm_confirmed", "family_input").then((ok) => ({
           ok,
@@ -1072,7 +1080,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         if (expectedDecisionId && target.decision_id !== expectedDecisionId) {
           return Promise.resolve({ ok: false, code: "stale_decision" });
         }
-        if (target.alarm || target.action_card?.status !== "pending") {
+        if (
+          target.family_delivery !== "action_card"
+          || target.alarm
+          || target.action_card?.status !== "pending"
+        ) {
           return Promise.resolve({ ok: false, code: "action_card_not_current" });
         }
         markResponded(target.decision_id);
@@ -1089,7 +1101,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           return Promise.resolve({ ok: false, code: "stale_decision" });
         }
         if (
-          target.alarm
+          target.family_delivery !== "notification"
+          || target.alarm
           || target.action_card
           || !target.family_notification
           || !["family_notification_required", "urgent_attention"].includes(target.state)
@@ -1190,6 +1203,17 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     return apiRef.current.respond?.("need_help", "user_input", null, expectedDecisionId)
       || Promise.resolve({ ok: false, code: "decision_unavailable" });
   }, []);
+  const respondNeedHelpWithText = useCallback((text, decisionId = null) => {
+    const normalizedText = typeof text === "string" ? text.trim() : "";
+    if (!normalizedText) return Promise.resolve({ ok: false, code: "response_text_required" });
+    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
+    return apiRef.current.respond?.(
+      "need_help",
+      "script",
+      normalizedText,
+      expectedDecisionId,
+    ) || Promise.resolve({ ok: false, code: "decision_unavailable" });
+  }, []);
   const respondConsentGranted = useCallback((decisionId = null) => {
     const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
     return apiRef.current.respond?.("consent_granted", "user_input", null, expectedDecisionId)
@@ -1245,6 +1269,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     visualContext,
     respondSafe,
     respondNeedHelp,
+    respondNeedHelpWithText,
     respondConsentGranted,
     respondConsentDenied,
     startDemoConversation,

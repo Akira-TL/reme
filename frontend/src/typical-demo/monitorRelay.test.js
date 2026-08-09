@@ -17,7 +17,7 @@ const TOKEN = "a".repeat(64);
 
 function careDecision(overrides = {}) {
   return {
-    schema_version: "reme-care-decision/v0-experiment",
+    schema_version: "reme-care-decision/v1-experiment",
     scene_id: "living",
     decision_id: "decision-1",
     timestamp_ms: 1_000,
@@ -29,6 +29,7 @@ function careDecision(overrides = {}) {
     elder_message: null,
     family_notification: null,
     action: "observe",
+    family_delivery: "none",
     reason_summary: "姿态和持续时间综合判断。",
     uncertainty: "low",
     fallback_used: false,
@@ -109,7 +110,7 @@ function command(name = "start_capture", overrides = {}) {
   };
 }
 
-test("Monitor accepts only an exact v3 CareDecision snapshot", () => {
+test("Monitor accepts only an exact v4 CareDecision snapshot", () => {
   const state = demoState(1);
   state.state.care.decision = careDecision();
 

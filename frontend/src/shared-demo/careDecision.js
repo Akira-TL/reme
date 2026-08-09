@@ -1,4 +1,4 @@
-export const CARE_DECISION_SCHEMA = "reme-care-decision/v0-experiment";
+export const CARE_DECISION_SCHEMA = "reme-care-decision/v1-experiment";
 
 const SCENE_IDS = new Set(["living", "kitchen", "bathroom", "fall"]);
 const DECISION_STATES = new Set([
@@ -21,6 +21,7 @@ const DECISION_ACTIONS = new Set([
   "mark_resolved",
 ]);
 const DECISION_SOURCES = new Set(["rule", "mimo", "mock", "record", "degraded"]);
+const FAMILY_DELIVERIES = new Set(["none", "notification", "action_card", "alarm"]);
 const DEMO_MODES = new Set(["live", "mock", "record"]);
 const UNCERTAINTIES = new Set(["low", "medium", "high", "unknown"]);
 const CARD_STATUSES = new Set(["pending", "confirmed", "done"]);
@@ -48,6 +49,7 @@ const DECISION_KEYS = [
   "elder_message",
   "family_notification",
   "action",
+  "family_delivery",
   "reason_summary",
   "uncertainty",
   "fallback_used",
@@ -157,6 +159,43 @@ function isAlarm(value) {
     && ALARM_TRIGGERS.has(value.trigger);
 }
 
+function isFamilyDeliveryConsistent(value) {
+  const hasCard = value.action_card !== null;
+  const hasAlarm = value.alarm !== null;
+  if (hasCard && hasAlarm) return false;
+
+  if (value.family_delivery === "action_card") {
+    if (!hasCard || hasAlarm) return false;
+    if (value.action_card.status === "pending") {
+      return value.state === "family_notification_required"
+        && value.action === "notify_family"
+        && value.family_notification !== null
+        && value.risk_level === 2;
+    }
+    return value.state === "resolved"
+      && value.action === "mark_resolved"
+      && value.risk_level === 0;
+  }
+  if (hasCard) return false;
+
+  if (value.family_delivery === "alarm") {
+    return hasAlarm
+      && value.risk_level >= 3
+      && value.family_notification !== null
+      && ["notify_family", "show_urgent_attention"].includes(value.action);
+  }
+  if (hasAlarm) return false;
+
+  if (value.family_delivery === "notification") {
+    return value.family_notification !== null
+      && ["notify_family", "show_urgent_attention"].includes(value.action)
+      && ["family_notification_required", "urgent_attention", "resolved"].includes(value.state);
+  }
+  return value.family_notification === null
+    && !["notify_family", "show_urgent_attention"].includes(value.action)
+    && !["family_notification_required", "urgent_attention"].includes(value.state);
+}
+
 export function isCareDecision(value) {
   if (!hasExactKeys(value, DECISION_KEYS)) return false;
   if (containsEncodedMedia(value)) return false;
@@ -174,6 +213,7 @@ export function isCareDecision(value) {
     || !isText(value.elder_message, { nullable: true })
     || !isText(value.family_notification, { nullable: true })
     || !DECISION_ACTIONS.has(value.action)
+    || !FAMILY_DELIVERIES.has(value.family_delivery)
     || !isText(value.reason_summary)
     || !UNCERTAINTIES.has(value.uncertainty)
     || typeof value.fallback_used !== "boolean"
@@ -211,7 +251,7 @@ export function isCareDecision(value) {
     if (!isUniqueClosedList(value.confirm_channels, CONFIRM_CHANNELS)
       || value.action !== "ask_elder") return false;
   }
-  return true;
+  return isFamilyDeliveryConsistent(value);
 }
 
 function freezeNullableRecord(value) {
@@ -233,6 +273,7 @@ export function projectCareDecision(value) {
     elder_message: value.elder_message,
     family_notification: value.family_notification,
     action: value.action,
+    family_delivery: value.family_delivery,
     reason_summary: value.reason_summary,
     uncertainty: value.uncertainty,
     fallback_used: value.fallback_used,
@@ -256,10 +297,12 @@ export function projectCareDecision(value) {
   });
 }
 
-export function mapDecisionStateToPhase(state) {
-  if (["check_in_required", "consent_required"].includes(state)) return "checking";
-  if (["family_notification_required", "urgent_attention"].includes(state)) return "emergency";
-  if (state === "resolved") return "resolved";
+export function mapCareDecisionToPhase(decision) {
+  if (!decision) return "idle";
+  if (["check_in_required", "consent_required"].includes(decision.state)) return "checking";
+  if (decision.state === "resolved") return "resolved";
+  if (decision.family_delivery === "alarm") return "emergency";
+  if (["notification", "action_card"].includes(decision.family_delivery)) return "attention";
   return "idle";
 }
 
@@ -271,5 +314,9 @@ export function careDecisionMessage(decision) {
 }
 
 export function hasCurrentAlarm(decision) {
-  return Boolean(decision?.alarm && isCareDecision(decision));
+  return Boolean(
+    decision?.family_delivery === "alarm"
+      && decision?.alarm
+      && isCareDecision(decision),
+  );
 }

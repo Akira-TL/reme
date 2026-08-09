@@ -1,5 +1,5 @@
 export const ROOM_NAME = "shared-live-demo";
-export const DEMO_STATE_SCHEMA_VERSION = "reme-demo-state/v3";
+export const DEMO_STATE_SCHEMA_VERSION = "reme-demo-state/v4";
 export const CONTROL_COMMAND_SCHEMA_VERSION = "reme-control-command/v1";
 export const POSE_FRAME_SCHEMA_VERSION = "reme-pose-frame-17/v1";
 export const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
@@ -48,7 +48,7 @@ export interface ActiveMediaGrant {
 }
 
 export interface CareDecision {
-  schema_version: "reme-care-decision/v0-experiment";
+  schema_version: "reme-care-decision/v1-experiment";
   scene_id: SceneId;
   decision_id: string;
   timestamp_ms: number;
@@ -74,6 +74,7 @@ export interface CareDecision {
     | "notify_family"
     | "show_urgent_attention"
     | "mark_resolved";
+  family_delivery: "none" | "notification" | "action_card" | "alarm";
   reason_summary: string;
   uncertainty: "low" | "medium" | "high" | "unknown";
   source: "rule" | "mimo" | "mock" | "record" | "degraded";
@@ -133,7 +134,7 @@ export interface DemoState {
     detail: string | null;
   };
   care: {
-    phase: "idle" | "checking" | "emergency" | "resolved";
+    phase: "idle" | "checking" | "attention" | "emergency" | "resolved";
     consent: "none" | "pending" | "granted" | "denied";
     decision: CareDecision | null;
   };
@@ -274,6 +275,7 @@ const CARE_DECISION_KEYS = [
   "dialogue_goal",
   "elder_message",
   "fallback_used",
+  "family_delivery",
   "family_notification",
   "need_dialogue",
   "privacy_mode",
@@ -594,6 +596,7 @@ function validateCare(value: unknown): value is DemoState["care"] {
   if (
     value.phase !== "idle"
     && value.phase !== "checking"
+    && value.phase !== "attention"
     && value.phase !== "emergency"
     && value.phase !== "resolved"
   ) return false;
@@ -608,18 +611,20 @@ function validateCare(value: unknown): value is DemoState["care"] {
     ? "idle"
     : value.decision.state === "check_in_required" || value.decision.state === "consent_required"
       ? "checking"
-      : value.decision.state === "family_notification_required"
-          || value.decision.state === "urgent_attention"
-        ? "emergency"
-        : value.decision.state === "resolved"
-          ? "resolved"
-          : "idle";
+      : value.decision.state === "resolved"
+        ? "resolved"
+        : value.decision.family_delivery === "alarm"
+          ? "emergency"
+          : value.decision.family_delivery === "notification"
+              || value.decision.family_delivery === "action_card"
+            ? "attention"
+            : "idle";
   return value.phase === expectedPhase;
 }
 
 export function validateCareDecision(value: unknown): value is CareDecision {
   if (!isExactObject(value, CARE_DECISION_KEYS)) return false;
-  if (value.schema_version !== "reme-care-decision/v0-experiment") return false;
+  if (value.schema_version !== "reme-care-decision/v1-experiment") return false;
   if (!isSceneId(value.scene_id) || !isOpaqueId(value.decision_id)) return false;
   if (!isFiniteNonNegativeNumber(value.timestamp_ms)) return false;
   if (
@@ -632,6 +637,10 @@ export function validateCareDecision(value: unknown): value is CareDecision {
     && value.state !== "resolved"
     && value.state !== "degraded"
   ) return false;
+  if (value.family_delivery !== "none"
+    && value.family_delivery !== "notification"
+    && value.family_delivery !== "action_card"
+    && value.family_delivery !== "alarm") return false;
   if (!isNonNegativeSafeInteger(value.risk_level) || value.risk_level > 4) return false;
   if (
     value.privacy_mode !== "visible"
@@ -672,9 +681,11 @@ export function validateCareDecision(value: unknown): value is CareDecision {
   if (value.response_deadline_ms !== null
     && (!isFiniteNonNegativeNumber(value.response_deadline_ms)
       || value.response_timeout_ms === null)) return false;
-  if (value.action_card !== null && !validateActionCard(value.action_card)) return false;
+  const actionCard = value.action_card;
+  const alarm = value.alarm;
+  if (actionCard !== null && !validateActionCard(actionCard)) return false;
   if (value.visual_context !== null && !validateCareVisualContext(value.visual_context)) return false;
-  if (value.alarm !== null && !validateAlarm(value.alarm)) return false;
+  if (alarm !== null && !validateAlarm(alarm)) return false;
   if (!isNullableText(value.voice_asset, 512)) return false;
   if (value.confirm_channels !== null
     && !isUniqueClosedList(value.confirm_channels, ["frame", "voice"])) return false;
@@ -691,6 +702,41 @@ export function validateCareDecision(value: unknown): value is CareDecision {
     && value.state !== "urgent_attention") return false;
   if (value.voice_asset !== null && value.elder_message === null) return false;
   if (value.confirm_channels !== null && value.action !== "ask_elder") return false;
+  if (actionCard !== null && alarm !== null) return false;
+  if (value.family_delivery === "action_card") {
+    if (actionCard === null || alarm !== null) return false;
+    if (actionCard.status === "pending") {
+      if (value.state !== "family_notification_required"
+        || value.action !== "notify_family"
+        || value.family_notification === null
+        || value.risk_level !== 2) return false;
+    } else if (value.state !== "resolved"
+      || value.action !== "mark_resolved"
+      || value.risk_level !== 0) return false;
+  } else if (actionCard !== null) return false;
+  if (value.family_delivery === "alarm") {
+    if (alarm === null
+      || value.risk_level < 3
+      || value.family_notification === null
+      || (value.action !== "notify_family" && value.action !== "show_urgent_attention")) {
+      return false;
+    }
+  } else if (alarm !== null) return false;
+  if (value.family_delivery === "notification") {
+    if (value.family_notification === null
+      || (value.action !== "notify_family" && value.action !== "show_urgent_attention")
+      || (value.state !== "family_notification_required"
+        && value.state !== "urgent_attention"
+        && value.state !== "resolved")) {
+      return false;
+    }
+  }
+  if (value.family_delivery === "none"
+    && (value.family_notification !== null
+      || value.action === "notify_family"
+      || value.action === "show_urgent_attention"
+      || value.state === "family_notification_required"
+      || value.state === "urgent_attention")) return false;
   return !containsForbiddenRawMedia(value);
 }
 

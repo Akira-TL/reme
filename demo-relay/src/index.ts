@@ -1411,6 +1411,7 @@ export class DemoRoom extends DurableObject<Env> {
       && (grant.scope === "kitchen_moment"
         ? state.state.scene_id === "kitchen" && state.state.care.consent === "granted"
         : state.state.scene_id === "fall"
+          && decision.family_delivery === "alarm"
           && decision.alarm !== null);
     if (!valid) this.revokeActiveGrants(nowMs, "grant_authority_lost", "revoked");
   }
@@ -1998,6 +1999,7 @@ function grantRejection(
       : "kitchen_consent_required";
   }
   return state.state.scene_id === "fall"
+    && decision.family_delivery === "alarm"
     && decision.alarm !== null
     ? null
     : "authoritative_fall_required";
@@ -2016,13 +2018,17 @@ function commandSafetyRejection(
       || body.name === "replay_voice")
     && body.decision_id !== state.state.care.decision?.decision_id
   ) return "decision_id_mismatch";
-  if (body.name === "confirm_alarm" && state.state.care.decision?.alarm === null) {
+  if (body.name === "confirm_alarm" && (
+    state.state.care.decision?.family_delivery !== "alarm"
+    || state.state.care.decision?.alarm === null
+  )) {
     return "alarm_not_current";
   }
   if (
     body.name === "confirm_action_card"
     && (
       state.state.care.decision?.alarm !== null
+      || state.state.care.decision?.family_delivery !== "action_card"
       || state.state.care.decision?.action_card?.status !== "pending"
     )
   ) return "action_card_not_current";
@@ -2031,12 +2037,16 @@ function commandSafetyRejection(
     && (
       state.state.care.decision?.alarm !== null
       || state.state.care.decision?.action_card !== null
+      || state.state.care.decision?.family_delivery !== "notification"
       || !state.state.care.decision?.family_notification
       || (state.state.care.decision.state !== "family_notification_required"
         && state.state.care.decision.state !== "urgent_attention")
     )
   ) return "family_notification_not_current";
-  if (state.state.care.decision?.alarm === null || state.state.care.decision === null) return null;
+  if (
+    state.state.care.decision?.family_delivery !== "alarm"
+    || state.state.care.decision?.alarm === null
+  ) return null;
   if (
     body.name === "reset_demo"
     || body.name === "stop_capture"

@@ -8,6 +8,7 @@ const ASSESSMENT_ACTIONS = new Set([
   "show_urgent_attention",
   "mark_resolved",
 ]);
+const FAMILY_DELIVERIES = new Set(["none", "notification", "action_card", "alarm"]);
 
 const STATUS_BY_STATE = Object.freeze({
   normal: "observing",
@@ -63,20 +64,54 @@ export function projectCareAssessment(decision) {
     ? decision.uncertainty
     : "unknown";
   const action = ASSESSMENT_ACTIONS.has(decision.action) ? decision.action : null;
+  const familyDelivery = FAMILY_DELIVERIES.has(decision.family_delivery)
+    ? decision.family_delivery
+    : null;
   const status = STATUS_BY_STATE[decision.state] || null;
   const visualContext = projectVisualContext(decision.visual_context);
-  if (!basis || !source || !action || !status || !visualContext) return null;
+  if (!basis || !source || !action || !familyDelivery || !status || !visualContext) return null;
 
-  const verdict = boundedText(decision.family_notification) || basis;
-  const cardAction = boundedText(decision.action_card?.suggested_action);
+  const actionCard = familyDelivery === "action_card" && decision.action_card
+    ? Object.freeze({
+        event: boundedText(decision.action_card.event),
+        elder_quote: boundedText(decision.action_card.elder_quote),
+        system_judgment: boundedText(decision.action_card.system_judgment),
+        suggested_action: boundedText(decision.action_card.suggested_action),
+        time_window: boundedText(decision.action_card.time_window),
+        status: decision.action_card.status,
+      })
+    : null;
+  if (familyDelivery === "action_card" && (
+    !actionCard
+    || Object.values(actionCard).some((value) => value === null)
+  )) return null;
+  const alarm = familyDelivery === "alarm" && decision.alarm
+    ? Object.freeze({
+        channels: Object.freeze([...(decision.alarm.channels || [])]),
+        trigger: decision.alarm.trigger,
+      })
+    : null;
+  if (familyDelivery === "alarm" && !alarm) return null;
+
+  const presentationKind = familyDelivery === "none" ? "judgment" : familyDelivery;
+  const familyNotification = boundedText(decision.family_notification);
+  const verdict = actionCard?.event
+    || ((familyDelivery === "notification" || familyDelivery === "alarm")
+      ? familyNotification
+      : null)
+    || basis;
+  const presentationBasis = actionCard?.system_judgment || basis;
   return Object.freeze({
+    presentation_kind: presentationKind,
     verdict,
-    basis,
+    basis: presentationBasis,
     uncertainty,
     source,
     action,
-    suggested_action: cardAction || ACTION_COPY[action],
+    suggested_action: actionCard?.suggested_action || ACTION_COPY[action],
     status,
+    action_card: actionCard,
+    alarm,
     visual_context: visualContext,
   });
 }

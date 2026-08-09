@@ -77,13 +77,16 @@ Viewer lifecycle and controller lease:
 {"type":"controller_status","room_session_id":"room-...","controller":{"viewer_id":"viewer-...","lease_id":"lease-...","expires_at_ms":0},"server_time_ms":0}
 ```
 
-State and pose are the exact `reme-demo-state/v3` and
+State and pose are the exact `reme-demo-state/v4` and
 `reme-pose-frame-17/v1` contracts exported by `src/protocol.ts`. Monitor state
 must publish `state.media_grant=null`; the Relay projects its own active grant
-for Viewers. In v3, `state.care.decision` is the exact current
-`reme-care-decision/v0-experiment` snapshot (or `null`); `phase` is presentation
-metadata and never substitutes for `decision.alarm`. A new Viewer receives the
-current state and only a pose received within the last 2.5 seconds.
+for Viewers. In v4, `state.care.decision` is the exact current
+`reme-care-decision/v1-experiment` snapshot (or `null`). Its B-owned
+`family_delivery` explicitly separates `none`, `notification`, `action_card`,
+and `alarm`; only `family_delivery=alarm` with a non-null `alarm` may drive
+emergency UI, alert channels, or fall video. `phase` is presentation metadata
+and never substitutes for that discriminator. A new Viewer receives the current
+state and only a pose received within the last 2.5 seconds.
 
 Commands are sent directly from the controller Viewer to the Relay and then
 unchanged to the Monitor:
@@ -115,8 +118,9 @@ specific `viewer_id`. ICE always targets the opposite peer. A Viewer joining
 during either active grant receives the remaining grant projection and starts
 the same offer flow immediately. Kitchen grants require current-event consent
 and last at most 60 seconds. Fall grants require the current event's exact
-`care.decision.decision_id` plus a non-null `care.decision.alarm`, and last at
-most 30 seconds. Bathroom, source/session/scene changes,
+`care.decision.decision_id`, `care.decision.family_delivery=alarm`, and a
+non-null `care.decision.alarm`, and last at most 30 seconds. Bathroom,
+source/session/scene changes,
 capture loss, stale authority, producer loss, and expiry all revoke the grant
 fail-closed. A repeated grant for the same room event can use only the time
 remaining before that event's first persisted grant deadline; it cannot restart

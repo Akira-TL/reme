@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
-from reme.runtime.decision.records import CareDecision, DecisionState
+from reme.runtime.decision.records import CareDecision, DecisionState, FamilyDelivery
 
 EMERGENCY_SCHEMA_VERSION = "reme-emergency-event/v1"
 _DEFAULT_QUEUE_SIZE = 32
@@ -157,6 +157,8 @@ def emergency_event_from_decision(
 ) -> EmergencyEvent | None:
     """Project an allowlisted final decision without serializing CareDecision itself."""
 
+    if decision.family_delivery is not FamilyDelivery.ALARM or decision.alarm is None:
+        return None
     outbound = _OUTBOUND_STATES.get(decision.state)
     if outbound is None:
         return None
