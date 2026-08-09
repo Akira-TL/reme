@@ -510,6 +510,7 @@ class BrowserGatewayPerceptionWorker:
         self,
         *,
         jpeg_pipeline_factory: Callable[[QueuedCameraMessageSource], Any] | None = None,
+        model_capabilities: dict[str, Any] | None = None,
         predictor: GeometricPostureModel | None = None,
         posture_config: PostureRuntimeConfig | None = None,
         transition_config: TransitionDetectorConfig | None = None,
@@ -517,6 +518,7 @@ class BrowserGatewayPerceptionWorker:
         poll_interval_s: float = 0.1,
     ) -> None:
         self._jpeg_pipeline_factory = jpeg_pipeline_factory
+        self._model_capabilities = dict(model_capabilities or {})
         self._predictor = predictor
         self._posture_config = posture_config
         self._transition_config = transition_config
@@ -536,12 +538,15 @@ class BrowserGatewayPerceptionWorker:
             if jpeg
             else ["landmarks_frame", "debug_scenario", "scene_signal"]
         )
-        return {
+        capabilities = {
             "camera_input_ws": "/ws/camera-input",
             "accepts": accepts,
             "jpeg_inference": jpeg,
             "landmarks_inference": not jpeg,
         }
+        if self._model_capabilities:
+            capabilities["models"] = dict(self._model_capabilities)
+        return capabilities
 
     def get_intake(self, session_id: str) -> SessionIntake | None:
         with self._lock:

@@ -630,6 +630,47 @@ def frontend_capabilities() -> dict[str, object]:
     }
 
 
+def effective_model_status(
+    input_gateway: BrowserGatewayPerceptionWorker,
+    status: RuntimeSessionStatus | None,
+) -> dict[str, dict[str, object]]:
+    """Report the models proven effective for the current session.
+
+    Capabilities only prove configuration. A JPEG session reaches ``running``
+    after its MoveNet, posture, and temporal adapters have been constructed;
+    that transition is therefore the evidence boundary used here. Missing MIL
+    remains an explicit deterministic fallback, never a loaded model.
+    """
+
+    configured = input_gateway.capabilities().get("models", {})
+    if not isinstance(configured, dict):
+        return {}
+    running = status is not None and status.state is RuntimeSessionState.RUNNING
+    degraded_reason = (
+        status.reason
+        if status is not None and status.state is RuntimeSessionState.DEGRADED
+        else None
+    )
+    result: dict[str, dict[str, object]] = {}
+    for name, raw in configured.items():
+        if not isinstance(name, str) or not isinstance(raw, dict):
+            continue
+        mode = raw.get("mode")
+        configured_status = raw.get("status")
+        fallback = configured_status == "degraded"
+        result[name] = {
+            "loaded": bool(
+                running
+                and input_gateway.mode == "jpeg"
+                and configured_status == "configured"
+            ),
+            "mode": mode if isinstance(mode, str) else "unreported",
+            "fallback": fallback,
+            "error": degraded_reason,
+        }
+    return result
+
+
 def build_runtime_handler(
     controller: RuntimePerceptionController,
     *,
@@ -642,6 +683,14 @@ def build_runtime_handler(
     the capabilities payload; the out-dialling ``c_ws`` adapter stays for
     setups where something C-side really does host a socket.
     """
+
+    def status_payload(status: RuntimeSessionStatus | None) -> dict[str, object] | None:
+        if status is None:
+            return None
+        payload = status.to_payload()
+        if input_gateway is not None:
+            payload["effective_models"] = effective_model_status(input_gateway, status)
+        return payload
 
     class RuntimeHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -667,7 +716,7 @@ def build_runtime_handler(
                     {
                         "status": "ok",
                         "active_session_id": controller.active_session_id(),
-                        "perception": status.to_payload() if status else None,
+                        "perception": status_payload(status),
                     },
                 )
                 return
@@ -685,7 +734,7 @@ def build_runtime_handler(
                 return
             if parsed.path == "/api/runtime/status":
                 status = controller.status()
-                self._json(HTTPStatus.OK, status.to_payload() if status else None)
+                self._json(HTTPStatus.OK, status_payload(status))
                 return
             if parsed.path == "/ws/events":
                 session_id = parse_qs(parsed.query).get("session_id", [""])[0]
@@ -705,14 +754,14 @@ def build_runtime_handler(
                 if parsed.path == "/api/runtime/start":
                     request = RuntimeSessionRequest.from_payload(body)
                     status = controller.start(request)
-                    self._json(HTTPStatus.ACCEPTED, status.to_payload())
+                    self._json(HTTPStatus.ACCEPTED, status_payload(status))
                     return
                 if parsed.path == "/api/runtime/stop":
                     session_id = body.get("session_id")
                     if not isinstance(session_id, str) or not session_id.strip():
                         raise RuntimeServerError("session_id must be non-empty")
                     status = controller.stop(session_id.strip())
-                    self._json(HTTPStatus.OK, status.to_payload())
+                    self._json(HTTPStatus.OK, status_payload(status))
                     return
             except (
                 RuntimeServerError,
@@ -1022,6 +1071,27 @@ def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionW
         output_hz=args.posture_hz, score_threshold=args.score_threshold
     )
     requested_mode = args.browser_input_mode
+    fall_mil_available = bool(
+        args.fall_mil_model is not None and args.fall_mil_model.is_file()
+    )
+
+    def model_capabilities(*, jpeg: bool) -> dict[str, object]:
+        return {
+            "pose_extractor": {
+                "status": "configured" if jpeg else "external_landmarks",
+                "mode": "movenet_tflite" if jpeg else "browser_landmarks",
+            },
+            "posture_classifier": {
+                "status": "configured" if jpeg else "degraded",
+                "mode": "learned_with_geometry_fallback" if jpeg else "geometry_only",
+            },
+            "fall_temporal": {
+                "status": "configured" if fall_mil_available else "degraded",
+                "mode": "mil_v3_with_deterministic_gate"
+                if fall_mil_available
+                else "deterministic_transition_only",
+            },
+        }
 
     def transition_factory(session_id: str) -> TransitionEventDetector:
         return build_runtime_transition_detector(
@@ -1032,6 +1102,7 @@ def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionW
 
     if requested_mode == "landmarks" or (requested_mode == "auto" and not jpeg_ready):
         return BrowserGatewayPerceptionWorker(
+            model_capabilities=model_capabilities(jpeg=False),
             posture_config=posture_config,
             transition_detector_factory=transition_factory,
         )
@@ -1053,6 +1124,7 @@ def build_browser_gateway(args: argparse.Namespace) -> BrowserGatewayPerceptionW
 
     return BrowserGatewayPerceptionWorker(
         jpeg_pipeline_factory=jpeg_pipeline,
+        model_capabilities=model_capabilities(jpeg=True),
         transition_detector_factory=transition_factory,
     )
 
