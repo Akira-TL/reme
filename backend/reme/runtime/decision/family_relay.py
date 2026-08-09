@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import sys
 import threading
 import time
@@ -19,9 +18,9 @@ from reme.runtime.decision.family_event import FamilyEvent, family_event_from_de
 from reme.runtime.decision.records import CareDecision
 from reme.runtime.decision.session import RuntimeSessionRegistry
 
-DEFAULT_QUEUE_CAPACITY = 64
 DEFAULT_TIMEOUT_SECONDS = 3.0
 DEFAULT_MAX_ATTEMPTS = 2
+DEFAULT_RETRY_DELAY_SECONDS = 0.25
 
 
 class FamilyRelayError(RuntimeError):
@@ -38,7 +37,7 @@ class FamilyRelayConfig:
     token: str
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
-    queue_capacity: int = DEFAULT_QUEUE_CAPACITY
+    retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS
     include_elder_quote: bool = False
 
     def __post_init__(self) -> None:
@@ -51,13 +50,8 @@ class FamilyRelayConfig:
             raise FamilyRelayError("family relay timeout must be positive")
         if self.max_attempts < 1:
             raise FamilyRelayError("family relay max_attempts must be at least 1")
-        if self.queue_capacity < 1:
-            raise FamilyRelayError("family relay queue_capacity must be at least 1")
-
-
-@dataclass(frozen=True, slots=True)
-class _QueuedEvent:
-    event: FamilyEvent
+        if self.retry_delay_seconds <= 0:
+            raise FamilyRelayError("family relay retry_delay_seconds must be positive")
 
 
 def _default_transport(request: urllib.request.Request, timeout: float) -> bytes:
@@ -103,8 +97,9 @@ class FamilyRelayPublisher:
         self._config = config
         self._transport = transport
         self._wall_clock = wall_clock
-        self._queue: queue.Queue[_QueuedEvent | None] = queue.Queue(config.queue_capacity)
-        self._lock = threading.Lock()
+        self._condition = threading.Condition()
+        self._stop_event = threading.Event()
+        self._pending: FamilyEvent | None = None
         self._revision_by_session: dict[str, int] = {}
         self._closed = False
         self._thread = threading.Thread(
@@ -118,7 +113,7 @@ class FamilyRelayPublisher:
         session_id = self._registry.active_session_id()
         if session_id is None:
             return
-        with self._lock:
+        with self._condition:
             if self._closed:
                 return
             revision = self._revision_by_session.get(session_id, 0) + 1
@@ -130,43 +125,47 @@ class FamilyRelayPublisher:
             published_at_ms=max(0, int(round(self._wall_clock() * 1000))),
             include_elder_quote=self._config.include_elder_quote,
         )
-        self._enqueue_latest(_QueuedEvent(event=event))
+        with self._condition:
+            if self._closed:
+                return
+            # Latest-state semantics: while cloud delivery is unavailable, a
+            # newer authoritative decision supersedes an older unsent one.
+            self._pending = event
+            self._condition.notify()
 
     def close(self) -> None:
-        with self._lock:
+        with self._condition:
             if self._closed:
                 return
             self._closed = True
-        self._enqueue_latest(None)
+            self._pending = None
+            self._condition.notify_all()
+        self._stop_event.set()
         self._thread.join(timeout=self._config.timeout_seconds * self._config.max_attempts + 1.0)
-
-    def _enqueue_latest(self, item: _QueuedEvent | None) -> None:
-        try:
-            self._queue.put_nowait(item)
-            return
-        except queue.Full:
-            pass
-        try:
-            self._queue.get_nowait()
-            self._queue.task_done()
-        except queue.Empty:
-            pass
-        try:
-            self._queue.put_nowait(item)
-        except queue.Full:
-            self._warn("queue remained full; dropping family relay event")
 
     def _run(self) -> None:
         while True:
-            item = self._queue.get()
-            try:
-                if item is None:
+            with self._condition:
+                while self._pending is None and not self._closed:
+                    self._condition.wait()
+                if self._closed:
                     return
-                self._deliver(item.event)
-            finally:
-                self._queue.task_done()
+                event = self._pending
+                self._pending = None
+            assert event is not None
+            if self._deliver(event):
+                continue
+            with self._condition:
+                if self._closed:
+                    return
+                if self._pending is None:
+                    self._pending = event
+            # Interruptible backoff: a newer decision can replace _pending
+            # while we wait, and shutdown never waits for the retry delay.
+            if self._stop_event.wait(self._config.retry_delay_seconds):
+                return
 
-    def _deliver(self, event: FamilyEvent) -> None:
+    def _deliver(self, event: FamilyEvent) -> bool:
         body = json.dumps(
             event.to_payload(),
             ensure_ascii=False,
@@ -186,15 +185,28 @@ class FamilyRelayPublisher:
         for attempt in range(1, self._config.max_attempts + 1):
             try:
                 self._transport(request, self._config.timeout_seconds)
-                return
+                return True
+            except urllib.error.HTTPError as exc:
+                if exc.code == 409:
+                    # Relay already has this revision or a newer one.
+                    return True
+                if 400 <= exc.code < 500:
+                    self._warn(
+                        "permanent delivery rejection for "
+                        f"{event.runtime_session_id}/revision-{event.revision}: HTTP {exc.code}"
+                    )
+                    return True
+                last_error = exc
             except (OSError, urllib.error.URLError, FamilyRelayError) as exc:
                 last_error = exc
-                if attempt < self._config.max_attempts:
-                    time.sleep(0.05 * attempt)
+            if attempt < self._config.max_attempts:
+                time.sleep(0.05 * attempt)
         self._warn(
-            "delivery failed for "
-            f"{event.runtime_session_id}/revision-{event.revision}: {last_error}"
+            "temporary delivery failure for "
+            f"{event.runtime_session_id}/revision-{event.revision}: {last_error}; "
+            "retrying latest state"
         )
+        return False
 
     @staticmethod
     def _warn(message: str) -> None:

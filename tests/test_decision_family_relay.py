@@ -156,8 +156,7 @@ def test_family_relay_publisher_sends_authoritative_revisions_with_bearer_token(
             json.loads(request.data.decode("utf-8")),
             {key.lower(): value for key, value in request.header_items()},
         ))
-        if len(delivered) >= 2:
-            delivered_event.set()
+        delivered_event.set()
         return b"{}"
 
     publisher = FamilyRelayPublisher(
@@ -170,6 +169,8 @@ def test_family_relay_publisher_sends_authoritative_revisions_with_bearer_token(
         wall_clock=lambda: 100.0,
     )
     publisher.publish_decision(_decision(decision_id="decision-42"))
+    assert delivered_event.wait(1.0)
+    delivered_event.clear()
     publisher.publish_decision(_decision(
         decision_id="decision-43",
         media_authorization=MediaAuthorization(
@@ -192,6 +193,39 @@ def test_family_relay_publisher_sends_authoritative_revisions_with_bearer_token(
     ]
     assert delivered[0][1]["authorization"] == "Bearer runtime-secret"
     assert delivered[0][1]["content-type"] == "application/json"
+
+
+def test_family_relay_publisher_retries_latest_state_after_temporary_outage() -> None:
+    registry = _Registry()
+    attempts: list[int] = []
+    delivered: list[dict[str, Any]] = []
+    success = threading.Event()
+
+    def transport(request: Any, _timeout: float) -> bytes:
+        attempts.append(len(attempts) + 1)
+        if len(attempts) <= 3:
+            raise OSError("relay temporarily unavailable")
+        delivered.append(json.loads(request.data.decode("utf-8")))
+        success.set()
+        return b"{}"
+
+    publisher = FamilyRelayPublisher(
+        registry=registry,  # type: ignore[arg-type]
+        config=FamilyRelayConfig(
+            endpoint="https://relay.example/api/runtime/event",
+            token="runtime-secret",
+            max_attempts=1,
+            retry_delay_seconds=0.01,
+        ),
+        transport=transport,
+    )
+    publisher.publish_decision(_decision())
+    assert success.wait(1.0)
+    publisher.close()
+
+    assert len(attempts) >= 4
+    assert [item["revision"] for item in delivered] == [1]
+    assert delivered[0]["care"]["decision_id"] == "decision-42"
 
 
 def test_family_relay_publisher_does_nothing_without_active_runtime_session() -> None:
