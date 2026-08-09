@@ -70,6 +70,7 @@ test("v3 carries the exact CareDecision and rejects invented fields", () => {
     demo_mode: "live",
     consent_required: false,
     response_timeout_ms: null,
+    response_deadline_ms: null,
     action_card: null,
     visual_context: {
       sent_to_mimo: true,
@@ -152,6 +153,16 @@ test("control command factory accepts only the strict command union", () => {
     command: { name: "select_scene", scene_id: "kitchen" },
   });
   assert.equal(isControlCommand(command), true);
+  const notificationAck = createControlCommand({
+    roomSessionId: "room-1",
+    commandId: "cmd-notification",
+    commandSequence: 1,
+    issuedAtMs: 1000,
+    expiresAtMs: 9000,
+    expectedStateRevision: 4,
+    command: { name: "confirm_family_notification", decision_id: "decision-1" },
+  });
+  assert.equal(isControlCommand(notificationAck), true);
   assert.throws(() => createControlCommand({
     ...command,
     roomSessionId: "room-1",

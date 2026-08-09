@@ -194,16 +194,22 @@ interaction_response
 系统存在两个可能脱钩的时间轴：
 
 - **感知时间**：视频起点或实时会话起点的毫秒偏移；
-- **交互时间**：C 收到某条决策后经过的现实时间。
+- **交互时间**：B 提交某条决策后经过的现实时间。
 
 规则：
 
 - `timestamp_ms`、`start_ms`、`end_ms` 表示感知时间；
 - 实时摄像头以当前 session 启动为 `0 ms`；
 - 预录视频以视频起点为 `0 ms`；
-- `response_timeout_ms` 表示从 C 收到 CareDecision 起计算的相对交互时长；
+- `response_timeout_ms` 表示 B 为该决策配置的相对交互时长；
+- `response_deadline_ms` 是同一窗口的墙上时间锚点，仅供 C 在重连或
+  重复投递时呈现同一个截止时间；
+- B 使用单调时钟调度并拥有 timeout transition，C 不提交 timeout；
+- deadline 到期只推进交互状态，不推进感知时间高水位；预录视频暂停后恢复的
+  合法帧不得因此被判为 timeline rewind；
 - 预录视频暂停或结束后，`response_timeout_ms` 仍然有效；
-- 当前不使用绝对截止时间；未来需要审计时采用“墙上时间锚点 + 相对时长”双字段，而不是替换 `response_timeout_ms`。
+- scene/session reset 或 runtime shutdown 必须取消旧 deadline；进程崩溃后的
+  deadline 恢复需要另行定义持久化合同。
 
 ## 6. 统一枚举
 
@@ -396,6 +402,7 @@ SceneManifest 只用于 `recorded_video`，不用于实时摄像头会话。
   "elder_message": "您还好吗？需要我帮您联系家人吗？",
   "family_notification": null,
   "response_timeout_ms": 8000,
+  "response_deadline_ms": 1786276808000,
   "action": "ask_elder",
   "reason_summary": "检测到异常动作变化，建议确认安全状态。",
   "uncertainty": "medium",
@@ -417,6 +424,7 @@ SceneManifest 只用于 `recorded_video`，不用于实时摄像头会话。
 normal
 observe
 check_in_required
+consent_required
 family_notification_required
 urgent_attention
 resolved
@@ -459,11 +467,14 @@ degraded
 - 姿态变化先经过确定性规则，再决定是否调用 MiMo；
 - 视觉上下文只在确有必要时显式抽取最小关键帧或短片段；
 - `visual_context.sent_to_mimo` 必须反映真实行为；
-- 需要回应时使用 `response_timeout_ms`；
+- 需要回应时使用 `response_timeout_ms + response_deadline_ms`；
 - 超时无回应后的确定性升级不得等待 MiMo；
+- timeout 由 B runtime 产生，C 归零时只清 presentation countdown；
 - MiMo 后到结果不得撤销、降级或推迟已触发的规则家属通知；
 - MiMo 超时、非法输出或断网时输出合法 `degraded` 决策；
-- 本版不包含牙疼、授权、行动卡或家属确认字段。
+- `privacy_mode` 是必须执行的呈现指令；Bathroom 与 `hidden` 是原画硬门，
+  事件 grant 只可覆盖日常 `blurred/skeleton_only`；
+- 普通行动卡确认与告警确认使用不同的 response 枚举。
 
 ## 12. InteractionResponse：C → B
 
@@ -485,6 +496,11 @@ safe
 need_help
 unclear
 none
+consent_granted
+consent_denied
+card_confirmed
+alarm_confirmed
+family_notification_confirmed
 ```
 
 `source`：
@@ -493,12 +509,18 @@ none
 user_input
 script
 timeout
+family_input
 ```
 
 约束：
 
 - `decision_id` 必须对应触发本次询问的 CareDecision；
-- `none` 只能由超时或明确脚本触发；
+- `none/timeout` 仅为旧客户端/测试脚本兼容输入；正常 runtime timeout 由 B
+  的 deadline 直接驱动，不经过 C；
+- `card_confirmed/family_input` 只确认当前 pending action card；
+- `alarm_confirmed/family_input` 只确认当前权威 alarm；
+- `family_notification_confirmed/family_input` 只确认既非 alarm 也非 action
+  card 的普通家属通知；三类回执不可互换；
 - C 不直接生成家属通知；
 - B 最多允许一次澄清询问，避免无限循环；
 - 自由文本主诉和具体产品故事暂不进入本版接口。

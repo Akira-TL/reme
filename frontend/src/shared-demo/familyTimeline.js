@@ -320,14 +320,30 @@ function transitionEvents(snapshot, previous, current) {
   ].filter(Boolean);
 }
 
+const ACKNOWLEDGEMENT_COPY = Object.freeze({
+  confirm_alarm: {
+    title: "家属已经确认收到告警",
+    statusLabel: "告警已确认",
+  },
+  confirm_action_card: {
+    title: "家属已经确认收到行动卡",
+    statusLabel: "行动卡已确认",
+  },
+  confirm_family_notification: {
+    title: "家属已经确认收到通知",
+    statusLabel: "通知已确认",
+  },
+});
+
 function acknowledgementEvents(roomSessionId, acks, seenAckIds) {
   if (!roomSessionId) return { events: [], seenAckIds };
   const seen = new Set(seenAckIds);
   const events = [];
   for (const ack of acks || []) {
+    const copy = ACKNOWLEDGEMENT_COPY[ack?.command_name];
     if (
       ack?.phase !== "applied"
-      || ack.command_name !== "confirm_alarm"
+      || !copy
       || !ack.command_id
       || seen.has(ack.command_id)
     ) continue;
@@ -336,11 +352,11 @@ function acknowledgementEvents(roomSessionId, acks, seenAckIds) {
       id: `ack:${roomSessionId}:${ack.command_id}`,
       kind: "acknowledgement",
       label: "处理结果",
-      title: "家属已经确认收到告警",
+      title: copy.title,
       detail: "家中端已应用本次处理回执。",
       timestampMs: ack.timestamp_ms,
       tone: "success",
-      statusLabel: "家属已确认",
+      statusLabel: copy.statusLabel,
       progress: "回执已同步",
       source: "command_ack",
       stateRevision: Number.isSafeInteger(ack.state_revision) ? ack.state_revision : null,

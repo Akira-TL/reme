@@ -95,6 +95,52 @@ test("响应动作携带当前 decision_id 且传播 stale 结果", async () => 
   assert.deepEqual(stale, { phase: "rejected", code: "stale_decision" });
 });
 
+test("普通行动卡确认调用独立动作而不是告警确认", async () => {
+  let alarmCalled = false;
+  let cardCalled = false;
+  const result = await executeMonitorCommand(
+    envelope("confirm_action_card", { decision_id: "decision-1" }),
+    {
+      context,
+      now: 2_000,
+      actions: {
+        confirmAlarm() {
+          alarmCalled = true;
+          return { ok: true };
+        },
+        confirmActionCard(decisionId) {
+          assert.equal(decisionId, "decision-1");
+          cardCalled = true;
+          return { ok: true };
+        },
+      },
+    },
+  );
+  assert.equal(alarmCalled, false);
+  assert.equal(cardCalled, true);
+  assert.deepEqual(result, { phase: "applied", code: "action_card_confirmed" });
+});
+
+test("普通家属通知确认调用独立动作", async () => {
+  let notificationCalled = false;
+  const result = await executeMonitorCommand(
+    envelope("confirm_family_notification", { decision_id: "decision-1" }),
+    {
+      context,
+      now: 2_000,
+      actions: {
+        confirmFamilyNotification(decisionId) {
+          assert.equal(decisionId, "decision-1");
+          notificationCalled = true;
+          return { ok: true };
+        },
+      },
+    },
+  );
+  assert.equal(notificationCalled, true);
+  assert.deepEqual(result, { phase: "applied", code: "family_notification_confirmed" });
+});
+
 test("本机拒绝确认不会触发任何采集动作", async () => {
   const rejected = await confirmLocalMonitorCommand(envelope("select_scene", {
     scene_id: "kitchen",

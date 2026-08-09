@@ -81,6 +81,7 @@ export interface CareDecision {
   demo_mode: "live" | "mock" | "record";
   consent_required: boolean;
   response_timeout_ms: number | null;
+  response_deadline_ms: number | null;
   action_card: {
     event: string;
     elder_quote: string;
@@ -183,6 +184,8 @@ export type ControlCommandBody =
     response: "safe" | "need_help" | "consent_granted" | "consent_denied";
   }
   | { name: "confirm_alarm"; decision_id: string }
+  | { name: "confirm_action_card"; decision_id: string }
+  | { name: "confirm_family_notification"; decision_id: string }
   | { name: "replay_voice"; decision_id: string };
 
 export interface ControlCommand {
@@ -276,6 +279,7 @@ const CARE_DECISION_KEYS = [
   "privacy_mode",
   "reason_summary",
   "response_timeout_ms",
+  "response_deadline_ms",
   "risk_level",
   "scene_id",
   "schema_version",
@@ -665,6 +669,9 @@ export function validateCareDecision(value: unknown): value is CareDecision {
     && (!isNonNegativeSafeInteger(value.response_timeout_ms) || value.response_timeout_ms === 0)) {
     return false;
   }
+  if (value.response_deadline_ms !== null
+    && (!isFiniteNonNegativeNumber(value.response_deadline_ms)
+      || value.response_timeout_ms === null)) return false;
   if (value.action_card !== null && !validateActionCard(value.action_card)) return false;
   if (value.visual_context !== null && !validateCareVisualContext(value.visual_context)) return false;
   if (value.alarm !== null && !validateAlarm(value.alarm)) return false;
@@ -771,7 +778,10 @@ function validateCommandBody(value: unknown): value is ControlCommandBody {
         || record.response === "consent_granted"
         || record.response === "consent_denied");
   }
-  if (record.name === "confirm_alarm" || record.name === "replay_voice") {
+  if (record.name === "confirm_alarm"
+    || record.name === "confirm_action_card"
+    || record.name === "confirm_family_notification"
+    || record.name === "replay_voice") {
     if (!isExactObject(record, ["decision_id", "name"])) return false;
     return isOpaqueId(record.decision_id);
   }

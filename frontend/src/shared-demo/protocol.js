@@ -408,7 +408,12 @@ function isCommandPayload(value) {
       && isOpaqueId(value.decision_id)
       && ["safe", "need_help", "consent_granted", "consent_denied"].includes(value.response);
   }
-  if (["confirm_alarm", "replay_voice"].includes(value.name)) {
+  if ([
+    "confirm_alarm",
+    "confirm_action_card",
+    "confirm_family_notification",
+    "replay_voice",
+  ].includes(value.name)) {
     return hasExactKeys(value, ["name", "decision_id"])
       && isOpaqueId(value.decision_id);
   }

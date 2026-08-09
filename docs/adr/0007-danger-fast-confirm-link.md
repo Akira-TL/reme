@@ -22,6 +22,16 @@ B 有两条主线：生活线与危险时期线。用户定调**先做危险时�
 
 **任一路判定危险即刻升级**——竞速在服务锁内自然裁决：后到的确认发现事件已升级/已关闭，丢弃并审计，绝不二次告警、绝不撤销。
 
+### 2026-08-09 ask-first sequencing clarification
+
+`confirm_channels=[frame, voice]` remains the accepted capability contract, but
+offering a channel does not authorize C to upload immediately on receipt. Home
+plays the elder prompt first, then may upload one current frame. A's dormant
+evidence-frame shortcut is not auto-forwarded until a future server-side
+prompt-delivery receipt can prove the question was offered. This prevents the
+visual fast path from turning “ask first” into a silent immediate alarm while
+keeping the explicit frame endpoint executable.
+
 **家属端告警通道**：源于跌倒的家属告警决策带 `alarm` 可空字段 `{channels: [vibrate, ring, flash], trigger}`，C 家属端按能力渲染（震动循环/响铃/爆闪）。`trigger` 枚举记录触发路（elder_report/voice_intent/visual_confirm/check_in_timeout/unclear_response/family_unresponsive），审计与叙事同源。
 
 ## 边界（继承 ADR-0005，一条不破）

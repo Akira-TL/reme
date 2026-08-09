@@ -1,9 +1,9 @@
-"""Pure per-scene session state machine: ticks and responses in, directives out.
+"""Pure per-scene state machine: ticks/responses/deadlines in, directives out.
 
-B is request-driven (contract: C renders the countdown and submits
-``response=none/source=timeout``), so this module holds no timers, no IO and
-no MiMo calls — those live in the policy layer. Every function returns a new
-immutable :class:`SessionState` plus instructions for the policy layer.
+This module holds no timers, IO or MiMo calls. The policy/runtime layer owns
+deadline scheduling and feeds expiry identities through :func:`on_timeout`.
+Every function returns a new immutable :class:`SessionState` plus instructions
+for the policy layer.
 """
 
 from __future__ import annotations
@@ -96,10 +96,9 @@ REJECT_TIMELINE_REWIND = "timeline_rewind"
 REJECT_EPISODE_RESOLVED = "episode_resolved"
 REJECT_DANGER_NOT_APPLICABLE = "danger_not_applicable"
 
-# Danger link: keep the elder check-in first.  Visual confirmation is not
-# accepted during the first question, otherwise C's automatic frame upload
-# turns "lying -> ask" into an immediate family alert.
-FALL_CONFIRM_CHANNELS = ("voice",)
+# Danger link: both accepted confirmation paths remain advertised. C sequences
+# its single-frame upload after prompt playback so the check-in is still first.
+FALL_CONFIRM_CHANNELS = ("frame", "voice")
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,7 +354,7 @@ def on_demo_conversation(
             need_dialogue=True,
             dialogue_goal="request_consent",
             consent_required=True,
-            response_timeout_ms=None,
+            response_timeout_ms=config.check_in_timeout_ms,
             template=TemplateId.KITCHEN_SHARE_REQUEST,
         )
         next_state = replace(
@@ -425,7 +424,7 @@ def _on_elder_response(
             return _family_alert(
                 state,
                 TemplateId.FALL_HELP_ALERT,
-                response_timeout_ms=None,
+                response_timeout_ms=config.family_ack_timeout_ms,
                 need_dialogue=True,
                 alarm_trigger=(
                     AlarmTrigger.VOICE_INTENT
@@ -466,7 +465,7 @@ def _on_elder_response(
             need_dialogue=True,
             dialogue_goal="request_consent",
             consent_required=True,
-            response_timeout_ms=None,
+            response_timeout_ms=config.check_in_timeout_ms,
             template=TemplateId.CONSENT_REQUEST,
         )
         next_state = replace(
@@ -504,24 +503,30 @@ def _on_elder_response(
             alarm_trigger=AlarmTrigger.UNCLEAR_RESPONSE if is_fall else None,
         )
     if value is ResponseValue.NONE:
-        # Contract: after a timeout the rules escalate immediately, never MiMo.
-        # Deliberately blind to `state.escalation` for severity: a silent
-        # concern check-in escalates on exactly the same rule as a silent fall
-        # check-in; only the fall episode additionally shakes the family phone.
-        return _family_alert(
-            state,
-            TemplateId.TIMEOUT_FAMILY_ALERT,
-            response_timeout_ms=config.family_ack_timeout_ms,
-            need_dialogue=False,
-            timeout_count=state.timeout_count + 1,
-            alarm_trigger=(
-                AlarmTrigger.CHECK_IN_TIMEOUT if state.escalation is EscalationKind.FALL else None
-            ),
-        )
+        return _on_elder_timeout(state, config=config)
     return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
 
 
-def _on_consent_response(state: SessionState, response: InteractionResponse) -> Directive:
+def _on_elder_timeout(state: SessionState, *, config: TriggerConfig) -> Directive:
+    """Deterministically escalate an unanswered elder check-in."""
+
+    # Deliberately blind to `state.escalation` for severity: a silent concern
+    # check-in escalates like a silent fall; only the fall additionally alarms.
+    return _family_alert(
+        state,
+        TemplateId.TIMEOUT_FAMILY_ALERT,
+        response_timeout_ms=config.family_ack_timeout_ms,
+        need_dialogue=False,
+        timeout_count=state.timeout_count + 1,
+        alarm_trigger=(
+            AlarmTrigger.CHECK_IN_TIMEOUT if state.escalation is EscalationKind.FALL else None
+        ),
+    )
+
+
+def _on_consent_response(
+    state: SessionState, response: InteractionResponse, *, config: TriggerConfig
+) -> Directive:
     value = response.response
     kitchen_share = state.conversation_kind is DemoConversationKind.KITCHEN_SHARE
     if value is ResponseValue.CONSENT_GRANTED:
@@ -549,7 +554,7 @@ def _on_consent_response(state: SessionState, response: InteractionResponse) -> 
                 need_dialogue=True,
                 dialogue_goal="request_consent",
                 consent_required=True,
-                response_timeout_ms=None,
+                response_timeout_ms=config.check_in_timeout_ms,
                 template=(
                     TemplateId.KITCHEN_SHARE_REQUEST
                     if kitchen_share
@@ -563,42 +568,36 @@ def _on_consent_response(state: SessionState, response: InteractionResponse) -> 
             TemplateId.KITCHEN_SHARE_DENIED if kitchen_share else TemplateId.CONSENT_TIMEOUT_CLOSE,
         )
     if value is ResponseValue.NONE:
-        # An unanswered consent request never becomes a family notification.
-        return _resolve(
-            state,
-            TemplateId.KITCHEN_SHARE_DENIED if kitchen_share else TemplateId.CONSENT_TIMEOUT_CLOSE,
-        )
+        return _on_consent_timeout(state)
     return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+
+
+def _on_consent_timeout(state: SessionState) -> Directive:
+    """Conservatively close unanswered consent without notifying family."""
+
+    kitchen_share = state.conversation_kind is DemoConversationKind.KITCHEN_SHARE
+    return _resolve(
+        state,
+        TemplateId.KITCHEN_SHARE_DENIED if kitchen_share else TemplateId.CONSENT_TIMEOUT_CLOSE,
+    )
 
 
 def _on_family_notified_response(state: SessionState, response: InteractionResponse) -> Directive:
     value = response.response
     if value is ResponseValue.CARD_CONFIRMED:
-        include_card = CardStatus.CONFIRMED if state.card_draft is not None else None
-        return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=include_card)
+        if state.card_draft is None:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=CardStatus.CONFIRMED)
+    if value is ResponseValue.ALARM_CONFIRMED:
+        if state.card_draft is not None or state.escalation is not EscalationKind.FALL:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED)
+    if value is ResponseValue.FAMILY_NOTIFICATION_CONFIRMED:
+        if state.card_draft is not None or state.escalation is EscalationKind.FALL:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED)
     if value is ResponseValue.NONE:
-        skeleton = DecisionSkeleton(
-            state=DecisionState.URGENT_ATTENTION,
-            risk_level=4,
-            action=DecisionAction.SHOW_URGENT_ATTENTION,
-            need_dialogue=False,
-            dialogue_goal=None,
-            consent_required=False,
-            response_timeout_ms=None,
-            template=TemplateId.URGENT_ALERT,
-            alarm_trigger=(
-                AlarmTrigger.FAMILY_UNRESPONSIVE
-                if state.escalation is EscalationKind.FALL
-                else None
-            ),
-        )
-        next_state = replace(
-            _mark_emitted(state, skeleton),
-            phase=SessionPhase.URGENT,
-            risk_floor=4,
-            timeout_count=state.timeout_count + 1,
-        )
-        return Directive(next_state=next_state, skeleton=skeleton)
+        return _on_family_timeout(state)
     if value is ResponseValue.SAFE:
         return _resolve(state, TemplateId.LATE_SAFE_RESOLVED)
     if value is ResponseValue.NEED_HELP:
@@ -606,11 +605,47 @@ def _on_family_notified_response(state: SessionState, response: InteractionRespo
     return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
 
 
+def _on_family_timeout(state: SessionState) -> Directive:
+    """Escalate an unacknowledged family alert to urgent attention."""
+
+    skeleton = DecisionSkeleton(
+        state=DecisionState.URGENT_ATTENTION,
+        risk_level=4,
+        action=DecisionAction.SHOW_URGENT_ATTENTION,
+        need_dialogue=False,
+        dialogue_goal=None,
+        consent_required=False,
+        response_timeout_ms=None,
+        template=TemplateId.URGENT_ALERT,
+        alarm_trigger=(
+            AlarmTrigger.FAMILY_UNRESPONSIVE
+            if state.escalation is EscalationKind.FALL
+            else None
+        ),
+    )
+    next_state = replace(
+        _mark_emitted(state, skeleton),
+        phase=SessionPhase.URGENT,
+        risk_floor=4,
+        timeout_count=state.timeout_count + 1,
+    )
+    return Directive(next_state=next_state, skeleton=skeleton)
+
+
 def _on_urgent_response(state: SessionState, response: InteractionResponse) -> Directive:
     value = response.response
     if value is ResponseValue.CARD_CONFIRMED:
-        include_card = CardStatus.CONFIRMED if state.card_draft is not None else None
-        return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=include_card)
+        if state.card_draft is None:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED, include_card=CardStatus.CONFIRMED)
+    if value is ResponseValue.ALARM_CONFIRMED:
+        if state.card_draft is not None or state.escalation is not EscalationKind.FALL:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED)
+    if value is ResponseValue.FAMILY_NOTIFICATION_CONFIRMED:
+        if state.card_draft is not None or state.escalation is EscalationKind.FALL:
+            return Directive(next_state=state, reject_code=REJECT_INVALID_RESPONSE)
+        return _resolve(state, TemplateId.RECEIPT_RESOLVED)
     if value is ResponseValue.SAFE:
         return _resolve(state, TemplateId.LATE_SAFE_RESOLVED)
     if value in (ResponseValue.NONE, ResponseValue.NEED_HELP):
@@ -639,10 +674,38 @@ def on_response(
     if advanced.phase is SessionPhase.AWAITING_ELDER:
         return _on_elder_response(advanced, response, config=config)
     if advanced.phase is SessionPhase.AWAITING_CONSENT:
-        return _on_consent_response(advanced, response)
+        return _on_consent_response(advanced, response, config=config)
     if advanced.phase is SessionPhase.FAMILY_NOTIFIED:
         return _on_family_notified_response(advanced, response)
     return _on_urgent_response(advanced, response)
+
+
+def on_timeout(
+    state: SessionState,
+    *,
+    decision_id: str,
+    timestamp_ms: float,
+    config: TriggerConfig,
+) -> Directive:
+    """Apply B's own deadline to the current episode.
+
+    This is deliberately separate from ``InteractionResponse``: browser
+    liveness is not a safety input, and B never forges a client response to
+    drive its state machine.
+    """
+
+    advanced = _advance_clock(state, timestamp_ms)
+    if advanced.pending_decision_id is None:
+        return Directive(next_state=advanced, reject_code=REJECT_NO_PENDING)
+    if decision_id != advanced.pending_decision_id:
+        return Directive(next_state=advanced, reject_code=REJECT_STALE_DECISION)
+    if advanced.phase is SessionPhase.AWAITING_ELDER:
+        return _on_elder_timeout(advanced, config=config)
+    if advanced.phase is SessionPhase.AWAITING_CONSENT:
+        return _on_consent_timeout(advanced)
+    if advanced.phase is SessionPhase.FAMILY_NOTIFIED:
+        return _on_family_timeout(advanced)
+    return Directive(next_state=advanced, reject_code=REJECT_INVALID_RESPONSE)
 
 
 def on_danger_confirmed(

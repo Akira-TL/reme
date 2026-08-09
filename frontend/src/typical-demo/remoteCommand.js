@@ -2,6 +2,7 @@ import {
   mapDecisionStateToPhase,
   projectCareDecision,
 } from "../shared-demo/careDecision.js";
+import { privacyAllowsEventVideo } from "./privacyPresentation.js";
 
 const COMMAND_SCHEMA = "reme-control-command/v1";
 const ACK_TYPE = "control_ack";
@@ -83,6 +84,8 @@ export function parseControlCommand(value) {
         && validId(command.decision_id)
         && RESPONSES.has(command.response) ? value : null;
     case "confirm_alarm":
+    case "confirm_action_card":
+    case "confirm_family_notification":
     case "replay_voice":
       return exactKeys(command, ["name", "decision_id"]) && validId(command.decision_id)
         ? value : null;
@@ -117,7 +120,13 @@ export function classifyControlCommand(commandEnvelope, context, now = Date.now(
     return { disposition: "rejected", code: "safety_event_active" };
   }
 
-  if (["submit_response", "confirm_alarm", "replay_voice"].includes(command.name)) {
+  if ([
+    "submit_response",
+    "confirm_alarm",
+    "confirm_action_card",
+    "confirm_family_notification",
+    "replay_voice",
+  ].includes(command.name)) {
     if (!context.decisionId || command.decision_id !== context.decisionId) {
       return { disposition: "rejected", code: "stale_decision" };
     }
@@ -241,6 +250,9 @@ export function mediaGrantEligibility({
   now = Date.now(),
 }) {
   if (sceneId === "bathroom") return { allowed: false, code: "bathroom_video_forbidden" };
+  if (!privacyAllowsEventVideo(sceneId, careDecision)) {
+    return { allowed: false, code: "decision_privacy_hidden" };
+  }
   if (sceneId === "kitchen") {
     const remainingMs = Number(
       kitchenAuthorization?.expiresAtMonotonicMs ?? kitchenAuthorization?.expiresAtMs,

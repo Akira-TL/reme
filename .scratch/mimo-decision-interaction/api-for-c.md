@@ -34,11 +34,18 @@ curl -s localhost:8100/api/decision -H 'Content-Type: application/json' \
 ```bash
 curl -s localhost:8100/api/response -H 'Content-Type: application/json' \
   -d '{"schema_version":"reme-interaction-response/v0-experiment","scene_id":"fall_demo_01",
-       "decision_id":"decision-0001","timestamp_ms":21000,"response":"none",
-       "source":"timeout","demo_mode":"live","text":null}'
+       "decision_id":"decision-0001","timestamp_ms":15000,"response":"safe",
+       "source":"user_input","demo_mode":"live","text":null}'
 ```
 
-要点：`decision_id` 必须是触发本次询问的那条决策；倒计时由 C 按 `response_timeout_ms`（相对毫秒）渲染，超时提交 `response=none, source=timeout`；老人原话放 `text`（仅 `user_input|script` 可非空）；家属确认行动卡用 `response=card_confirmed, source=family_input`。
+要点：`decision_id` 必须是当前待处理决策；C 按
+`response_deadline_ms`（墙上时间）呈现倒计时，缺失时才回退
+`response_timeout_ms`，归零不提交任何业务回应。B 的单调时钟 deadline
+会自主发布下一条 CareDecision，页面关闭也不影响。老人原话放 `text`
+（仅 `user_input|script|voice` 可非空）；普通行动卡确认用
+`card_confirmed/family_input`，告警确认用 `alarm_confirmed/family_input`，不带
+告警/行动卡的普通家属通知用
+`family_notification_confirmed/family_input`，三者不可互换。
 
 ### `POST /api/scene/reset` — 重置场景会话
 
@@ -92,7 +99,7 @@ C→B 的用户回应仍走 `POST /api/response`（HTTP，有明确成败）；`
 ### CareDecision 新增可空字段（不识别可忽略，零破坏）
 
 - `voice_asset: string|null` — 预生成语音的相对 URL（如 `/voice/fall_check_in.m4a`）。**老人端拿到带此字段的决策应立即播放**（`new Audio(base + voice_asset).play()`），文字仍在 `elder_message`（audio 失败或字段为 null 时用 Web Speech `speechSynthesis` 读 `elder_message` 兜底）。只在语音与文字逐字一致时才下发，不会读错词。
-- `confirm_channels: ["frame","voice"]|null` — 非空表示 B 正接受对本决策的确认上传。老人端见到含 `"frame"` 时**立即抓一帧当前画面上传**（canvas→JPEG→base64）；含 `"voice"` 时开麦录老人回应（3-5 秒）上传。跌倒 check-in 与跌倒澄清都会带；关怀问候不带。
+- `confirm_channels: ["frame","voice"]|null` — 非空表示 B 正接受对本决策的确认上传。含 `"frame"` 时必须**先完整播放本次老人问询，再至多抓一帧上传**；不得在刚收到决策时静默立即上传并触发告警。含 `"voice"` 时开麦录老人回应。跌倒 check-in 与跌倒澄清都会带；关怀问候不带。
 - `alarm: {"channels": ["vibrate","ring","flash"], "trigger": "..."}|null` — **家属端告警指令**，只出现在 `family_notification_required` / `urgent_attention` 且事件源于跌倒时。家属端按能力渲染：`navigator.vibrate([500,200,500…])` 循环、`<audio loop>` 响铃、屏幕全屏爆闪（背景色 200ms 交替；有 torch 权限可用 ImageCapture torch）。`trigger` 说明由哪条路触发：`elder_report`（按钮求助）/`voice_intent`（语音判定）/`visual_confirm`（画面确认）/`check_in_timeout`（询问超时）/`unclear_response`（澄清失败）/`family_unresponsive`（家属未确认，urgent 级）。
 
 ### `POST /api/danger/frame` — 原图确认上传（老人端→B）
@@ -128,11 +135,15 @@ C→B 的用户回应仍走 `POST /api/response`（HTTP，有明确成败）；`
 | 503 | `confirm_unavailable` | B 无认知后端（mock 模式的音频/图片路；text 规则路仍可用） |
 | 503 | `danger_disabled` | 服务端以 `--no-danger` 启动 |
 
-上传被拒不影响主链路：按钮回应、倒计时超时照常工作。
+上传被拒不影响主链路：真实按钮/语音回应照常工作，B 的 deadline 仍会
+自主执行超时升级。
 
 ### 全链集成状态（lbx 分支，2026-08-02）
 
-以上全部职责在 `frontend/` 已有参考实现：`services/decisionClient.js` + `hooks/useDecisionRuntime.js` + `components/DangerLayer.jsx`（B 会话/WS 去重/倒计时自动 timeout/语音播放/抓帧与 WAV 录音上传/alarm 渲染）。A 侧 `/api/runtime/capabilities` 现有 `input` 段：`jpeg_inference=false` 时 C 自动把本地 17 点以 `landmarks_frame` 直传 `/ws/camera-input`（≤10fps），不再推 JPEG。六跳链路 E2E 与真实 key 冒烟均绿：跌倒→check-in 0.02s、真图确认→告警 1.44s、全链 1.46s。启动方式见 `.scratch/handoff/2026-08-02-danger-link-lbx.md`。
+`frontend/` 的参考实现负责 WS 去重、权威 deadline 展示、语音播放、
+ask-first 后单帧上传与 alarm 渲染；它不再生成 timeout 或安全状态。
+历史实测数字仅描述 2026-08-02 的测试条件，不是当前部署承诺。启动方式见
+`.scratch/handoff/2026-08-02-danger-link-lbx.md`。
 
 ## 附录：mkcert HTTPS（手机摄像头硬前提）
 

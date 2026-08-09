@@ -11,9 +11,9 @@ import threading
 from collections.abc import Callable
 from typing import Protocol
 
-from reme.runtime.decision.danger import DangerConfirmController, DangerRejectedError
+from reme.runtime.decision.danger import DangerConfirmController
 from reme.runtime.decision.policy import DecisionPublisher, DecisionService
-from reme.runtime.decision.records import CareDecision, DecisionState
+from reme.runtime.decision.records import CareDecision
 from reme.runtime.decision.session import RuntimeSessionRegistry, SessionRegistryError
 from reme.runtime.decision.stream import EventIngest, LiveStreams
 from reme.runtime.decision.websocket import DecisionEventHub
@@ -23,12 +23,6 @@ _EVALUATED_EVENT_TYPES = {
     RuntimeEventType.POSTURE_OBSERVATION,
     RuntimeEventType.TRANSITION_EVENT,
 }
-
-# Dormant superset key (abc-interface: TransitionEvent.evidence is a free
-# dict): A may attach the fall window's raw frame so the visual confirmation
-# starts without waiting for C's upload.  A never has to send it.
-EVIDENCE_FRAME_KEY = "frame_jpeg_b64"
-
 
 class PerceptionBridgeLike(Protocol):
     """Session-scoped perception transport consumed by the HTTP handler."""
@@ -130,41 +124,14 @@ def evaluate_after_ingest(
     if isinstance(timestamp_raw, bool) or not isinstance(timestamp_raw, int | float):
         return
     try:
-        decision = service.get_decision(scene_id=scene_id, timestamp_ms=float(timestamp_raw))
+        service.get_decision(scene_id=scene_id, timestamp_ms=float(timestamp_raw))
     except Exception as exc:  # noqa: BLE001 - background tick must never crash ingest
         print(f"warning: post-ingest evaluation failed for {scene_id}: {exc}")
         return
-    _feed_evidence_frame(danger, event, decision)
-
-
-def _feed_evidence_frame(
-    danger: DangerConfirmController | None, event: RuntimeEvent, decision: CareDecision
-) -> None:
-    """Start the visual confirmation from A's own evidence frame, if any."""
-
-    if danger is None or event.event_type is not RuntimeEventType.TRANSITION_EVENT:
-        return
-    if decision.state is not DecisionState.CHECK_IN_REQUIRED:
-        return
-    channels = decision.confirm_channels
-    if channels is None or "frame" not in channels:
-        return
-    evidence = event.payload.get("evidence")
-    frame_b64 = evidence.get(EVIDENCE_FRAME_KEY) if isinstance(evidence, dict) else None
-    if not isinstance(frame_b64, str) or not frame_b64:
-        return
-    try:
-        danger.submit_frame(
-            scene_id=decision.scene_id,
-            decision_id=decision.decision_id,
-            image_b64=frame_b64,
-            timestamp_ms=decision.timestamp_ms,
-            origin="a_evidence",
-        )
-    except DangerRejectedError as exc:
-        # Evidence frames are best-effort; a refusal only means the episode
-        # moved on or the payload was junk.
-        print(f"warning: evidence frame refused for {decision.scene_id}: {exc.code}")
+    # Do not auto-upload A's transition frame here. The accepted product order
+    # is ask-first; Home submits at most one offered frame after prompt playback.
+    # Re-enabling the A evidence path requires a prompt-delivery receipt so a
+    # frame cannot silently alarm before the elder hears the question.
 
 
 def spawn_post_ingest_evaluation(

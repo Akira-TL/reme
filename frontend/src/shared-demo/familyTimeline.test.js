@@ -63,6 +63,7 @@ function careDecision({
     demo_mode: "live",
     consent_required: false,
     response_timeout_ms: null,
+    response_deadline_ms: null,
     action_card: assessment ? {
       event: assessment.verdict,
       elder_quote: "暂无本人补充",
@@ -301,6 +302,36 @@ test("an applied family alarm acknowledgement is recorded exactly once", () => {
   );
   assert.equal(state.events[0].title, "家属已经确认收到告警");
   assert.equal(state.events[0].source, "command_ack");
+});
+
+test("action-card and plain-notification acknowledgements are recorded distinctly", () => {
+  let state = observe(createFamilyTimelineState(), snapshot());
+  state = observe(state, null, [
+    {
+      command_id: "command-card",
+      command_name: "confirm_action_card",
+      phase: "applied",
+      timestamp_ms: 3_100,
+      state_revision: 3,
+      reason: null,
+    },
+    {
+      command_id: "command-notification",
+      command_name: "confirm_family_notification",
+      phase: "applied",
+      timestamp_ms: 3_200,
+      state_revision: 4,
+      reason: null,
+    },
+  ]);
+
+  const titles = state.events
+    .filter((event) => event.kind === "acknowledgement")
+    .map((event) => event.title);
+  assert.deepEqual(titles, [
+    "家属已经确认收到通知",
+    "家属已经确认收到行动卡",
+  ]);
 });
 
 test("the in-memory timeline remains bounded to its newest judgments", () => {

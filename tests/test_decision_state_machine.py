@@ -40,6 +40,7 @@ from reme.runtime.decision.state_machine import (
     on_demo_conversation,
     on_response,
     on_tick,
+    on_timeout,
 )
 
 _CONFIG = TriggerConfig()
@@ -127,6 +128,17 @@ def _awaiting_elder(**overrides: Any) -> SessionState:
     return _state(**fields)
 
 
+def _pending_card() -> ActionCard:
+    return ActionCard(
+        event="牙疼影响进食",
+        elder_quote="牙疼，饭咬不动。",
+        system_judgment="需要家属协助预约",
+        suggested_action="预约口腔检查",
+        time_window="3 天内",
+        status=CardStatus.PENDING,
+    )
+
+
 def test_normal_context_stays_monitoring_with_normal_decision() -> None:
     directive = on_tick(_state(), _context(), config=_CONFIG)
     assert directive.skeleton is not None
@@ -134,6 +146,60 @@ def test_normal_context_stays_monitoring_with_normal_decision() -> None:
     assert directive.skeleton.action is DecisionAction.NONE
     assert directive.next_state.phase is SessionPhase.MONITORING
     assert directive.mimo_task is None
+
+
+def test_server_timeout_escalates_without_an_interaction_response() -> None:
+    directive = on_timeout(
+        _awaiting_elder(),
+        decision_id="decision-0001",
+        timestamp_ms=20_000.0,
+        config=_CONFIG,
+    )
+    assert directive.skeleton is not None
+    assert directive.skeleton.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
+    assert directive.skeleton.response_timeout_ms == _CONFIG.family_ack_timeout_ms
+
+
+def test_family_acknowledgement_kind_must_match_pending_authority() -> None:
+    alarm_state = _state(
+        phase=SessionPhase.FAMILY_NOTIFIED,
+        escalation=EscalationKind.FALL,
+        pending_decision_id="decision-0001",
+        risk_floor=3,
+    )
+    wrong_card = on_response(
+        alarm_state,
+        _response(ResponseValue.CARD_CONFIRMED, ResponseSource.FAMILY_INPUT),
+        config=_CONFIG,
+    )
+    right_alarm = on_response(
+        alarm_state,
+        _response(ResponseValue.ALARM_CONFIRMED, ResponseSource.FAMILY_INPUT),
+        config=_CONFIG,
+    )
+    assert wrong_card.reject_code == REJECT_INVALID_RESPONSE
+    assert right_alarm.skeleton is not None
+    assert right_alarm.skeleton.state is DecisionState.RESOLVED
+
+    card_state = replace(
+        alarm_state,
+        escalation=EscalationKind.CONCERN,
+        card_draft=_pending_card(),
+    )
+    wrong_alarm = on_response(
+        card_state,
+        _response(ResponseValue.ALARM_CONFIRMED, ResponseSource.FAMILY_INPUT),
+        config=_CONFIG,
+    )
+    right_card = on_response(
+        card_state,
+        _response(ResponseValue.CARD_CONFIRMED, ResponseSource.FAMILY_INPUT),
+        config=_CONFIG,
+    )
+    assert wrong_alarm.reject_code == REJECT_INVALID_RESPONSE
+    assert right_card.skeleton is not None
+    assert right_card.skeleton.state is DecisionState.RESOLVED
+    assert right_card.skeleton.include_card is CardStatus.CONFIRMED
 
 
 def test_repeated_normal_tick_reuses_pending_decision() -> None:
@@ -541,6 +607,48 @@ def test_card_confirmed_by_family_resolves_episode() -> None:
     assert directive.skeleton.state is DecisionState.RESOLVED
     assert directive.skeleton.include_card is CardStatus.CONFIRMED
     assert directive.skeleton.template is TemplateId.RECEIPT_RESOLVED
+
+
+def test_plain_family_notification_has_its_own_acknowledgement() -> None:
+    directive = on_response(
+        _family_notified(),
+        _response(
+            ResponseValue.FAMILY_NOTIFICATION_CONFIRMED,
+            ResponseSource.FAMILY_INPUT,
+            decision_id="decision-0003",
+        ),
+        config=_CONFIG,
+    )
+    assert directive.skeleton is not None
+    assert directive.skeleton.state is DecisionState.RESOLVED
+    assert directive.skeleton.template is TemplateId.RECEIPT_RESOLVED
+
+
+def test_plain_family_notification_rejects_alarm_or_card_acknowledgement() -> None:
+    for response_value in (ResponseValue.ALARM_CONFIRMED, ResponseValue.CARD_CONFIRMED):
+        directive = on_response(
+            _family_notified(),
+            _response(
+                response_value,
+                ResponseSource.FAMILY_INPUT,
+                decision_id="decision-0003",
+            ),
+            config=_CONFIG,
+        )
+        assert directive.reject_code == REJECT_INVALID_RESPONSE
+
+
+def test_fall_alert_rejects_plain_family_notification_acknowledgement() -> None:
+    directive = on_response(
+        _family_notified(escalation=EscalationKind.FALL),
+        _response(
+            ResponseValue.FAMILY_NOTIFICATION_CONFIRMED,
+            ResponseSource.FAMILY_INPUT,
+            decision_id="decision-0003",
+        ),
+        config=_CONFIG,
+    )
+    assert directive.reject_code == REJECT_INVALID_RESPONSE
 
 
 def test_late_safe_after_family_alert_resolves_with_dedicated_template() -> None:

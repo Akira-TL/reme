@@ -52,6 +52,7 @@ function careDecision(overrides = {}) {
     demo_mode: "live",
     consent_required: false,
     response_timeout_ms: null,
+    response_deadline_ms: null,
     action_card: null,
     visual_context: {
       sent_to_mimo: true,
@@ -71,6 +72,12 @@ test("控制命令使用 exact-shape 且拒绝未知命令", () => {
   assert.ok(parseControlCommand(command("select_scene", { scene_id: "kitchen" })));
   assert.equal(parseControlCommand(command("select_scene", { scene_id: "kitchen", hidden: true })), null);
   assert.equal(parseControlCommand(command("open_raw_video")), null);
+  assert.ok(parseControlCommand(command("confirm_action_card", {
+    decision_id: "decision-1",
+  })));
+  assert.ok(parseControlCommand(command("confirm_family_notification", {
+    decision_id: "decision-1",
+  })));
 });
 
 test("旧房间、过期命令和旧 revision 均在 Monitor 再次 fail-close", () => {
@@ -163,6 +170,15 @@ test("浴室硬门、厨房当前授权和跌倒权威升级决定 grant", () =>
     },
     now: 11_000,
   }).durationMs, 20_000);
+  assert.equal(mediaGrantEligibility({
+    sceneId: "fall",
+    careDecision: {
+      scene_id: "fall",
+      decision_id: "hidden-fall",
+      privacy_mode: "hidden",
+      alarm: { channels: ["ring"], trigger: "visual_confirm" },
+    },
+  }).code, "decision_privacy_hidden");
   assert.equal(mediaGrantEligibility({
     sceneId: "fall",
     careDecision: {

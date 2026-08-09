@@ -15,6 +15,9 @@ This intentionally conflicts with the previous blanket statement that judge/fami
 
 - The room is deliberately unauthenticated. Exact Origin checks, connection limits and leases prevent accidental UI races but are not represented as authentication.
 - Routine presentation remains skeleton/structured state. Bathroom presentation always denies clear video.
+- `privacy_mode=hidden` also denies clear video and revokes an existing grant.
+  An event grant may override routine `blurred` or `skeleton_only` rendering,
+  but never the bathroom or `hidden` hard vetoes.
 - A kitchen grant requires an explicit current-event consent result and lasts no more than 60 seconds.
 - A fall grant requires the current authoritative escalated alarm and lasts no more than 30 seconds.
 - Every online Viewer, including a Viewer joining during the remaining kitchen or fall grant, is in the grant audience. The UI must disclose the public audience count and remaining clear-video time.

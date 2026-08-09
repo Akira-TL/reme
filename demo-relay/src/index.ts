@@ -1407,6 +1407,7 @@ export class DemoRoom extends DurableObject<Env> {
       && state.state.capture.remote_video === "available"
       && state.state.scene_id !== "bathroom"
       && decision?.decision_id === grant.event_id
+      && decision.privacy_mode !== "hidden"
       && (grant.scope === "kitchen_moment"
         ? state.state.scene_id === "kitchen" && state.state.care.consent === "granted"
         : state.state.scene_id === "fall"
@@ -1990,6 +1991,7 @@ function grantRejection(
   ) return "remote_video_unavailable";
   const decision = state.state.care.decision;
   if (decision?.decision_id !== request.event_id) return "event_authority_mismatch";
+  if (decision.privacy_mode === "hidden") return "decision_privacy_hidden";
   if (request.scope === "kitchen_moment") {
     return state.state.scene_id === "kitchen" && state.state.care.consent === "granted"
       ? null
@@ -2009,12 +2011,31 @@ function commandSafetyRejection(
   if (
     (body.name === "submit_response"
       || body.name === "confirm_alarm"
+      || body.name === "confirm_action_card"
+      || body.name === "confirm_family_notification"
       || body.name === "replay_voice")
     && body.decision_id !== state.state.care.decision?.decision_id
   ) return "decision_id_mismatch";
   if (body.name === "confirm_alarm" && state.state.care.decision?.alarm === null) {
     return "alarm_not_current";
   }
+  if (
+    body.name === "confirm_action_card"
+    && (
+      state.state.care.decision?.alarm !== null
+      || state.state.care.decision?.action_card?.status !== "pending"
+    )
+  ) return "action_card_not_current";
+  if (
+    body.name === "confirm_family_notification"
+    && (
+      state.state.care.decision?.alarm !== null
+      || state.state.care.decision?.action_card !== null
+      || !state.state.care.decision?.family_notification
+      || (state.state.care.decision.state !== "family_notification_required"
+        && state.state.care.decision.state !== "urgent_attention")
+    )
+  ) return "family_notification_not_current";
   if (state.state.care.decision?.alarm === null || state.state.care.decision === null) return null;
   if (
     body.name === "reset_demo"

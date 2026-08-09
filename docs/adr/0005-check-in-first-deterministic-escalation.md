@@ -24,10 +24,11 @@ Three invariants, in order:
 1. **Check-in first.** A high-confidence fall-like transition produces a
    rule-sourced check-in decision immediately, with a mandatory
    `response_timeout_ms` countdown. MiMo is not consulted on this path.
-2. **Deterministic escalation.** When the countdown expires and C submits
-   `response = none / source = timeout`, the rules emit
+2. **Deterministic escalation.** B owns a monotonic deadline for every
+   timeout-bearing decision. When it expires, the rules emit
    `family_notification_required` (and `urgent_attention` after a second
-   timeout) with `source = rule`, without waiting for any in-flight MiMo call.
+   timeout) with `source = rule`, without waiting for C or any in-flight MiMo
+   call. C may render `response_deadline_ms`, but never produces the timeout.
 3. **No model cancellation.** A MiMo result that arrives after a rule
    escalation is discarded. MiMo output can never lower, cancel, or delay an
    escalation; it may only contribute wording on non-escalation paths.
@@ -35,7 +36,10 @@ Three invariants, in order:
 ## Implementation anchors
 
 - `reme.runtime.decision.state_machine`: timeout transitions are rule-only
-  (`mimo_task is None`); escalations raise a monotonic `risk_floor`.
+  (`mimo_task is None`) through `on_timeout`; escalations raise a monotonic
+  `risk_floor`.
+- `reme.runtime.decision.deadline`: runtime-owned monotonic scheduling keyed by
+  scene + decision; replacement, reset and shutdown cancel stale timers.
 - `reme.runtime.decision.guardrails.violates_risk_floor`: outbound decisions may not
   map below the session's risk floor.
 - `reme.runtime.decision.policy.DecisionService`: a generation compare-and-swap
@@ -54,3 +58,6 @@ Three invariants, in order:
 - The conservative consent-timeout default (no answer means no family
   notification) is a separate product choice recorded in the state machine and
   may be revisited without touching these invariants.
+- Browser closure/background throttling cannot suspend safety escalation.
+- The current in-memory scheduler is not process-crash recovery. Durable
+  deadline restoration requires a persistence ADR.

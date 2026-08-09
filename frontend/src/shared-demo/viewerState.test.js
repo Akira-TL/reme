@@ -54,6 +54,7 @@ function careDecision(scene, overrides = {}) {
     demo_mode: "live",
     consent_required: false,
     response_timeout_ms: null,
+    response_deadline_ms: null,
     action_card: null,
     visual_context: null,
     alarm: null,

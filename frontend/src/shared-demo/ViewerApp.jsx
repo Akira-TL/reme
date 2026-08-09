@@ -48,6 +48,7 @@ import { relayAvailabilityCopy } from "./config.js";
 import {
   isFamilyConfirmationTimedOut,
   resolveFamilyConfirmationError,
+  selectFamilyAcknowledgementCommand,
 } from "./familyConfirmation.js";
 import { deriveFamilyTruth } from "./familyPresentation.js";
 import {
@@ -132,6 +133,8 @@ const COMMAND_COPY = Object.freeze({
   start_conversation: "发起问询",
   submit_response: "提交本人回应",
   confirm_alarm: "确认告警",
+  confirm_action_card: "确认行动卡",
+  confirm_family_notification: "确认家属通知",
   replay_voice: "重播语音",
   unknown: "远程命令",
 });
@@ -336,6 +339,7 @@ function HomePage({
   localNowMs,
   relayNowMs,
   familySurface = false,
+  familyAcknowledgementControl = null,
 }) {
   const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
   return (
@@ -365,6 +369,7 @@ function HomePage({
         </div>
       )}
       <StatusCard snapshot={snapshot} relay={relay} familySurface={familySurface} />
+      {familyAcknowledgementControl}
       {sceneId === "kitchen" && snapshot?.state.care.consent === "granted" && (
         <article className="care-moment-card">
           <span><RestaurantRoundedIcon /></span>
@@ -384,6 +389,85 @@ function HomePage({
         </div>
       )}
     </main>
+  );
+}
+
+function FamilyActionCard({
+  decision,
+  pending,
+  applied,
+  blocked,
+  error,
+  onConfirm,
+}) {
+  const card = decision?.action_card;
+  if (!card) return null;
+  const canConfirm = card.status === "pending" && !decision.alarm;
+  const label = applied
+    ? "已确认收到行动卡"
+    : pending
+      ? "正在提交确认…"
+      : blocked
+        ? "其他访问端正在处理"
+        : "确认收到并开始处理";
+  return (
+    <article className="care-moment-card family-action-card">
+      <span><TipsAndUpdatesRoundedIcon /></span>
+      <div>
+        <small>家属行动卡 · {card.status === "pending" ? "待确认" : "已更新"}</small>
+        <b>{card.event}</b>
+        <p>{card.suggested_action} · {card.time_window}</p>
+        <p>本人原话：{card.elder_quote}</p>
+        {canConfirm && (
+          <Button
+            size="small"
+            variant="contained"
+            disabled={pending || applied || blocked}
+            onClick={() => onConfirm(decision.decision_id, "confirm_action_card")}
+          >
+            {label}
+          </Button>
+        )}
+        {error && <p className="family-confirm-error" role="alert">{error}</p>}
+      </div>
+    </article>
+  );
+}
+
+function FamilyNotificationCard({
+  decision,
+  pending,
+  applied,
+  blocked,
+  error,
+  onConfirm,
+}) {
+  if (selectFamilyAcknowledgementCommand(decision) !== "confirm_family_notification") return null;
+  const label = applied
+    ? "已确认收到通知"
+    : pending
+      ? "正在提交确认…"
+      : blocked
+        ? "其他访问端正在处理"
+        : "确认收到并开始联系";
+  return (
+    <article className="care-moment-card family-acknowledgement-card">
+      <span><NotificationsActiveRoundedIcon /></span>
+      <div>
+        <small>家属通知 · 待确认</small>
+        <b>{decision.family_notification}</b>
+        <p>这是通知回执，不会被当作告警或行动卡确认。</p>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={pending || applied || blocked}
+          onClick={() => onConfirm(decision.decision_id, "confirm_family_notification")}
+        >
+          {label}
+        </Button>
+        {error && <p className="family-confirm-error" role="alert">{error}</p>}
+      </div>
+    </article>
   );
 }
 
@@ -725,6 +809,11 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
   const disabled = !relay.ownsControl || !snapshot || pending;
   const decisionId = snapshot?.state.care.decision?.decision_id;
   const alarmActive = Boolean(snapshot?.state.care.decision?.alarm);
+  const actionCardPending = snapshot?.state.care.decision?.action_card?.status === "pending"
+    && !alarmActive;
+  const familyNotificationPending = selectFamilyAcknowledgementCommand(
+    snapshot?.state.care.decision,
+  ) === "confirm_family_notification";
   const leaseSeconds = relay.ownsControl ? secondsRemaining(relay.lease?.expires_at_ms, nowMs) : 0;
   return (
     <Drawer
@@ -789,6 +878,8 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
           <CommandButton icon={VideocamRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_granted" })}>同意分享</CommandButton>
           <CommandButton icon={LockRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_denied" })}>拒绝分享</CommandButton>
           <CommandButton icon={ShieldRoundedIcon} disabled={disabled || !decisionId || !alarmActive} onClick={() => onIssue({ name: "confirm_alarm", decision_id: decisionId })}>确认告警</CommandButton>
+          <CommandButton icon={TipsAndUpdatesRoundedIcon} disabled={disabled || !decisionId || !actionCardPending} onClick={() => onIssue({ name: "confirm_action_card", decision_id: decisionId })}>确认行动卡</CommandButton>
+          <CommandButton icon={NotificationsActiveRoundedIcon} disabled={disabled || !decisionId || !familyNotificationPending} onClick={() => onIssue({ name: "confirm_family_notification", decision_id: decisionId })}>确认家属通知</CommandButton>
           <CommandButton icon={VolumeUpRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "replay_voice", decision_id: decisionId })}>重播语音</CommandButton>
         </div>
       </section>
@@ -866,7 +957,7 @@ function EmergencyDialog({
             color="error"
             startIcon={<ShieldRoundedIcon />}
             disabled={!decision.decision_id || familyConfirmPending || familyConfirmApplied || controllerBlocked}
-            onClick={() => onFamilyConfirm(decision.decision_id)}
+            onClick={() => onFamilyConfirm(decision.decision_id, "confirm_alarm")}
           >
             {familyConfirmLabel}
           </Button>
@@ -958,6 +1049,7 @@ export function ViewerApp({ surface = "family" }) {
   const currentAlarm = emergencyStale ? null : careDecision?.alarm || null;
   const emergency = Boolean(currentAlarm);
   const decisionId = careDecision?.decision_id || null;
+  const familyAcknowledgementCommand = selectFamilyAcknowledgementCommand(careDecision);
   const alertEffects = useAlertEffects({
     enabled: notificationsEnabled,
     alarm: currentAlarm,
@@ -965,9 +1057,11 @@ export function ViewerApp({ surface = "family" }) {
   });
 
   const currentSentFamilyConfirmation = sentFamilyConfirmation?.decisionId === decisionId
+    && sentFamilyConfirmation?.commandName === familyAcknowledgementCommand
     ? sentFamilyConfirmation
     : null;
   const currentPendingFamilyConfirmation = pendingFamilyConfirmation?.decisionId === decisionId
+    && pendingFamilyConfirmation?.commandName === familyAcknowledgementCommand
     ? pendingFamilyConfirmation
     : null;
   const familyConfirmAck = currentSentFamilyConfirmation
@@ -988,7 +1082,7 @@ export function ViewerApp({ surface = "family" }) {
     currentSentFamilyConfirmation && familyConfirmAck?.phase === "applied",
   );
   const familyConfirmAckError = ["rejected", "failed"].includes(familyConfirmAck?.phase)
-    ? familyConfirmAck.reason || "告警确认未能提交，请重试"
+    ? familyConfirmAck.reason || "处理确认未能提交，请重试"
     : "";
   const familyControllerBlocked = Boolean(
     controller
@@ -996,22 +1090,23 @@ export function ViewerApp({ surface = "family" }) {
       && !ownsControl,
   );
 
-  const sendFamilyConfirmation = useCallback((targetDecisionId) => {
+  const sendFamilyConfirmation = useCallback((targetDecisionId, commandName) => {
     const result = sendCommand({
-      name: "confirm_alarm",
+      name: commandName,
       decision_id: targetDecisionId,
     });
     if (result.ok) {
       setFamilyConfirmFailure(null);
       setSentFamilyConfirmation({
         decisionId: targetDecisionId,
+        commandName,
         commandId: result.commandId,
         sentAtMs: Date.now(),
       });
     } else {
       setFamilyConfirmFailure({
         decisionId: targetDecisionId,
-        message: result.reason || "告警确认未能提交，请重试",
+        message: result.reason || "处理确认未能提交，请重试",
       });
     }
     return result;
@@ -1043,22 +1138,24 @@ export function ViewerApp({ surface = "family" }) {
     if (!familySurface || !pendingFamilyConfirmation) return undefined;
     let settlePending = null;
     if (
-      !emergency
-      || emergencyStale
+      relay.stateStale
+      || relay.unavailableReason
       || pendingFamilyConfirmation.decisionId !== decisionId
+      || pendingFamilyConfirmation.commandName !== familyAcknowledgementCommand
     ) {
       settlePending = () => {
         setPendingFamilyConfirmation(null);
         setFamilyConfirmFailure({
           decisionId,
-          message: "当前告警状态已变化，请按最新状态处理",
+          message: "当前待处理状态已变化，请按最新状态处理",
         });
       };
     } else if (ownsControl) {
       const targetDecisionId = pendingFamilyConfirmation.decisionId;
+      const commandName = pendingFamilyConfirmation.commandName;
       settlePending = () => {
         setPendingFamilyConfirmation(null);
-        const result = sendFamilyConfirmation(targetDecisionId);
+        const result = sendFamilyConfirmation(targetDecisionId, commandName);
         if (!result.ok) releaseControl();
       };
     } else if (familyControllerBlocked) {
@@ -1066,7 +1163,7 @@ export function ViewerApp({ surface = "family" }) {
         setPendingFamilyConfirmation(null);
         setFamilyConfirmFailure({
           decisionId: pendingFamilyConfirmation.decisionId,
-          message: "其他访问端正在处理这次告警，请稍后查看最新状态",
+          message: "其他访问端正在处理，请稍后查看最新状态",
         });
       };
     } else if (nowMs - pendingFamilyConfirmation.requestedAtMs > 5_000) {
@@ -1083,13 +1180,14 @@ export function ViewerApp({ surface = "family" }) {
     return () => window.clearTimeout(timer);
   }, [
     decisionId,
-    emergency,
-    emergencyStale,
+    familyAcknowledgementCommand,
     familyControllerBlocked,
     familySurface,
     nowMs,
     ownsControl,
     pendingFamilyConfirmation,
+    relay.stateStale,
+    relay.unavailableReason,
     releaseControl,
     sendFamilyConfirmation,
   ]);
@@ -1121,24 +1219,29 @@ export function ViewerApp({ surface = "family" }) {
     releaseControl,
   ]);
 
-  const requestFamilyConfirmation = (targetDecisionId) => {
+  const requestFamilyConfirmation = (targetDecisionId, commandName) => {
     setFamilyConfirmFailure(null);
     setSentFamilyConfirmation(null);
-    if (!targetDecisionId || emergencyStale || !emergency) {
+    if (
+      !targetDecisionId
+      || relay.stateStale
+      || relay.unavailableReason
+      || commandName !== familyAcknowledgementCommand
+    ) {
       setFamilyConfirmFailure({
         decisionId: targetDecisionId || decisionId,
-        message: "当前没有可确认的紧急告警",
+        message: "当前没有可确认的待处理事项",
       });
       return;
     }
     if (ownsControl) {
-      sendFamilyConfirmation(targetDecisionId);
+      sendFamilyConfirmation(targetDecisionId, commandName);
       return;
     }
     if (controller) {
       setFamilyConfirmFailure({
         decisionId: targetDecisionId,
-        message: "其他访问端正在处理这次告警，请稍后查看最新状态",
+        message: "其他访问端正在处理，请稍后查看最新状态",
       });
       return;
     }
@@ -1151,6 +1254,7 @@ export function ViewerApp({ surface = "family" }) {
     }
     setPendingFamilyConfirmation({
       decisionId: targetDecisionId,
+      commandName,
       requestedAtMs: nowMs,
     });
   };
@@ -1207,7 +1311,51 @@ export function ViewerApp({ surface = "family" }) {
           </aside>
         )}
 
-        {activeTab === "home" && <HomePage relay={relay} snapshot={snapshot} pose={relay.pose} media={media} activeGrant={activeGrant} highPrivacyEnabled={highPrivacyEnabled} localNowMs={nowMs} relayNowMs={relayNowMs} familySurface={familySurface} />}
+        {activeTab === "home" && (
+          <HomePage
+            relay={relay}
+            snapshot={snapshot}
+            pose={relay.pose}
+            media={media}
+            activeGrant={activeGrant}
+            highPrivacyEnabled={highPrivacyEnabled}
+            localNowMs={nowMs}
+            relayNowMs={relayNowMs}
+            familySurface={familySurface}
+            familyAcknowledgementControl={familySurface ? (
+              <>
+                <FamilyActionCard
+                  decision={careDecision}
+                  pending={familyConfirmPending}
+                  applied={familyConfirmApplied}
+                  blocked={familyControllerBlocked}
+                  error={familyAcknowledgementCommand === "confirm_action_card"
+                    ? resolveFamilyConfirmationError({
+                        failure: familyConfirmFailure,
+                        decisionId,
+                        ackError: familyConfirmAckError,
+                      })
+                    : ""}
+                  onConfirm={requestFamilyConfirmation}
+                />
+                <FamilyNotificationCard
+                  decision={careDecision}
+                  pending={familyConfirmPending}
+                  applied={familyConfirmApplied}
+                  blocked={familyControllerBlocked}
+                  error={familyAcknowledgementCommand === "confirm_family_notification"
+                    ? resolveFamilyConfirmationError({
+                        failure: familyConfirmFailure,
+                        decisionId,
+                        ackError: familyConfirmAckError,
+                      })
+                    : ""}
+                  onConfirm={requestFamilyConfirmation}
+                />
+              </>
+            ) : null}
+          />
+        )}
         {activeTab === "timeline" && (
           <TimelinePage
             timeline={timeline}

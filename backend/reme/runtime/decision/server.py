@@ -33,6 +33,7 @@ from reme.runtime.decision.config import (
 )
 from reme.runtime.decision.context import discover_scenes
 from reme.runtime.decision.danger import DangerConfirmController, DangerRejectedError
+from reme.runtime.decision.deadline import MonotonicDeadlineScheduler
 from reme.runtime.decision.policy import (
     DecisionPublisher,
     DecisionRejectedError,
@@ -895,10 +896,12 @@ class DecisionRuntime:
     danger: DangerConfirmController | None
     voice_dialogue: VoiceDialogueController
     emergency_publisher: EmergencyDecisionPublisher | None
+    deadline_scheduler: MonotonicDeadlineScheduler
 
     def shutdown(self, bridge: PerceptionBridgeLike | None = None) -> None:
         if bridge is not None:
             bridge.stop()
+        self.deadline_scheduler.close()
         if self.emergency_publisher is not None:
             self.emergency_publisher.close()
         self.hub.close_all()
@@ -919,6 +922,7 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
     publisher: DecisionPublisher = local_publisher
     if emergency_publisher is not None:
         publisher = DecisionPublisherFanout(local_publisher, emergency_publisher)
+    deadline_scheduler = MonotonicDeadlineScheduler()
     service = DecisionService(
         scenes=scenes,
         config=build_policy_config(config),
@@ -926,6 +930,7 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
         audit=audit,
         publisher=publisher,
         live_streams=live_streams_resolver(registry, ingest),
+        deadline_scheduler=deadline_scheduler,
     )
     danger = build_danger_controller(config, service, audit)
     voice_dialogue = VoiceDialogueController(
@@ -941,6 +946,7 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
         danger=danger,
         voice_dialogue=voice_dialogue,
         emergency_publisher=emergency_publisher,
+        deadline_scheduler=deadline_scheduler,
     )
 
 

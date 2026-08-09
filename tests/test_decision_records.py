@@ -170,6 +170,29 @@ def test_interaction_response_rejects_card_confirmed_from_user_input() -> None:
         _response(response=ResponseValue.CARD_CONFIRMED, source=ResponseSource.USER_INPUT)
 
 
+def test_interaction_response_accepts_distinct_family_acknowledgements() -> None:
+    card = _response(
+        response=ResponseValue.CARD_CONFIRMED,
+        source=ResponseSource.FAMILY_INPUT,
+    )
+    alarm = _response(
+        response=ResponseValue.ALARM_CONFIRMED,
+        source=ResponseSource.FAMILY_INPUT,
+    )
+    notification = _response(
+        response=ResponseValue.FAMILY_NOTIFICATION_CONFIRMED,
+        source=ResponseSource.FAMILY_INPUT,
+    )
+    assert card.response is ResponseValue.CARD_CONFIRMED
+    assert alarm.response is ResponseValue.ALARM_CONFIRMED
+    assert notification.response is ResponseValue.FAMILY_NOTIFICATION_CONFIRMED
+
+
+def test_care_decision_rejects_deadline_without_timeout() -> None:
+    with pytest.raises(DecisionRecordError, match="response_deadline_ms"):
+        _decision(response_timeout_ms=None, response_deadline_ms=1_000.0)
+
+
 def test_parse_care_decision_rejects_unknown_field() -> None:
     payload = _decision().to_payload()
     payload["surprise"] = 1

@@ -436,7 +436,12 @@ function validateCommandBody(value) {
       && isId(value.decision_id)
       && ["safe", "need_help", "consent_granted", "consent_denied"].includes(value.response);
   }
-  if (value.name === "confirm_alarm" || value.name === "replay_voice") {
+  if ([
+    "confirm_alarm",
+    "confirm_action_card",
+    "confirm_family_notification",
+    "replay_voice",
+  ].includes(value.name)) {
     return exactKeys(value, ["name", "decision_id"]) && isId(value.decision_id);
   }
   return false;

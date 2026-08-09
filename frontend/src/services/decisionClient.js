@@ -9,6 +9,8 @@ const RESPONSE_SOURCE_RULES = {
   consent_granted: "user_input",
   consent_denied: "user_input",
   card_confirmed: "family_input",
+  alarm_confirmed: "family_input",
+  family_notification_confirmed: "family_input",
 };
 
 export function getDecisionUrls() {

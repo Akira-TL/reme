@@ -554,6 +554,74 @@ describe("public dual-device relay", () => {
     await expect(nextSchema(monitor, "reme-control-command/v1")).resolves.toEqual(leave);
   });
 
+  it("forwards action-card acknowledgement only for a current pending card", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+    const cardState = makeState(claim, 1, {
+      scene: "living",
+      care: {
+        phase: "emergency",
+        decision: "decision-card",
+        consent: "granted",
+        authoritative: false,
+      },
+    });
+    if (cardState.state.care.decision === null) throw new Error("decision fixture missing");
+    cardState.state.care.decision.action_card = {
+      event: "牙疼影响进食",
+      elder_quote: "牙疼，饭咬不动。",
+      system_judgment: "需要家属协助预约",
+      suggested_action: "预约口腔检查",
+      time_window: "3 天内",
+      status: "pending",
+    };
+    monitor.send(JSON.stringify(cardState));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewer, "reme-demo-state/v3");
+    await claimControl(viewer, claim.room_session_id);
+
+    const command = {
+      ...makeCommand(claim, 1, 1, "cmd-confirm-card"),
+      command: { name: "confirm_action_card" as const, decision_id: "decision-card" },
+    };
+    viewer.send(JSON.stringify(command));
+    await expect(nextAck(viewer, command.command_id)).resolves.toMatchObject({ phase: "received" });
+    await expect(nextSchema(monitor, "reme-control-command/v1")).resolves.toEqual(command);
+  });
+
+  it("forwards plain family-notification acknowledgement without treating it as an alarm", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+    const notificationState = makeState(claim, 1, {
+      scene: "living",
+      care: {
+        phase: "emergency",
+        decision: "decision-notification",
+        consent: "none",
+        authoritative: false,
+      },
+    });
+    monitor.send(JSON.stringify(notificationState));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewer, "reme-demo-state/v3");
+    await claimControl(viewer, claim.room_session_id);
+
+    const command = {
+      ...makeCommand(claim, 1, 1, "cmd-confirm-notification"),
+      command: {
+        name: "confirm_family_notification" as const,
+        decision_id: "decision-notification",
+      },
+    };
+    viewer.send(JSON.stringify(command));
+    await expect(nextAck(viewer, command.command_id)).resolves.toMatchObject({ phase: "received" });
+    await expect(nextSchema(monitor, "reme-control-command/v1")).resolves.toEqual(command);
+  });
+
   it("turns a pending remote command into a terminal failure when the Monitor disconnects", async () => {
     const claim = await claimMonitor();
     const monitor = await connectMonitor(claim);
@@ -780,6 +848,57 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(request));
     await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({
       code: "authority_runtime_degraded",
+    });
+  });
+
+  it("denies and revokes event video when authoritative privacy becomes hidden", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+    const kitchen = makeState(claim, 1, {
+      scene: "kitchen",
+      care: {
+        phase: "checking",
+        decision: "decision-privacy-gate",
+        consent: "granted",
+        authoritative: false,
+      },
+    });
+    monitor.send(JSON.stringify(kitchen));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewer, "reme-demo-state/v3");
+    const request = {
+      type: "media_grant_request",
+      room_session_id: claim.room_session_id,
+      runtime_session_id: kitchen.runtime_session_id,
+      event_id: "decision-privacy-gate",
+      scope: "kitchen_moment",
+      expires_in_ms: 60_000,
+    };
+    monitor.send(JSON.stringify(request));
+    await nextType(viewer, "media_grant");
+
+    const hidden = makeState(claim, 2, {
+      scene: "kitchen",
+      care: {
+        phase: "checking",
+        decision: "decision-privacy-gate",
+        consent: "granted",
+        authoritative: false,
+      },
+    });
+    if (hidden.state.care.decision === null) throw new Error("decision fixture missing");
+    hidden.state.care.decision.privacy_mode = "hidden";
+    monitor.send(JSON.stringify(hidden));
+    await nextType(monitor, "state_accepted");
+    await expect(nextWhere(viewer, (value) => typeOf(value) === "media_grant"
+      && field(objectField(value, "grant"), "status") === "revoked")).resolves.toMatchObject({
+        reason: "grant_authority_lost",
+      });
+    monitor.send(JSON.stringify(request));
+    await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({
+      code: "decision_privacy_hidden",
     });
   });
 
@@ -1120,6 +1239,7 @@ function makeState(
     demo_mode: "live" as const,
     consent_required: care.consent === "pending",
     response_timeout_ms: needDialogue ? 8_000 : null,
+    response_deadline_ms: needDialogue ? 1_008_000 : null,
     action_card: null,
     visual_context: null,
     alarm: care.authoritative

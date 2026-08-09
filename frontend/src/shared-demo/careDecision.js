@@ -55,6 +55,7 @@ const DECISION_KEYS = [
   "demo_mode",
   "consent_required",
   "response_timeout_ms",
+  "response_deadline_ms",
   "action_card",
   "visual_context",
   "alarm",
@@ -192,6 +193,11 @@ export function isCareDecision(value) {
     && (!Number.isSafeInteger(value.response_timeout_ms) || value.response_timeout_ms <= 0)) {
     return false;
   }
+  if (value.response_deadline_ms !== null) {
+    if (!isTimestamp(value.response_deadline_ms) || value.response_timeout_ms === null) {
+      return false;
+    }
+  }
   if (value.action_card !== null && !isActionCard(value.action_card)) return false;
   if (value.visual_context !== null && !isVisualContext(value.visual_context)) return false;
   if (value.alarm !== null) {
@@ -234,6 +240,7 @@ export function projectCareDecision(value) {
     demo_mode: value.demo_mode,
     consent_required: value.consent_required,
     response_timeout_ms: value.response_timeout_ms,
+    response_deadline_ms: value.response_deadline_ms,
     action_card: freezeNullableRecord(value.action_card),
     visual_context: freezeNullableRecord(value.visual_context),
     alarm: value.alarm === null

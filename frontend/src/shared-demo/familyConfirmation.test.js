@@ -3,7 +3,31 @@ import test from "node:test";
 import {
   isFamilyConfirmationTimedOut,
   resolveFamilyConfirmationError,
+  selectFamilyAcknowledgementCommand,
 } from "./familyConfirmation.js";
+
+test("告警、行动卡和普通家属通知使用互不混淆的确认命令", () => {
+  assert.equal(selectFamilyAcknowledgementCommand({
+    alarm: { trigger: "elder_need_help" },
+    action_card: null,
+  }), "confirm_alarm");
+  assert.equal(selectFamilyAcknowledgementCommand({
+    alarm: null,
+    action_card: { status: "pending" },
+  }), "confirm_action_card");
+  assert.equal(selectFamilyAcknowledgementCommand({
+    alarm: null,
+    action_card: null,
+    family_notification: "请尽快联系确认。",
+    state: "family_notification_required",
+  }), "confirm_family_notification");
+  assert.equal(selectFamilyAcknowledgementCommand({
+    alarm: null,
+    action_card: null,
+    family_notification: "已处理。",
+    state: "resolved",
+  }), null);
+});
 
 test("缺少本地失败对象时不会读取空值", () => {
   assert.equal(resolveFamilyConfirmationError({ decisionId: undefined, failure: null }), "");

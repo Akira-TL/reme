@@ -595,11 +595,22 @@ export function useLiveVideoSource({
       const width = context.canvas.width;
       const height = context.canvas.height;
       context.clearRect(0, 0, width, height);
-      const showVideo = mode === "video" || mode === "video_skeleton";
+      const showVideo = mode === "video"
+        || mode === "video_skeleton"
+        || mode === "blurred"
+        || mode === "blurred_skeleton";
       if (showVideo && cameraReadyRef.current && video?.readyState >= 2) {
+        context.save();
+        if (mode === "blurred" || mode === "blurred_skeleton") {
+          context.filter = "blur(24px)";
+        }
         drawFrame(context, video, width, height, mirror);
+        context.restore();
       }
-      if ((mode === "skeleton" || mode === "video_skeleton") && points.length === 17) {
+      if (
+        ["skeleton", "video_skeleton", "blurred_skeleton"].includes(mode)
+        && points.length === 17
+      ) {
         drawSkeleton(
           context,
           points,

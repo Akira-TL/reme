@@ -1,4 +1,8 @@
-const HOME_REMOTE_COMMANDS = new Set(["confirm_alarm"]);
+const HOME_REMOTE_COMMANDS = new Set([
+  "confirm_alarm",
+  "confirm_action_card",
+  "confirm_family_notification",
+]);
 
 export function normalizeSurface(surface) {
   return surface === "debug" ? "debug" : "home";
@@ -19,5 +23,9 @@ export function exposesDebugInterface(surface) {
 
 export function remoteActionsForSurface(surface, actions) {
   if (normalizeSurface(surface) === "debug") return { ...actions };
-  return { confirmAlarm: actions.confirmAlarm };
+  return {
+    confirmAlarm: actions.confirmAlarm,
+    confirmActionCard: actions.confirmActionCard,
+    confirmFamilyNotification: actions.confirmFamilyNotification,
+  };
 }

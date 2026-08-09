@@ -1,8 +1,13 @@
 # Contract gap：浏览器退出后无法自主 timeout
 
-状态：Open（需要后端 owner 处理）
+状态：Resolved in `.scratch/cross-boundary-contract-fixes/`（2026-08-09）
 发现日期：2026-08-09
-本工作项处理：前端删除自动 timeout，不修改 Python
+本工作项原处理：前端删除自动 timeout；后续工作项已补 B runtime deadline
+
+> 解决摘要：`MonotonicDeadlineScheduler` 在 B runtime 中按 scene + decision
+> 注册 deadline；`DecisionService` 在锁内复验当前 authority 后调用状态机
+> `on_timeout`，并在 response/new decision/reset/session stop/shutdown 时取消旧
+> deadline。CareDecision 现携带 `response_deadline_ms` 供 C 只读呈现。
 
 ## 现状证据
 

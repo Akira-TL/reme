@@ -232,6 +232,14 @@ button, input { font: inherit; }
 .care-moment-card small { color: #9b765a; font-size: 8px; }
 .care-moment-card b { margin-top: 2px; font-size: 10px; }
 .care-moment-card p { margin: 3px 0 0; color: #857d76; font-size: 8px; }
+.family-action-card,
+.family-acknowledgement-card { align-items: flex-start; }
+.family-action-card > div,
+.family-acknowledgement-card > div { flex: 1; min-width: 0; }
+.family-action-card button,
+.family-acknowledgement-card button { margin-top: 8px; }
+.family-action-card .family-confirm-error,
+.family-acknowledgement-card .family-confirm-error { color: #b42318; }
 .care-moment-check { color: #2b9d3f; font-size: 20px !important; }
 
 .family-home-dashboard { display: grid; gap: 16px; margin-top: 18px; }

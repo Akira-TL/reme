@@ -11,6 +11,17 @@ export function resolveFamilyConfirmationError({
 
 const TERMINAL_PHASES = new Set(["applied", "rejected", "failed"]);
 
+export function selectFamilyAcknowledgementCommand(decision) {
+  if (decision?.alarm) return "confirm_alarm";
+  if (decision?.action_card?.status === "pending") return "confirm_action_card";
+  if (
+    !decision?.action_card
+    && decision?.family_notification
+    && ["family_notification_required", "urgent_attention"].includes(decision.state)
+  ) return "confirm_family_notification";
+  return null;
+}
+
 export function isFamilyConfirmationTimedOut({
   sent,
   ack,

@@ -101,6 +101,8 @@ class ResponseValue(StrEnum):
     CONSENT_GRANTED = "consent_granted"
     CONSENT_DENIED = "consent_denied"
     CARD_CONFIRMED = "card_confirmed"
+    ALARM_CONFIRMED = "alarm_confirmed"
+    FAMILY_NOTIFICATION_CONFIRMED = "family_notification_confirmed"
 
 
 class ResponseSource(StrEnum):
@@ -284,6 +286,9 @@ class CareDecision:
     demo_mode: DemoMode
     consent_required: bool = False
     response_timeout_ms: int | None = None
+    # Epoch milliseconds are display/reconnect metadata only. B's scheduler
+    # uses a monotonic timer and revalidates decision identity on expiry.
+    response_deadline_ms: float | None = None
     action_card: ActionCard | None = None
     visual_context: VisualContext | None = None
     alarm: AlarmSignal | None = None
@@ -328,6 +333,12 @@ class CareDecision:
             or self.response_timeout_ms <= 0
         ):
             raise DecisionRecordError("response_timeout_ms must be a positive integer")
+        if self.response_deadline_ms is not None:
+            _require_timestamp(self.response_deadline_ms, "response_deadline_ms")
+            if self.response_timeout_ms is None:
+                raise DecisionRecordError(
+                    "response_deadline_ms requires response_timeout_ms"
+                )
         if self.alarm is not None and self.state not in (
             DecisionState.FAMILY_NOTIFICATION_REQUIRED,
             DecisionState.URGENT_ATTENTION,
@@ -372,6 +383,7 @@ class CareDecision:
             "demo_mode": self.demo_mode.value,
             "consent_required": self.consent_required,
             "response_timeout_ms": self.response_timeout_ms,
+            "response_deadline_ms": self.response_deadline_ms,
             "action_card": None if self.action_card is None else self.action_card.to_payload(),
             "visual_context": (
                 None if self.visual_context is None else self.visual_context.to_payload()
@@ -409,24 +421,40 @@ class InteractionResponse:
         if self.text is not None and self.source not in _TEXT_BEARING_RESPONSE_SOURCES:
             raise DecisionRecordError("text is only allowed when source is user_input or script")
         # Full response x source cross-whitelist: a timeout can only say "none",
-        # the family view can only confirm cards, and elder answers (including
-        # consent) must come from the elder's own input or an explicit script.
+        # the family view can only acknowledge cards/alarms/notifications, and
+        # elder answers (including consent) must come from elder input or a script.
         if self.response is ResponseValue.NONE and self.source not in _NONE_RESPONSE_SOURCES:
             raise DecisionRecordError("response=none is only valid from timeout or script sources")
         if self.source is ResponseSource.TIMEOUT and self.response is not ResponseValue.NONE:
             raise DecisionRecordError("source=timeout can only carry response=none")
-        if (
-            self.response is ResponseValue.CARD_CONFIRMED
-            and self.source is not ResponseSource.FAMILY_INPUT
-        ):
-            raise DecisionRecordError("response=card_confirmed must come from family_input")
+        if self.response in (
+            ResponseValue.CARD_CONFIRMED,
+            ResponseValue.ALARM_CONFIRMED,
+            ResponseValue.FAMILY_NOTIFICATION_CONFIRMED,
+        ) and self.source is not ResponseSource.FAMILY_INPUT:
+            raise DecisionRecordError(
+                "family acknowledgements must come from family_input"
+            )
         if (
             self.source is ResponseSource.FAMILY_INPUT
-            and self.response is not ResponseValue.CARD_CONFIRMED
+            and self.response
+            not in (
+                ResponseValue.CARD_CONFIRMED,
+                ResponseValue.ALARM_CONFIRMED,
+                ResponseValue.FAMILY_NOTIFICATION_CONFIRMED,
+            )
         ):
-            raise DecisionRecordError("source=family_input can only confirm the action card")
+            raise DecisionRecordError(
+                "source=family_input can only confirm an action card, alarm, or family notification"
+            )
         if (
-            self.response not in (ResponseValue.NONE, ResponseValue.CARD_CONFIRMED)
+            self.response
+            not in (
+                ResponseValue.NONE,
+                ResponseValue.CARD_CONFIRMED,
+                ResponseValue.ALARM_CONFIRMED,
+                ResponseValue.FAMILY_NOTIFICATION_CONFIRMED,
+            )
             and self.source not in _ELDER_RESPONSE_SOURCES
         ):
             raise DecisionRecordError("elder responses must come from user_input or script sources")
@@ -495,6 +523,7 @@ _DECISION_FIELDS = {
     "demo_mode",
     "consent_required",
     "response_timeout_ms",
+    "response_deadline_ms",
     "action_card",
     "visual_context",
     "alarm",
@@ -600,6 +629,7 @@ def parse_care_decision(data: object) -> CareDecision:
         demo_mode=_enum_value(payload, "demo_mode", DemoMode),
         consent_required=_bool_value(payload, "consent_required"),
         response_timeout_ms=payload.get("response_timeout_ms"),
+        response_deadline_ms=payload.get("response_deadline_ms"),
         action_card=None if card is None else parse_action_card(card),
         visual_context=None if visual is None else _parse_visual_context(visual),
         alarm=None if alarm is None else _parse_alarm(alarm),

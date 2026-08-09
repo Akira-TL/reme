@@ -13,8 +13,10 @@ test("home starts from the quiet living context while debug keeps the fall accep
   assert.equal(initialSceneForSurface("debug"), "fall");
 });
 
-test("home accepts only the family alarm receipt command", () => {
+test("home accepts only family acknowledgement commands", () => {
   assert.equal(allowsRemoteCommand("home", "confirm_alarm"), true);
+  assert.equal(allowsRemoteCommand("home", "confirm_action_card"), true);
+  assert.equal(allowsRemoteCommand("home", "confirm_family_notification"), true);
   for (const command of [
     "select_scene",
     "select_source",
@@ -45,15 +47,21 @@ test("unknown surfaces fail closed into the product-safe home policy", () => {
   assert.equal(allowsRemoteCommand("unknown", "run_demo_scenario"), false);
 });
 
-test("home registers only alarm acknowledgement while debug keeps engineering actions", () => {
+test("home registers family acknowledgements while debug keeps engineering actions", () => {
   const actions = {
     selectScene() {},
     selectSource() {},
     startCapture() {},
     runDemoScenario() {},
     confirmAlarm() {},
+    confirmActionCard() {},
+    confirmFamilyNotification() {},
   };
 
-  assert.deepEqual(Object.keys(remoteActionsForSurface("home", actions)), ["confirmAlarm"]);
+  assert.deepEqual(Object.keys(remoteActionsForSurface("home", actions)), [
+    "confirmAlarm",
+    "confirmActionCard",
+    "confirmFamilyNotification",
+  ]);
   assert.deepEqual(Object.keys(remoteActionsForSurface("debug", actions)), Object.keys(actions));
 });

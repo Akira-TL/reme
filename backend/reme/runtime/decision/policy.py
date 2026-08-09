@@ -33,6 +33,7 @@ from reme.runtime.decision.context import (
     SceneStreams,
     build_decision_context,
 )
+from reme.runtime.decision.deadline import DeadlineScheduler
 from reme.runtime.decision.guardrails import TriggerConfig, violates_risk_floor
 from reme.runtime.decision.home import (
     HomeContext,
@@ -88,6 +89,7 @@ from reme.runtime.decision.state_machine import (
     on_demo_conversation,
     on_response,
     on_tick,
+    on_timeout,
 )
 from reme.runtime.decision.visual import (
     load_visual_asset,
@@ -368,6 +370,8 @@ class DecisionService:
         audit: AuditLog | None = None,
         publisher: DecisionPublisher | None = None,
         live_streams: Callable[[str], PerceptionStreams | None] | None = None,
+        deadline_scheduler: DeadlineScheduler | None = None,
+        wall_clock_ms: Callable[[], float] | None = None,
     ) -> None:
         self._scenes = dict(scenes)
         self._config = config
@@ -375,6 +379,8 @@ class DecisionService:
         self._audit = audit
         self._publisher = publisher
         self._live_streams = live_streams
+        self._deadline_scheduler = deadline_scheduler
+        self._wall_clock_ms = wall_clock_ms or (lambda: time.time() * 1000.0)
         self._lock = threading.Lock()
         self._runtimes: dict[str, _SceneRuntime] = {}
         self._replays: dict[str, tuple[CareDecision, ...]] = {}
@@ -405,6 +411,8 @@ class DecisionService:
                     sequence=runtime.sequence,
                     epoch=runtime.epoch + 1,
                 )
+            if self._deadline_scheduler is not None:
+                self._deadline_scheduler.cancel_all()
 
     def scene_streams(self, scene_id: str) -> SceneStreams:
         """Bundle-backed streams only (assets/health); live scenes raise."""
@@ -658,6 +666,8 @@ class DecisionService:
                 sequence=runtime.sequence,
                 epoch=runtime.epoch + 1,
             )
+            if self._deadline_scheduler is not None:
+                self._deadline_scheduler.cancel(scene_id)
         self._audit_event(kind="scene_reset", scene_id=scene_id)
 
     # -- shared plumbing ----------------------------------------------------
@@ -702,6 +712,43 @@ class DecisionService:
             self._publisher.publish_decision(decision)
         except Exception as exc:  # noqa: BLE001 - stream must never break decisions
             print(f"warning: decision publish failed: {exc}")
+
+    def _expire_decision(self, scene_id: str, decision_id: str) -> None:
+        """Apply one server-owned timeout if its authority is still current."""
+
+        decision: CareDecision | None = None
+        try:
+            with self._lock:
+                runtime = self._runtimes.get(scene_id)
+                pending = None if runtime is None else runtime.pending
+                if (
+                    runtime is None
+                    or pending is None
+                    or pending.decision_id != decision_id
+                    or pending.response_timeout_ms is None
+                ):
+                    return
+                # A deadline advances interaction time, not perception time.
+                # In particular, a recorded video may stay paused throughout
+                # the reply window; pushing its context high-water mark forward
+                # would make valid frames after resume look like a rewind.
+                timestamp_ms = max(
+                    runtime.session.context_high_water_ms,
+                    pending.timestamp_ms,
+                )
+                directive = on_timeout(
+                    runtime.session,
+                    decision_id=decision_id,
+                    timestamp_ms=timestamp_ms,
+                    config=self._config.trigger,
+                )
+                decision = self._commit_rule_directive(runtime, directive, timestamp_ms)
+                if decision is None:
+                    raise DecisionRejectedError("invalid_response")
+        except Exception as exc:  # noqa: BLE001 - deadline thread must fail closed
+            print(f"warning: decision deadline failed for {scene_id}/{decision_id}: {exc}")
+            return
+        self._publish(decision, decision_id)
 
     def _runtime(self, scene_id: str) -> _SceneRuntime:
         runtime = self._runtimes.get(scene_id)
@@ -1030,6 +1077,21 @@ class DecisionService:
         runtime.voice_prompt_decision_id = None
         runtime.voice_prompt_inflight = False
         runtime.voice_prompt_ready_monotonic = None
+        if self._deadline_scheduler is not None:
+            self._deadline_scheduler.cancel(decision.scene_id)
+            if (
+                decision.response_timeout_ms is not None
+                and decision.response_deadline_ms is not None
+            ):
+                self._deadline_scheduler.schedule(
+                    scene_id=decision.scene_id,
+                    decision_id=decision.decision_id,
+                    delay_ms=max(
+                        1.0,
+                        decision.response_deadline_ms - self._wall_clock_ms(),
+                    ),
+                    callback=self._expire_decision,
+                )
         self._record_capture(runtime, decision)
         self._memory_milestones(directive, decision, previous_complaint)
 
@@ -1092,6 +1154,11 @@ class DecisionService:
             skeleton.state, skeleton.risk_level, risk_floor=directive.next_state.risk_floor
         ):
             raise DecisionRejectedError("risk_floor_violation")
+        response_deadline_ms = (
+            None
+            if skeleton.response_timeout_ms is None
+            else self._wall_clock_ms() + skeleton.response_timeout_ms
+        )
         return CareDecision(
             scene_id=runtime.session.scene_id,
             decision_id=self._next_decision_id(runtime),
@@ -1111,6 +1178,7 @@ class DecisionService:
             demo_mode=self._config.demo_mode,
             consent_required=skeleton.consent_required,
             response_timeout_ms=skeleton.response_timeout_ms,
+            response_deadline_ms=response_deadline_ms,
             action_card=card,
             visual_context=None if visual is None else visual.record,
             alarm=alarm,

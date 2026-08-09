@@ -29,6 +29,7 @@ function validDecision(overrides = {}) {
     demo_mode: "live",
     consent_required: false,
     response_timeout_ms: null,
+    response_deadline_ms: null,
     action_card: {
       event: "疑似跌倒",
       elder_quote: "没有回应",
@@ -78,6 +79,14 @@ test("CareDecision rejects invented fields and invalid alarm semantics", () => {
   })), false);
   assert.equal(isCareDecision(validDecision({
     alarm: { channels: ["ring", "ring"], trigger: "visual_confirm" },
+  })), false);
+  assert.equal(isCareDecision(validDecision({
+    response_timeout_ms: 8_000,
+    response_deadline_ms: 9_000,
+  })), true);
+  assert.equal(isCareDecision(validDecision({
+    response_timeout_ms: null,
+    response_deadline_ms: 9_000,
   })), false);
 });
 

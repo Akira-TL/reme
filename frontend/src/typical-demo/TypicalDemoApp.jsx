@@ -27,6 +27,7 @@ import { createDemoStateEnvelope, createPoseFrame } from "./monitorRelay";
 import { createBoundedMediaSignalDispatcher } from "./monitorMedia";
 import { RuntimeDebugPanel } from "./RuntimeDebugPanel";
 import { shouldAutoOpenFamilyVideo } from "./phoneState";
+import { homePrivacyViewMode, privacyAllowsEventVideo } from "./privacyPresentation";
 import { buildDemoState, mediaGrantEligibility } from "./remoteCommand";
 import { getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus";
 import { DEMO_SCENES } from "./scenes";
@@ -184,6 +185,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
   const familyGrantActive = Boolean(
     activeGrant
       && sceneId !== "bathroom"
+      && privacyAllowsEventVideo(sceneId, projectedDecision)
       && (
         (sceneId === "kitchen" && activeGrant.scope === "kitchen_moment")
         || (sceneId === "fall" && activeGrant.scope === "fall_emergency")
@@ -193,7 +195,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
         || (sceneId === "fall" && live.familyVideoAllowed)
       ),
   );
-  const deviceViewMode = sceneId === "bathroom" ? "skeleton" : "video_skeleton";
+  const deviceViewMode = homePrivacyViewMode(sceneId, projectedDecision);
   const autoFamilyViewOpen = shouldAutoOpenFamilyVideo(sceneId, projectedDecision);
   const effectiveFamilyViewOpen = Boolean(
     projectedDecision?.decision_id
@@ -678,12 +680,16 @@ export function TypicalDemoApp({ surface = "debug" }) {
       startConversation: startDemoConversation,
       submitResponse: submitRemoteResponse,
       confirmAlarm: live.confirmAlarm,
+      confirmActionCard: live.confirmActionCard,
+      confirmFamilyNotification: live.confirmFamilyNotification,
       replayVoice: live.replayVoice,
     });
   }, [
     alarmActive,
     debugInterface,
     live.confirmAlarm,
+    live.confirmActionCard,
+    live.confirmFamilyNotification,
     live.replayVoice,
     media.availableSources,
     media.stop,

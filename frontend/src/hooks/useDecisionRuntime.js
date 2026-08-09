@@ -17,6 +17,7 @@ import {
   submitResponse,
   uploadDangerFrame,
 } from "../services/decisionClient";
+import { shouldSubmitDangerFrame } from "./dangerFramePolicy.js";
 import {
   inspectMicrophoneProcessing,
   openMicrophone,
@@ -205,10 +206,11 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     const abortController = new AbortController();
     const seenDecisionIds = new Set();
     const respondedDecisionIds = new Set();
+    const submittedFrameDecisionIds = new Set();
     let disposed = false;
     let socket = null;
     let latestDecision = null;
-    let countdown = { decisionId: null, timer: 0 };
+    let countdown = { decisionId: null, expiresAt: null, timer: 0 };
     let pendingSceneSwitch = Promise.resolve();
     let vibrateTimer = 0;
     let ring = null;
@@ -383,7 +385,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
 
     function clearCountdown() {
       if (countdown.timer) window.clearTimeout(countdown.timer);
-      countdown = { decisionId: null, timer: 0 };
+      countdown = { decisionId: null, expiresAt: null, timer: 0 };
       setDeadline(null);
     }
 
@@ -397,22 +399,87 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     function showResponseCountdown(payload, timeoutMs = payload?.response_timeout_ms) {
       if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !payload?.decision_id) return;
       const decisionId = payload.decision_id;
+      const authoritativeDeadline = Number.isFinite(payload.response_deadline_ms)
+        ? payload.response_deadline_ms
+        : null;
+      const expiresAt = authoritativeDeadline ?? Date.now() + timeoutMs;
+      const remainingMs = Math.max(0, expiresAt - Date.now());
       clearCountdown();
-      setDeadline({ decisionId, timeoutMs, expiresAt: Date.now() + timeoutMs });
+      if (remainingMs <= 0) return;
+      setDeadline({ decisionId, timeoutMs, expiresAt });
       countdown = {
         decisionId,
+        expiresAt,
         timer: window.setTimeout(() => {
           if (countdown.decisionId !== decisionId) return;
-          countdown = { decisionId: null, timer: 0 };
+          countdown = { decisionId: null, expiresAt: null, timer: 0 };
           setDeadline(null);
-        }, timeoutMs),
+        }, remainingMs),
       };
     }
 
     function replyWindowMs(target) {
+      if (countdown.decisionId === target?.decision_id && Number.isFinite(countdown.expiresAt)) {
+        return Math.max(0, countdown.expiresAt - Date.now());
+      }
+      if (Number.isFinite(target?.response_deadline_ms)) {
+        return Math.max(0, target.response_deadline_ms - Date.now());
+      }
       return Number.isFinite(target?.response_timeout_ms) && target.response_timeout_ms > 0
         ? target.response_timeout_ms
         : 2500;
+    }
+
+    function submitOfferedDangerFrame(payload, { promptPlaybackCompleted = false } = {}) {
+      if (!shouldSubmitDangerFrame(payload, {
+        promptPlaybackCompleted,
+        alreadySubmitted: submittedFrameDecisionIds.has(payload?.decision_id),
+      })) return;
+      submittedFrameDecisionIds.add(payload.decision_id);
+      const imageB64 = captureJpegBase64(videoRef.current);
+      const requestedAt = Date.now();
+      const request = {
+        decisionId: payload.decision_id,
+        sceneId: payload.scene_id || sceneRef.current,
+        frameCount: imageB64 ? 1 : 0,
+        requestedAt,
+      };
+      if (!imageB64) {
+        setVisualContext({
+          status: "failed",
+          ...request,
+          respondedAt: Date.now(),
+          error: "未获得可发送的当前画面",
+        });
+        return;
+      }
+      setVisualContext({
+        status: "sending",
+        ...request,
+        respondedAt: null,
+        error: "",
+      });
+      uploadDangerFrame(httpBase, {
+        sceneId: request.sceneId,
+        decisionId: payload.decision_id,
+        timestampMs: performance.now(),
+        imageB64,
+      }).then(() => {
+        if (disposed) return;
+        setVisualContext((current) => current.decisionId === request.decisionId
+          ? { ...current, status: "sent", respondedAt: Date.now(), error: "" }
+          : current);
+      }).catch((error) => {
+        if (disposed) return;
+        setVisualContext((current) => current.decisionId === request.decisionId
+          ? {
+              ...current,
+              status: "failed",
+              respondedAt: Date.now(),
+              error: error?.message || "视觉确认发送失败",
+            }
+          : current);
+      });
     }
 
     async function beginVoiceCapture(target, stage = "recording") {
@@ -646,6 +713,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         }
       }
       if (disposed || playbackGeneration !== sceneGeneration) return false;
+      // ADR-0007 ask-first sequencing: receiving `frame` authority is not an
+      // immediate-upload command. Offer the prompt, then submit one frame.
+      submitOfferedDangerFrame(payload, { promptPlaybackCompleted: true });
       if (respondedDecisionIds.has(payload.decision_id)) {
         setVoice((current) => ({ ...current, listening: false, stage: "complete" }));
         return true;
@@ -770,58 +840,6 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         void playDecisionVoice(payload);
       }
 
-      const channels = Array.isArray(payload.confirm_channels) ? payload.confirm_channels : [];
-      if (channels.includes("frame")) {
-        const imageB64 = captureJpegBase64(videoRef.current);
-        const requestedAt = Date.now();
-        const request = {
-          decisionId: payload.decision_id,
-          sceneId: payload.scene_id || sceneRef.current,
-          frameCount: imageB64 ? 1 : 0,
-          requestedAt,
-        };
-        if (imageB64) {
-          setVisualContext({
-            status: "sending",
-            ...request,
-            respondedAt: null,
-            error: "",
-          });
-          uploadDangerFrame(httpBase, {
-            sceneId: request.sceneId,
-            decisionId: payload.decision_id,
-            timestampMs: performance.now(),
-            imageB64,
-          }).then(() => {
-            if (disposed) return;
-            setVisualContext((current) => current.decisionId === request.decisionId
-              ? {
-                  ...current,
-                  status: "sent",
-                  respondedAt: Date.now(),
-                  error: "",
-                }
-              : current);
-          }).catch((error) => {
-            if (disposed) return;
-            setVisualContext((current) => current.decisionId === request.decisionId
-              ? {
-                  ...current,
-                  status: "failed",
-                  respondedAt: Date.now(),
-                  error: error?.message || "视觉确认发送失败",
-                }
-              : current);
-          });
-        } else {
-          setVisualContext({
-            status: "failed",
-            ...request,
-            respondedAt: Date.now(),
-            error: "未获得可发送的当前画面",
-          });
-        }
-      }
       if (payload.alarm) {
         const alarmChannels = Array.isArray(payload.alarm.channels) ? payload.alarm.channels : [];
         setAlarm({
@@ -1042,9 +1060,46 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         }
         if (!target.alarm) return Promise.resolve({ ok: false, code: "alarm_not_current" });
         markResponded(target.decision_id);
-        return submitFor(target, "card_confirmed", "family_input").then((ok) => ({
+        return submitFor(target, "alarm_confirmed", "family_input").then((ok) => ({
           ok,
           code: ok ? "alarm_confirmed" : "response_failed",
+          decisionId: target.decision_id,
+        }));
+      },
+      confirmActionCard(expectedDecisionId = null) {
+        const target = latestDecision;
+        if (!target?.decision_id) return Promise.resolve({ ok: false, code: "decision_unavailable" });
+        if (expectedDecisionId && target.decision_id !== expectedDecisionId) {
+          return Promise.resolve({ ok: false, code: "stale_decision" });
+        }
+        if (target.alarm || target.action_card?.status !== "pending") {
+          return Promise.resolve({ ok: false, code: "action_card_not_current" });
+        }
+        markResponded(target.decision_id);
+        return submitFor(target, "card_confirmed", "family_input").then((ok) => ({
+          ok,
+          code: ok ? "action_card_confirmed" : "response_failed",
+          decisionId: target.decision_id,
+        }));
+      },
+      confirmFamilyNotification(expectedDecisionId = null) {
+        const target = latestDecision;
+        if (!target?.decision_id) return Promise.resolve({ ok: false, code: "decision_unavailable" });
+        if (expectedDecisionId && target.decision_id !== expectedDecisionId) {
+          return Promise.resolve({ ok: false, code: "stale_decision" });
+        }
+        if (
+          target.alarm
+          || target.action_card
+          || !target.family_notification
+          || !["family_notification_required", "urgent_attention"].includes(target.state)
+        ) {
+          return Promise.resolve({ ok: false, code: "family_notification_not_current" });
+        }
+        markResponded(target.decision_id);
+        return submitFor(target, "family_notification_confirmed", "family_input").then((ok) => ({
+          ok,
+          code: ok ? "family_notification_confirmed" : "response_failed",
           decisionId: target.decision_id,
         }));
       },
@@ -1110,7 +1165,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       apiRef.current = {};
       abortController.abort();
       if (countdown.timer) window.clearTimeout(countdown.timer);
-      countdown = { decisionId: null, timer: 0 };
+      countdown = { decisionId: null, expiresAt: null, timer: 0 };
       sceneGeneration += 1;
       clearVoiceReplyTimer();
       abortVoiceCapture();
@@ -1156,6 +1211,16 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     return apiRef.current.confirmAlarm?.(expectedDecisionId)
       || Promise.resolve({ ok: false, code: "decision_unavailable" });
   }, []);
+  const confirmActionCard = useCallback((decisionId = null) => {
+    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
+    return apiRef.current.confirmActionCard?.(expectedDecisionId)
+      || Promise.resolve({ ok: false, code: "decision_unavailable" });
+  }, []);
+  const confirmFamilyNotification = useCallback((decisionId = null) => {
+    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
+    return apiRef.current.confirmFamilyNotification?.(expectedDecisionId)
+      || Promise.resolve({ ok: false, code: "decision_unavailable" });
+  }, []);
   const replayVoice = useCallback((decisionId = null) => {
     const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
     return apiRef.current.replayVoice?.(expectedDecisionId)
@@ -1185,6 +1250,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     startDemoConversation,
     switchScene,
     confirmAlarm,
+    confirmActionCard,
+    confirmFamilyNotification,
     replayVoice,
     startVoiceReply,
     resetSceneState,
