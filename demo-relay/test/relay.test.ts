@@ -51,6 +51,13 @@ afterEach(async () => {
 
 describe("public dual-device relay", () => {
   it("claims one passwordless 30 second producer lease and never accepts a request body", async () => {
+    const emptyBodyResponse = await relayFetch("/api/monitor/claim", {
+      method: "POST",
+      body: new Uint8Array(0),
+    });
+    expect(emptyBodyResponse.status).toBe(201);
+    const first = await emptyBodyResponse.json<Claim>();
+
     const bodyResponse = await relayFetch("/api/monitor/claim", {
       method: "POST",
       body: "{}",
@@ -58,7 +65,6 @@ describe("public dual-device relay", () => {
     expect(bodyResponse.status).toBe(400);
     await expect(bodyResponse.json()).resolves.toEqual({ error: "request_body_forbidden" });
 
-    const first = await claimMonitor();
     expect(first.room_name).toBe(ROOM_NAME);
     expect(first.room_session_id).toMatch(/^room-[a-f0-9-]+$/);
     expect(first.producer_token).toMatch(/^[a-f0-9]{64}$/);
@@ -66,7 +72,11 @@ describe("public dual-device relay", () => {
 
     const second = await relayFetch("/api/monitor/claim", { method: "POST" });
     expect(second.status).toBe(409);
-    await expect(second.json()).resolves.toMatchObject({ error: "monitor_busy" });
+    const busy = await second.json<Record<string, unknown>>();
+    expect(busy).toMatchObject({ error: "monitor_busy" });
+    expect(numberField(busy, "retry_after_ms")).toBeGreaterThan(29_000);
+    expect(numberField(busy, "retry_at_ms") - numberField(busy, "server_time_ms"))
+      .toBe(numberField(busy, "retry_after_ms"));
 
     await runInDurableObject(roomStub(), async (_instance, state) => {
       const row = state.storage.sql.exec<{
@@ -173,6 +183,119 @@ describe("public dual-device relay", () => {
     await expect(nextType(viewerB, "control_claim_result")).resolves.toMatchObject({ status: "granted" });
   });
 
+  it("lets only the current Monitor revoke control and terminally fails its pending commands", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewerA = await connectViewerAndReady();
+    const viewerB = await connectViewerAndReady();
+    monitor.send(JSON.stringify(makeState(claim, 1)));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewerA, "reme-demo-state/v1");
+    await claimControl(viewerA, claim.room_session_id);
+
+    const pending = makeCommand(claim, 1, 1, "cmd-monitor-revoke");
+    viewerA.send(JSON.stringify(pending));
+    await expect(nextAck(viewerA, pending.command_id)).resolves.toMatchObject({ phase: "received" });
+    await nextSchema(monitor, "reme-control-command/v1");
+
+    viewerA.send(JSON.stringify({
+      type: "control_revoke",
+      room_session_id: claim.room_session_id,
+    }));
+    await expect(nextType(viewerA, "protocol_error")).resolves.toMatchObject({
+      code: "invalid_viewer_message",
+    });
+    monitor.send(JSON.stringify({
+      type: "control_revoke",
+      room_session_id: claim.room_session_id,
+      lease_id: "unexpected",
+    }));
+    await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({
+      code: "invalid_monitor_message",
+    });
+
+    monitor.send(JSON.stringify({
+      type: "control_revoke",
+      room_session_id: claim.room_session_id,
+    }));
+    await expect(nextAck(viewerA, pending.command_id)).resolves.toMatchObject({
+      phase: "failed",
+      reason: "control_revoked_by_monitor",
+    });
+    await expect(nextWhere(viewerB, (value) => (
+      typeOf(value) === "controller_status" && field(value, "controller") === null
+    ))).resolves.toMatchObject({ room_session_id: claim.room_session_id });
+    viewerB.send(JSON.stringify({ type: "control_claim", room_session_id: claim.room_session_id }));
+    await expect(nextType(viewerB, "control_claim_result")).resolves.toMatchObject({ status: "granted" });
+  });
+
+  it("terminally fails pending commands before a Viewer controller is released, disconnected, or expired", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const controller = await connectViewerAndReady();
+    const observer = await connectViewerAndReady();
+    monitor.send(JSON.stringify(makeState(claim, 1)));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(controller, "reme-demo-state/v1");
+    const firstLeaseId = await claimControl(controller, claim.room_session_id);
+
+    const releasedCommand = makeCommand(claim, 1, 1, "cmd-controller-release");
+    controller.send(JSON.stringify(releasedCommand));
+    await nextAck(controller, releasedCommand.command_id);
+    await nextSchema(monitor, "reme-control-command/v1");
+    controller.send(JSON.stringify({
+      type: "control_release",
+      room_session_id: claim.room_session_id,
+      lease_id: firstLeaseId,
+    }));
+    await expect(nextAckPhase(observer, releasedCommand.command_id, "failed")).resolves.toMatchObject({
+      phase: "failed",
+      reason: "controller_released",
+    });
+
+    await claimControl(controller, claim.room_session_id);
+    const disconnectedCommand = makeCommand(claim, 1, 1, "cmd-controller-disconnect");
+    controller.send(JSON.stringify(disconnectedCommand));
+    await nextAck(controller, disconnectedCommand.command_id);
+    await nextSchema(monitor, "reme-control-command/v1");
+    controller.close(1000, "controller_gone");
+    await expect(nextAckPhase(observer, disconnectedCommand.command_id, "failed")).resolves.toMatchObject({
+      phase: "failed",
+      reason: "controller_disconnected",
+    });
+
+    const expiringController = observer;
+    const expiryObserver = await connectViewerAndReady();
+    await claimControl(expiringController, claim.room_session_id);
+    const expiredCommand = {
+      ...makeCommand(claim, 1, 1, "cmd-controller-expiry"),
+      expires_at_ms: baseTime + 60_000,
+    };
+    expiringController.send(JSON.stringify(expiredCommand));
+    await nextAck(expiringController, expiredCommand.command_id);
+    await nextSchema(monitor, "reme-control-command/v1");
+
+    now.mockReturnValue(baseTime + 10_000);
+    monitor.send(JSON.stringify({
+      type: "monitor_heartbeat",
+      room_session_id: claim.room_session_id,
+    }));
+    await nextType(monitor, "monitor_heartbeat_ack");
+    now.mockReturnValue(baseTime + 30_001);
+    expect(await runDurableObjectAlarm(roomStub())).toBe(true);
+    await expect(nextAckPhase(expiryObserver, expiredCommand.command_id, "failed")).resolves.toMatchObject({
+      phase: "failed",
+      reason: "controller_lease_expired",
+    });
+    await expect(nextWhere(expiryObserver, (value) => (
+      typeOf(value) === "controller_status" && field(value, "controller") === null
+    ))).resolves.toMatchObject({ room_session_id: claim.room_session_id });
+  });
+
   it("validates and replays a fresh state and ordered 17-point pose without raw media", async () => {
     const claim = await claimMonitor();
     const monitor = await connectMonitor(claim);
@@ -182,10 +305,19 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(state));
     await expect(nextSchema(viewer, "reme-demo-state/v1")).resolves.toEqual(state);
     await expect(nextType(monitor, "state_accepted")).resolves.toMatchObject({ state_revision: 1 });
+    monitor.send(JSON.stringify(state));
+    await expect(nextSchema(viewer, "reme-demo-state/v1")).resolves.toEqual(state);
+    await expect(nextType(monitor, "state_accepted")).resolves.toMatchObject({ state_revision: 1 });
+    monitor.send(JSON.stringify({ ...state, timestamp_ms: state.timestamp_ms + 1 }));
+    await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({
+      code: "state_revision_conflict",
+    });
 
     const pose = makePose(claim, state.runtime_session_id, 1);
     monitor.send(JSON.stringify(pose));
     await expect(nextSchema(viewer, "reme-pose-frame-17/v1")).resolves.toEqual(pose);
+    await expect(nextType(monitor, "pose_accepted")).resolves.toMatchObject({ frame_sequence: 1 });
+    monitor.send(JSON.stringify(pose));
     await expect(nextType(monitor, "pose_accepted")).resolves.toMatchObject({ frame_sequence: 1 });
 
     const late = await connectViewerAndReady();
@@ -217,7 +349,7 @@ describe("public dual-device relay", () => {
       reason: "state_revision_mismatch",
     });
 
-    const command = makeCommand(claim, 1, 4, "cmd-start");
+    const command = makeCommand(claim, 2, 4, "cmd-start");
     viewer.send(JSON.stringify(command));
     await expect(nextAck(viewer, command.command_id)).resolves.toMatchObject({ phase: "received" });
     await expect(nextSchema(monitor, "reme-control-command/v1")).resolves.toEqual(command);
@@ -253,11 +385,76 @@ describe("public dual-device relay", () => {
     viewer.send(JSON.stringify(command));
     await expect(nextAck(viewer, command.command_id)).resolves.toEqual(applied);
 
-    const skipped = makeCommand(claim, 3, 5, "cmd-skipped");
+    const skipped = makeCommand(claim, 4, 5, "cmd-skipped");
     viewer.send(JSON.stringify(skipped));
-    await expect(nextAck(viewer, skipped.command_id)).resolves.toMatchObject({
+    const skippedAck = await nextAck(viewer, skipped.command_id);
+    expect(skippedAck).toMatchObject({
       phase: "rejected",
       reason: "invalid_command_sequence",
+    });
+    viewer.send(JSON.stringify(skipped));
+    await expect(nextAck(viewer, skipped.command_id)).resolves.toEqual(skippedAck);
+
+    const next = makeCommand(claim, 3, 5, "cmd-after-skipped");
+    viewer.send(JSON.stringify(next));
+    await expect(nextAck(viewer, next.command_id)).resolves.toMatchObject({ phase: "received" });
+    await expect(nextSchema(monitor, "reme-control-command/v1")).resolves.toEqual(next);
+  });
+
+  it("persists a no-lease rejection so an exact command id cannot become accepted later", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+    monitor.send(JSON.stringify(makeState(claim, 1)));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewer, "reme-demo-state/v1");
+
+    const unauthorized = makeCommand(claim, 1, 1, "cmd-before-lease");
+    viewer.send(JSON.stringify(unauthorized));
+    const rejected = await nextAck(viewer, unauthorized.command_id);
+    expect(rejected).toMatchObject({
+      phase: "rejected",
+      reason: "controller_lease_required",
+    });
+
+    await claimControl(viewer, claim.room_session_id);
+    viewer.send(JSON.stringify(unauthorized));
+    await expect(nextAck(viewer, unauthorized.command_id)).resolves.toEqual(rejected);
+
+    const authorized = makeCommand(claim, 1, 1, "cmd-after-lease");
+    viewer.send(JSON.stringify(authorized));
+    await expect(nextAck(viewer, authorized.command_id)).resolves.toMatchObject({ phase: "received" });
+    await expect(nextSchema(monitor, "reme-control-command/v1")).resolves.toEqual(authorized);
+  });
+
+  it("rejects cross-scene navigation while an authoritative emergency is active", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+    const emergency = makeState(claim, 1, {
+      scene: "fall",
+      care: {
+        phase: "emergency",
+        decision: "decision-locked",
+        consent: "none",
+        authoritative: true,
+      },
+    });
+    monitor.send(JSON.stringify(emergency));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewer, "reme-demo-state/v1");
+    await claimControl(viewer, claim.room_session_id);
+
+    const command = {
+      ...makeCommand(claim, 1, 1, "cmd-leave-emergency"),
+      command: { name: "select_scene" as const, scene_id: "living" as const },
+    };
+    viewer.send(JSON.stringify(command));
+    await expect(nextAck(viewer, command.command_id)).resolves.toMatchObject({
+      phase: "rejected",
+      reason: "authoritative_alarm_locked",
     });
   });
 
@@ -279,6 +476,34 @@ describe("public dual-device relay", () => {
     await expect(nextAck(viewer, command.command_id)).resolves.toMatchObject({
       phase: "failed",
       reason: "monitor_disconnected",
+    });
+  });
+
+  it("expires a nonterminal command from the Durable Object alarm", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+    monitor.send(JSON.stringify(makeState(claim, 1)));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewer, "reme-demo-state/v1");
+    await claimControl(viewer, claim.room_session_id);
+    const command = {
+      ...makeCommand(claim, 1, 1, "cmd-alarm-expiry"),
+      issued_at_ms: baseTime,
+      expires_at_ms: baseTime + 1_000,
+    };
+    viewer.send(JSON.stringify(command));
+    await nextAck(viewer, command.command_id);
+    await nextSchema(monitor, "reme-control-command/v1");
+
+    now.mockReturnValue(baseTime + 1_001);
+    expect(await runDurableObjectAlarm(roomStub())).toBe(true);
+    await expect(nextAck(viewer, command.command_id)).resolves.toMatchObject({
+      phase: "failed",
+      reason: "command_expired",
     });
   });
 
@@ -375,25 +600,25 @@ describe("public dual-device relay", () => {
       schema_version: "reme-media-signal/v1",
       room_session_id: claim.room_session_id,
       grant_id: grantId,
-      target_id: viewerId,
+      target_id: "monitor",
       signal_type: "offer",
       signal: { type: "offer", sdp: "v=0\r\n" },
     };
-    monitor.send(JSON.stringify(offer));
-    await expect(nextSchema(viewer, "reme-media-signal/v1")).resolves.toEqual({
+    viewer.send(JSON.stringify(offer));
+    await expect(nextSchema(monitor, "reme-media-signal/v1")).resolves.toEqual({
       ...offer,
-      from_id: "monitor",
+      from_id: viewerId,
     });
     const answer = {
       ...offer,
-      target_id: "monitor",
+      target_id: viewerId,
       signal_type: "answer",
       signal: { type: "answer", sdp: "v=0\r\na=answer" },
     };
-    viewer.send(JSON.stringify(answer));
-    await expect(nextSchema(monitor, "reme-media-signal/v1")).resolves.toEqual({
+    monitor.send(JSON.stringify(answer));
+    await expect(nextSchema(viewer, "reme-media-signal/v1")).resolves.toEqual({
       ...answer,
-      from_id: viewerId,
+      from_id: "monitor",
     });
 
     const living = makeState(claim, 2, { scene: "living" });
@@ -402,9 +627,145 @@ describe("public dual-device relay", () => {
     const revoked = await nextWhere(viewer, (value) => typeOf(value) === "media_grant"
       && field(objectField(value, "grant"), "status") === "revoked");
     expect(revoked).toMatchObject({ reason: "scene_changed" });
-    viewer.send(JSON.stringify(answer));
+    viewer.send(JSON.stringify(offer));
     await expect(nextType(viewer, "protocol_error")).resolves.toMatchObject({
       code: "media_grant_inactive",
+    });
+  });
+
+  it("revokes event video when the authoritative runtime degrades", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+    const kitchen = makeState(claim, 1, {
+      scene: "kitchen",
+      care: {
+        phase: "checking",
+        decision: "decision-runtime-gate",
+        consent: "granted",
+        authoritative: false,
+      },
+    });
+    monitor.send(JSON.stringify(kitchen));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewer, "reme-demo-state/v1");
+    const request = {
+      type: "media_grant_request",
+      room_session_id: claim.room_session_id,
+      runtime_session_id: kitchen.runtime_session_id,
+      event_id: "decision-runtime-gate",
+      scope: "kitchen_moment",
+      expires_in_ms: 60_000,
+    };
+    monitor.send(JSON.stringify(request));
+    await nextType(viewer, "media_grant");
+
+    const degraded = makeState(claim, 2, {
+      scene: "kitchen",
+      care: {
+        phase: "checking",
+        decision: "decision-runtime-gate",
+        consent: "granted",
+        authoritative: false,
+      },
+    });
+    degraded.state.runtime = {
+      status: "degraded",
+      capability: "live",
+      detail: "decision transport unavailable",
+    };
+    monitor.send(JSON.stringify(degraded));
+    await nextType(monitor, "state_accepted");
+    await expect(nextWhere(viewer, (value) => typeOf(value) === "media_grant"
+      && field(objectField(value, "grant"), "status") === "revoked")).resolves.toMatchObject({
+        reason: "grant_authority_lost",
+      });
+    monitor.send(JSON.stringify(request));
+    await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({
+      code: "authority_runtime_degraded",
+    });
+  });
+
+  it("expires stale authority and never extends an event beyond its first grant deadline", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+    const kitchen = makeState(claim, 1, {
+      scene: "kitchen",
+      care: {
+        phase: "checking",
+        decision: "decision-fixed-window",
+        consent: "granted",
+        authoritative: false,
+      },
+    });
+    monitor.send(JSON.stringify(kitchen));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewer, "reme-demo-state/v1");
+    const leaseId = await claimControl(viewer, claim.room_session_id);
+    const request = {
+      type: "media_grant_request",
+      room_session_id: claim.room_session_id,
+      runtime_session_id: kitchen.runtime_session_id,
+      event_id: "decision-fixed-window",
+      scope: "kitchen_moment",
+      expires_in_ms: 60_000,
+    };
+    monitor.send(JSON.stringify(request));
+    const firstGrant = await nextType(viewer, "media_grant");
+    const firstGrantValue = objectField(firstGrant, "grant");
+    const firstDeadline = numberField(firstGrantValue, "expires_at_ms");
+    expect(firstDeadline).toBe(baseTime + 60_000);
+
+    now.mockReturnValue(baseTime + 20_000);
+    monitor.send(JSON.stringify({
+      type: "monitor_heartbeat",
+      room_session_id: claim.room_session_id,
+    }));
+    await nextType(monitor, "monitor_heartbeat_ack");
+    viewer.send(JSON.stringify({
+      type: "control_heartbeat",
+      room_session_id: claim.room_session_id,
+      lease_id: leaseId,
+    }));
+    await nextType(viewer, "control_heartbeat_ack");
+
+    now.mockReturnValue(baseTime + 30_001);
+    expect(await runDurableObjectAlarm(roomStub())).toBe(true);
+    await expect(nextWhere(viewer, (value) => typeOf(value) === "media_grant"
+      && field(objectField(value, "grant"), "status") === "revoked")).resolves.toMatchObject({
+        reason: "state_stale",
+      });
+    await expect(nextType(viewer, "state_unavailable")).resolves.toMatchObject({ reason: "stale" });
+
+    const staleCommand = makeCommand(claim, 1, 1, "cmd-stale-authority");
+    viewer.send(JSON.stringify(staleCommand));
+    await expect(nextAck(viewer, staleCommand.command_id)).resolves.toMatchObject({
+      phase: "rejected",
+      reason: "state_stale",
+    });
+    monitor.send(JSON.stringify(request));
+    await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({ code: "state_stale" });
+
+    monitor.send(JSON.stringify(kitchen));
+    await nextType(monitor, "state_accepted");
+    await nextSchema(viewer, "reme-demo-state/v1");
+    monitor.send(JSON.stringify(request));
+    const resumedGrant = await nextWhere(viewer, (value) => typeOf(value) === "media_grant"
+      && field(objectField(value, "grant"), "status") === "active");
+    expect(numberField(objectField(resumedGrant, "grant"), "expires_at_ms")).toBe(firstDeadline);
+
+    await runInDurableObject(roomStub(), async (_instance, state) => {
+      const rows = state.storage.sql.exec<{ [key: string]: SqlStorageValue; count: number }>(
+        `SELECT COUNT(*) AS count FROM media_grant_audience
+          WHERE grant_id = ?`,
+        stringField(firstGrantValue, "grant_id"),
+      ).one();
+      expect(rows.count).toBe(0);
     });
   });
 
@@ -706,6 +1067,16 @@ function nextSchema(socket: WebSocket, schema: string): Promise<Record<string, u
 function nextAck(socket: WebSocket, commandId: string): Promise<Record<string, unknown>> {
   return nextWhere(socket, (value) => typeOf(value) === "control_ack"
     && field(value, "command_id") === commandId);
+}
+
+function nextAckPhase(
+  socket: WebSocket,
+  commandId: string,
+  phase: string,
+): Promise<Record<string, unknown>> {
+  return nextWhere(socket, (value) => typeOf(value) === "control_ack"
+    && field(value, "command_id") === commandId
+    && field(value, "phase") === phase);
 }
 
 async function latestQueuedType(socket: WebSocket, type: string): Promise<Record<string, unknown>> {

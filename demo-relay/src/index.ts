@@ -51,6 +51,7 @@ const MAX_JSON_BYTES = 16_384;
 const MAX_SIGNAL_MESSAGES_PER_GRANT = 160;
 const MAX_COMMAND_LIFETIME_MS = 60_000;
 const MAX_CLOCK_SKEW_MS = 5_000;
+const MAX_TERMINAL_COMMAND_HISTORY = 256;
 
 interface SqlRow {
   [key: string]: SqlStorageValue;
@@ -142,6 +143,8 @@ export interface MonitorClaimBusy {
   ok: false;
   error: "monitor_busy";
   retry_at_ms: number;
+  server_time_ms: number;
+  retry_after_ms: number;
 }
 
 export type MonitorClaimResult = MonitorClaimSuccess | MonitorClaimBusy;
@@ -178,6 +181,10 @@ interface MediaGrantWire {
   reason: string | null;
 }
 
+type StateAuthority =
+  | { status: "fresh"; row: LatestStateRow; state: DemoStateEnvelope }
+  | { status: "missing" | "stale" };
+
 export class DemoRoom extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -194,7 +201,13 @@ export class DemoRoom extends DurableObject<Env> {
     const current = this.producerLease();
     if (current !== null && current.expires_at_ms > nowMs) {
       await this.scheduleNextAlarm(nowMs);
-      return { ok: false, error: "monitor_busy", retry_at_ms: current.expires_at_ms };
+      return {
+        ok: false,
+        error: "monitor_busy",
+        retry_at_ms: current.expires_at_ms,
+        server_time_ms: nowMs,
+        retry_after_ms: current.expires_at_ms - nowMs,
+      };
     }
 
     this.failPendingCommands(nowMs, "room_session_replaced");
@@ -432,6 +445,7 @@ export class DemoRoom extends DurableObject<Env> {
     ) return jsonResponse({ error: "invalid_or_expired_token" }, 401);
 
     this.revokeActiveGrants(nowMs, "monitor_reconnected", "revoked");
+    this.failPendingCommands(nowMs, "monitor_reconnected");
     this.ctx.storage.sql.exec(
       `UPDATE producer_lease SET socket_id = NULL
         WHERE singleton = 1 AND room_session_id = ? AND token_hash = ?`,
@@ -556,6 +570,11 @@ export class DemoRoom extends DurableObject<Env> {
       }
       this.releaseMonitor(attachment, nowMs, "monitor_released");
       ws.close(1000, "monitor_released");
+      return;
+    }
+    if (isExactObject(value, ["room_session_id", "type"])
+      && value.type === "control_revoke") {
+      this.handleMonitorControlRevoke(ws, attachment, value.room_session_id, nowMs);
       return;
     }
     if (isExactObject(value, ["schema_version", "room_session_id", "runtime_session_id", "state_revision", "timestamp_ms", "state"])
@@ -687,12 +706,6 @@ export class DemoRoom extends DurableObject<Env> {
       attachment.tokenHash,
       attachment.socketId,
     );
-    this.ctx.storage.sql.exec(
-      `UPDATE latest_state SET received_at_ms = ?
-        WHERE singleton = 1 AND room_session_id = ?`,
-      nowMs,
-      attachment.roomSessionId,
-    );
     sendJson(ws, {
       type: "monitor_heartbeat_ack",
       room_session_id: attachment.roomSessionId,
@@ -717,7 +730,28 @@ export class DemoRoom extends DurableObject<Env> {
     }
     const previousRow = this.latestState();
     if (previousRow !== null && value.state_revision <= previousRow.state_revision) {
-      sendJson(ws, { type: "protocol_error", code: "non_increasing_state_revision" });
+      if (
+        value.state_revision === previousRow.state_revision
+        && canonicalJson(value) === previousRow.state_json
+      ) {
+        this.ctx.storage.sql.exec(
+          "UPDATE latest_state SET received_at_ms = ? WHERE singleton = 1",
+          nowMs,
+        );
+        this.broadcastState(value, nowMs);
+        sendJson(ws, {
+          type: "state_accepted",
+          room_session_id: value.room_session_id,
+          state_revision: value.state_revision,
+        });
+        return;
+      }
+      sendJson(ws, {
+        type: "protocol_error",
+        code: value.state_revision === previousRow.state_revision
+          ? "state_revision_conflict"
+          : "non_increasing_state_revision",
+      });
       return;
     }
     const previous = previousRow === null ? null : parseStoredState(previousRow);
@@ -775,12 +809,15 @@ export class DemoRoom extends DurableObject<Env> {
     value: unknown,
     nowMs: number,
   ): void {
-    const latestState = this.latestState();
-    if (latestState === null) {
-      sendJson(ws, { type: "protocol_error", code: "state_required_before_pose" });
+    const authority = this.authoritativeState(nowMs);
+    if (authority.status !== "fresh") {
+      sendJson(ws, {
+        type: "protocol_error",
+        code: authority.status === "stale" ? "state_stale" : "state_required_before_pose",
+      });
       return;
     }
-    if (!validatePoseFrame(value, attachment.roomSessionId, latestState.runtime_session_id)) {
+    if (!validatePoseFrame(value, attachment.roomSessionId, authority.row.runtime_session_id)) {
       sendJson(ws, { type: "protocol_error", code: "invalid_pose_frame" });
       return;
     }
@@ -790,7 +827,27 @@ export class DemoRoom extends DurableObject<Env> {
       && previous.runtime_session_id === value.runtime_session_id
       && value.frame_sequence <= previous.frame_sequence
     ) {
-      sendJson(ws, { type: "protocol_error", code: "non_increasing_frame_sequence" });
+      if (
+        value.frame_sequence === previous.frame_sequence
+        && canonicalJson(value) === previous.pose_json
+      ) {
+        this.ctx.storage.sql.exec(
+          "UPDATE latest_pose SET received_at_ms = ? WHERE singleton = 1",
+          nowMs,
+        );
+        sendJson(ws, {
+          type: "pose_accepted",
+          room_session_id: value.room_session_id,
+          frame_sequence: value.frame_sequence,
+        });
+        return;
+      }
+      sendJson(ws, {
+        type: "protocol_error",
+        code: value.frame_sequence === previous.frame_sequence
+          ? "frame_sequence_conflict"
+          : "non_increasing_frame_sequence",
+      });
       return;
     }
     this.ctx.storage.sql.exec(
@@ -926,7 +983,29 @@ export class DemoRoom extends DurableObject<Env> {
       sendJson(ws, { type: "protocol_error", code: "controller_lease_invalid" });
       return;
     }
-    this.ctx.storage.sql.exec("DELETE FROM controller_lease");
+    this.terminateControllerLease(controller, nowMs, "controller_released");
+  }
+
+  private handleMonitorControlRevoke(
+    ws: WebSocket,
+    attachment: MonitorAttachment,
+    roomSessionId: unknown,
+    nowMs: number,
+  ): void {
+    if (roomSessionId !== attachment.roomSessionId) {
+      sendJson(ws, { type: "protocol_error", code: "stale_room_session" });
+      return;
+    }
+    const controller = this.controllerLease();
+    if (controller?.room_session_id === attachment.roomSessionId) {
+      this.terminateControllerLease(controller, nowMs, "control_revoked_by_monitor");
+      return;
+    }
+    this.failPendingCommandsForRoom(
+      attachment.roomSessionId,
+      nowMs,
+      "control_revoked_by_monitor",
+    );
     this.broadcastControllerStatus(nowMs);
   }
 
@@ -957,62 +1036,52 @@ export class DemoRoom extends DurableObject<Env> {
       || controller.viewer_id !== attachment.viewerId
       || controller.room_session_id !== value.room_session_id
     ) {
-      this.sendRejectedAck(ws, value, nowMs, "controller_lease_required");
+      this.recordRejectedCommand(value, nowMs, "controller_lease_required");
       return;
     }
     if (value.command_sequence !== controller.last_command_sequence + 1) {
-      this.sendRejectedAck(ws, value, nowMs, "invalid_command_sequence");
+      this.recordRejectedCommand(value, nowMs, "invalid_command_sequence");
       return;
     }
+    this.ctx.storage.sql.exec(
+      "UPDATE controller_lease SET last_command_sequence = ? WHERE singleton = 1",
+      value.command_sequence,
+    );
     if (
       value.issued_at_ms > nowMs + MAX_CLOCK_SKEW_MS
       || value.expires_at_ms <= nowMs
       || value.expires_at_ms <= value.issued_at_ms
       || value.expires_at_ms - value.issued_at_ms > MAX_COMMAND_LIFETIME_MS
     ) {
-      this.sendRejectedAck(ws, value, nowMs, "command_expired_or_invalid_time");
+      this.recordRejectedCommand(value, nowMs, "command_expired_or_invalid_time");
       return;
     }
-    const latest = this.latestState();
-    if (latest === null || latest.state_revision !== value.expected_state_revision) {
-      this.sendRejectedAck(ws, value, nowMs, "state_revision_mismatch");
+    const authority = this.authoritativeState(nowMs);
+    if (authority.status !== "fresh") {
+      this.recordRejectedCommand(
+        value,
+        nowMs,
+        authority.status === "stale" ? "state_stale" : "state_unavailable",
+      );
       return;
     }
-    const state = parseStoredState(latest);
-    if (state === null) {
-      this.sendRejectedAck(ws, value, nowMs, "state_unavailable");
+    if (authority.row.state_revision !== value.expected_state_revision) {
+      this.recordRejectedCommand(value, nowMs, "state_revision_mismatch");
       return;
     }
-    const safetyReason = commandSafetyRejection(value, state);
+    const safetyReason = commandSafetyRejection(value, authority.state);
     if (safetyReason !== null) {
-      this.sendRejectedAck(ws, value, nowMs, safetyReason);
+      this.recordRejectedCommand(value, nowMs, safetyReason);
       return;
     }
     const monitor = this.currentMonitorSocket(nowMs);
     if (monitor === null) {
-      this.sendRejectedAck(ws, value, nowMs, "monitor_offline");
+      this.recordRejectedCommand(value, nowMs, "monitor_offline");
       return;
     }
 
     const ack = makeAck(value, "received", nowMs, null, null);
-    this.ctx.storage.sql.exec(
-      `INSERT INTO commands
-         (room_session_id, command_id, command_json, ack_json, phase,
-          expected_state_revision, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      value.room_session_id,
-      value.command_id,
-      canonicalJson(value),
-      canonicalJson(ack),
-      ack.phase,
-      value.expected_state_revision,
-      nowMs,
-      nowMs,
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE controller_lease SET last_command_sequence = ? WHERE singleton = 1",
-      value.command_sequence,
-    );
+    this.recordCommand(value, ack, nowMs);
     this.broadcastToViewers(ack);
     sendJson(monitor, value);
   }
@@ -1063,6 +1132,7 @@ export class DemoRoom extends DurableObject<Env> {
       value.command_id,
     );
     this.broadcastToViewers(value);
+    if (isTerminalAck(value.phase)) this.pruneTerminalCommands();
   }
 
   private handleGrantRequest(
@@ -1076,16 +1146,42 @@ export class DemoRoom extends DurableObject<Env> {
       sendJson(ws, { type: "protocol_error", code: "invalid_media_grant_request" });
       return;
     }
-    const stateRow = this.latestState();
-    const state = stateRow === null ? null : parseStoredState(stateRow);
-    const rejection = grantRejection(value, state);
+    const authority = this.authoritativeState(nowMs);
+    if (authority.status !== "fresh") {
+      sendJson(ws, {
+        type: "protocol_error",
+        code: authority.status === "stale" ? "state_stale" : "state_required_before_grant",
+      });
+      return;
+    }
+    const rejection = grantRejection(value, authority.state);
     if (rejection !== null) {
       sendJson(ws, { type: "protocol_error", code: rejection });
       return;
     }
+    const previousDeadline = this.eventGrantDeadline(value);
+    if (previousDeadline !== null && previousDeadline <= nowMs) {
+      sendJson(ws, { type: "protocol_error", code: "event_grant_window_expired" });
+      return;
+    }
+    const current = this.activeGrantRow(nowMs);
+    if (
+      current !== null
+      && current.room_session_id === value.room_session_id
+      && current.runtime_session_id === value.runtime_session_id
+      && current.event_id === value.event_id
+      && current.scope === value.scope
+      && (previousDeadline === null || current.expires_at_ms <= previousDeadline)
+    ) {
+      this.broadcastGrantWire(current, this.mediaGrantWire(current, "active", null));
+      return;
+    }
     this.revokeActiveGrants(nowMs, "grant_replaced", "revoked");
     const grantId = `grant-${crypto.randomUUID()}`;
-    const expiresAtMs = nowMs + value.expires_in_ms;
+    const expiresAtMs = Math.min(
+      nowMs + value.expires_in_ms,
+      previousDeadline ?? Number.POSITIVE_INFINITY,
+    );
     this.ctx.storage.sql.exec(
       `INSERT INTO media_grants
          (grant_id, room_session_id, runtime_session_id, event_id, scope,
@@ -1137,6 +1233,7 @@ export class DemoRoom extends DurableObject<Env> {
         grant.grant_id,
       );
       this.broadcastGrantWire(grant, this.mediaGrantWire(grant, "revoked", "monitor_revoked"));
+      this.clearGrantAudience(grant.grant_id);
     }
   }
 
@@ -1224,13 +1321,17 @@ export class DemoRoom extends DurableObject<Env> {
     }
     const controller = this.controllerLease();
     if (controller?.viewer_id === attachment.viewerId) {
-      this.ctx.storage.sql.exec("DELETE FROM controller_lease");
-      this.broadcastControllerStatus(nowMs);
+      this.terminateControllerLease(controller, nowMs, "controller_disconnected");
     }
+    this.ctx.storage.sql.exec(
+      "DELETE FROM media_grant_audience WHERE viewer_id = ?",
+      attachment.viewerId,
+    );
     this.broadcastPresence(nowMs);
   }
 
   private expireDueSync(nowMs: number): void {
+    this.expirePendingCommands(nowMs);
     const lease = this.producerLease();
     if (lease !== null && lease.expires_at_ms <= nowMs) {
       this.ctx.storage.sql.exec("DELETE FROM producer_lease");
@@ -1243,9 +1344,9 @@ export class DemoRoom extends DurableObject<Env> {
     }
     const controller = this.controllerLease();
     if (controller !== null && controller.expires_at_ms <= nowMs) {
-      this.ctx.storage.sql.exec("DELETE FROM controller_lease");
-      this.broadcastControllerStatus(nowMs);
+      this.terminateControllerLease(controller, nowMs, "controller_lease_expired");
     }
+    if (this.monitorOnline(nowMs)) this.expireStaleState(nowMs);
     const expired = this.ctx.storage.sql.exec<GrantRow>(
       "SELECT * FROM media_grants WHERE status = 'active' AND expires_at_ms <= ?",
       nowMs,
@@ -1257,7 +1358,10 @@ export class DemoRoom extends DurableObject<Env> {
         grant.grant_id,
       );
       this.broadcastGrantWire(grant, this.mediaGrantWire(grant, "expired", "grant_expired"));
+      this.clearGrantAudience(grant.grant_id);
     }
+    this.pruneTerminalCommands();
+    this.pruneInactiveGrantAudience();
   }
 
   private async scheduleNextAlarm(nowMs: number): Promise<void> {
@@ -1268,6 +1372,20 @@ export class DemoRoom extends DurableObject<Env> {
     if (controller !== null) times.push(controller.expires_at_ms);
     const grant = this.activeGrantRow(nowMs);
     if (grant !== null) times.push(grant.expires_at_ms);
+    const state = this.latestState();
+    if (
+      state !== null
+      && state.received_at_ms > 0
+      && this.monitorOnline(nowMs)
+    ) times.push(state.received_at_ms + LATEST_STATE_TTL_MS);
+    for (const command of this.pendingCommands()) {
+      try {
+        const value: unknown = JSON.parse(command.command_json);
+        if (validateControlCommand(value)) times.push(value.expires_at_ms);
+      } catch {
+        // A malformed persisted command is failed by expirePendingCommands.
+      }
+    }
     if (times.length === 0) {
       await this.ctx.storage.deleteAlarm();
       return;
@@ -1279,6 +1397,7 @@ export class DemoRoom extends DurableObject<Env> {
     const grant = this.activeGrantRow(nowMs);
     if (grant === null) return;
     const valid = grant.runtime_session_id === state.runtime_session_id
+      && state.state.runtime.status === "ready"
       && state.state.capture.status === "active"
       && state.state.capture.remote_video === "available"
       && state.state.scene_id !== "bathroom"
@@ -1307,33 +1426,153 @@ export class DemoRoom extends DurableObject<Env> {
         grant.grant_id,
       );
       this.broadcastGrantWire(grant, this.mediaGrantWire(grant, status, reason));
+      this.clearGrantAudience(grant.grant_id);
     }
   }
 
-  private failPendingCommands(nowMs: number, reason: string): void {
-    const pending = this.ctx.storage.sql.exec<CommandRow>(
-      "SELECT * FROM commands WHERE phase IN ('received', 'awaiting_local_confirmation')",
-    ).toArray();
-    for (const command of pending) {
-      const ack: ControlAck = {
-        type: "control_ack",
-        room_session_id: command.room_session_id,
-        command_id: command.command_id,
-        phase: "failed",
-        timestamp_ms: nowMs,
-        state_revision: null,
-        reason,
-      };
-      this.ctx.storage.sql.exec(
-        `UPDATE commands SET phase = 'failed', ack_json = ?, updated_at_ms = ?
-          WHERE room_session_id = ? AND command_id = ?`,
-        canonicalJson(ack),
-        nowMs,
-        command.room_session_id,
-        command.command_id,
-      );
-      this.broadcastToViewers(ack);
+  private terminateControllerLease(
+    controller: ControllerLeaseRow,
+    nowMs: number,
+    reason: string,
+  ): void {
+    this.failPendingCommandsForRoom(controller.room_session_id, nowMs, reason);
+    this.ctx.storage.sql.exec(
+      `DELETE FROM controller_lease
+        WHERE room_session_id = ? AND viewer_id = ? AND lease_id = ?`,
+      controller.room_session_id,
+      controller.viewer_id,
+      controller.lease_id,
+    );
+    this.broadcastControllerStatus(nowMs);
+  }
+
+  private expireStaleState(nowMs: number): void {
+    const row = this.latestState();
+    if (
+      row !== null
+      && row.received_at_ms > 0
+      && nowMs - row.received_at_ms >= LATEST_STATE_TTL_MS
+    ) this.markStateStale(row, nowMs);
+  }
+
+  private authoritativeState(nowMs: number): StateAuthority {
+    const row = this.latestState();
+    if (row === null) return { status: "missing" };
+    if (
+      row.received_at_ms <= 0
+      || nowMs - row.received_at_ms >= LATEST_STATE_TTL_MS
+    ) {
+      this.markStateStale(row, nowMs);
+      return { status: "stale" };
     }
+    const state = parseStoredState(row);
+    if (state === null) {
+      this.markStateStale(row, nowMs);
+      return { status: "stale" };
+    }
+    return { status: "fresh", row, state };
+  }
+
+  private markStateStale(row: LatestStateRow, nowMs: number): void {
+    if (row.received_at_ms <= 0) return;
+    this.ctx.storage.sql.exec(
+      `UPDATE latest_state SET received_at_ms = 0
+        WHERE singleton = 1 AND room_session_id = ? AND received_at_ms = ?`,
+      row.room_session_id,
+      row.received_at_ms,
+    );
+    this.ctx.storage.sql.exec("DELETE FROM latest_pose");
+    this.revokeActiveGrants(nowMs, "state_stale", "revoked");
+    this.failPendingCommandsForRoom(row.room_session_id, nowMs, "state_stale");
+    this.broadcastStateUnavailable("stale");
+  }
+
+  private failPendingCommands(nowMs: number, reason: string): void {
+    for (const command of this.pendingCommands()) {
+      this.failCommand(command, nowMs, reason);
+    }
+    this.pruneTerminalCommands();
+  }
+
+  private failPendingCommandsForRoom(
+    roomSessionId: string,
+    nowMs: number,
+    reason: string,
+  ): void {
+    for (const command of this.pendingCommands(roomSessionId)) {
+      this.failCommand(command, nowMs, reason);
+    }
+    this.pruneTerminalCommands();
+  }
+
+  private pendingCommands(roomSessionId?: string): CommandRow[] {
+    return roomSessionId === undefined
+      ? this.ctx.storage.sql.exec<CommandRow>(
+        "SELECT * FROM commands WHERE phase IN ('received', 'awaiting_local_confirmation')",
+      ).toArray()
+      : this.ctx.storage.sql.exec<CommandRow>(
+        `SELECT * FROM commands
+          WHERE room_session_id = ?
+            AND phase IN ('received', 'awaiting_local_confirmation')`,
+        roomSessionId,
+      ).toArray();
+  }
+
+  private expirePendingCommands(nowMs: number): void {
+    for (const command of this.pendingCommands()) {
+      let value: unknown = null;
+      try {
+        value = JSON.parse(command.command_json);
+      } catch {
+        // Invalid persisted commands are failed closed below.
+      }
+      if (!validateControlCommand(value) || value.expires_at_ms <= nowMs) {
+        this.failCommand(command, nowMs, "command_expired");
+      }
+    }
+    this.pruneTerminalCommands();
+  }
+
+  private failCommand(command: CommandRow, nowMs: number, reason: string): void {
+    const ack: ControlAck = {
+      type: "control_ack",
+      room_session_id: command.room_session_id,
+      command_id: command.command_id,
+      phase: "failed",
+      timestamp_ms: nowMs,
+      state_revision: null,
+      reason,
+    };
+    this.ctx.storage.sql.exec(
+      `UPDATE commands SET phase = 'failed', ack_json = ?, updated_at_ms = ?
+        WHERE room_session_id = ? AND command_id = ?`,
+      canonicalJson(ack),
+      nowMs,
+      command.room_session_id,
+      command.command_id,
+    );
+    this.broadcastToViewers(ack);
+  }
+
+  private pruneTerminalCommands(): void {
+    this.ctx.storage.sql.exec(
+      `DELETE FROM commands WHERE rowid IN (
+        SELECT rowid FROM commands
+          WHERE phase IN ('applied', 'rejected', 'failed')
+          ORDER BY updated_at_ms DESC, rowid DESC
+          LIMIT -1 OFFSET ?
+      )`,
+      MAX_TERMINAL_COMMAND_HISTORY,
+    );
+  }
+
+  private pruneInactiveGrantAudience(): void {
+    this.ctx.storage.sql.exec(
+      `DELETE FROM media_grant_audience
+        WHERE grant_id IN (
+          SELECT grant_id FROM media_grants WHERE status != 'active'
+        )`,
+    );
   }
 
   private sendLatestState(ws: WebSocket, viewerId: string, nowMs: number): void {
@@ -1346,7 +1585,7 @@ export class DemoRoom extends DurableObject<Env> {
       sendJson(ws, { type: "state_unavailable", reason: "not_published" });
       return;
     }
-    if (nowMs - row.received_at_ms > LATEST_STATE_TTL_MS) {
+    if (row.received_at_ms <= 0 || nowMs - row.received_at_ms >= LATEST_STATE_TTL_MS) {
       sendJson(ws, { type: "state_unavailable", reason: "stale" });
       return;
     }
@@ -1402,6 +1641,34 @@ export class DemoRoom extends DurableObject<Env> {
     reason: string,
   ): void {
     sendJson(ws, makeAck(command, "rejected", nowMs, null, reason));
+  }
+
+  private recordCommand(command: ControlCommand, ack: ControlAck, nowMs: number): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO commands
+         (room_session_id, command_id, command_json, ack_json, phase,
+          expected_state_revision, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      command.room_session_id,
+      command.command_id,
+      canonicalJson(command),
+      canonicalJson(ack),
+      ack.phase,
+      command.expected_state_revision,
+      nowMs,
+      nowMs,
+    );
+  }
+
+  private recordRejectedCommand(
+    command: ControlCommand,
+    nowMs: number,
+    reason: string,
+  ): void {
+    const ack = makeAck(command, "rejected", nowMs, null, reason);
+    this.recordCommand(command, ack, nowMs);
+    this.broadcastToViewers(ack);
+    this.pruneTerminalCommands();
   }
 
   private broadcastPresence(nowMs: number): void {
@@ -1568,12 +1835,30 @@ export class DemoRoom extends DurableObject<Env> {
     ));
   }
 
+  private eventGrantDeadline(request: MediaGrantRequest): number | null {
+    const row = firstRow(this.ctx.storage.sql.exec<SqlRow & { deadline_ms: number | null }>(
+      `SELECT MIN(expires_at_ms) AS deadline_ms FROM media_grants
+        WHERE room_session_id = ? AND event_id = ? AND scope = ?`,
+      request.room_session_id,
+      request.event_id,
+      request.scope,
+    ));
+    return typeof row?.deadline_ms === "number" ? row.deadline_ms : null;
+  }
+
   private addGrantAudience(grantId: string, viewerId: string): void {
     this.ctx.storage.sql.exec(
       `INSERT OR IGNORE INTO media_grant_audience (grant_id, viewer_id)
        VALUES (?, ?)`,
       grantId,
       viewerId,
+    );
+  }
+
+  private clearGrantAudience(grantId: string): void {
+    this.ctx.storage.sql.exec(
+      "DELETE FROM media_grant_audience WHERE grant_id = ?",
+      grantId,
     );
   }
 
@@ -1647,12 +1932,18 @@ export default {
         return jsonWithCors(await room.getStatus(), 200, origin);
       }
       if (request.method === "POST" && url.pathname === "/api/monitor/claim") {
-        if (request.body !== null || Number(request.headers.get("Content-Length") ?? "0") > 0) {
+        const body = await request.arrayBuffer();
+        if (body.byteLength > 0) {
           return jsonWithCors({ error: "request_body_forbidden" }, 400, origin);
         }
         const result = await room.claimMonitor();
         if (!result.ok) {
-          return jsonWithCors({ error: result.error, retry_at_ms: result.retry_at_ms }, 409, origin);
+          return jsonWithCors({
+            error: result.error,
+            retry_at_ms: result.retry_at_ms,
+            server_time_ms: result.server_time_ms,
+            retry_after_ms: result.retry_after_ms,
+          }, 409, origin);
         }
         return jsonWithCors({
           room_name: result.room_name,
@@ -1688,6 +1979,7 @@ function grantRejection(
     || request.runtime_session_id !== state.runtime_session_id
   ) return "stale_grant_session";
   if (state.state.scene_id === "bathroom") return "bathroom_privacy_lock";
+  if (state.state.runtime.status !== "ready") return "authority_runtime_degraded";
   if (
     state.state.capture.status !== "active"
     || state.state.capture.remote_video !== "available"
@@ -1721,6 +2013,7 @@ function commandSafetyRejection(
     body.name === "reset_demo"
     || body.name === "stop_capture"
     || body.name === "select_source"
+    || (body.name === "select_scene" && body.scene_id !== state.state.scene_id)
     || (body.name === "run_demo_scenario" && body.scenario === "normal")
   ) return "authoritative_alarm_locked";
   return null;

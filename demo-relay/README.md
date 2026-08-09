@@ -33,14 +33,17 @@ credentials.
 - `GET /api/status`: current public room status, without tokens.
 - `POST /api/monitor/claim`: bodyless, passwordless producer claim. Returns a
   256-bit token, a new `room_session_id`, and a 30-second expiry. A live lease
-  returns HTTP 409.
+  returns HTTP 409 with `retry_at_ms`, `server_time_ms`, and the clock-skew-safe
+  relative `retry_after_ms`.
 - `GET /ws/monitor`: protocols `reme-monitor-v1` and
   `reme-token-${producer_token}`.
 - `GET /ws/viewer`: public protocol `reme-viewer-v1`, capped at five sockets.
 
 The Monitor sends `monitor_heartbeat` every 10 seconds. Producer and controller
-leases both expire after 30 seconds and are handled by one idempotent Durable
-Object alarm.
+leases both expire after 30 seconds. Authoritative state must also be refreshed
+within 30 seconds; a stale-state alarm revokes event media, fails pending
+commands, and broadcasts `state_unavailable(stale)`. One idempotent Durable
+Object alarm handles all of these deadlines.
 
 ## Exact protocol shapes
 
@@ -52,8 +55,14 @@ Monitor lifecycle:
 {"type":"monitor_ready","room_name":"shared-live-demo","room_session_id":"room-...","expires_at_ms":0,"viewer_count":0,"max_viewers":5,"controller":null,"heartbeat_interval_ms":10000,"server_time_ms":0}
 {"type":"monitor_heartbeat","room_session_id":"room-..."}
 {"type":"monitor_heartbeat_ack","room_session_id":"room-...","expires_at_ms":0}
+{"type":"control_revoke","room_session_id":"room-..."}
 {"type":"monitor_release","room_session_id":"room-..."}
 ```
+
+`control_revoke` is Monitor-only. It terminally fails the current room's
+nonterminal commands, removes the controller lease, and broadcasts
+`controller_status`. Viewer release, disconnect, and lease expiry use the same
+fail-before-delete ordering.
 
 Viewer lifecycle and controller lease:
 
@@ -83,8 +92,10 @@ unchanged to the Monitor:
 ```
 
 ACK phases are `received`, `awaiting_local_confirmation`, `applied`, `rejected`,
-or `failed`. The Relay caches each accepted `command_id`; a byte-order-independent
-equivalent retry receives the latest cached ACK.
+or `failed`. The Relay caches exact valid `command_id` values, including
+pre-controller and invalid-sequence rejections; a byte-order-independent
+equivalent retry receives the cached ACK. Terminal history is bounded to the
+most recent 256 rows in the active room.
 
 Media grant and signalling:
 
@@ -92,16 +103,21 @@ Media grant and signalling:
 {"type":"media_grant_request","room_session_id":"room-...","runtime_session_id":"runtime-...","event_id":"decision-...","scope":"kitchen_moment","expires_in_ms":60000}
 {"type":"media_grant_revoke","room_session_id":"room-...","grant_id":"grant-..."}
 {"type":"media_grant","room_session_id":"room-...","grant":{"grant_id":"grant-...","event_id":"decision-...","scope":"kitchen_moment","expires_at_ms":0,"status":"active"},"audience":"all_viewers","reason":null}
-{"schema_version":"reme-media-signal/v1","room_session_id":"room-...","grant_id":"grant-...","target_id":"viewer-...","signal_type":"offer","signal":{"type":"offer","sdp":"..."}}
+{"schema_version":"reme-media-signal/v1","room_session_id":"room-...","grant_id":"grant-...","target_id":"monitor","signal_type":"offer","signal":{"type":"offer","sdp":"..."}}
+{"schema_version":"reme-media-signal/v1","room_session_id":"room-...","grant_id":"grant-...","target_id":"viewer-...","signal_type":"answer","signal":{"type":"answer","sdp":"..."}}
 ```
 
-The Relay adds `from_id` when forwarding a signal. Monitor offers target a
-specific `viewer_id`; Viewer answers and ICE target `monitor`. Kitchen grants
-require current-event consent and last at most 60 seconds. Fall grants require
-an authoritative current emergency and last at most 30 seconds. Bathroom,
-source/session/scene changes, capture loss, producer loss, and expiry all revoke
-the grant fail-closed. A Viewer joining during either active grant is added to
-the audience only for the remaining grant lifetime.
+The Relay adds `from_id` when forwarding a signal. Each Viewer creates a
+`recvonly` video peer and sends the offer to `monitor`; the Monitor answers that
+specific `viewer_id`. ICE always targets the opposite peer. A Viewer joining
+during either active grant receives the remaining grant projection and starts
+the same offer flow immediately. Kitchen grants require current-event consent
+and last at most 60 seconds. Fall grants require an authoritative current
+emergency and last at most 30 seconds. Bathroom, source/session/scene changes,
+capture loss, stale authority, producer loss, and expiry all revoke the grant
+fail-closed. A repeated grant for the same room event can use only the time
+remaining before that event's first persisted grant deadline; it cannot restart
+the 60/30-second window.
 
 ## Verification
 
