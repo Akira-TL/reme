@@ -102,13 +102,16 @@ function initialEvent(snapshot, current) {
     kind: "sync",
     label: "开始同步",
     title: emergency ? "已同步一项需要关注的安全事件" : "已同步家中端当前状态",
-    detail: current.careMessage || baselineDetail(current),
+    detail: current.carePhase === "idle"
+      ? baselineDetail(current)
+      : current.careMessage || baselineDetail(current),
     timestampMs: snapshot.timestamp_ms,
     tone: emergency ? "danger" : "neutral",
   });
 }
 
 function careEvent(snapshot, previous, current) {
+  if (current.carePhase === "idle" && previous.carePhase === "idle") return null;
   if (
     current.carePhase === previous.carePhase
     && current.careDecisionId === previous.careDecisionId

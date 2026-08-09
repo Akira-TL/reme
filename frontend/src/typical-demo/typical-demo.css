@@ -9,7 +9,7 @@
 
 * { box-sizing: border-box; }
 
-html, body, #typical-demo-root { min-width: 320px; min-height: 100%; margin: 0; }
+html, body, #root, #typical-demo-root { min-width: 320px; min-height: 100%; margin: 0; }
 body { overflow-x: hidden; background: #f2f2ef; }
 button { font: inherit; }
 
@@ -453,6 +453,7 @@ button { font: inherit; }
 .fall-controls > div:first-child { max-width: 65%; }
 .control-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .camera-error { width: 100%; margin-top: 8px; padding: 8px; border: 1px dashed #e29a50; border-radius: 10px; color: #a85d10; background: #fff8ef; font-size: 10px; cursor: pointer; }
+.camera-error.is-static { cursor: default; }
 
 .sync-rail { display: flex; flex-direction: column; align-items: center; color: var(--accent); }
 .sync-rail span { width: 9px; height: 9px; border: 2px solid var(--accent); border-radius: 50%; background: #fff; }
@@ -702,4 +703,308 @@ button { font: inherit; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* Home is a product surface. Debug keeps the dense judge-facing layout above. */
+.debug-surface-badge {
+  align-self: flex-start;
+  padding: 5px 8px;
+  border: 1px solid #e0b88c;
+  border-radius: 8px;
+  color: #88541e;
+  background: #fff6e9;
+  font-size: 9px;
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+
+.typical-demo.is-home-surface {
+  min-height: 100dvh;
+  padding:
+    max(18px, env(safe-area-inset-top))
+    max(18px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom))
+    max(18px, env(safe-area-inset-left));
+  background: #faf7f1;
+}
+
+.is-home-surface .demo-topbar,
+.is-home-surface .monitor-control-panel,
+.is-home-surface .demo-workspace { max-width: 1320px; }
+.is-home-surface.is-home-idle .demo-topbar { max-width: 1120px; }
+.is-home-surface .demo-topbar { margin-bottom: 18px; }
+.is-home-surface .brand-lockup { align-items: flex-start; gap: 16px; }
+.is-home-surface .reme-word { font-size: clamp(34px, 4vw, 52px); }
+.is-home-surface .brand-lockup h1 { font-size: clamp(25px, 3vw, 36px); }
+.is-home-surface .brand-lockup p {
+  max-width: 680px;
+  margin-top: 7px;
+  color: #625d57;
+  font-size: clamp(16px, 1.4vw, 19px);
+  line-height: 1.55;
+}
+.is-home-surface .camera-health { font-size: 14px; }
+.is-home-surface .topbar-actions .MuiButton-root { min-height: 44px; font-size: 14px; }
+
+.monitor-control-panel.is-home-control {
+  margin-bottom: 22px;
+  border-color: #e6ded4;
+  border-radius: 24px;
+  box-shadow: 0 16px 40px rgba(66, 50, 36, .07);
+}
+.monitor-control-panel.is-home-control.is-idle { max-width: 1120px; }
+.is-home-control .public-room-warning.MuiAlert-root { min-height: 48px; color: #31566b; background: #f1f7f8; }
+.is-home-control .public-room-warning .MuiAlert-message { align-items: center; gap: 12px; padding-block: 7px; }
+.is-home-control .public-room-warning strong { font-size: 14px; }
+.is-home-control .public-room-warning span { color: #49636f; font-size: 12px; line-height: 1.5; }
+.is-home-control .monitor-control-grid { grid-template-columns: minmax(330px, 1fr) minmax(390px, 1.15fr) minmax(270px, .85fr); padding: 15px 18px; }
+.is-home-control.is-idle .monitor-control-grid { grid-template-columns: minmax(0, 1fr); padding: 18px; }
+.is-home-control .monitor-start-block,
+.is-home-control .monitor-source-block,
+.is-home-control .monitor-room-block { padding-block: 8px; }
+.is-home-control .monitor-start-block small,
+.is-home-control .monitor-section-heading small,
+.is-home-control .monitor-confirmation-queue small { font-size: 10px; }
+.is-home-control .monitor-start-block strong,
+.is-home-control .monitor-section-heading strong,
+.is-home-control .monitor-confirmation-queue strong { margin-top: 4px; font-size: 15px; }
+.is-home-control .monitor-start-block p,
+.is-home-control .monitor-source-block > p {
+  margin-top: 5px;
+  overflow: visible;
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: clip;
+  white-space: normal;
+}
+.is-home-control .monitor-start-block .MuiButton-root,
+.is-home-control .monitor-source-actions .MuiButton-root { min-height: 44px; padding-inline: 14px; font-size: 15px; }
+.is-home-control .monitor-start-block .home-primary-action.MuiButton-root {
+  min-width: 150px;
+  min-height: 52px;
+  padding-inline: 22px;
+  color: #fff;
+  background: #ff5a00;
+  box-shadow: 0 10px 24px rgba(255, 90, 0, .22);
+  font-size: 20px;
+  font-weight: 750;
+}
+.is-home-control .monitor-start-block .home-primary-action.MuiButton-root:hover { background: #e95100; }
+.is-home-control .monitor-source-actions .MuiInputBase-root { min-height: 44px; height: 44px; font-size: 15px; }
+.is-home-control .monitor-section-heading .MuiChip-root { height: 28px; font-size: 10px; }
+.is-home-control .monitor-room-block dl { gap: 7px; margin-top: 10px; }
+.is-home-control .monitor-room-block dl > div { grid-template-columns: 68px 1fr; font-size: 12px; line-height: 1.4; }
+.is-home-control .monitor-controller-value .MuiButton-root { min-height: 44px; padding-inline: 9px; font-size: 14px; }
+.is-home-control .monitor-confirmation-queue { min-height: 48px; padding: 9px 18px; }
+.is-home-control .monitor-confirmation-queue article { min-height: 56px; }
+.is-home-control .monitor-confirmation-queue article b { font-size: 12px; }
+.is-home-control .monitor-confirmation-queue article span { font-size: 10px; }
+.is-home-control .monitor-confirmation-queue article .MuiButton-root { min-height: 38px; font-size: 12px; }
+
+.is-home-surface .demo-workspace {
+  grid-template-columns: minmax(0, 1.45fr) minmax(330px, .55fr);
+  grid-template-areas: "device care";
+  align-items: stretch;
+  gap: 24px;
+  min-height: 0;
+}
+.is-home-surface.is-home-idle .demo-workspace {
+  max-width: 1120px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(330px, .55fr);
+}
+.is-home-surface .device-panel {
+  grid-area: device;
+  min-height: 100%;
+  padding: clamp(16px, 2vw, 24px);
+  border-color: #e3ddd5;
+  border-radius: 28px;
+  box-shadow: 0 22px 58px rgba(66, 49, 34, .09);
+}
+.is-home-surface .panel-heading span { font-size: 14px; }
+.is-home-surface .panel-heading h2 { margin-top: 5px; font-size: clamp(26px, 3vw, 38px); }
+.is-home-surface .device-health-strip { gap: 8px; margin-bottom: 14px; }
+.is-home-surface .device-health-badge { min-height: 32px; padding: 7px 11px; font-size: 12px; }
+.is-home-surface .scene-viewport { min-height: clamp(320px, 50dvh, 620px); border-radius: 22px; }
+.is-home-surface .viewport-pill { min-height: 42px; padding-inline: 14px; font-size: 12px; }
+.is-home-surface .camera-error.MuiButton-root { min-height: 48px; font-size: 14px; }
+.viewport-waiting-state {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 9px;
+  padding: 28px;
+  color: #5f5953;
+  text-align: center;
+}
+.viewport-waiting-state svg { color: #a4653a; font-size: 30px; }
+.viewport-waiting-state strong { font-size: clamp(17px, 1.6vw, 22px); }
+.viewport-waiting-state span { color: #847d76; font-size: 14px; }
+
+.home-care-prompt {
+  grid-area: care;
+  display: flex;
+  min-width: 0;
+  min-height: 100%;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(24px, 3vw, 38px);
+  border: 1px solid #eadfd5;
+  border-radius: 28px;
+  color: #28231f;
+  background: #fffaf5;
+  box-shadow: 0 22px 58px rgba(66, 49, 34, .08);
+}
+.home-care-prompt header { max-width: 30rem; }
+.home-care-kicker {
+  margin: 0 0 12px;
+  color: #a45421;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+.home-care-prompt h2 {
+  margin: 0;
+  font-size: clamp(30px, 3.3vw, 46px);
+  line-height: 1.18;
+  letter-spacing: -.035em;
+}
+.home-care-message {
+  margin: 20px 0 0;
+  color: #4c4540;
+  font-size: clamp(21px, 2.1vw, 28px);
+  line-height: 1.65;
+}
+.home-care-progress {
+  margin: 20px 0 0;
+  padding: 12px 14px;
+  border: 1px solid #e8d7c6;
+  border-radius: 14px;
+  color: #7f4d28;
+  background: #fff3e8;
+  font-size: 17px;
+  line-height: 1.5;
+}
+.home-care-progress[data-tone="error"] { border-color: #edb7ab; color: #a83f29; background: #fff1ed; }
+.home-care-progress[data-tone="complete"] { border-color: #b9ddc1; color: #247534; background: #eff9f1; }
+.home-care-visual-context {
+  margin: 12px 0 0;
+  padding: 11px 14px;
+  border: 1px solid #ead2bc;
+  border-radius: 14px;
+  color: #6b513f;
+  background: #fff4ea;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.home-care-visual-context[data-tone="complete"] { border-color: #b9ddc1; color: #247534; background: #eff9f1; }
+.home-care-visual-context[data-tone="error"] { border-color: #edb7ab; color: #a83f29; background: #fff1ed; }
+.home-care-actions { display: grid; gap: 12px; margin-top: 26px; }
+.home-care-actions button {
+  width: 100%;
+  min-height: 58px;
+  padding: 13px 18px;
+  border: 1px solid #ded5cd;
+  border-radius: 16px;
+  color: #3d3833;
+  background: #fff;
+  font-size: 20px;
+  font-weight: 760;
+  line-height: 1.3;
+  cursor: pointer;
+}
+.home-care-actions button:focus-visible { outline: 3px solid rgba(255, 90, 0, .32); outline-offset: 2px; }
+.home-care-actions button:hover:not(:disabled) { border-color: #e58b4d; }
+.home-care-actions button:disabled { cursor: not-allowed; opacity: .48; }
+.home-care-actions .home-care-primary { border-color: #ff6a16; color: #fff; background: #ff5a00; }
+.home-care-actions .home-care-safe { border-color: #cfc4ba; color: #35302c; background: #fff; }
+.home-care-actions .home-care-danger { border-color: #e34c45; color: #fff; background: #d9413a; }
+.home-care-actions .home-care-replay {
+  width: auto;
+  min-height: 44px;
+  justify-self: start;
+  padding: 9px 14px;
+  color: #6f5541;
+  background: #fff8f1;
+  font-size: 17px;
+}
+.home-care-source {
+  margin: auto 0 0;
+  padding-top: 24px;
+  color: #8a817a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+@media (max-width: 1080px) {
+  .is-home-surface .demo-topbar { align-items: flex-start; gap: 14px; }
+  .is-home-surface .topbar-actions { max-width: 380px; }
+  .is-home-control .monitor-control-grid { grid-template-columns: 1fr 1fr; }
+  .is-home-control .monitor-room-block { grid-column: 1 / -1; border-top: 1px solid #ebe7e2; border-left: 0; }
+  .is-home-surface .demo-workspace { grid-template-columns: minmax(0, 1.2fr) minmax(310px, .8fr); }
+}
+
+@media (max-width: 820px) {
+  .typical-demo.is-home-surface {
+    padding:
+      max(14px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(20px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+  }
+  .is-home-surface .demo-topbar { flex-direction: column; }
+  .is-home-surface .brand-lockup p { display: block; font-size: 16px; }
+  .is-home-surface .topbar-actions { justify-content: flex-start; max-width: none; }
+  .is-home-surface .camera-health { display: flex; }
+  .is-home-control .public-room-warning .MuiAlert-message { align-items: flex-start; }
+  .is-home-control .monitor-control-grid { grid-template-columns: 1fr; padding: 12px 14px; }
+  .is-home-control .monitor-start-block,
+  .is-home-control .monitor-source-block,
+  .is-home-control .monitor-room-block { grid-column: auto; padding: 10px 0; border-top: 1px solid #ebe7e2; border-left: 0; }
+  .is-home-control .monitor-start-block { border-top: 0; }
+  .is-home-surface .demo-workspace,
+  .is-home-surface.is-home-idle .demo-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "device" "care";
+    gap: 16px;
+  }
+  .is-home-surface .scene-viewport { min-height: 0; aspect-ratio: 4 / 3; }
+  .home-care-prompt { min-height: auto; }
+}
+
+@media (max-width: 520px) {
+  .is-home-surface .reme-word { font-size: 31px; }
+  .is-home-surface .brand-lockup { gap: 10px; }
+  .is-home-surface .brand-lockup h1 { font-size: 24px; }
+  .is-home-surface .brand-lockup p { font-size: 15px; line-height: 1.5; }
+  .is-home-surface .topbar-actions { width: 100%; gap: 8px; }
+  .is-home-surface .camera-health { flex: 1 1 calc(50% - 8px); min-width: 132px; font-size: 12px; }
+  .is-home-surface .topbar-actions .MuiButton-root { width: 44px; min-width: 44px; padding: 0; font-size: 0; }
+  .monitor-control-panel.is-home-control { margin-inline: -2px; border-radius: 22px; }
+  .is-home-control .public-room-warning .MuiAlert-message { flex-direction: column; gap: 3px; }
+  .is-home-control .monitor-start-block { grid-template-columns: 44px minmax(0, 1fr); }
+  .is-home-control .monitor-start-block > .MuiButton-root { grid-column: 1 / -1; width: 100%; }
+  .is-home-control .monitor-source-actions { grid-template-columns: 1fr; }
+  .is-home-control .monitor-source-actions .MuiButton-root { width: 100%; }
+  .is-home-control .monitor-room-block dl > div { grid-template-columns: 72px minmax(0, 1fr); }
+  .is-home-control .monitor-confirmation-queue { align-items: flex-start; flex-direction: column; }
+  .is-home-surface .device-panel { padding: 12px; border-radius: 22px; }
+  .is-home-surface .panel-heading h2 { font-size: 26px; }
+  .is-home-surface .device-health-badge { max-width: 100%; font-size: 11px; }
+  .is-home-surface .viewport-pill { min-height: 36px; padding-inline: 9px; font-size: 10px; }
+  .is-home-surface .viewport-privacy { top: auto; right: 3%; bottom: 4%; }
+  .home-care-prompt { padding: 24px 20px; border-radius: 22px; }
+  .home-care-kicker { font-size: 13px; }
+  .home-care-prompt h2 { font-size: 30px; }
+  .home-care-message { font-size: 21px; }
+  .home-care-progress, .home-care-visual-context { font-size: 16px; }
+  .home-care-actions button { min-height: 58px; font-size: 20px; }
+}
+
+@media (min-width: 361px) {
+  .is-home-surface .home-care-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .is-home-surface .home-care-replay { grid-column: 1 / -1; }
 }
