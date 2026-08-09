@@ -12,6 +12,12 @@
   - Relay：`http://127.0.0.1:8887`
 - 已停止旧的 4176、4177 Vite 前端，避免页面、Relay 房间与后端会话混用。
 
+### 本地成果分支对账
+
+- `codex/public-dual-device-demo`、`codex/home-surface-refine`、`codex/frontend-role-routes` 与本分支都以 `origin/lbx-frontend` 为祖先。
+- Home 三个纯 UI 补丁已在本分支按当前权限/模型基线重放并解决冲突；Family 时间线 `3ab92566` 已以等价补丁吸收为 `f038529b`。
+- `codex/frontend-role-routes@587eebce` 是 time/voice/clock WIP、构建产物、Wrangler 本机缓存和截图证据混合提交，不属于本轮 P0，未整提交合并，避免把未独立验收的能力和生成物带回唯一成果线。
+
 ## P0 产品边界
 
 - Home 是家中/全屋智能的数据采集端：本机相机或本地真实视频进入统一后端，输出姿态与事件。
