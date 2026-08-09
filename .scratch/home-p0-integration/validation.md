@@ -30,7 +30,7 @@ Home 页面刷新会启动新的 `runtime_session_id`，但旧实现同时在浏
 
 ## 自动验证
 
-- Frontend：`npm test`，145/145 通过。
+- Frontend：`npm test`，153/153 通过。
 - Frontend：`npm run lint` 通过。
 - Frontend：`npm run build` 通过，1010 modules，Home/Family/Debug 独立动态入口。
 - Route build：`npm run test:route-build`，4/4 通过（本机监听测试在允许 loopback 后执行）。
@@ -56,6 +56,8 @@ Home 页面刷新会启动新的 `runtime_session_id`，但旧实现同时在浏
    - `person_detected: true` 时包含严格有序的 17 个 MoveNet 关键点。
 7. 没有人体或当前帧质量不足时，Family 显示“等待当前运行时的可靠骨架”或“骨架质量较低”，不会补造画面或宣称一切正常。
 8. Home 刷新并创建新 runtime session 后，Family 能接管新 revision，不再锁在旧的“采集未开始”时间线。
+9. Family 时间线只记录本页打开后收到的权威 `demo_state` revision 与已应用的家属告警确认 ACK；相同 revision/ACK 去重，room session 切换清空，断线时旧记录明确标为历史，不再把“当前房间/运行时/在线人数”拼成伪历史。
+10. 同为 idle 的决策文案变化不会制造“关怀已恢复”噪声，初始时间线也不会把“状态正常”当成现场事实；只记录采集、运行时、场景、授权、关怀阶段和家属回执等有意义变化。
 
 ## 结论
 
