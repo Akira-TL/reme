@@ -251,6 +251,28 @@ test("state 与 17 点 pose 各自只有一个 in-flight 和一个 latest slot",
   assert.equal(queue.snapshot().runtimeSessionId, "runtime-2");
 });
 
+test("新 runtime session 可从较小 revision 重新发布", () => {
+  const sent = [];
+  const queue = createLatestPublicationQueue((value) => sent.push(value));
+  queue.reset("room-1", "runtime-1");
+
+  assert.equal(queue.offerState(demoState(9, "runtime-1")), true);
+  queue.acceptState(9);
+  assert.equal(queue.offerState(demoState(0, "runtime-2")), true);
+
+  assert.deepEqual(sent.map((value) => value.state_revision), [9, 0]);
+  assert.deepEqual(queue.snapshot(), {
+    roomSessionId: "room-1",
+    runtimeSessionId: "runtime-2",
+    latestStateRevision: 0,
+    latestPoseSequence: null,
+    stateInFlight: 0,
+    poseInFlight: null,
+    acceptedStateRevision: -1,
+    acceptedPoseSequence: -1,
+  });
+});
+
 test("Relay 永不接受 JPEG、Blob 或 data URL 进入 JSON 通道", () => {
   assert.equal(containsForbiddenRawMedia({ jpeg: "bytes" }), true);
   assert.equal(containsForbiddenRawMedia({ nested: { video: "data:video/mp4;base64,AAAA" } }), true);

@@ -729,7 +729,14 @@ export class DemoRoom extends DurableObject<Env> {
       return;
     }
     const previousRow = this.latestState();
-    if (previousRow !== null && value.state_revision <= previousRow.state_revision) {
+    const previous = previousRow === null ? null : parseStoredState(previousRow);
+    const sessionChanged = previous !== null
+      && previous.runtime_session_id !== value.runtime_session_id;
+    if (
+      !sessionChanged
+      && previousRow !== null
+      && value.state_revision <= previousRow.state_revision
+    ) {
       if (
         value.state_revision === previousRow.state_revision
         && canonicalJson(value) === previousRow.state_json
@@ -754,9 +761,6 @@ export class DemoRoom extends DurableObject<Env> {
       });
       return;
     }
-    const previous = previousRow === null ? null : parseStoredState(previousRow);
-    const sessionChanged = previous !== null
-      && previous.runtime_session_id !== value.runtime_session_id;
     const sceneChanged = previous !== null && previous.state.scene_id !== value.state.scene_id;
     const sourceChanged = previous !== null
       && previous.state.source_generation !== value.state.source_generation;

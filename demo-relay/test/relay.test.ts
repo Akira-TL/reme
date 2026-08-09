@@ -330,6 +330,26 @@ describe("public dual-device relay", () => {
     await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({ code: "binary_frames_forbidden" });
   });
 
+  it("accepts a revision reset when a refreshed Home starts a new runtime session", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+
+    const previous = makeState(claim, 7, { runtimeSession: "runtime-before-refresh" });
+    monitor.send(JSON.stringify(previous));
+    await expect(nextSchema(viewer, "reme-demo-state/v1")).resolves.toEqual(previous);
+    await expect(nextType(monitor, "state_accepted")).resolves.toMatchObject({ state_revision: 7 });
+
+    const refreshed = makeState(claim, 0, { runtimeSession: "runtime-after-refresh" });
+    monitor.send(JSON.stringify(refreshed));
+    await expect(nextSchema(viewer, "reme-demo-state/v1")).resolves.toEqual(refreshed);
+    await expect(nextType(monitor, "state_accepted")).resolves.toMatchObject({ state_revision: 0 });
+
+    const lateViewer = await connectViewerAndReady();
+    await expect(nextSchema(lateViewer, "reme-demo-state/v1")).resolves.toEqual(refreshed);
+  });
+
   it("forwards exact commands, enforces revision and sequence, and replays idempotent ACKs", async () => {
     const claim = await claimMonitor();
     const monitor = await connectMonitor(claim);
