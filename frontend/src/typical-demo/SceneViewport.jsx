@@ -16,6 +16,8 @@ export function SceneViewport({
   skeletonSource = "unavailable",
   compact = false,
   showStatus = true,
+  decorativeSet = true,
+  waitingForStart = false,
 }) {
   const privacy = sceneId === "bathroom";
   const night = sceneId === "fall";
@@ -36,25 +38,37 @@ export function SceneViewport({
         aspectRatio: aspectRatio || 16 / 9,
       }}
     >
-      <div className="room-wall" />
-      <div className="room-floor" />
-      <div className="set-window"><i /><i /></div>
-      <div className="set-console"><i /></div>
-      <div className="set-sofa"><i /><i /></div>
-      <div className="set-rug" />
-      <div className="set-lamp"><i /></div>
-      <div className="set-counter"><i /><i /><i /></div>
-      <div className="set-cabinets"><i /><i /><i /></div>
-      <div className="set-island"><i /><i /></div>
-      <div className="set-shower"><i /><i /></div>
-      <div className="set-tiles" />
-      <div className="set-bath-shelf"><i /><i /></div>
+      {decorativeSet && (
+        <>
+          <div className="room-wall" />
+          <div className="room-floor" />
+          <div className="set-window"><i /><i /></div>
+          <div className="set-console"><i /></div>
+          <div className="set-sofa"><i /><i /></div>
+          <div className="set-rug" />
+          <div className="set-lamp"><i /></div>
+          <div className="set-counter"><i /><i /><i /></div>
+          <div className="set-cabinets"><i /><i /><i /></div>
+          <div className="set-island"><i /><i /></div>
+          <div className="set-shower"><i /><i /></div>
+          <div className="set-tiles" />
+          <div className="set-bath-shelf"><i /><i /></div>
+        </>
+      )}
 
       <canvas
         ref={canvasRef}
         className="live-output"
         aria-label={viewMode === "video_skeleton" ? "现场画面与姿态识别叠加" : "实时姿态画面"}
       />
+
+      {waitingForStart ? (
+        <div className="viewport-waiting-state" role="status">
+          <LockOutlinedIcon />
+          <strong>开启后显示实时视频与姿态叠加</strong>
+          <span>当前摄像头与麦克风均未启用</span>
+        </div>
+      ) : null}
 
       {showStatus && (
         <>
@@ -84,7 +98,7 @@ export function SceneViewport({
           </div>
         </>
       )}
-      {night && <div className="night-time">23:47</div>}
+      {night && decorativeSet && <div className="night-time">23:47</div>}
       {privacy && <div className="privacy-curtain"><span>{compact ? "浴室隐私保护" : "隐私幕布"}</span></div>}
     </div>
   );

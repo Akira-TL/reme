@@ -16,6 +16,7 @@ import {
   startRuntime,
   stopRuntime,
 } from "../services/perceptionClient";
+import { sendBoundedCameraFrame } from "./cameraInputBuffer.js";
 
 const CAMERA_FPS = 10;
 let pendingRuntimeStop = Promise.resolve();
@@ -25,7 +26,7 @@ function makeSessionId() {
   return `live-camera-${id}`;
 }
 
-function connectSocket(url, timeoutMs = 2500) {
+function connectSocket(url, timeoutMs = 10_000) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
     const timeout = window.setTimeout(() => {
@@ -43,7 +44,12 @@ function connectSocket(url, timeoutMs = 2500) {
   });
 }
 
-export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) {
+export function usePerceptionRuntime({
+  videoElement,
+  sceneId,
+  sourceGeneration = 0,
+  enabled = true,
+}) {
   const [runtime, setRuntime] = useState({ state: "offline", reason: "正在检查统一后端感知模块" });
   const [landmarkFrame, setLandmarkFrame] = useState(null);
   const [posture, setPosture] = useState(null);
@@ -134,6 +140,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
           ...current,
           state: status.state,
           reason: status.reason || "",
+          effectiveModels: status.effective_models || null,
           sessionId,
           frameAgeMs,
           activityState,
@@ -166,14 +173,27 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
       canvas.toBlob((blob) => {
         encoding = false;
         if (!blob || disposed || inputSocket.readyState !== WebSocket.OPEN) return;
-        const frameIndex = frameIndexRef.current++;
-        inputSocket.send(JSON.stringify(createFrameMeta(
+        const frameIndex = frameIndexRef.current;
+        const result = sendBoundedCameraFrame(inputSocket, createFrameMeta(
           sessionId,
           sceneRef.current,
           frameIndex,
           performance.now(),
-        )));
-        inputSocket.send(blob);
+        ), blob);
+        if (!result.sent) {
+          if (result.reason === "backpressure") {
+            setRuntime((current) => ({
+              ...current,
+              droppedInputFrames: (current.droppedInputFrames || 0) + 1,
+              inputBackpressure: true,
+            }));
+          }
+          return;
+        }
+        frameIndexRef.current += 1;
+        setRuntime((current) => current.inputBackpressure
+          ? { ...current, inputBackpressure: false }
+          : current);
       }, "image/jpeg", 0.72);
     }
 
@@ -203,6 +223,8 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
           sessionId,
           inputMode: "jpeg",
           acceptedInputs,
+          modelCapabilities: capabilities?.input?.models || null,
+          effectiveModels: null,
         }));
         const starting = await startRuntime(
           urls.httpBase,
@@ -212,16 +234,27 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
         if (disposed) return;
         applyStatus(starting);
 
-        eventsSocket = await connectSocket(urls.eventsWs(sessionId));
+        // The first local JPEG session may spend tens of seconds constructing
+        // MoveNet/posture/MIL adapters. Keep the upgrade pending long enough to
+        // surface the real model state instead of falsely declaring A offline.
+        eventsSocket = await connectSocket(urls.eventsWs(sessionId), 45_000);
         if (disposed) return eventsSocket.close();
         eventsSocket.onmessage = (message) => {
+          if (disposed) return;
           try {
             const event = parseEvent(message.data);
             if (!event) return;
             if (event.event_type === "frame_landmarks") {
               const landmarks = mapFrameLandmarks(event.payload);
               const receivedAt = performance.now();
-              if (landmarks) setLandmarkFrame({ landmarks, receivedAt, payload: event.payload });
+              if (landmarks) {
+                setLandmarkFrame({
+                  landmarks,
+                  receivedAt,
+                  payload: event.payload,
+                  sourceGeneration,
+                });
+              }
               setRuntime((current) => ({
                 ...current,
                 latestFrameIndex: event.payload?.frame_index,
@@ -286,7 +319,7 @@ export function usePerceptionRuntime({ videoElement, sceneId, enabled = true }) 
       acceptedInputsRef.current = [];
       pendingRuntimeStop = stopRuntime(urls.httpBase, sessionId).catch(() => {});
     };
-  }, [enabled, retryGeneration, videoElement]);
+  }, [enabled, retryGeneration, sourceGeneration, videoElement]);
 
   return {
     runtime,

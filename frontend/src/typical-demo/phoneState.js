@@ -17,7 +17,7 @@ export function shouldShowEmergencySheet(phase) {
 }
 
 export function shouldAutoOpenFamilyVideo(sceneId, phase) {
-  return sceneId !== "bathroom" && phase === "emergency";
+  return sceneId === "fall" && phase === "emergency";
 }
 
 export function shouldCloseFamilyVideo(phase) {

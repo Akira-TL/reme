@@ -1,107 +1,127 @@
 # Reme
 
-Reme 是面向家庭关怀场景的隐私优先演示系统：统一后端在本地完成姿态感知、动作事件和关怀决策，结合确定性规则与 Xiaomi MiMo 生成交互；家属端默认只看到抽象骨架和结构化状态。
+Reme 是面向独居或经常独处老人的隐私优先关怀演示系统。Monitor 在本地采集媒体，统一后端完成 MoveNet 姿态、动作事件和关怀决策；Viewer 默认只接收 17 点骨架和结构化状态。
 
-当前冻结演示版本为 `v0.1.0beta`。该版本用于比赛演示和后续结构整理，不代表医疗器械、生产级监护系统或已验证的跌倒检测产品。
+当前冻结演示版本为 `v0.1.0beta`。它用于比赛路演和可行性验收，不是医疗器械、生产级监护系统，也不代表跌倒准确率、延迟或隐私合规已经获得验证。
 
-## 当前演示链路
+## 当前双端链路
 
 ```text
-浏览器摄像头
-  └─ /ws/camera-input
-       ↓
-统一后端 backend/reme/runtime/server.py
-  ├─ perception：MoveNet / 姿态分类、posture_observation、transition_event
-  ├─ 进程内 EventBroker → EventIngest
-  └─ decision：确定性状态机、MiMo 对话、care_decision
-       ↓ /ws
-frontend React 单页应用（/）
-  ├─ 老人端演示
-  └─ 家属端隐私视图
+Monitor /
+  ├─ 摄像头 / 屏幕 / 本地视频
+  ├─ 约 10 FPS 有界 JPEG
+  │    └─ Vite 同源代理 → 统一后端 :8770
+  │         ├─ MoveNet / 姿态 / 连续转变
+  │         └─ 进程内 EventBroker → decision / MiMo
+  └─ 权威状态、17 点骨架、控制 ACK、WebRTC 信令
+       └─ Vite 同源代理 → Relay :8787 → Viewer /viewer.html
+
+事件期原画：Monitor ═════ WebRTC ═════> 全部在线 Viewer
+             （RTP 不进入 Worker、SQLite 或事件消息）
 ```
 
-正式单机入口为 `scripts/demo/start-local-demo.sh`。它只管理统一后端和前端两个进程；感知到决策不经过内部 HTTP/WebSocket。浏览器只采集摄像头并向统一后端发送 JPEG 帧；MoveNet、姿态分类和动作转变判断均在后端完成，前端只展示后端返回的关键点和状态。
+正式本地入口 `scripts/demo/start-local-demo.sh` 在一个前台启动器中管理三个进程：统一后端、固定公开 Relay 和 Vite 前端。感知到决策仍在后端进程内传递；浏览器和 Viewer 不加载 MoveNet、MediaPipe、LiteRT 或重复模型权重。
 
-## 快速启动
+## 桌面本机启动
 
 环境要求：Python 3.11+、`uv`、Node.js 和 npm。
 
 ```bash
 uv sync --extra dev --extra pose
-scripts/setup/setup-mimo-env.sh
+cp .env.example .env
+# 编辑仓库根目录 .env；MIMO_API_KEY 可留空并显示确定性降级状态
 scripts/demo/start-local-demo.sh
 ```
 
-MiMo 密钥写入仓库根目录 `.env`；该文件已被 Git 忽略。也可以复制模板后手动填写：
+脚本最终执行的 Python 入口是：
 
 ```bash
-cp .env.example .env
+uv run --extra pose python -m reme.runtime.launcher
 ```
 
 启动后访问：
 
 ```text
-http://127.0.0.1:4174/
+Monitor: http://127.0.0.1:4174/
+Viewer:  http://127.0.0.1:4174/viewer.html
 ```
 
-macOS 可双击根目录的 `启动Reme全链路演示.command`。该快捷方式统一转发到 `scripts/launchers/macos/`，实际启动逻辑位于 `scripts/demo/`。
+`Ctrl+C`、`SIGTERM` 或 `SIGHUP` 会触发统一清理。macOS 也可双击根目录的 `启动Reme全链路演示.command`。
 
-完整说明见 [docs/快速启动.md](docs/快速启动.md)。
+## 手机局域网启动
+
+手机把局域网 IP 的普通 HTTP 页面视为不安全上下文，不能据此验收摄像头或前后镜头。手机 Monitor 必须使用手机已信任的 HTTPS 证书，且证书 SAN 必须包含实际访问的 IPv4 地址或 hostname：
+
+```bash
+scripts/demo/start-local-demo.sh \
+  --host 0.0.0.0 \
+  --public-host 192.168.1.42 \
+  --tls-cert /absolute/path/to/reme-lan-cert.pem \
+  --tls-key /absolute/path/to/reme-lan-key.pem
+```
+
+然后在手机访问：
+
+```text
+Monitor: https://192.168.1.42:4174/
+Viewer:  https://192.168.1.42:4174/viewer.html
+```
+
+`--public-host` 只允许与 `--host 0.0.0.0` 一起使用，当前启动器明确拒绝 IPv6。证书私钥不得提交；仅“继续访问”一个未受信任的自签证书不能替代系统信任，也不能作为手机媒体权限已通过的证据。
+
+## 固定公开房间风险
+
+`shared-live-demo` 有意不做身份认证，只是本轮受控路演例外。同一网络中能够访问端口的人可以作为 Viewer 加入，producer 空闲时也可尝试 claim Monitor。只应在可信或隔离局域网中短时运行，演示结束立即关闭，不得把它宣传为生产访问控制或隐私方案。
+
+- 最多 5 名 Viewer；同一时刻仅一个 30 秒可续租的远程 controller。
+- 日常只同步骨架；浴室永不开放原画。
+- 厨房只有当前事件明确授权后才可开放最多 60 秒原画。
+- 跌倒只有当前权威升级后才可开放最多 30 秒原画。
+- 有效 grant 面向全部在线 Viewer，晚到 Viewer 可加入剩余窗口。
+
+本地 Relay 只有信令，没有 TURN 凭证服务。局域网内仍需按实际浏览器和网络结果验收 WebRTC；跨 NAT 或受限网络的原画不可保证，界面必须显示“局域网能力”，不能把 STUN 或一次偶然直连描述为生产可用。
+
+## 根目录环境
+
+项目默认读取仓库根目录 `.env`，不使用 `~/.config`。`frontend/vite.config.js` 的 `envDir` 也指向仓库根目录；公共默认值见 `.env.example`。完整启动器会根据 CLI 主机、端口和 TLS 参数，把浏览器地址覆盖为 Vite 的同源代理路径。
+
+`VITE_*` 会进入浏览器 bundle，只能保存公开 URL 或公开状态。MiMo、TURN、Cloudflare 和其他密钥不得写入 `VITE_*`。
 
 ## 目录结构
 
 ```text
 .
-├── backend/reme/       # 统一后端运行时：perception、decision、transport、server
-├── frontend/           # React/Vite 演示页面
-├── models/             # 运行时模型约定与本地训练模型
-├── data/               # 本地训练、来源归档和参考场景数据
+├── backend/reme/       # 本地统一后端：perception、decision、transport、server
+├── demo-relay/         # 固定公开房间的 Worker + SQLite Durable Object
+├── frontend/           # Monitor、Viewer、媒体源和 WebRTC 适配
+├── models/             # 运行时模型约定与本机 ignored 训练模型
+├── data/               # 本地或带外训练/参考数据
 ├── scripts/            # 演示、环境配置和平台启动器
-├── docs/               # 产品、方案、调研、ADR 和启动文档
-├── examples/           # 联调与合同示例
-├── experiments/        # 可复现但未进入产品运行时的实验
+├── docs/               # 产品、方案、ADR 和启动文档
 ├── tests/              # Python 确定性测试
-├── .scratch/           # 规格、任务、实验过程、结果和交接记录
-├── AGENTS.md           # Agent 工程规则
-└── CONTEXT.md          # 当前领域边界与事实口径
+├── .scratch/           # 规格、实验、验收记录和交接
+├── AGENTS.md
+└── CONTEXT.md
 ```
 
-文档入口见 [docs/README.md](docs/README.md)。
-
-## 本地模型与训练数据
-
-2026-08-05 已从团队开发机恢复训练模型和数据。当前运行时默认资产：
-
-```text
-models/runtime/movenet/movenet_lightning_f16_v4.tflite
-models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json
-models/trained/fall/mil-v3/model.json
-```
-
-本地还保存姿态 Softmax 历史版本、12 组 sweep 结果、MIL v1–v3、原始动作视频、关键点标注、跌倒 bootstrap 样本和参考场景。大型资产受 `.gitignore` 管理，不推送到远端 Git。
-
-目录与校验信息见 [models/README.md](models/README.md) 和 [data/README.md](data/README.md)。可再生成的运行日志与临时结果继续写入 `artifacts/`。
+完整操作见 [docs/快速启动.md](docs/快速启动.md)，本轮真实验证与待验项见 [.scratch/public-dual-device-demo/validation.md](.scratch/public-dual-device-demo/validation.md)。
 
 ## 开发检查
 
-全部整理批次完成后执行：
-
 ```bash
-python -m compileall backend
-python -m pytest
+uv run --extra dev --extra pose pytest
 npm --prefix frontend test
 npm --prefix frontend run lint
 npm --prefix frontend run build
+npm --prefix demo-relay test
+npm --prefix demo-relay run check
+npm --prefix demo-relay run dry-run
 ```
 
-涉及本地模型、摄像头或 MiMo 的检查必须如实记录运行环境和缺失条件，不得把降级结果描述为完整能力通过。
+模型、摄像头、手机、WebRTC 或 MiMo 的检查必须记录真实设备、网络和缺失条件。自动测试、脚本场景或降级结果不能替代硬件验收。
 
 ## 兼容与历史内容
 
-- `scripts/demo/start-local-demo.sh` 是当前单机演示入口；项目不再向 `.venv/bin` 安装 `reme-*` 程序。
-- `scripts/tools/run-legacy-motion-demo.sh`、`experiments/legacy_motion_demo/` 和 `docs/motion-data-format.md` 属于早期动作 JSONL 探索原型，仅用于历史追溯和实验复现，不进入产品运行时。
-- `.scratch/` 中的阶段性方案、实验代码和结果不自动构成当前架构决策；正式事实以 `CONTEXT.md`、已接受 ADR 和当前代码为准。
-
-## 隐私边界
-
-Reme 的窄化隐私主张是：感知默认在本地处理，家属和评委界面优先使用骨架、抽象视图和结构化事件。任何向 MiMo 发送的视觉上下文必须是事件触发、最小、显式且可审计的，不能扩展为持续后台上传。
+- 项目不定义 `[project.scripts]`，也不向 `.venv/bin` 安装 `reme-*` 命令。
+- `scripts/tools/run-legacy-motion-demo.sh`、`experiments/legacy_motion_demo/` 和 `docs/motion-data-format.md` 只用于历史追溯。
+- `.scratch/` 中的方案或结果不自动成为架构事实；正式边界以 `CONTEXT.md`、已接受 ADR 和当前代码为准。

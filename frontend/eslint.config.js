@@ -4,7 +4,14 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 
 export default [
-  { ignores: ["dist", "public/mediapipe"] },
+  {
+    ignores: [
+      ".vercel",
+      "dist",
+      "public/litert",
+      "public/mediapipe",
+    ],
+  },
   {
     files: ["**/*.{js,jsx}"],
     plugins: {

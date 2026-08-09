@@ -25,10 +25,10 @@ test("跌倒询问与普通关怀询问保持可区分", () => {
   assert.equal(isFallSafetyDecision({ state: "check_in_required", dialogue_goal: "understand_need" }), false);
 });
 
-test("任意非浴室场景进入紧急阶段都会临时开放家属现场画面", () => {
+test("只有跌倒场景的权威紧急阶段会自动临时开放家属现场画面", () => {
   assert.equal(shouldAutoOpenFamilyVideo("fall", "emergency"), true);
-  assert.equal(shouldAutoOpenFamilyVideo("living", "emergency"), true);
-  assert.equal(shouldAutoOpenFamilyVideo("kitchen", "emergency"), true);
+  assert.equal(shouldAutoOpenFamilyVideo("living", "emergency"), false);
+  assert.equal(shouldAutoOpenFamilyVideo("kitchen", "emergency"), false);
   assert.equal(shouldAutoOpenFamilyVideo("bathroom", "emergency"), false);
   assert.equal(shouldAutoOpenFamilyVideo("fall", "checking"), false);
   assert.equal(shouldAutoOpenFamilyVideo("fall", "resolved"), false);

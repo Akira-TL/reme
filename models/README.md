@@ -27,18 +27,18 @@ MoveNet 的大小、张量合同和 SHA-256 见 `models/runtime/movenet/README.m
 当前运行时默认路径：
 
 - `models/runtime/movenet/movenet_lightning_f16_v4.tflite`
-- `frontend/public/mediapipe/pose_landmarker_lite.task`（由 Vite 直接提供，不在 `models/runtime/` 重复保存）
 - `models/trained/posture/posture-sweep-20260801/seed-42-lr-0.04/model.json`
 - `models/trained/fall/mil-v3/model.json`
+
+浏览器只把有界 JPEG 帧发送给本地统一后端；前端不再加载 MoveNet、MediaPipe、LiteRT 或重复模型权重。
 
 后续修改或替换运行时模型时，必须同时更新：
 
 1. 后端或前端默认路径；
-2. 构建复制脚本；
-3. README 与快速启动文档；
-4. 模型来源、大小和 SHA-256 记录；
-5. 缺失模型时的降级说明。
+2. README 与快速启动文档；
+3. 模型来源、大小和 SHA-256 记录；
+4. 缺失模型时的降级说明。
 
 ## Git 规则
 
-目录结构和说明文件进入 Git；训练检查点、逐帧数据及大型派生产物默认不进入 Git。比赛演示已经明确纳入的 MoveNet 权重和浏览器 MediaPipe `.task` 文件继续由 Git 跟踪，移动或替换时必须保留来源记录并重新校验哈希。
+目录结构和说明文件进入 Git；训练检查点、逐帧数据及大型派生产物默认不进入 Git。比赛演示明确纳入的后端 MoveNet 权重继续由 Git 跟踪，移动或替换时必须保留来源记录并重新校验哈希。

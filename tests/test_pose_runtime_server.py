@@ -21,11 +21,13 @@ import reme.runtime.perception.runtime_server as runtime_server_module
 from reme.runtime.perception.c_stream import CSceneSignal, CVideoFrame
 from reme.runtime.perception.posture import PosturePrediction
 from reme.runtime.perception.runtime import (
+    Component,
     ModeProfile,
     RuntimeEvent,
     RuntimeEventType,
     RuntimeSessionRequest,
     RuntimeSessionState,
+    RuntimeSessionStatus,
 )
 from reme.runtime.perception.runtime_server import (
     CCameraWebSocketPerceptionWorker,
@@ -364,6 +366,81 @@ def test_browser_gateway_can_force_landmark_lane_when_jpeg_stack_is_ready(
         "debug_scenario",
         "scene_signal",
     ]
+    assert gateway.capabilities()["models"]["posture_classifier"] == {
+        "status": "degraded",
+        "mode": "geometry_only",
+    }
+
+
+def test_browser_gateway_reports_missing_mil_as_explicit_degradation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    movenet_model = tmp_path / "movenet.tflite"
+    posture_model = tmp_path / "posture.json"
+    movenet_model.write_bytes(b"model")
+    posture_model.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
+
+    args = runtime_server_module._build_parser().parse_args(
+        [
+            "--input-adapter",
+            "c_ws_server",
+            "--browser-input-mode",
+            "jpeg",
+            "--movenet-model",
+            str(movenet_model),
+            "--posture-model",
+            str(posture_model),
+            "--fall-mil-model",
+            str(tmp_path / "missing-mil.json"),
+        ]
+    )
+
+    models = runtime_server_module.build_browser_gateway(args).capabilities()["models"]
+
+    assert models["pose_extractor"]["mode"] == "movenet_tflite"
+    assert models["fall_temporal"] == {
+        "status": "degraded",
+        "mode": "deterministic_transition_only",
+    }
+
+    starting = RuntimeSessionStatus(
+        session_id="session-model-status",
+        component=Component.PERCEPTION,
+        requested_profile=ModeProfile.LIVE_CAMERA,
+        effective_profile=None,
+        state=RuntimeSessionState.STARTING,
+    )
+    before = runtime_server_module.effective_model_status(
+        runtime_server_module.build_browser_gateway(args),
+        starting,
+    )
+    assert before["pose_extractor"]["loaded"] is False
+    running = RuntimeSessionStatus(
+        session_id="session-model-status",
+        component=Component.PERCEPTION,
+        requested_profile=ModeProfile.LIVE_CAMERA,
+        effective_profile=ModeProfile.LIVE_CAMERA,
+        state=RuntimeSessionState.RUNNING,
+    )
+    effective = runtime_server_module.effective_model_status(
+        runtime_server_module.build_browser_gateway(args),
+        running,
+    )
+    assert effective["pose_extractor"] == {
+        "loaded": True,
+        "mode": "movenet_tflite",
+        "fallback": False,
+        "error": None,
+    }
+    assert effective["posture_classifier"]["loaded"] is True
+    assert effective["fall_temporal"] == {
+        "loaded": False,
+        "mode": "deterministic_transition_only",
+        "fallback": True,
+        "error": None,
+    }
 
 
 def test_c_camera_worker_resets_scene_state_and_keeps_runtime_sequence(
