@@ -33,6 +33,11 @@ from reme.runtime.decision.config import (
 )
 from reme.runtime.decision.context import discover_scenes
 from reme.runtime.decision.danger import DangerConfirmController, DangerRejectedError
+from reme.runtime.decision.family_relay import (
+    FamilyRelayError,
+    FamilyRelayPublisher,
+    family_relay_config_from_env,
+)
 from reme.runtime.decision.policy import (
     DecisionPublisher,
     DecisionRejectedError,
@@ -895,6 +900,7 @@ class DecisionRuntime:
     danger: DangerConfirmController | None
     voice_dialogue: VoiceDialogueController
     emergency_publisher: EmergencyDecisionPublisher | None
+    family_relay_publisher: FamilyRelayPublisher | None
 
     def shutdown(self, bridge: PerceptionBridgeLike | None = None) -> None:
         if bridge is not None:
@@ -902,6 +908,8 @@ class DecisionRuntime:
         self.service.close()
         if self.emergency_publisher is not None:
             self.emergency_publisher.close()
+        if self.family_relay_publisher is not None:
+            self.family_relay_publisher.close()
         self.hub.close_all()
 
 
@@ -917,9 +925,25 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
     ingest = EventIngest()
     local_publisher = RuntimeDecisionPublisher(registry=registry, hub=hub)
     emergency_publisher = build_miloco_emergency_publisher()
-    publisher: DecisionPublisher = local_publisher
+    try:
+        family_relay_config = family_relay_config_from_env()
+    except FamilyRelayError as exc:
+        raise ServerConfigError(str(exc)) from exc
+    family_relay_publisher = (
+        None
+        if family_relay_config is None
+        else FamilyRelayPublisher(registry=registry, config=family_relay_config)
+    )
+    publishers: list[DecisionPublisher] = [local_publisher]
+    if family_relay_publisher is not None:
+        publishers.append(family_relay_publisher)
     if emergency_publisher is not None:
-        publisher = DecisionPublisherFanout(local_publisher, emergency_publisher)
+        publishers.append(emergency_publisher)
+    publisher: DecisionPublisher = (
+        publishers[0]
+        if len(publishers) == 1
+        else DecisionPublisherFanout(*publishers)
+    )
     service = DecisionService(
         scenes=scenes,
         config=build_policy_config(config),
@@ -942,6 +966,7 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
         danger=danger,
         voice_dialogue=voice_dialogue,
         emergency_publisher=emergency_publisher,
+        family_relay_publisher=family_relay_publisher,
     )
 
 
