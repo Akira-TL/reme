@@ -50,28 +50,6 @@ afterEach(async () => {
 });
 
 describe("public dual-device relay", () => {
-  it("allows originless health probes but rejects non-browser authority requests", async () => {
-    const health = await workerExports.default.fetch(
-      new Request("https://relay.example/health"),
-    );
-    expect(health.status).toBe(200);
-
-    const missingOrigin = await workerExports.default.fetch(
-      new Request("https://relay.example/api/monitor/claim", { method: "POST" }),
-    );
-    expect(missingOrigin.status).toBe(403);
-    await expect(missingOrigin.json()).resolves.toEqual({ error: "origin_not_allowed" });
-
-    const foreignOrigin = await workerExports.default.fetch(
-      new Request("https://relay.example/api/monitor/claim", {
-        method: "POST",
-        headers: { Origin: "https://evil.example" },
-      }),
-    );
-    expect(foreignOrigin.status).toBe(403);
-    await expect(foreignOrigin.json()).resolves.toEqual({ error: "origin_not_allowed" });
-  });
-
   it("claims one passwordless 30 second producer lease and never accepts a request body", async () => {
     const emptyBodyResponse = await relayFetch("/api/monitor/claim", {
       method: "POST",

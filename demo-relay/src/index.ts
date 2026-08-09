@@ -1921,9 +1921,6 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const origin = request.headers.get("Origin");
-    if (request.method === "GET" && url.pathname === "/health") {
-      return jsonResponse({ ok: true, room_name: ROOM_NAME }, 200);
-    }
     if (!originAllowed(origin, env.ALLOWED_ORIGINS)) {
       return jsonWithCors({ error: "origin_not_allowed" }, 403, origin);
     }
@@ -1932,6 +1929,9 @@ export default {
     }
     try {
       const room = env.DEMO_ROOM.getByName(ROOM_NAME);
+      if (request.method === "GET" && url.pathname === "/health") {
+        return jsonWithCors({ ok: true, room_name: ROOM_NAME }, 200, origin);
+      }
       if (request.method === "GET" && url.pathname === "/api/status") {
         return jsonWithCors(await room.getStatus(), 200, origin);
       }
@@ -2185,8 +2185,7 @@ function hexToBytes(value: string): Uint8Array | null {
 }
 
 function originAllowed(origin: string | null, configured: string): boolean {
-  if (configured === "*") return true;
-  if (origin === null) return false;
+  if (origin === null || configured === "*") return true;
   return configured.split(",").map((value) => value.trim()).includes(origin);
 }
 

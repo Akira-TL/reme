@@ -44,7 +44,8 @@ function localHttps() {
 }
 
 function allowedHosts() {
-  return [env.REME_VITE_PUBLIC_HOST?.trim()].filter(Boolean);
+  return ["reme.babelbeast.com", env.REME_VITE_PUBLIC_HOST?.trim()]
+    .filter(Boolean);
 }
 
 export default defineConfig({
