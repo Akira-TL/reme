@@ -1,18 +1,23 @@
 import AlarmRoundedIcon from "@mui/icons-material/AlarmRounded";
 import ArrowForwardIosRoundedIcon from "@mui/icons-material/ArrowForwardIosRounded";
 import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
+import BedRoundedIcon from "@mui/icons-material/BedRounded";
 import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import CameraFrontRoundedIcon from "@mui/icons-material/CameraFrontRounded";
 import CameraRearRoundedIcon from "@mui/icons-material/CameraRearRounded";
+import ChairRoundedIcon from "@mui/icons-material/ChairRounded";
+import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import ChevronLeftRoundedIcon from "@mui/icons-material/ChevronLeftRounded";
 import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import DashboardRoundedIcon from "@mui/icons-material/DashboardRounded";
+import DirectionsWalkRoundedIcon from "@mui/icons-material/DirectionsWalkRounded";
 import EmergencyRoundedIcon from "@mui/icons-material/EmergencyRounded";
 import EventBusyRoundedIcon from "@mui/icons-material/EventBusyRounded";
 import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import FavoriteRoundedIcon from "@mui/icons-material/FavoriteRounded";
+import FiberManualRecordRoundedIcon from "@mui/icons-material/FiberManualRecordRounded";
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
 import HealthAndSafetyRoundedIcon from "@mui/icons-material/HealthAndSafetyRounded";
@@ -29,10 +34,15 @@ import ScreenShareRoundedIcon from "@mui/icons-material/ScreenShareRounded";
 import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
+import SoupKitchenRoundedIcon from "@mui/icons-material/SoupKitchenRounded";
+import SubdirectoryArrowRightRoundedIcon from "@mui/icons-material/SubdirectoryArrowRightRounded";
 import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
 import TipsAndUpdatesRoundedIcon from "@mui/icons-material/TipsAndUpdatesRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import VolumeUpRoundedIcon from "@mui/icons-material/VolumeUpRounded";
+import WbSunnyRoundedIcon from "@mui/icons-material/WbSunnyRounded";
+import WbTwilightRoundedIcon from "@mui/icons-material/WbTwilightRounded";
+import WindowRoundedIcon from "@mui/icons-material/WindowRounded";
 import {
   BottomNavigation,
   BottomNavigationAction,
@@ -55,8 +65,10 @@ import {
   reduceFamilyTimeline,
 } from "./familyTimeline.js";
 import {
+  FAMILY_TIMELINE_MOCK_DAYS,
   FAMILY_TIMELINE_MOCK_END_DATE,
   FAMILY_TIMELINE_MOCK_EVENTS,
+  getFamilyTimelineMockDay,
   isFamilyTimelineMockDate,
 } from "./familyTimelineMock.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
@@ -66,6 +78,7 @@ import {
   filterTimelineEventsByDate,
   shiftDateKey,
   timelineDateHeading,
+  timelineDateLongHeading,
 } from "./timelineDates.js";
 import { useAlertEffects } from "./useAlertEffects.js";
 import { useViewerMedia } from "./useViewerMedia.js";
@@ -516,6 +529,228 @@ function TimelineEventCard({ event }) {
   );
 }
 
+const REME_ACTIVITY_ICONS = Object.freeze({
+  bed: BedRoundedIcon,
+  walk: DirectionsWalkRoundedIcon,
+  kitchen: SoupKitchenRoundedIcon,
+  seat: ChairRoundedIcon,
+  window: WindowRoundedIcon,
+});
+
+function RemeActivityRow({ entry }) {
+  const [expanded, setExpanded] = useState(false);
+  const ActivityIcon = REME_ACTIVITY_ICONS[entry.icon] || DirectionsWalkRoundedIcon;
+  const dateTime = new Date(entry.timestampMs).toISOString();
+  return (
+    <article className="reme-life-event">
+      <button
+        type="button"
+        className="reme-life-event-summary"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="reme-life-event-icon"><ActivityIcon /></span>
+        <time dateTime={dateTime}>{formatTime(entry.timestampMs)}</time>
+        <span className="reme-life-event-title">{entry.title}</span>
+        <ArrowForwardIosRoundedIcon className={expanded ? "is-expanded" : ""} />
+      </button>
+      {expanded && (
+        <div className="reme-life-event-detail">
+          <b>Mock 生活片段 · 非真实家庭历史</b>
+          <p>{entry.detail} 不包含原始画面、音频或可识别人物影像。</p>
+          {entry.related.length > 0 && (
+            <ul>
+              {entry.related.map((related) => (
+                <li key={`${entry.id}:${related.timestampMs}`}>
+                  <time dateTime={new Date(related.timestampMs).toISOString()}>{formatTime(related.timestampMs)}</time>
+                  <span>{related.title}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function RemeCareThread({ event }) {
+  const [expanded, setExpanded] = useState(false);
+  const response = event.linkedResponse;
+  const dateTime = new Date(event.timestampMs).toISOString();
+  const responseDateTime = response ? new Date(response.timestampMs).toISOString() : null;
+  return (
+    <article className={`reme-care-thread is-${event.tone} ${response ? "has-response" : ""}`}>
+      <button
+        type="button"
+        className="reme-care-card"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="reme-care-icon"><FavoriteRoundedIcon /></span>
+        <span className="reme-care-copy">
+          <span className="reme-care-meta"><time dateTime={dateTime}>{formatTime(event.timestampMs)}</time><b>主动关怀判词</b></span>
+          <strong>{event.title}</strong>
+          <small>依据：{event.detail} · 不确定性{TIMELINE_UNCERTAINTY_COPY[event.uncertainty] || "未知"}</small>
+        </span>
+        <span className="reme-care-status">{event.statusLabel}</span>
+      </button>
+      {expanded && (
+        <div className="reme-care-details">
+          <div><span>判断来源</span><b>{TIMELINE_SOURCE_COPY[event.assessmentSource]?.detail || "演示脚本"}</b></div>
+          <div><span>建议动作</span><b>{event.suggestedAction}</b></div>
+          <div><span>处理进展</span><b>{event.progress}</b></div>
+          <p>关怀判断不等于医疗诊断；本卡只展示固定 Mock 结构化结论，不包含原始画面或完整对话。</p>
+        </div>
+      )}
+      {response && (
+        <button
+          type="button"
+          className="reme-care-response"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <SubdirectoryArrowRightRoundedIcon className="reme-care-connector" />
+          <span><ChatBubbleOutlineRoundedIcon /></span>
+          <time dateTime={responseDateTime}>{formatTime(response.timestampMs)}</time>
+          <b>{response.title}</b>
+          <ArrowForwardIosRoundedIcon className={expanded ? "is-expanded" : ""} />
+        </button>
+      )}
+    </article>
+  );
+}
+
+function RemeDaypartSection({ section, filter, expanded, onToggle }) {
+  const entries = filter === "care"
+    ? section.entries.filter((entry) => entry.kind === "assessment")
+    : section.entries;
+  if (entries.length === 0) return null;
+  const DaypartIcon = section.icon === "sunset" ? WbTwilightRoundedIcon : WbSunnyRoundedIcon;
+  const contentId = `reme-daypart-${section.id}`;
+  return (
+    <section className={`reme-daypart ${expanded ? "is-expanded" : "is-collapsed"}`}>
+      <button
+        type="button"
+        className="reme-daypart-heading"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        onClick={onToggle}
+      >
+        <span className="reme-daypart-icon"><DaypartIcon /></span>
+        <span className="reme-daypart-name">{section.label}</span>
+        <span className="reme-daypart-range">{section.range}</span>
+        <span className="reme-daypart-count">· {filter === "care" ? `${section.careCount} 次关怀` : `${section.count} 条`}</span>
+        {!expanded && section.careCount > 0 && filter === "all" && (
+          <span className="reme-daypart-care-count">含 {section.careCount} 次关怀</span>
+        )}
+        <ExpandMoreRoundedIcon className={expanded ? "is-expanded" : ""} />
+      </button>
+      {expanded && (
+        <div className="reme-daypart-events" id={contentId}>
+          {entries.map((entry) => (
+            entry.kind === "assessment"
+              ? <RemeCareThread event={entry} key={entry.id} />
+              : <RemeActivityRow entry={entry} key={entry.id} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
+  const [filter, setFilter] = useState("all");
+  const [expandedDayparts, setExpandedDayparts] = useState(() => new Set(["early", "morning"]));
+  const [weekNoteExpanded, setWeekNoteExpanded] = useState(false);
+
+  const selectFilter = (nextFilter) => {
+    setFilter(nextFilter);
+    if (nextFilter === "care") setExpandedDayparts(new Set(["morning", "afternoon"]));
+  };
+  const toggleDaypart = (daypartId) => {
+    setExpandedDayparts((current) => {
+      const next = new Set(current);
+      if (next.has(daypartId)) next.delete(daypartId);
+      else next.add(daypartId);
+      return next;
+    });
+  };
+
+  return (
+    <main className="viewer-page timeline-page reme-timeline-page">
+      <section className="reme-week-strip" aria-label="Mock 记忆周日期">
+        <div className="reme-week-days">
+          {FAMILY_TIMELINE_MOCK_DAYS.map((mockDay) => (
+            <button
+              type="button"
+              key={mockDay.dateKey}
+              className={mockDay.dateKey === day.dateKey ? "is-selected" : ""}
+              aria-pressed={mockDay.dateKey === day.dateKey}
+              onClick={() => onSelectDate(mockDay.dateKey)}
+            >
+              <span>周{mockDay.weekday}</span>
+              <b>{mockDay.day}</b>
+              {mockDay.dateKey === day.dateKey && <FiberManualRecordRoundedIcon />}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <aside className={`reme-memory-week ${weekNoteExpanded ? "is-expanded" : ""}`}>
+        <button
+          type="button"
+          className="reme-memory-week-summary"
+          aria-expanded={weekNoteExpanded}
+          onClick={() => setWeekNoteExpanded((value) => !value)}
+        >
+          <AutoAwesomeRoundedIcon />
+          <b>Mock 记忆周</b>
+          <span>8月4—11日 · 非真实家庭历史</span>
+          <ArrowForwardIosRoundedIcon className={weekNoteExpanded ? "is-expanded" : ""} />
+        </button>
+        <ol className="reme-memory-week-progress" aria-label={`已选择 8 月 ${day.day} 日`}>
+          {FAMILY_TIMELINE_MOCK_DAYS.map((mockDay) => (
+            <li key={mockDay.dateKey} className={mockDay.dateKey === day.dateKey ? "is-selected" : ""} />
+          ))}
+        </ol>
+        {weekNoteExpanded && (
+          <p>这些记录只用于演示 reme 如何把可观察到的琐事与主动关怀串在一起；不会写入家庭历史或改变实时告警。</p>
+        )}
+      </aside>
+
+      <section className="reme-day-summary" aria-labelledby="reme-day-summary-title">
+        <h2 id="reme-day-summary-title">今天记录到 {day.totalCount} 个生活片段，有两次值得关心的停顿。</h2>
+        <div className="reme-timeline-filter" role="group" aria-label="筛选时间线记录">
+          <button type="button" className={filter === "all" ? "is-selected" : ""} aria-pressed={filter === "all"} onClick={() => selectFilter("all")}>全部 <b>{day.totalCount}</b></button>
+          <button type="button" className={filter === "care" ? "is-selected" : ""} aria-pressed={filter === "care"} onClick={() => selectFilter("care")}>关怀 <b>{day.careCount}</b></button>
+        </div>
+      </section>
+
+      <div className="reme-dayparts">
+        {day.sections.map((section) => (
+          <RemeDaypartSection
+            key={section.id}
+            section={section}
+            filter={filter}
+            expanded={expandedDayparts.has(section.id)}
+            onToggle={() => toggleDaypart(section.id)}
+          />
+        ))}
+      </div>
+
+      {liveEvents.length > 0 && (
+        <section className="reme-live-session">
+          <div className="timeline-section-heading"><div><h2>本次会话关怀</h2><p>以下来自当前 Relay 会话，不计入 Mock 记忆周。</p></div><span>{liveEvents.length} 条</span></div>
+          <div className="timeline-event-list">
+            {liveEvents.map((event) => <TimelineEventCard event={event} key={event.id} />)}
+          </div>
+        </section>
+      )}
+    </main>
+  );
+}
+
 function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs }) {
   const todayKey = dateKeyFromTimestamp(nowMs);
   const selectableThrough = todayKey > FAMILY_TIMELINE_MOCK_END_DATE
@@ -527,6 +762,7 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
   const events = [...liveEvents, ...mockEvents]
     .sort((left, right) => right.timestampMs - left.timestampMs || left.id.localeCompare(right.id));
   const mockDateSelected = isFamilyTimelineMockDate(selectedDateKey);
+  const mockDay = getFamilyTimelineMockDay(selectedDateKey);
   const interrupted = Boolean(
     relay.unavailableReason
       || !relay.monitorOnline
@@ -537,6 +773,9 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
     const candidate = shiftDateKey(selectedDateKey, offset * 7);
     onSelectDate(candidate > selectableThrough ? selectableThrough : candidate);
   };
+  if (mockDay) {
+    return <RemeMockTimeline key={mockDay.dateKey} day={mockDay} onSelectDate={onSelectDate} liveEvents={liveEvents} />;
+  }
   return (
     <main className="viewer-page timeline-page">
       <section className="timeline-calendar" aria-label="选择时间线日期">
@@ -901,9 +1140,13 @@ export function ViewerApp({ surface = "family" }) {
     viewerId,
   } = relay;
   const [activeTab, setActiveTab] = useState("home");
-  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => (
-    familySurface ? FAMILY_TIMELINE_MOCK_END_DATE : dateKeyFromTimestamp(Date.now())
-  ));
+  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => {
+    const currentDateKey = dateKeyFromTimestamp(Date.now());
+    if (!familySurface) return currentDateKey;
+    return isFamilyTimelineMockDate(currentDateKey)
+      ? currentDateKey
+      : FAMILY_TIMELINE_MOCK_END_DATE;
+  });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [issueError, setIssueError] = useState("");
   const [familyConfirmFailure, setFamilyConfirmFailure] = useState(null);
@@ -1172,7 +1415,7 @@ export function ViewerApp({ surface = "family" }) {
     if (activeTab === "timeline") return {
       title: familySurface ? "reme" : "主动关怀",
       subtitle: familySurface
-        ? `remember me · ${timelineDateHeading(selectedTimelineDate, nowMs)}`
+        ? `remember me · ${timelineDateLongHeading(selectedTimelineDate)}`
         : `外婆 · ${timelineDateHeading(selectedTimelineDate, nowMs)} · MiMo 关怀时间线`,
     };
     if (activeTab === "dashboard") return {
@@ -1184,7 +1427,7 @@ export function ViewerApp({ surface = "family" }) {
 
   return (
     <div
-      className={`viewer-app ${familySurface ? "is-family-surface" : "is-demo-surface"} ${alertEffects.flashActive ? "is-flashing" : ""}`}
+      className={`viewer-app ${familySurface ? "is-family-surface" : "is-demo-surface"} ${activeTab === "timeline" ? "is-timeline-tab" : ""} ${alertEffects.flashActive ? "is-flashing" : ""}`}
       data-app-role={familySurface ? "family" : "viewer-demo"}
     >
       <div className="alert-flash-layer" aria-hidden="true" />

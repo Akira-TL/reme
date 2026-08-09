@@ -6,6 +6,7 @@ import {
   filterTimelineEventsByDate,
   shiftDateKey,
   timelineDateHeading,
+  timelineDateLongHeading,
 } from "./timelineDates.js";
 
 test("week model starts on Monday and disables future days", () => {
@@ -18,6 +19,8 @@ test("week model starts on Monday and disables future days", () => {
   assert.equal(days.some((day) => day.disabled), false);
   assert.equal(shiftDateKey(todayKey, -7), "2026-08-02");
   assert.equal(timelineDateHeading(todayKey, now), "今天 · 星期日");
+  assert.equal(timelineDateLongHeading(todayKey), "2026年8月9日 · 星期日");
+  assert.equal(timelineDateLongHeading("not-a-date"), "选择日期");
 });
 
 test("date filtering accepts projected events with timestamps", () => {
