@@ -350,6 +350,7 @@ def test_need_help_on_fall_path_notifies_family_immediately() -> None:
     assert directive.skeleton is not None
     assert directive.skeleton.state is DecisionState.FAMILY_NOTIFICATION_REQUIRED
     assert directive.skeleton.template is TemplateId.FALL_HELP_ALERT
+    assert directive.skeleton.response_timeout_ms == _CONFIG.family_ack_timeout_ms
     assert directive.mimo_task is None
 
 

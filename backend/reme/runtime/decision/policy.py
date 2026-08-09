@@ -22,6 +22,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from reme.runtime.decision.audit import AuditLog
+from reme.runtime.decision.authorization import (
+    FALL_AUTHORIZATION_TTL_MS,
+    KITCHEN_AUTHORIZATION_TTL_MS,
+    MediaAuthorization,
+    MediaAuthorizationScope,
+)
 from reme.runtime.decision.behavior import (
     DEFAULT_WINDOW_MS,
     behavior_summary_zh,
@@ -81,6 +87,7 @@ from reme.runtime.decision.state_machine import (
     DecisionSkeleton,
     DemoConversationKind,
     Directive,
+    EscalationKind,
     MimoTask,
     SessionState,
     TemplateId,
@@ -361,6 +368,8 @@ class _SceneRuntime:
     voice_prompt_ready_monotonic: float | None = None
     timeout_handle: TimeoutHandle | None = None
     timeout_generation: int = 0
+    media_authorization: MediaAuthorization | None = None
+    media_authorization_expires_monotonic: float | None = None
 
 
 class DecisionService:
@@ -377,6 +386,7 @@ class DecisionService:
         live_streams: Callable[[str], PerceptionStreams | None] | None = None,
         timeout_scheduler: TimeoutScheduler | None = None,
         monotonic: Callable[[], float] | None = None,
+        wall_clock: Callable[[], float] | None = None,
     ) -> None:
         self._scenes = dict(scenes)
         self._config = config
@@ -386,6 +396,7 @@ class DecisionService:
         self._live_streams = live_streams
         self._timeout_scheduler = timeout_scheduler or ThreadingTimeoutScheduler()
         self._monotonic = monotonic or time.monotonic
+        self._wall_clock = wall_clock or time.time
         self._closed = False
         self._lock = threading.Lock()
         self._runtimes: dict[str, _SceneRuntime] = {}
@@ -450,6 +461,21 @@ class DecisionService:
         with self._lock:
             runtime = self._runtimes.get(scene_id)
             return None if runtime is None else runtime.pending
+
+    def current_media_authorization(self, scene_id: str) -> MediaAuthorization | None:
+        """Return the still-valid event-scoped clear-video authorization, if any."""
+
+        self._streams(scene_id)
+        with self._lock:
+            runtime = self._runtimes.get(scene_id)
+            if runtime is None or runtime.media_authorization is None:
+                return None
+            expires = runtime.media_authorization_expires_monotonic
+            if expires is None or self._monotonic() >= expires:
+                runtime.media_authorization = None
+                runtime.media_authorization_expires_monotonic = None
+                return None
+            return runtime.media_authorization
 
     def mark_decision_voice_started(self, *, scene_id: str, decision_id: str) -> None:
         """Mark that C started synthesizing the elder-facing prompt.
@@ -1165,8 +1191,34 @@ class DecisionService:
         if proposal is not None and proposal.action_card is not None:
             draft = _bind_elder_quote(proposal.action_card, next_state.complaint_text)
             next_state = replace(next_state, card_draft=draft)
+        previous_authorization = runtime.media_authorization
         runtime.session = next_state
         runtime.pending = decision
+        runtime.media_authorization = decision.media_authorization
+        runtime.media_authorization_expires_monotonic = (
+            None
+            if decision.media_authorization is None
+            else self._monotonic() + decision.media_authorization.ttl_ms / 1000.0
+        )
+        if decision.media_authorization is not None:
+            if (
+                previous_authorization is None
+                or previous_authorization.authorization_id
+                != decision.media_authorization.authorization_id
+            ):
+                self._audit_event(
+                    kind="media_authorization_issued",
+                    scene_id=decision.scene_id,
+                    decision_id=decision.decision_id,
+                    note=decision.media_authorization.scope.value,
+                )
+        elif previous_authorization is not None:
+            self._audit_event(
+                kind="media_authorization_revoked",
+                scene_id=decision.scene_id,
+                decision_id=decision.decision_id,
+                note=previous_authorization.authorization_id,
+            )
         runtime.voice_prompt_decision_id = None
         runtime.voice_prompt_inflight = False
         runtime.voice_prompt_ready_monotonic = None
@@ -1180,6 +1232,44 @@ class DecisionService:
 
     def _privacy_mode(self, scene_id: str) -> PrivacyMode:
         return self._config.scene_privacy.get(scene_id, self._config.trigger.default_privacy_mode)
+
+    def _build_media_authorization(
+        self,
+        *,
+        runtime: _SceneRuntime,
+        directive: Directive,
+        decision_id: str,
+        privacy_mode: PrivacyMode,
+        alarm: AlarmSignal | None,
+    ) -> MediaAuthorization | None:
+        scene_id = runtime.session.scene_id
+        if scene_id == "bathroom" or privacy_mode in {
+            PrivacyMode.HIDDEN,
+            PrivacyMode.SKELETON_ONLY,
+        }:
+            return None
+        skeleton = directive.skeleton
+        assert skeleton is not None
+        if skeleton.template is TemplateId.KITCHEN_SHARE_GRANTED:
+            scope = MediaAuthorizationScope.KITCHEN_MOMENT
+            ttl_ms = KITCHEN_AUTHORIZATION_TTL_MS
+            event_id = None
+        elif alarm is not None and directive.next_state.escalation is EscalationKind.FALL:
+            scope = MediaAuthorizationScope.FALL_EMERGENCY
+            ttl_ms = FALL_AUTHORIZATION_TTL_MS
+            event_id = directive.next_state.handled_fall_event_id
+        else:
+            return None
+        issued_at_ms = max(0, int(round(self._wall_clock() * 1000)))
+        return MediaAuthorization(
+            authorization_id=f"authorization-{decision_id}",
+            decision_id=decision_id,
+            scene_id=scene_id,
+            scope=scope,
+            issued_at_ms=issued_at_ms,
+            expires_at_ms=issued_at_ms + ttl_ms,
+            event_id=event_id,
+        )
 
     def _build_decision(
         self,
@@ -1233,13 +1323,22 @@ class DecisionService:
             skeleton.state, skeleton.risk_level, risk_floor=directive.next_state.risk_floor
         ):
             raise DecisionRejectedError("risk_floor_violation")
+        decision_id = self._next_decision_id(runtime)
+        privacy_mode = self._privacy_mode(runtime.session.scene_id)
+        media_authorization = self._build_media_authorization(
+            runtime=runtime,
+            directive=directive,
+            decision_id=decision_id,
+            privacy_mode=privacy_mode,
+            alarm=alarm,
+        )
         return CareDecision(
             scene_id=runtime.session.scene_id,
-            decision_id=self._next_decision_id(runtime),
+            decision_id=decision_id,
             timestamp_ms=timestamp_ms,
             state=skeleton.state,
             risk_level=skeleton.risk_level,
-            privacy_mode=self._privacy_mode(runtime.session.scene_id),
+            privacy_mode=privacy_mode,
             need_dialogue=skeleton.need_dialogue,
             dialogue_goal=dialogue_goal,
             elder_message=elder_message,
@@ -1253,6 +1352,7 @@ class DecisionService:
             consent_required=skeleton.consent_required,
             response_timeout_ms=skeleton.response_timeout_ms,
             action_card=card,
+            media_authorization=media_authorization,
             visual_context=None if visual is None else visual.record,
             alarm=alarm,
             voice_asset=voice_asset,

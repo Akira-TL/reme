@@ -8,6 +8,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from reme.runtime.decision.authorization import (
+    MediaAuthorization,
+    MediaAuthorizationError,
+    parse_media_authorization,
+)
+
 DECISION_SCHEMA_VERSION = "reme-care-decision/v0-experiment"
 RESPONSE_SCHEMA_VERSION = "reme-interaction-response/v0-experiment"
 
@@ -286,6 +292,7 @@ class CareDecision:
     consent_required: bool = False
     response_timeout_ms: int | None = None
     action_card: ActionCard | None = None
+    media_authorization: MediaAuthorization | None = None
     visual_context: VisualContext | None = None
     alarm: AlarmSignal | None = None
     voice_asset: str | None = None
@@ -334,6 +341,15 @@ class CareDecision:
             DecisionState.URGENT_ATTENTION,
         ):
             raise DecisionRecordError("alarm is only valid on family-alert or urgent decisions")
+        if self.media_authorization is not None:
+            if self.media_authorization.decision_id != self.decision_id:
+                raise DecisionRecordError("media_authorization.decision_id must match decision_id")
+            if self.media_authorization.scene_id != self.scene_id:
+                raise DecisionRecordError("media_authorization.scene_id must match scene_id")
+            if self.privacy_mode in (PrivacyMode.HIDDEN, PrivacyMode.SKELETON_ONLY):
+                raise DecisionRecordError(
+                    "media_authorization is forbidden by hidden/skeleton_only privacy_mode"
+                )
         _require_optional_text(self.voice_asset, "voice_asset")
         if self.voice_asset is not None and self.elder_message is None:
             raise DecisionRecordError("voice_asset requires a spoken elder_message")
@@ -374,6 +390,11 @@ class CareDecision:
             "consent_required": self.consent_required,
             "response_timeout_ms": self.response_timeout_ms,
             "action_card": None if self.action_card is None else self.action_card.to_payload(),
+            "media_authorization": (
+                None
+                if self.media_authorization is None
+                else self.media_authorization.to_payload()
+            ),
             "visual_context": (
                 None if self.visual_context is None else self.visual_context.to_payload()
             ),
@@ -506,6 +527,7 @@ _DECISION_FIELDS = {
     "consent_required",
     "response_timeout_ms",
     "action_card",
+    "media_authorization",
     "visual_context",
     "alarm",
     "voice_asset",
@@ -565,6 +587,13 @@ def _parse_confirm_channels(data: object) -> tuple[str, ...]:
     return tuple(data)
 
 
+def _parse_media_authorization_record(data: object) -> MediaAuthorization:
+    try:
+        return parse_media_authorization(data)
+    except MediaAuthorizationError as exc:
+        raise DecisionRecordError(str(exc)) from exc
+
+
 def _parse_visual_context(data: object) -> VisualContext:
     payload = _require_payload_mapping(data, "visual_context")
     allowed = {"sent_to_mimo", "type", "start_ms", "end_ms", "sample_count"}
@@ -584,6 +613,7 @@ def parse_care_decision(data: object) -> CareDecision:
     payload = _require_payload_mapping(data, "care decision")
     _reject_unknown_fields(payload, _DECISION_FIELDS, "care decision")
     card = payload.get("action_card")
+    media_authorization = payload.get("media_authorization")
     visual = payload.get("visual_context")
     alarm = payload.get("alarm")
     confirm_channels = payload.get("confirm_channels")
@@ -611,6 +641,11 @@ def parse_care_decision(data: object) -> CareDecision:
         consent_required=_bool_value(payload, "consent_required"),
         response_timeout_ms=payload.get("response_timeout_ms"),
         action_card=None if card is None else parse_action_card(card),
+        media_authorization=(
+            None
+            if media_authorization is None
+            else _parse_media_authorization_record(media_authorization)
+        ),
         visual_context=None if visual is None else _parse_visual_context(visual),
         alarm=None if alarm is None else _parse_alarm(alarm),
         voice_asset=payload.get("voice_asset"),

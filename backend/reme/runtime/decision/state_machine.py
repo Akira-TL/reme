@@ -426,7 +426,7 @@ def _on_elder_response(
             return _family_alert(
                 state,
                 TemplateId.FALL_HELP_ALERT,
-                response_timeout_ms=None,
+                response_timeout_ms=config.family_ack_timeout_ms,
                 need_dialogue=True,
                 alarm_trigger=(
                     AlarmTrigger.VOICE_INTENT
