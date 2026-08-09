@@ -3,6 +3,8 @@ export const DEMO_STATE_SCHEMA_VERSION = "reme-demo-state/v1";
 export const CONTROL_COMMAND_SCHEMA_VERSION = "reme-control-command/v1";
 export const POSE_FRAME_SCHEMA_VERSION = "reme-pose-frame-17/v1";
 export const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
+export const FAMILY_EVENT_SCHEMA_VERSION = "reme-family-event/v1";
+export const MEDIA_AUTHORIZATION_SCHEMA_VERSION = "reme-media-authorization/v1";
 
 export const SCENE_IDS = ["living", "kitchen", "bathroom", "fall"] as const;
 export const MEDIA_GRANT_SCOPES = ["kitchen_moment", "fall_emergency"] as const;
@@ -78,6 +80,70 @@ export interface DemoState {
   media_grant: ActiveMediaGrant | null;
 }
 
+export interface FamilyEvent {
+  schema_version: typeof FAMILY_EVENT_SCHEMA_VERSION;
+  runtime_session_id: string;
+  revision: number;
+  decision_timestamp_ms: number;
+  published_at_ms: number;
+  care: {
+    decision_id: string;
+    state:
+      | "normal"
+      | "observe"
+      | "check_in_required"
+      | "consent_required"
+      | "family_notification_required"
+      | "urgent_attention"
+      | "resolved"
+      | "degraded";
+    action:
+      | "none"
+      | "observe"
+      | "ask_elder"
+      | "notify_family"
+      | "show_urgent_attention"
+      | "mark_resolved";
+    risk_level: number;
+    family_notification: string | null;
+    privacy_mode: "visible" | "blurred" | "skeleton_only" | "hidden";
+    alarm: null | {
+      channels: Array<"vibrate" | "ring" | "flash">;
+      trigger:
+        | "elder_report"
+        | "voice_intent"
+        | "visual_confirm"
+        | "check_in_timeout"
+        | "unclear_response"
+        | "family_unresponsive";
+    };
+    action_card: null | {
+      event: string;
+      system_judgment: string;
+      suggested_action: string;
+      time_window: string;
+      status: "pending" | "confirmed" | "done";
+      elder_quote?: string;
+    };
+    media_authorization: null | {
+      schema_version: typeof MEDIA_AUTHORIZATION_SCHEMA_VERSION;
+      authorization_id: string;
+      decision_id: string;
+      scene_id: string;
+      scope: MediaGrantScope;
+      status: "active";
+      issued_at_ms: number;
+      expires_at_ms: number;
+      event_id: string | null;
+    };
+  };
+}
+
+export interface FamilyEventWire extends FamilyEvent {
+  type: "family_event";
+  room_session_id: string;
+}
+
 export interface DemoStateEnvelope {
   schema_version: typeof DEMO_STATE_SCHEMA_VERSION;
   room_session_id: string;
@@ -121,6 +187,8 @@ export type ControlCommandBody =
     decision_id: string;
     response: "safe" | "need_help" | "consent_granted" | "consent_denied";
   }
+  | { name: "acknowledge_alarm"; decision_id: string }
+  | { name: "confirm_action_card"; decision_id: string }
   | { name: "confirm_alarm"; decision_id: string }
   | { name: "replay_voice"; decision_id: string };
 
@@ -302,6 +370,34 @@ export function validateDemoState(
   return !containsForbiddenRawMedia(value);
 }
 
+export function validateFamilyEvent(value: unknown): value is FamilyEvent {
+  if (!isExactObject(value, [
+    "care",
+    "decision_timestamp_ms",
+    "published_at_ms",
+    "revision",
+    "runtime_session_id",
+    "schema_version",
+  ])) return false;
+  if (value.schema_version !== FAMILY_EVENT_SCHEMA_VERSION) return false;
+  if (!isOpaqueId(value.runtime_session_id)) return false;
+  if (!isNonNegativeSafeInteger(value.revision) || value.revision === 0) return false;
+  if (!isFiniteNonNegativeNumber(value.decision_timestamp_ms)) return false;
+  if (!isFiniteNonNegativeNumber(value.published_at_ms)) return false;
+  return validateFamilyCare(value.care) && !containsForbiddenRawMedia(value);
+}
+
+export function createFamilyEventWire(
+  event: FamilyEvent,
+  roomSessionId: string,
+): FamilyEventWire {
+  return {
+    ...event,
+    type: "family_event",
+    room_session_id: roomSessionId,
+  };
+}
+
 export function validatePoseFrame(
   value: unknown,
   roomSessionId: string,
@@ -434,6 +530,95 @@ function validateStateBody(value: unknown, requireRelayOwnedGrant: boolean): val
   return value.media_grant === null || validateActiveGrant(value.media_grant);
 }
 
+function validateFamilyCare(value: unknown): value is FamilyEvent["care"] {
+  if (!isExactObject(value, [
+    "action",
+    "action_card",
+    "alarm",
+    "decision_id",
+    "family_notification",
+    "media_authorization",
+    "privacy_mode",
+    "risk_level",
+    "state",
+  ])) return false;
+  if (!isOpaqueId(value.decision_id)) return false;
+  if (!["normal", "observe", "check_in_required", "consent_required", "family_notification_required", "urgent_attention", "resolved", "degraded"].includes(String(value.state))) return false;
+  if (!["none", "observe", "ask_elder", "notify_family", "show_urgent_attention", "mark_resolved"].includes(String(value.action))) return false;
+  if (!Number.isSafeInteger(value.risk_level) || (value.risk_level as number) < 0 || (value.risk_level as number) > 4) return false;
+  if (value.family_notification !== null && !isBoundedString(value.family_notification, 500)) return false;
+  if (!["visible", "blurred", "skeleton_only", "hidden"].includes(String(value.privacy_mode))) return false;
+  if (!validateFamilyAlarm(value.alarm)) return false;
+  if (!validateFamilyActionCard(value.action_card)) return false;
+  if (!validateMediaAuthorization(value.media_authorization, value.decision_id)) return false;
+  return true;
+}
+
+function validateFamilyAlarm(value: unknown): value is FamilyEvent["care"]["alarm"] {
+  if (value === null) return true;
+  if (!isExactObject(value, ["channels", "trigger"])) return false;
+  if (!Array.isArray(value.channels) || value.channels.length === 0) return false;
+  if (!value.channels.every((channel) => (
+    channel === "vibrate" || channel === "ring" || channel === "flash"
+  ))) return false;
+  if (new Set(value.channels).size !== value.channels.length) return false;
+  return [
+    "elder_report",
+    "voice_intent",
+    "visual_confirm",
+    "check_in_timeout",
+    "unclear_response",
+    "family_unresponsive",
+  ].includes(String(value.trigger));
+}
+
+function validateFamilyActionCard(value: unknown): value is FamilyEvent["care"]["action_card"] {
+  if (value === null) return true;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value).sort();
+  const base = ["event", "status", "suggested_action", "system_judgment", "time_window"].sort();
+  const withQuote = [...base, "elder_quote"].sort();
+  if (!(
+    (keys.length === base.length && keys.every((key, index) => key === base[index]))
+    || (keys.length === withQuote.length && keys.every((key, index) => key === withQuote[index]))
+  )) return false;
+  const record = value as Record<string, unknown>;
+  if (!isBoundedString(record.event, 500)) return false;
+  if (!isBoundedString(record.system_judgment, 500)) return false;
+  if (!isBoundedString(record.suggested_action, 500)) return false;
+  if (!isBoundedString(record.time_window, 240)) return false;
+  if (record.status !== "pending" && record.status !== "confirmed" && record.status !== "done") return false;
+  return record.elder_quote === undefined || isBoundedString(record.elder_quote, 500);
+}
+
+function validateMediaAuthorization(
+  value: unknown,
+  decisionId: string,
+): value is FamilyEvent["care"]["media_authorization"] {
+  if (value === null) return true;
+  if (!isExactObject(value, [
+    "authorization_id",
+    "decision_id",
+    "event_id",
+    "expires_at_ms",
+    "issued_at_ms",
+    "scene_id",
+    "schema_version",
+    "scope",
+    "status",
+  ])) return false;
+  if (value.schema_version !== MEDIA_AUTHORIZATION_SCHEMA_VERSION) return false;
+  if (!isOpaqueId(value.authorization_id) || value.decision_id !== decisionId) return false;
+  if (!isOpaqueId(value.decision_id) || !isOpaqueId(value.scene_id)) return false;
+  if (!isMediaGrantScope(value.scope) || value.status !== "active") return false;
+  if (!isFiniteNonNegativeNumber(value.issued_at_ms) || !isFiniteNonNegativeNumber(value.expires_at_ms)) return false;
+  if (value.expires_at_ms <= value.issued_at_ms) return false;
+  if (value.event_id !== null && !isOpaqueId(value.event_id)) return false;
+  return value.scope === "kitchen_moment"
+    ? value.expires_at_ms - value.issued_at_ms <= 60_000
+    : value.expires_at_ms - value.issued_at_ms <= 30_000;
+}
+
 function validateCapture(value: unknown): value is DemoState["capture"] {
   if (!isExactObject(value, CAPTURE_KEYS)) return false;
   if (
@@ -543,7 +728,12 @@ function validateCommandBody(value: unknown): value is ControlCommandBody {
         || record.response === "consent_granted"
         || record.response === "consent_denied");
   }
-  if (record.name === "confirm_alarm" || record.name === "replay_voice") {
+  if (
+    record.name === "acknowledge_alarm"
+    || record.name === "confirm_action_card"
+    || record.name === "confirm_alarm"
+    || record.name === "replay_voice"
+  ) {
     if (!isExactObject(record, ["decision_id", "name"])) return false;
     return isOpaqueId(record.decision_id);
   }

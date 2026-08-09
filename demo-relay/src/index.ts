@@ -4,6 +4,7 @@ import {
   canonicalJson,
   containsForbiddenRawMedia,
   CONTROL_COMMAND_SCHEMA_VERSION,
+  createFamilyEventWire,
   createForwardedMediaSignal,
   DEMO_STATE_SCHEMA_VERSION,
   isExactObject,
@@ -16,6 +17,8 @@ import {
   type ControlAckPhase,
   type ControlCommand,
   type DemoStateEnvelope,
+  type FamilyEvent,
+  type FamilyEventWire,
   type MediaGrantRequest,
   type MediaGrantScope,
   type MediaSignal,
@@ -23,6 +26,7 @@ import {
   validateControlAck,
   validateControlCommand,
   validateDemoState,
+  validateFamilyEvent,
   validateMediaGrantRequest,
   validateMediaGrantRevoke,
   validateMediaSignal,
@@ -35,12 +39,15 @@ export type {
   ControlAck,
   ControlCommand,
   DemoStateEnvelope,
+  FamilyEvent,
+  FamilyEventWire,
   MediaSignal,
   PoseFrame,
 } from "./protocol";
 
 const MONITOR_PROTOCOL = "reme-monitor-v1";
 const VIEWER_PROTOCOL = "reme-viewer-v1";
+const VIEWER_PROTOCOL_V2 = "reme-viewer-v2";
 const TOKEN_PROTOCOL_PREFIX = "reme-token-";
 const LEASE_TTL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -74,6 +81,14 @@ interface LatestStateRow extends SqlRow {
   runtime_session_id: string;
   state_revision: number;
   state_json: string;
+  received_at_ms: number;
+}
+
+interface LatestFamilyEventRow extends SqlRow {
+  room_session_id: string;
+  runtime_session_id: string;
+  revision: number;
+  event_json: string;
   received_at_ms: number;
 }
 
@@ -116,6 +131,7 @@ interface ViewerAttachment {
   role: "viewer";
   viewerId: string;
   socketId: string;
+  familyEvents: boolean;
   signalGrantId: string | null;
   signalCount: number;
 }
@@ -210,18 +226,12 @@ export class DemoRoom extends DurableObject<Env> {
       };
     }
 
-    this.failPendingCommands(nowMs, "room_session_replaced");
-    this.revokeActiveGrants(nowMs, "room_session_replaced", "revoked");
-    this.closeMonitorSockets(1012, "room_session_replaced");
+    this.failPendingCommands(nowMs, "monitor_reconnected");
+    this.revokeActiveGrants(nowMs, "monitor_reconnected", "revoked");
+    this.closeMonitorSockets(1012, "monitor_reconnected");
 
-    const roomSessionId = `room-${crypto.randomUUID()}`;
+    const roomSessionId = this.ensureRoom(nowMs).room_session_id;
     const expiresAtMs = nowMs + LEASE_TTL_MS;
-    this.ctx.storage.sql.exec(
-      `INSERT OR REPLACE INTO room (singleton, room_session_id, created_at_ms)
-       VALUES (1, ?, ?)`,
-      roomSessionId,
-      nowMs,
-    );
     this.ctx.storage.sql.exec(
       `INSERT OR REPLACE INTO producer_lease
          (singleton, token_hash, room_session_id, expires_at_ms, socket_id)
@@ -265,6 +275,69 @@ export class DemoRoom extends DurableObject<Env> {
       controller: this.controllerInfo(nowMs),
       active_media_grant: this.activeGrant(nowMs),
       server_time_ms: nowMs,
+    };
+  }
+
+  async publishFamilyEvent(
+    event: FamilyEvent,
+    nowMs = Date.now(),
+  ): Promise<{
+    ok: boolean;
+    error?: string;
+    room_session_id?: string;
+    revision?: number;
+  }> {
+    if (!validateFamilyEvent(event)) return { ok: false, error: "invalid_family_event" };
+    const room = this.ensureRoom(nowMs);
+    const current = this.latestFamilyEvent();
+    if (
+      current !== null
+      && current.runtime_session_id === event.runtime_session_id
+      && event.revision <= current.revision
+    ) {
+      return {
+        ok: false,
+        error: "stale_family_revision",
+        room_session_id: room.room_session_id,
+        revision: current.revision,
+      };
+    }
+    if (current !== null && current.runtime_session_id !== event.runtime_session_id) {
+      this.failPendingCommands(nowMs, "runtime_session_replaced");
+      this.revokeActiveGrants(nowMs, "runtime_session_replaced", "revoked");
+      this.ctx.storage.sql.exec("DELETE FROM latest_state");
+      this.ctx.storage.sql.exec("DELETE FROM latest_pose");
+    }
+    const activeGrant = this.activeGrantRow(nowMs);
+    const authorization = event.care.media_authorization;
+    if (
+      activeGrant !== null
+      && (
+        authorization === null
+        || authorization.decision_id !== activeGrant.event_id
+        || authorization.scope !== activeGrant.scope
+        || event.care.privacy_mode === "hidden"
+        || event.care.privacy_mode === "skeleton_only"
+      )
+    ) {
+      this.revokeActiveGrants(nowMs, "authorization_replaced", "revoked");
+    }
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO latest_family_event
+         (singleton, room_session_id, runtime_session_id, revision, event_json, received_at_ms)
+       VALUES (1, ?, ?, ?, ?, ?)`,
+      room.room_session_id,
+      event.runtime_session_id,
+      event.revision,
+      canonicalJson(event),
+      nowMs,
+    );
+    this.broadcastFamilyEvent(createFamilyEventWire(event, room.room_session_id));
+    await this.scheduleNextAlarm(nowMs);
+    return {
+      ok: true,
+      room_session_id: room.room_session_id,
+      revision: event.revision,
     };
   }
 
@@ -377,6 +450,14 @@ export class DemoRoom extends DurableObject<Env> {
         runtime_session_id TEXT NOT NULL,
         state_revision INTEGER NOT NULL,
         state_json TEXT NOT NULL,
+        received_at_ms INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS latest_family_event (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        room_session_id TEXT NOT NULL,
+        runtime_session_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
         received_at_ms INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS latest_pose (
@@ -497,7 +578,12 @@ export class DemoRoom extends DurableObject<Env> {
 
   private acceptViewer(request: Request, nowMs: number): Response {
     const protocols = parseProtocols(request.headers.get("Sec-WebSocket-Protocol"));
-    if (!protocols.includes(VIEWER_PROTOCOL)) {
+    const selectedProtocol = protocols.includes(VIEWER_PROTOCOL_V2)
+      ? VIEWER_PROTOCOL_V2
+      : protocols.includes(VIEWER_PROTOCOL)
+        ? VIEWER_PROTOCOL
+        : null;
+    if (selectedProtocol === null) {
       return jsonResponse({ error: "viewer_protocol_required" }, 400);
     }
     if (this.viewerSockets().length >= MAX_VIEWERS) {
@@ -513,6 +599,7 @@ export class DemoRoom extends DurableObject<Env> {
       role: "viewer",
       viewerId,
       socketId: `socket-${crypto.randomUUID()}`,
+      familyEvents: selectedProtocol === VIEWER_PROTOCOL_V2,
       signalGrantId: null,
       signalCount: 0,
     };
@@ -533,6 +620,7 @@ export class DemoRoom extends DurableObject<Env> {
       controller: this.controllerInfo(nowMs),
       server_time_ms: nowMs,
     });
+    if (attachment.familyEvents) this.sendLatestFamilyEvent(server);
     this.sendLatestState(server, viewerId, nowMs);
     this.sendLatestPose(server, nowMs);
     if (activeGrant !== null && this.viewerInGrantAudience(activeGrant.grant_id, viewerId)) {
@@ -542,7 +630,7 @@ export class DemoRoom extends DurableObject<Env> {
     return new Response(null, {
       status: 101,
       webSocket: client,
-      headers: { "Sec-WebSocket-Protocol": VIEWER_PROTOCOL },
+      headers: { "Sec-WebSocket-Protocol": selectedProtocol },
     });
   }
 
@@ -1158,13 +1246,17 @@ export class DemoRoom extends DurableObject<Env> {
       });
       return;
     }
-    const rejection = grantRejection(value, authority.state);
+    const familyRow = this.latestFamilyEvent();
+    const familyEvent = familyRow === null ? null : parseStoredFamilyEvent(familyRow);
+    const rejection = grantRejection(value, authority.state, familyEvent, nowMs);
     if (rejection !== null) {
       sendJson(ws, { type: "protocol_error", code: rejection });
       return;
     }
+    const authorizationDeadline = matchingAuthorizationDeadline(value, familyEvent);
     const previousDeadline = this.eventGrantDeadline(value);
-    if (previousDeadline !== null && previousDeadline <= nowMs) {
+    const hardDeadline = minDefinedDeadline(previousDeadline, authorizationDeadline);
+    if (hardDeadline !== null && hardDeadline <= nowMs) {
       sendJson(ws, { type: "protocol_error", code: "event_grant_window_expired" });
       return;
     }
@@ -1175,7 +1267,7 @@ export class DemoRoom extends DurableObject<Env> {
       && current.runtime_session_id === value.runtime_session_id
       && current.event_id === value.event_id
       && current.scope === value.scope
-      && (previousDeadline === null || current.expires_at_ms <= previousDeadline)
+      && (hardDeadline === null || current.expires_at_ms <= hardDeadline)
     ) {
       this.broadcastGrantWire(current, this.mediaGrantWire(current, "active", null));
       return;
@@ -1184,7 +1276,7 @@ export class DemoRoom extends DurableObject<Env> {
     const grantId = `grant-${crypto.randomUUID()}`;
     const expiresAtMs = Math.min(
       nowMs + value.expires_in_ms,
-      previousDeadline ?? Number.POSITIVE_INFINITY,
+      hardDeadline ?? Number.POSITIVE_INFINITY,
     );
     this.ctx.storage.sql.exec(
       `INSERT INTO media_grants
@@ -1579,6 +1671,13 @@ export class DemoRoom extends DurableObject<Env> {
     );
   }
 
+  private sendLatestFamilyEvent(ws: WebSocket): void {
+    const row = this.latestFamilyEvent();
+    if (row === null) return;
+    const event = parseStoredFamilyEvent(row);
+    if (event !== null) sendJson(ws, createFamilyEventWire(event, row.room_session_id));
+  }
+
   private sendLatestState(ws: WebSocket, viewerId: string, nowMs: number): void {
     if (!this.monitorOnline(nowMs)) {
       sendJson(ws, { type: "state_unavailable", reason: "monitor_offline" });
@@ -1716,6 +1815,13 @@ export class DemoRoom extends DurableObject<Env> {
     }
   }
 
+  private broadcastFamilyEvent(value: FamilyEventWire): void {
+    for (const ws of this.viewerSockets()) {
+      const attachment = readAttachment(ws);
+      if (attachment?.role === "viewer" && attachment.familyEvents) sendJson(ws, value);
+    }
+  }
+
   private broadcastToViewers(value: unknown): void {
     for (const ws of this.viewerSockets()) sendJson(ws, value);
   }
@@ -1790,6 +1896,21 @@ export class DemoRoom extends DurableObject<Env> {
     return firstRow(this.ctx.storage.sql.exec<RoomRow>("SELECT * FROM room WHERE singleton = 1"));
   }
 
+  private ensureRoom(nowMs: number): RoomRow {
+    const existing = this.room();
+    if (existing !== null) return existing;
+    const room: RoomRow = {
+      room_session_id: `room-${crypto.randomUUID()}`,
+      created_at_ms: nowMs,
+    };
+    this.ctx.storage.sql.exec(
+      `INSERT INTO room (singleton, room_session_id, created_at_ms) VALUES (1, ?, ?)`,
+      room.room_session_id,
+      room.created_at_ms,
+    );
+    return room;
+  }
+
   private producerLease(): ProducerLeaseRow | null {
     return firstRow(this.ctx.storage.sql.exec<ProducerLeaseRow>(
       "SELECT * FROM producer_lease WHERE singleton = 1",
@@ -1799,6 +1920,12 @@ export class DemoRoom extends DurableObject<Env> {
   private latestState(): LatestStateRow | null {
     return firstRow(this.ctx.storage.sql.exec<LatestStateRow>(
       "SELECT * FROM latest_state WHERE singleton = 1",
+    ));
+  }
+
+  private latestFamilyEvent(): LatestFamilyEventRow | null {
+    return firstRow(this.ctx.storage.sql.exec<LatestFamilyEventRow>(
+      "SELECT * FROM latest_family_event WHERE singleton = 1",
     ));
   }
 
@@ -1920,6 +2047,59 @@ export class DemoRoom extends DurableObject<Env> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/api/runtime/event") {
+      try {
+        const configuredToken = runtimeIngestToken(env);
+        if (configuredToken === null) {
+          return jsonResponse({ error: "runtime_ingest_not_configured" }, 503);
+        }
+        const authorization = request.headers.get("Authorization") || "";
+        const providedToken = authorization.startsWith("Bearer ")
+          ? authorization.slice("Bearer ".length)
+          : "";
+        if (
+          !providedToken
+          || !(await timingSafeHexEqual(
+            await sha256Hex(providedToken),
+            await sha256Hex(configuredToken),
+          ))
+        ) return jsonResponse({ error: "invalid_runtime_token" }, 401);
+        const body = await request.arrayBuffer();
+        if (body.byteLength === 0 || body.byteLength > MAX_JSON_BYTES) {
+          return jsonResponse({ error: "invalid_family_event_size" }, 400);
+        }
+        let value: unknown;
+        try {
+          value = JSON.parse(new TextDecoder().decode(body));
+        } catch {
+          return jsonResponse({ error: "invalid_json" }, 400);
+        }
+        if (!validateFamilyEvent(value)) {
+          return jsonResponse({ error: "invalid_family_event" }, 422);
+        }
+        const room = env.DEMO_ROOM.getByName(ROOM_NAME);
+        const result = await room.publishFamilyEvent(value);
+        if (!result.ok) {
+          return jsonResponse({
+            error: result.error,
+            room_session_id: result.room_session_id ?? null,
+            revision: result.revision ?? null,
+          }, result.error === "stale_family_revision" ? 409 : 422);
+        }
+        return jsonResponse({
+          ok: true,
+          room_session_id: result.room_session_id,
+          revision: result.revision,
+        }, 202);
+      } catch (error) {
+        console.error(JSON.stringify({
+          message: "runtime_event_ingest_failed",
+          path: url.pathname,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+        return jsonResponse({ error: "internal_error" }, 500);
+      }
+    }
     const origin = request.headers.get("Origin");
     if (!originAllowed(origin, env.ALLOWED_ORIGINS)) {
       return jsonWithCors({ error: "origin_not_allowed" }, 403, origin);
@@ -1934,6 +2114,23 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/api/status") {
         return jsonWithCors(await room.getStatus(), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/api/rtc-config") {
+        try {
+          const rtc = await buildRtcConfig(env);
+          return jsonWithCors(rtc, 200, origin, { "Cache-Control": "no-store" });
+        } catch (error) {
+          console.error(JSON.stringify({
+            message: "rtc_config_unavailable",
+            error: error instanceof Error ? error.message : String(error),
+          }));
+          return jsonWithCors(
+            { error: "rtc_config_unavailable" },
+            503,
+            origin,
+            { "Cache-Control": "no-store" },
+          );
+        }
       }
       if (request.method === "POST" && url.pathname === "/api/monitor/claim") {
         const body = await request.arrayBuffer();
@@ -1976,6 +2173,8 @@ export default {
 function grantRejection(
   request: MediaGrantRequest,
   state: DemoStateEnvelope | null,
+  familyEvent: FamilyEvent | null,
+  nowMs: number,
 ): string | null {
   if (state === null) return "state_required_before_grant";
   if (
@@ -1988,6 +2187,32 @@ function grantRejection(
     state.state.capture.status !== "active"
     || state.state.capture.remote_video !== "available"
   ) return "remote_video_unavailable";
+
+  if (familyEvent !== null) {
+    if (familyEvent.runtime_session_id !== request.runtime_session_id) {
+      return "family_authority_session_mismatch";
+    }
+    const care = familyEvent.care;
+    const authorization = care.media_authorization;
+    if (care.privacy_mode === "hidden" || care.privacy_mode === "skeleton_only") {
+      return "privacy_mode_forbids_video";
+    }
+    if (authorization === null) return "backend_media_authorization_required";
+    if (authorization.expires_at_ms <= nowMs) return "backend_media_authorization_expired";
+    if (authorization.decision_id !== request.event_id || care.decision_id !== request.event_id) {
+      return "event_authority_mismatch";
+    }
+    if (authorization.scope !== request.scope) return "media_authorization_scope_mismatch";
+    if (authorization.scene_id !== state.state.scene_id) return "media_authorization_scene_mismatch";
+    if (request.scope === "fall_emergency" && care.alarm === null) {
+      return "authoritative_fall_required";
+    }
+    return null;
+  }
+
+  // Legacy v1 fallback for the existing local demo. Cloud deployment enables
+  // backend FamilyEvent publication, at which point the branch above is the
+  // sole business authority and these Home-derived fields are ignored.
   if (state.state.care.decision_id !== request.event_id) return "event_authority_mismatch";
   if (request.scope === "kitchen_moment") {
     return state.state.scene_id === "kitchen" && state.state.care.consent === "granted"
@@ -2001,6 +2226,25 @@ function grantRejection(
     : "authoritative_fall_required";
 }
 
+function matchingAuthorizationDeadline(
+  request: MediaGrantRequest,
+  familyEvent: FamilyEvent | null,
+): number | null {
+  const authorization = familyEvent?.care.media_authorization;
+  return authorization !== null
+    && authorization !== undefined
+    && authorization.decision_id === request.event_id
+    && authorization.scope === request.scope
+    ? authorization.expires_at_ms
+    : null;
+}
+
+function minDefinedDeadline(left: number | null, right: number | null): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.min(left, right);
+}
+
 function commandSafetyRejection(
   command: ControlCommand,
   state: DemoStateEnvelope,
@@ -2008,6 +2252,8 @@ function commandSafetyRejection(
   const body = command.command;
   if (
     (body.name === "submit_response"
+      || body.name === "acknowledge_alarm"
+      || body.name === "confirm_action_card"
       || body.name === "confirm_alarm"
       || body.name === "replay_voice")
     && body.decision_id !== state.state.care.decision_id
@@ -2051,6 +2297,15 @@ function validAckTransition(from: ControlAckPhase, to: ControlAckPhase): boolean
 
 function isTerminalAck(phase: ControlAckPhase): boolean {
   return phase === "applied" || phase === "rejected" || phase === "failed";
+}
+
+function parseStoredFamilyEvent(row: LatestFamilyEventRow): FamilyEvent | null {
+  try {
+    const value: unknown = JSON.parse(row.event_json);
+    return validateFamilyEvent(value) ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function parseStoredState(row: LatestStateRow): DemoStateEnvelope | null {
@@ -2111,11 +2366,18 @@ function readAttachment(ws: WebSocket): SocketAttachment | null {
   if (typeof value.socketId !== "string") return null;
   if (value.signalGrantId !== null && typeof value.signalGrantId !== "string") return null;
   if (!Number.isSafeInteger(value.signalCount) || (value.signalCount as number) < 0) return null;
-  if (value.role === "viewer" && "viewerId" in value && typeof value.viewerId === "string") {
+  if (
+    value.role === "viewer"
+    && "viewerId" in value
+    && "familyEvents" in value
+    && typeof value.viewerId === "string"
+    && typeof value.familyEvents === "boolean"
+  ) {
     return {
       role: "viewer",
       viewerId: value.viewerId,
       socketId: value.socketId,
+      familyEvents: value.familyEvents,
       signalGrantId: value.signalGrantId,
       signalCount: value.signalCount as number,
     };
@@ -2151,6 +2413,87 @@ function sendJson(ws: WebSocket, value: unknown): void {
   } catch {
     // A disconnect races normal broadcasts; close handlers own cleanup.
   }
+}
+
+function runtimeIngestToken(env: Env): string | null {
+  const value = (env as Env & { RUNTIME_INGEST_TOKEN?: string }).RUNTIME_INGEST_TOKEN;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+interface RtcEnvBindings {
+  REME_STUN_URLS?: string;
+  REME_TURN_URLS?: string;
+  REME_TURN_SHARED_SECRET?: string;
+  REME_TURN_CREDENTIAL_TTL_SECONDS?: string;
+}
+
+function commaSeparatedUrls(value: string | undefined): string[] {
+  return typeof value === "string"
+    ? value.split(",").map((item) => item.trim()).filter(Boolean)
+    : [];
+}
+
+async function buildRtcConfig(env: Env): Promise<{
+  iceServers: Array<{
+    urls: string[];
+    username?: string;
+    credential?: string;
+  }>;
+  mode: "local_network_only" | "stun_only" | "turn_configured";
+  credential_expires_at_ms: number | null;
+}> {
+  const bindings = env as Env & RtcEnvBindings;
+  const stunUrls = commaSeparatedUrls(bindings.REME_STUN_URLS);
+  const turnUrls = commaSeparatedUrls(bindings.REME_TURN_URLS);
+  const secret = bindings.REME_TURN_SHARED_SECRET?.trim() || "";
+  if ((turnUrls.length === 0) !== (secret.length === 0)) {
+    throw new Error("TURN URLs and shared secret must be configured together");
+  }
+  const iceServers: Array<{
+    urls: string[];
+    username?: string;
+    credential?: string;
+  }> = [];
+  if (stunUrls.length > 0) iceServers.push({ urls: stunUrls });
+  if (turnUrls.length === 0) {
+    return {
+      iceServers,
+      mode: stunUrls.length > 0 ? "stun_only" : "local_network_only",
+      credential_expires_at_ms: null,
+    };
+  }
+
+  const configuredTtl = Number.parseInt(bindings.REME_TURN_CREDENTIAL_TTL_SECONDS || "3600", 10);
+  if (!Number.isSafeInteger(configuredTtl) || configuredTtl < 60 || configuredTtl > 86_400) {
+    throw new Error("TURN credential TTL must be an integer within 60..86400 seconds");
+  }
+  const expiresAtSeconds = Math.floor(Date.now() / 1000) + configuredTtl;
+  const username = `${expiresAtSeconds}:reme-demo`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(username),
+  );
+  const credential = bytesToBase64(new Uint8Array(signature));
+  iceServers.push({ urls: turnUrls, username, credential });
+  return {
+    iceServers,
+    mode: "turn_configured",
+    credential_expires_at_ms: expiresAtSeconds * 1000,
+  };
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 function randomToken(): string {

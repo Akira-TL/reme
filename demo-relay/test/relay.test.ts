@@ -11,6 +11,7 @@ import {
   type ControlAck,
   type ControlCommand,
   type DemoStateEnvelope,
+  type FamilyEvent,
   type PoseFrame,
 } from "../src/index";
 import { MOVENET_KEYPOINT_NAMES } from "../src/protocol";
@@ -19,6 +20,7 @@ const ORIGIN = "http://127.0.0.1:4173";
 const ROOM_NAME = "shared-live-demo";
 const MONITOR_PROTOCOL = "reme-monitor-v1";
 const VIEWER_PROTOCOL = "reme-viewer-v1";
+const VIEWER_PROTOCOL_V2 = "reme-viewer-v2";
 const sockets: WebSocket[] = [];
 const inboxes = new WeakMap<WebSocket, SocketInbox>();
 
@@ -908,6 +910,152 @@ describe("public dual-device relay", () => {
     expect(status.active_media_grant).toBeNull();
     await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(false);
   });
+
+  it("returns short-lived TURN REST credentials without exposing the shared secret", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    const response = await relayFetch("/api/rtc-config");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const body = await response.json<Record<string, unknown>>();
+    expect(body.mode).toBe("turn_configured");
+    expect(body.credential_expires_at_ms).toBe((Math.floor(baseTime / 1000) + 600) * 1000);
+    const servers = body.iceServers as Array<Record<string, unknown>>;
+    expect(servers).toHaveLength(2);
+    expect(servers[0]).toEqual({ urls: ["stun:turn.test:3478"] });
+    const turn = servers[1];
+    if (turn === undefined) throw new Error("expected TURN server entry");
+    expect(turn).toMatchObject({
+      urls: [
+        "turn:turn.test:3478?transport=udp",
+        "turns:turn.test:5349?transport=tcp",
+      ],
+    });
+    expect(String(turn.username)).toBe(`${Math.floor(baseTime / 1000) + 600}:reme-demo`);
+    expect(String(turn.credential)).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    expect(JSON.stringify(body)).not.toContain("test-turn-shared-secret");
+    now.mockRestore();
+  });
+
+  it("accepts authenticated runtime FamilyEvent ingest and rejects bad credentials", async () => {
+    const event = makeFamilyEvent("runtime-ingest", 1, "decision-ingest");
+    const denied = await relayFetch("/api/runtime/event", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer wrong-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(event),
+    });
+    expect(denied.status).toBe(401);
+
+    const accepted = await relayFetch("/api/runtime/event", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-runtime-ingest-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(event),
+    });
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toMatchObject({ ok: true, revision: 1 });
+
+    const stale = await relayFetch("/api/runtime/event", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-runtime-ingest-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(event),
+    });
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toMatchObject({ error: "stale_family_revision" });
+  });
+
+  it("stores authoritative family events and only sends them to viewer v2", async () => {
+    const published = await roomStub().publishFamilyEvent(
+      makeFamilyEvent("runtime-family", 1, "decision-family"),
+    );
+    expect(published).toMatchObject({ ok: true, revision: 1 });
+
+    const viewer = await connectViewerV2();
+    await nextType(viewer, "viewer_ready");
+    const event = await nextType(viewer, "family_event");
+    expect(event).toMatchObject({
+      schema_version: "reme-family-event/v1",
+      runtime_session_id: "runtime-family",
+      revision: 1,
+      care: {
+        decision_id: "decision-family",
+        state: "family_notification_required",
+      },
+    });
+    expect(field(event, "room_session_id")).toMatch(/^room-/);
+
+    await expect(roomStub().publishFamilyEvent(
+      makeFamilyEvent("runtime-family", 1, "decision-stale"),
+    )).resolves.toMatchObject({ ok: false, error: "stale_family_revision", revision: 1 });
+  });
+
+  it("uses backend media authorization instead of spoofed Home consent once available", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const kitchen = makeState(claim, 1, {
+      scene: "kitchen",
+      care: {
+        phase: "checking",
+        decision: "decision-kitchen-auth",
+        consent: "granted",
+        authoritative: false,
+      },
+    });
+    monitor.send(JSON.stringify(kitchen));
+    await nextType(monitor, "state_accepted");
+
+    await roomStub().publishFamilyEvent(
+      makeFamilyEvent("runtime-current", 1, "decision-kitchen-auth", { authorization: null }),
+    );
+    monitor.send(JSON.stringify({
+      type: "media_grant_request",
+      room_session_id: claim.room_session_id,
+      runtime_session_id: kitchen.runtime_session_id,
+      event_id: "decision-kitchen-auth",
+      scope: "kitchen_moment",
+      expires_in_ms: 60_000,
+    }));
+    await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({
+      code: "backend_media_authorization_required",
+    });
+
+    const now = Date.now();
+    await roomStub().publishFamilyEvent(
+      makeFamilyEvent("runtime-current", 2, "decision-kitchen-auth", {
+        authorization: {
+          schema_version: "reme-media-authorization/v1",
+          authorization_id: "authorization-kitchen",
+          decision_id: "decision-kitchen-auth",
+          scene_id: "kitchen",
+          scope: "kitchen_moment",
+          status: "active",
+          issued_at_ms: now,
+          expires_at_ms: now + 60_000,
+          event_id: null,
+        },
+      }),
+    );
+    monitor.send(JSON.stringify({
+      type: "media_grant_request",
+      room_session_id: claim.room_session_id,
+      runtime_session_id: kitchen.runtime_session_id,
+      event_id: "decision-kitchen-auth",
+      scope: "kitchen_moment",
+      expires_in_ms: 60_000,
+    }));
+    await expect(nextType(monitor, "media_grant")).resolves.toMatchObject({
+      grant: { scope: "kitchen_moment", status: "active" },
+    });
+  });
 });
 
 async function relayFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -931,6 +1079,7 @@ async function resetRoomStorage(): Promise<void> {
       state.storage.sql.exec("DELETE FROM commands");
       state.storage.sql.exec("DELETE FROM controller_lease");
       state.storage.sql.exec("DELETE FROM latest_pose");
+      state.storage.sql.exec("DELETE FROM latest_family_event");
       state.storage.sql.exec("DELETE FROM latest_state");
       state.storage.sql.exec("DELETE FROM producer_lease");
       state.storage.sql.exec("DELETE FROM room");
@@ -962,6 +1111,15 @@ async function connectViewer(): Promise<WebSocket> {
   });
   expect(response.status).toBe(101);
   expect(response.headers.get("Sec-WebSocket-Protocol")).toBe(VIEWER_PROTOCOL);
+  return acceptSocket(response);
+}
+
+async function connectViewerV2(): Promise<WebSocket> {
+  const response = await relayFetch("/ws/viewer", {
+    headers: { Upgrade: "websocket", "Sec-WebSocket-Protocol": VIEWER_PROTOCOL_V2 },
+  });
+  expect(response.status).toBe(101);
+  expect(response.headers.get("Sec-WebSocket-Protocol")).toBe(VIEWER_PROTOCOL_V2);
   return acceptSocket(response);
 }
 
@@ -1034,6 +1192,37 @@ function makeState(
         message: care.phase === "idle" ? null : "演示状态",
       },
       media_grant: null,
+    },
+  };
+}
+
+function makeFamilyEvent(
+  runtimeSessionId: string,
+  revision: number,
+  decisionId: string,
+  options: {
+    authorization?: FamilyEvent["care"]["media_authorization"];
+  } = {},
+): FamilyEvent {
+  return {
+    schema_version: "reme-family-event/v1",
+    runtime_session_id: runtimeSessionId,
+    revision,
+    decision_timestamp_ms: 13_000,
+    published_at_ms: Date.now(),
+    care: {
+      decision_id: decisionId,
+      state: "family_notification_required",
+      action: "notify_family",
+      risk_level: 3,
+      family_notification: "请尽快联系或前往查看。",
+      privacy_mode: "blurred",
+      alarm: {
+        channels: ["vibrate", "ring", "flash"],
+        trigger: "check_in_timeout",
+      },
+      action_card: null,
+      media_authorization: options.authorization ?? null,
     },
   };
 }
