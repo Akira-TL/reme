@@ -1,64 +1,57 @@
-# Reme 主动关怀时间线 Design QA
+# Reme 密集生活时间线 Design QA
 
 ## Comparison target
 
-- Structural source: `.scratch/lbx-care-assessments/evidence/source-family-timeline-reference.png`
-  - Pixels: `604×800`, cropped from `(0,100)` to `(604,900)` in the user-provided `1440×903` screenshot so unrelated browser chrome and chat content do not enter the repository.
-  - Intended use: the left-side week selector, vertical chronology, expandable event rows, and warm neutral hierarchy. The source is a desktop split view; its chat panel is not part of this implementation target.
-- Browser-rendered implementation: `.scratch/lbx-care-assessments/evidence/reme-aug11-desktop-1440x894.png`
-  - CSS viewport and capture pixels: `1440×894`; `devicePixelRatio=1`.
-  - State: family surface, `reme` selected, 2026-08-11 selected, two collapsed Mock assessments, Relay unavailable.
-- Full comparison input: `.scratch/lbx-care-assessments/evidence/reference-vs-reme-desktop.png`
-  - Pixels: `2125×894`.
-  - Source timeline crop normalized to `675×894` on the left; implementation at native `1440×894` on the right, separated by 10px. Both are compared at the same visible height.
-- Mobile implementation: `.scratch/lbx-care-assessments/evidence/reme-aug11-mobile-390x844.png`
-  - CSS viewport and capture pixels: `390×844`; `devicePixelRatio=1`.
-- Merged home implementation: `.scratch/lbx-care-assessments/evidence/home-mobile-390x844.png`.
-
-The result intentionally adapts the source rather than cloning the whole screenshot: Reme is an independent application surface with a persistent bottom navigation, while the source’s right-hand chat panel is outside the requested scope.
+- 获批视觉：`/Users/maniforld/.codex/generated_images/019fe568-60a5-7610-afa6-555f0496754b/exec-621216ec-c8d9-4cb8-beb4-552123a9825d.png`
+  - 像素：`852×1846`。
+  - 采用部分：八日选择器、“Mock 记忆周”、18/2 分段筛选、7/6/5 时段章节、主动关怀判词与本人回应的显式连接、`家 / reme / 设置` 底栏。
+- 最终 390×844 实现：`.scratch/reme-dense-timeline-design/audit/08-implementation-mobile-390x844-compact.png`。
+- 同状态对比输入：`.scratch/reme-dense-timeline-design/audit/09-reference-vs-implementation-compact-390x844.png`。
+  - 左侧把获批稿等比缩放至 390px 宽并裁到 844px；右侧为浏览器真实 `390×844` CSS 视口，`devicePixelRatio=1`。
+- 关怀线程局部：`.scratch/reme-dense-timeline-design/audit/10-care-thread-mobile-390x844-compact.png`。
+- 360px 窄屏：`.scratch/reme-dense-timeline-design/audit/11-implementation-narrow-360x800.png`。
 
 ## Browser evidence
 
-Primary interactions tested in the in-app browser:
+在应用内浏览器实际完成：
 
-- switched among `家 / reme / 设置` and confirmed the destination content and selected state;
-- confirmed `家` contains both the live home state and the former dashboard sections (`本次同步摘要`, `当前能力`, `连接与失败可见性`), with no separate `看板` action;
-- navigated from the 8 月 11 日 week to the prior week, selected 8 月 4 日, and confirmed two explicitly labeled Mock assessments;
-- expanded a Mock card and confirmed source, uncertainty, data provenance, room context, and the no-diagnosis/no-raw-media disclosure;
-- checked `390×844` and `1440×894`; both reported `scrollWidth === clientWidth`;
-- checked console output after the navigation fix; only Vite connection and React DevTools informational messages remained, with no warning or error.
+- 进入 `reme` 后默认选择 2026 年 8 月 9 日，并显示正确的星期与八日日期对；
+- 切换到 8 月 10 日后，标题、日期选中态、筛选和默认展开章节同步重置，再返回 8 月 9 日；
+- `全部 18 / 关怀 2` 可切换，关怀视图只保留上午、午后两章和两条关怀线程；
+- 清晨、上午、午后可独立折叠，`aria-expanded` 与视觉状态一致；
+- 10:06 关怀判词可展开查看来源、建议、进展和非诊断披露；10:08 本人回应与判词保持橙色连接；
+- 07:36 连续活动展开后能看到被收纳的 07:52 “厨房短暂停留”，18 个片段没有因视觉压缩而丢失；
+- “Mock 记忆周”说明可展开，并明确不会写入家庭历史或改变实时告警；
+- 390×844、360×800 和 1280×720 均满足 `scrollWidth === clientWidth`；
+- 控制台只有 Vite 连接和 React DevTools 提示，没有应用 warning 或 error。
 
-## Full-view comparison
+## Mandatory comparison pass
 
-The implementation keeps the source’s useful structural cues: date navigation leads the page, the selected day uses the warm orange accent, entries follow a thin vertical rail, and each entry exposes time, classification, summary, and details. It deliberately replaces the source’s long diary paragraph with concise, actionable cards: verdict, basis, uncertainty, suggested action, and progress. The persistent heart action is now labeled `reme`, making the timeline a peer destination rather than an embedded dashboard section.
+- 字体与层级：继续使用项目既有 Apple/PingFang 系统字体；`reme`、日期、日摘要、时段标题、普通片段、判词和回应形成与获批稿一致的六级扫描层级。390px 下正文没有被截断，判词依据采用单行省略并可展开查看完整内容。
+- 间距与布局：最终对比后压缩了日期条、记忆周、筛选、章节头和事件行；相邻的连续姿态变化收进同一行，章节计数仍为 7/6/5。页面比概念稿略长，因为实现保留了全部可访问细节和公开演示安全披露。
+- 视口韧性：八个日期在 360px 仍保持一行；摘要允许自然换行；章节头、关怀状态和底栏没有重叠或横向溢出。
+- 色彩与表面：新增界面只使用平面暖白、珊瑚橙和克制紫色；没有新渐变。选中日期、关怀线程、Mock 边界和普通生活片段的语义区分清晰。
+- 图标：生活片段、时段、Mock、关怀、回应和底栏全部使用现有 MUI Rounded 图标。关怀到回应的实线关系由同一图标库的转向连接符表达；无 emoji、手绘 SVG、占位图或 CSS 假图标。
+- 内容：普通片段只描述房间、姿态和移动，不把做饭、睡眠或健康原因写成事实；关怀卡始终显示 Mock、依据和不确定性。
+- 状态与交互：日期、筛选、章节、事件详情和记忆周说明均为语义按钮，具备 pressed/expanded 状态与可见焦点；底栏保持三入口可用。
+- 可访问性：按钮有明确可访问名称，触控主控件接近或达到 44px；细节不是仅靠颜色表达；减少动画偏好继续由项目全局规则处理。
 
-The mobile capture serves as the focused-region comparison because it keeps the week control, card typography, Mock provenance, and bottom-navigation labels legible at their actual target size. No further crop is needed.
+## Comparison history
 
-## Findings and comparison history
+### Pass 1
 
-### Iteration 1
-
-- [P1] Bottom navigation rendered but did not change pages.
-  - Location: `frontend/src/shared-demo/ViewerApp.jsx`, family/demo children of `BottomNavigation`.
-  - Evidence: clicking `reme` or `设置` left the `家` content visible; MUI logged that `BottomNavigation` does not accept a Fragment child, and all labels had `opacity: 0`.
-  - Impact: the core Reme destination was inaccessible and its requested label was not visible.
-  - Fix: supplied keyed `BottomNavigationAction` arrays as direct MUI children for both family and demo surfaces.
-  - Post-fix evidence: all three labels have `opacity: 1`; clicking each action updates the heading and selected state; the console has no MUI warnings. The final mobile and desktop screenshots were captured after this fix.
+- [P1] 首版在 390px 下沿用一条琐事一个大行，页面密度明显低于获批稿，关怀线程需要滚动较远才能出现。
+  - 修复：把同一场景的相邻变化收进可展开的一行，同时把 07:52、10:42、11:05 保持为显式 Mock 子记录；章节计数仍由真实片段数计算。
+- [P1] 家属端公开演示披露在手机上占据两行统计区，进一步挤压核心内容。
+  - 修复：仅在 `reme` 手机页把披露改为单行紧凑布局，仍保留“无账号验证”和当前权威状态不可用两项必要信息。
+- [P2] 日期条、记忆周、摘要、筛选和事件行的纵向节奏偏松。
+  - 修复：按同屏对比缩短组件高度与段间距，同时保持日期、章节和普通事件的可操作尺寸。
 
 ### Final pass
 
-No actionable P0/P1/P2 findings remain.
+没有剩余的 P0/P1/P2 发现。
 
-- Fonts and typography: the existing Apple/PingFang system stack preserves the source’s calm sans-serif character. Headings, card verdicts, metadata, and labels remain readable at 390px without truncation.
-- Spacing and layout rhythm: the date strip, intro, Mock disclosure, and event list have consistent 14–20px gaps and warm rounded surfaces. The fixed bottom bar retains content allowance and does not create horizontal overflow.
-- Colors and visual tokens: warm white, restrained orange, pale green, and pale violet carry the source’s low-alarm character while keeping selected, mock, normal, and unavailable states distinct. No new gradient is used.
-- Image quality and asset fidelity: the target requires no content photography. Visible UI icons use the project’s MUI rounded-icon family; there are no placeholders, handcrafted SVGs, emoji substitutes, or CSS-drawn assets.
-- Copy and content: the page consistently says `reme · remember me`, labels the fixtures as `Mock` and `非真实家庭历史`, avoids medical certainty, and distinguishes verdict, basis, suggestion, and progress.
-- Accessibility and interaction: bottom navigation, dates, arrows, and expandable entries are semantic controls with visible labels, selected/pressed/disabled states, and practical tap targets.
-- Responsiveness: no horizontal overflow at either tested viewport. The desktop shell is intentionally narrower than the source’s two-pane layout because only the independent Reme surface is in scope.
-
-## Follow-up polish
-
-- [P3] If a later persistent-history service introduces long summaries, clamp the collapsed verdict to three lines and keep the complete text in the expanded detail region.
+保留的一项有意差异：实现顶部持续展示“公开演示连接 / 无账号验证 / 当前权威状态不可用”，概念稿未画出该安全披露。它属于当前产品的失败可见性和访问边界，不为追求视觉一致而移除。
 
 final result: passed
+

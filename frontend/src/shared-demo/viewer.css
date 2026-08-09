@@ -410,6 +410,316 @@ button, input { font: inherit; }
 .timeline-empty-state h2 { margin: 12px 0 0; font-size: 15px; }
 .timeline-empty-state p { max-width: 270px; margin: 6px 0 0; color: var(--viewer-muted); font-size: 10px; line-height: 1.55; }
 
+.reme-timeline-page {
+  --reme-coral: #ff4f17;
+  --reme-coral-soft: #fff3ec;
+  --reme-violet: #7b4aae;
+  --reme-violet-soft: #fbf7ff;
+  padding-top: 1px;
+}
+
+.reme-week-strip {
+  padding: 7px 8px 13px;
+  border: 1px solid #ecdccf;
+  border-radius: 20px;
+  background: #fffdfb;
+}
+
+.reme-week-days {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.reme-week-days button {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 6px 1px;
+  border: 0;
+  border-radius: 15px;
+  color: #6e6b69;
+  background: transparent;
+  cursor: pointer;
+}
+
+.reme-week-days button:hover { background: #fff3eb; }
+.reme-week-days button.is-selected { color: #fff; background: var(--reme-coral); }
+.reme-week-days button > span { font-size: 10px; line-height: 1; white-space: nowrap; }
+.reme-week-days button > b { font-size: 20px; line-height: 1; }
+.reme-week-days button > svg { position: absolute; bottom: -10px; color: var(--reme-coral); font-size: 10px; }
+
+.reme-week-days button:focus-visible,
+.reme-memory-week-summary:focus-visible,
+.reme-timeline-filter button:focus-visible,
+.reme-daypart-heading:focus-visible,
+.reme-life-event-summary:focus-visible,
+.reme-care-card:focus-visible,
+.reme-care-response:focus-visible {
+  outline: 2px solid #ff9c6e;
+  outline-offset: 2px;
+}
+
+.reme-memory-week {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid #dfcdf0;
+  border-radius: 18px;
+  color: var(--reme-violet);
+  background: var(--reme-violet-soft);
+}
+
+.reme-memory-week-summary {
+  display: grid;
+  grid-template-columns: 30px auto minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 52px;
+  padding: 9px 14px 6px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reme-memory-week-summary > svg:first-child { font-size: 25px; }
+.reme-memory-week-summary > b { font-size: 14px; white-space: nowrap; }
+.reme-memory-week-summary > span { overflow: hidden; font-size: 11px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.reme-memory-week-summary > svg:last-child { justify-self: end; color: #736f73; font-size: 17px; transition: transform 180ms ease; }
+.reme-memory-week-summary > svg:last-child.is-expanded { transform: rotate(90deg); }
+
+.reme-memory-week-progress {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 9px;
+  margin: 0;
+  padding: 0 14px 10px;
+  list-style: none;
+}
+
+.reme-memory-week-progress li { height: 3px; border-radius: 999px; background: #e6d7f3; }
+.reme-memory-week-progress li.is-selected { background: var(--reme-coral); }
+.reme-memory-week > p { margin: 0; padding: 0 14px 12px; color: #765d88; font-size: 10px; line-height: 1.5; }
+
+.reme-day-summary { margin: 20px 4px 0; }
+.reme-day-summary h2 { margin: 0; font-size: 20px; line-height: 1.45; letter-spacing: -0.025em; }
+
+.reme-timeline-filter {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 14px;
+  padding: 3px;
+  border-radius: 999px;
+  background: #f5f3f1;
+}
+
+.reme-timeline-filter button {
+  min-height: 43px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #777574;
+  background: transparent;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.reme-timeline-filter button b { margin-left: 5px; }
+.reme-timeline-filter button.is-selected { color: var(--reme-coral); border-color: #ffad86; background: #fff; }
+
+.reme-dayparts { display: grid; gap: 10px; margin-top: 17px; }
+
+.reme-daypart {
+  overflow: hidden;
+  border: 1px solid #eee3da;
+  border-radius: 19px;
+  background: #fff;
+}
+
+.reme-daypart-heading {
+  display: grid;
+  grid-template-columns: 42px auto auto minmax(0, 1fr) auto 22px;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 54px;
+  padding: 5px 12px;
+  border: 0;
+  color: var(--viewer-ink);
+  background: #fffaf6;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reme-daypart-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid #f2dfcf;
+  border-radius: 50%;
+  color: var(--reme-coral);
+  background: #fff;
+}
+
+.reme-daypart-icon svg { font-size: 23px; }
+.reme-daypart-name { font-size: 19px; font-weight: 780; white-space: nowrap; }
+.reme-daypart-range { font-size: 14px; font-weight: 650; white-space: nowrap; }
+.reme-daypart-count { color: #77716d; font-size: 12px; white-space: nowrap; }
+.reme-daypart-care-count { padding: 5px 8px; border: 1px solid #d9c1ed; border-radius: 999px; color: var(--reme-violet); background: #fdfaff; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.reme-daypart-heading > svg { justify-self: end; color: #615f5d; font-size: 21px; transition: transform 180ms ease; }
+.reme-daypart-heading > svg.is-expanded { transform: rotate(180deg); }
+.reme-daypart.is-collapsed .reme-daypart-count { display: none; }
+
+.reme-daypart-events { padding: 0 12px; border-top: 1px solid #f1e8e1; }
+
+.reme-life-event + .reme-life-event,
+.reme-life-event + .reme-care-thread,
+.reme-care-thread + .reme-life-event,
+.reme-care-thread + .reme-care-thread { border-top: 1px solid #f2ebe6; }
+
+.reme-life-event-summary {
+  display: grid;
+  grid-template-columns: 40px 50px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 56px;
+  padding: 6px 1px;
+  border: 0;
+  color: var(--viewer-ink);
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reme-life-event-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  color: #696765;
+  background: #faf4ee;
+}
+
+.reme-life-event-icon svg { font-size: 21px; }
+.reme-life-event-summary time { color: #77716d; font-size: 14px; font-variant-numeric: tabular-nums; }
+.reme-life-event-title { overflow: hidden; font-size: 14px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.reme-life-event-summary > svg { color: #73716f; font-size: 16px; transition: transform 180ms ease; }
+.reme-life-event-summary > svg.is-expanded { transform: rotate(90deg); }
+.reme-life-event-detail { margin: -1px 0 8px 48px; padding: 8px 10px; border-radius: 10px; color: #756d67; background: #faf7f4; }
+.reme-life-event-detail b { display: block; color: #805b43; font-size: 9px; }
+.reme-life-event-detail p { margin: 3px 0 0; font-size: 9px; line-height: 1.5; }
+
+.reme-care-thread { padding: 7px 0; }
+
+.reme-care-card {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 104px;
+  padding: 10px 10px 10px 8px;
+  border: 1px solid #f0ded1;
+  border-left: 3px solid var(--reme-coral);
+  border-radius: 14px;
+  color: var(--viewer-ink);
+  background: #fffaf6;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reme-care-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  color: var(--reme-coral);
+  background: #ffe8dc;
+}
+
+.reme-care-icon svg { font-size: 23px; }
+.reme-care-copy { display: block; min-width: 0; }
+.reme-care-meta { display: flex; align-items: baseline; gap: 10px; }
+.reme-care-meta time { color: var(--reme-coral); font-size: 13px; font-variant-numeric: tabular-nums; }
+.reme-care-meta b { color: var(--reme-coral); font-size: 12px; }
+.reme-care-copy > strong { display: block; margin-top: 5px; font-size: 17px; line-height: 1.35; }
+.reme-care-copy > small { display: block; margin-top: 4px; overflow: hidden; color: #77706a; font-size: 10px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.reme-care-status { align-self: start; padding: 5px 8px; border: 1px solid #ffb18c; border-radius: 999px; color: var(--reme-coral); background: #fff; font-size: 10px; white-space: nowrap; }
+
+.reme-care-details { margin: 0 10px 0 22px; padding: 9px 11px; border: 1px solid #f0e4db; border-top: 0; border-radius: 0 0 12px 12px; background: #fffcf9; }
+.reme-care-details > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-height: 20px; }
+.reme-care-details > div span { color: #8b837d; font-size: 9px; }
+.reme-care-details > div b { max-width: 70%; font-size: 9px; text-align: right; }
+.reme-care-details p { margin: 6px 0 0; padding-top: 6px; border-top: 1px solid #eee3db; color: #817974; font-size: 9px; line-height: 1.45; }
+
+.reme-care-response {
+  display: grid;
+  grid-template-columns: 30px 38px 46px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  width: calc(100% - 22px);
+  min-height: 56px;
+  margin: 2px 0 0 22px;
+  padding: 5px 8px 5px 0;
+  border: 1px solid #eee3db;
+  border-radius: 0 0 13px 13px;
+  color: var(--viewer-ink);
+  background: #fffaf6;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reme-care-connector { align-self: start; color: var(--reme-coral); font-size: 32px !important; transform: translate(-3px, -7px); }
+.reme-care-response > span { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: #6f6d6b; background: #faf4ee; }
+.reme-care-response > span svg { font-size: 20px; }
+.reme-care-response time { color: #77716d; font-size: 13px; font-variant-numeric: tabular-nums; }
+.reme-care-response b { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.reme-care-response > svg:last-child { color: #73716f; font-size: 15px; transition: transform 180ms ease; }
+.reme-care-response > svg:last-child.is-expanded { transform: rotate(90deg); }
+
+.reme-live-session { margin-top: 20px; }
+
+@media (max-width: 420px) {
+  .reme-week-days { gap: 2px; }
+  .reme-week-days button { min-height: 58px; border-radius: 13px; }
+  .reme-week-days button > span { font-size: 9px; }
+  .reme-week-days button > b { font-size: 18px; }
+  .reme-memory-week-summary { grid-template-columns: 27px auto minmax(0, 1fr) 18px; gap: 7px; padding-right: 11px; padding-left: 11px; }
+  .reme-memory-week-summary > b { font-size: 13px; }
+  .reme-memory-week-summary > span { font-size: 10px; }
+  .reme-memory-week-progress { gap: 7px; padding-right: 11px; padding-left: 11px; }
+  .reme-day-summary { margin-top: 18px; }
+  .reme-day-summary h2 { font-size: 18px; }
+  .reme-daypart-heading { grid-template-columns: 39px auto auto minmax(0, 1fr) auto 20px; gap: 5px; padding-right: 10px; padding-left: 9px; }
+  .reme-daypart-icon { width: 37px; height: 37px; }
+  .reme-daypart-name { font-size: 17px; }
+  .reme-daypart-range { font-size: 12px; }
+  .reme-daypart-count { font-size: 10px; }
+  .reme-daypart-care-count { padding-inline: 6px; font-size: 9px; }
+  .reme-daypart-events { padding: 0 9px; }
+  .reme-life-event-summary { grid-template-columns: 38px 47px minmax(0, 1fr) 16px; gap: 7px; }
+  .reme-life-event-summary time,
+  .reme-life-event-title { font-size: 13px; }
+  .reme-care-card { grid-template-columns: 42px minmax(0, 1fr) auto; gap: 8px; }
+  .reme-care-copy > strong { font-size: 15px; }
+  .reme-care-copy > small { font-size: 9px; }
+  .reme-care-response { grid-template-columns: 28px 36px 43px minmax(0, 1fr) 15px; gap: 6px; }
+  .reme-care-response time,
+  .reme-care-response b { font-size: 12px; }
+}
+
 .page-title-row { display: flex; align-items: flex-start; justify-content: space-between; padding: 2px 4px 12px; }
 .page-title-row h1 { margin: 0; font-size: 27px; }
 .page-title-row p { margin: 3px 0 0; color: var(--viewer-muted); font-size: 12px; }
@@ -951,5 +1261,79 @@ html, body, #root {
 
   .viewer-app.is-family-surface .viewer-header {
     padding-top: 24px;
+  }
+}
+
+.reme-life-event-detail ul {
+  display: grid;
+  gap: 4px;
+  margin: 7px 0 0;
+  padding: 7px 0 0;
+  border-top: 1px solid #ebe2db;
+  list-style: none;
+}
+
+.reme-life-event-detail li { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 7px; color: #6f6964; font-size: 9px; }
+.reme-life-event-detail li time { color: #9a6c4e; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 560px) {
+  .viewer-app.is-family-surface.is-timeline-tab {
+    padding-top: calc(82px + env(safe-area-inset-top));
+  }
+
+  .viewer-app.is-family-surface.is-timeline-tab .public-room-banner {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 164px);
+    gap: 6px;
+    min-height: 58px;
+    padding: 7px 9px;
+  }
+
+  .viewer-app.is-family-surface.is-timeline-tab .public-room-label { gap: 7px; }
+  .viewer-app.is-family-surface.is-timeline-tab .public-room-label > svg { font-size: 19px; }
+  .viewer-app.is-family-surface.is-timeline-tab .public-room-label b { font-size: 10px; }
+  .viewer-app.is-family-surface.is-timeline-tab .public-room-label small { font-size: 8px; }
+  .viewer-app.is-family-surface.is-timeline-tab .public-room-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .viewer-app.is-family-surface.is-timeline-tab .public-room-stats > span { min-height: 25px; padding: 3px 4px; font-size: 8px; }
+  .viewer-app.is-family-surface.is-timeline-tab .viewer-shell { min-height: calc(100dvh - 82px - env(safe-area-inset-top)); }
+  .viewer-app.is-family-surface.is-timeline-tab .viewer-header { min-height: 62px; padding-top: 9px; padding-bottom: 8px; }
+  .viewer-app.is-family-surface.is-timeline-tab .viewer-header h1 { font-size: 25px; }
+  .viewer-app.is-family-surface.is-timeline-tab .viewer-header p { font-size: 10px; }
+
+  .reme-week-strip { padding-top: 5px; padding-bottom: 11px; }
+  .reme-week-days button { min-height: 53px; }
+  .reme-memory-week { margin-top: 10px; }
+  .reme-memory-week-summary { min-height: 46px; padding-top: 7px; padding-bottom: 4px; }
+  .reme-memory-week-progress { padding-bottom: 8px; }
+  .reme-day-summary { margin-top: 14px; }
+  .reme-day-summary h2 { font-size: 17px; line-height: 1.4; }
+  .reme-timeline-filter { margin-top: 10px; }
+  .reme-timeline-filter button { min-height: 40px; font-size: 14px; }
+  .reme-dayparts { gap: 8px; margin-top: 12px; }
+  .reme-daypart-heading { min-height: 49px; }
+  .reme-daypart-icon { width: 36px; height: 36px; }
+  .reme-daypart-icon svg { font-size: 21px; }
+  .reme-daypart-events { padding-right: 8px; padding-left: 8px; }
+  .reme-life-event-summary { min-height: 48px; }
+  .reme-life-event-icon { width: 34px; height: 34px; }
+  .reme-life-event-icon svg { font-size: 19px; }
+  .reme-care-card { min-height: 94px; }
+  .reme-care-response { min-height: 50px; }
+}
+
+@media (max-width: 360px) {
+  .viewer-app.is-family-surface.is-timeline-tab {
+    padding-top: calc(82px + env(safe-area-inset-top));
+  }
+
+  .viewer-app.is-family-surface.is-timeline-tab .public-room-banner {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 148px);
+  }
+
+  .viewer-app.is-family-surface.is-timeline-tab .public-room-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .viewer-app.is-family-surface.is-timeline-tab .viewer-shell {
+    min-height: calc(100dvh - 82px - env(safe-area-inset-top));
   }
 }

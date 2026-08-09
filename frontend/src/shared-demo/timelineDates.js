@@ -64,3 +64,9 @@ export function timelineDateHeading(dateKey, nowMs = Date.now()) {
     : `${date.getMonth() + 1}月${date.getDate()}日`;
   return `${prefix} · 星期${WEEKDAY_COPY[date.getDay()]}`;
 }
+
+export function timelineDateLongHeading(dateKey) {
+  const date = dateFromKey(dateKey);
+  if (!date) return "选择日期";
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 · 星期${WEEKDAY_COPY[date.getDay()]}`;
+}
