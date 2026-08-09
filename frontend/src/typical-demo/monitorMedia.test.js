@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createBoundedMediaSignalDispatcher,
   createMediaSignal,
   createMonitorMediaProducer,
   describeMediaConnectivity,
@@ -63,6 +64,8 @@ function context(overrides = {}) {
     sourceGeneration: 2,
     sceneId: "kitchen",
     stream: stream(),
+    authorized: true,
+    authorityKey: "kitchen_moment:decision-1",
     ...overrides,
   };
 }
@@ -181,6 +184,25 @@ test("浴室、错误场景、断线与不可远传媒体源无法激活 grant",
     ...context({ stream: null }),
     nowMs: 1_000,
   }).reason, "remote_stream_unavailable");
+  assert.equal(validateActiveGrantContext({
+    grantMessage: grant(),
+    ...context({ authorized: false }),
+    nowMs: 1_000,
+  }).reason, "media_authority_unavailable");
+});
+
+test("Monitor 媒体信令在 handler 就绪前有界缓存并按序交付", async () => {
+  const dispatcher = createBoundedMediaSignalDispatcher({ limit: 3 });
+  const delivered = [];
+  dispatcher.dispatch({ signal_type: "offer", from_id: "viewer-1" });
+  dispatcher.dispatch({ signal_type: "ice_candidate", from_id: "viewer-1" });
+  dispatcher.dispatch({ signal_type: "offer", from_id: "viewer-2" });
+  dispatcher.dispatch({ signal_type: "ice_candidate", from_id: "viewer-2" });
+  assert.equal(dispatcher.pendingCount, 3);
+  dispatcher.setHandler(async (value) => delivered.push(value));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(delivered.map((value) => value.from_id), ["viewer-1", "viewer-2", "viewer-2"]);
+  assert.deepEqual(delivered.map((value) => value.signal_type), ["offer", "offer", "ice_candidate"]);
 });
 
 test("每个 Viewer 建独立 PC，候选有界等待 offer 后再回答", async () => {
@@ -256,6 +278,29 @@ test("每个 Viewer 建独立 PC，候选有界等待 offer 后再回答", async
   assert.equal(producer.getSnapshot().connectivity, "local_network_only");
 });
 
+test("Monitor 发送 answer 返回 false 时关闭对应 peer 并显式失败", async () => {
+  FakePeerConnection.instances = [];
+  const producer = createMonitorMediaProducer({
+    RTCPeerConnectionImpl: FakePeerConnection,
+    sendSignal: () => false,
+    timerApi: fakeTimers(),
+    now: () => 1_000,
+  });
+  producer.activate({ grantMessage: grant(), ...context() });
+
+  const result = await producer.handleSignal(forwardedSignal("viewer-1", "offer", {
+    type: "offer",
+    sdp: "viewer-offer",
+  }));
+
+  assert.deepEqual(result, { ok: false, reason: "answer_signal_failed" });
+  assert.equal(FakePeerConnection.instances.length, 1);
+  assert.equal(FakePeerConnection.instances[0].closed, true);
+  assert.equal(producer.getSnapshot().peerCount, 0);
+  assert.equal(producer.getSnapshot().lastReason, "answer_signal_failed");
+  assert.match(producer.getSnapshot().error, /媒体回答/);
+});
+
 test("媒体源、场景、runtime session 或 Relay 状态变化立即关闭所有 PC", async () => {
   FakePeerConnection.instances = [];
   const localStream = stream();
@@ -279,6 +324,13 @@ test("媒体源、场景、runtime session 或 Relay 状态变化立即关闭所
   assert.equal(reason, "runtime_session_changed");
   assert.equal(FakePeerConnection.instances[0].closed, true);
   assert.equal(producer.getSnapshot().peerCount, 0);
+  assert.equal(producer.getSnapshot().activeGrant, null);
+
+  producer.activate({ grantMessage: grant(), ...context({ stream: localStream }) });
+  assert.equal(
+    producer.reconcile(context({ stream: localStream, authorized: false })),
+    "media_authority_changed",
+  );
   assert.equal(producer.getSnapshot().activeGrant, null);
 });
 

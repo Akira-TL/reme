@@ -171,6 +171,14 @@ export async function claimMonitor(relayUrl, fetchImpl = globalThis.fetch) {
     const error = new Error(payload?.error === "monitor_busy" ? "Monitor 正被另一设备占用" : "Relay claim 失败");
     error.code = payload?.error || `http_${response.status}`;
     error.retryAtMs = isFiniteNonNegative(payload?.retry_at_ms) ? payload.retry_at_ms : null;
+    error.serverTimeMs = isFiniteNonNegative(payload?.server_time_ms)
+      ? payload.server_time_ms
+      : null;
+    error.retryAfterMs = isFiniteNonNegative(payload?.retry_after_ms)
+      ? payload.retry_after_ms
+      : error.retryAtMs !== null && error.serverTimeMs !== null
+        ? Math.max(0, error.retryAtMs - error.serverTimeMs)
+        : null;
     throw error;
   }
   if (!validateClaim(payload)) {
@@ -622,10 +630,9 @@ export function createLatestPublicationQueue(send, canSend = () => true) {
       acceptedPoseSequence = -1;
     },
     transportInterrupted() {
-      // Never replay a possibly accepted revision after a lost ACK. The caller publishes
-      // a fresh revision after monitor_ready; this prevents stale state flowing backwards.
-      acceptedStateRevision = Math.max(acceptedStateRevision, stateInFlight ?? -1);
-      acceptedPoseSequence = Math.max(acceptedPoseSequence, poseInFlight ?? -1);
+      // An ACK may have been lost. Keep the last accepted cursors unchanged and
+      // retry the exact in-flight value after reconnect; Relay treats exact
+      // duplicate state/pose publications idempotently.
       stateInFlight = null;
       poseInFlight = null;
     },
@@ -692,6 +699,8 @@ function initialSnapshot(relayUrl) {
     connectionGeneration: 0,
     error: relayUrl ? null : "Relay URL 未配置",
     lastProtocolError: null,
+    acceptedStateRevision: -1,
+    serverTimeOffsetMs: 0,
   });
 }
 
@@ -723,6 +732,9 @@ export function createMonitorRelayClient({
   let heartbeatTimer = null;
   let reconnectTimer = null;
   let generation = 0;
+  let controlGeneration = 0;
+  let controlRevocationPending = false;
+  let commandChain = Promise.resolve();
   let callbacks = { onCommand, onMediaGrant, onMediaSignal, onEvent };
   const listeners = new Set();
   const handledCommands = new Map();
@@ -742,6 +754,10 @@ export function createMonitorRelayClient({
     return socket?.readyState === 1;
   }
 
+  function relayNow() {
+    return now() + (snapshot.serverTimeOffsetMs || 0);
+  }
+
   function canPublish() {
     return snapshot.status === "connected"
       && socketOpen()
@@ -750,8 +766,12 @@ export function createMonitorRelayClient({
 
   function send(value) {
     if (!socketOpen()) return false;
-    socket.send(serializeRelayMessage(value));
-    return true;
+    try {
+      socket.send(serializeRelayMessage(value));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   const publications = createLatestPublicationQueue(send, canPublish);
@@ -799,7 +819,7 @@ export function createMonitorRelayClient({
     reconnectTimer = timerApi.setTimeout(() => {
       reconnectTimer = null;
       if (!desiredActive) return;
-      if (claim?.expires_at_ms > now()) void connect(claim, true);
+      if (claim?.expires_at_ms > relayNow()) void connect(claim, true);
       else void start(true);
     }, delayMs);
   }
@@ -813,7 +833,7 @@ export function createMonitorRelayClient({
     if (!claim) return false;
     const ack = createExactControlAck({
       roomSessionId: claim.room_session_id,
-      timestampMs: parameters.timestampMs ?? now(),
+      timestampMs: parameters.timestampMs ?? relayNow(),
       ...parameters,
     });
     rememberHandledCommand(ack.command_id, ack.phase);
@@ -826,11 +846,12 @@ export function createMonitorRelayClient({
     return send(ack);
   }
 
-  async function dispatchCommand(command) {
+  async function dispatchCommand(command, expectedControlGeneration) {
     if (!claim || command.room_session_id !== claim.room_session_id) return;
+    if (expectedControlGeneration !== controlGeneration) return;
     if (handledCommands.has(command.command_id)) return;
     rememberHandledCommand(command.command_id);
-    if (command.expires_at_ms <= now()) {
+    if (command.expires_at_ms <= relayNow()) {
       sendControlAck({
         commandId: command.command_id,
         phase: "rejected",
@@ -841,6 +862,7 @@ export function createMonitorRelayClient({
     }
     try {
       const result = await callbacks.onCommand?.(command);
+      if (expectedControlGeneration !== controlGeneration) return;
       if (result?.phase) {
         sendControlAck({
           commandId: command.command_id,
@@ -850,6 +872,7 @@ export function createMonitorRelayClient({
         });
       }
     } catch (error) {
+      if (expectedControlGeneration !== controlGeneration) return;
       sendControlAck({
         commandId: command.command_id,
         phase: "failed",
@@ -898,6 +921,7 @@ export function createMonitorRelayClient({
         viewerCount: value.viewer_count,
         maxViewers: value.max_viewers,
         controller: value.controller,
+        serverTimeOffsetMs: value.server_time_ms - now(),
         error: null,
       });
       beginHeartbeat();
@@ -923,6 +947,9 @@ export function createMonitorRelayClient({
         && value.room_session_id === claim?.room_session_id
         && validController(value.controller)
         && isFiniteNonNegative(value.server_time_ms)) {
+        if (controlRevocationPending && value.controller === null) {
+          controlRevocationPending = false;
+        }
         update({ controller: value.controller });
       }
       return;
@@ -942,6 +969,12 @@ export function createMonitorRelayClient({
         && value.room_session_id === claim?.room_session_id
         && isNonNegativeInteger(value.state_revision)) {
         publications.acceptState(value.state_revision);
+        update({
+          acceptedStateRevision: Math.max(
+            snapshot.acceptedStateRevision,
+            value.state_revision,
+          ),
+        });
         flushAppliedAcks();
       }
       return;
@@ -955,7 +988,15 @@ export function createMonitorRelayClient({
       return;
     }
     if (validateControlCommand(value)) {
-      if (value.room_session_id === claim?.room_session_id) void dispatchCommand(value);
+      if (value.room_session_id === claim?.room_session_id && !controlRevocationPending) {
+        const commandGeneration = generation;
+        const commandControlGeneration = controlGeneration;
+        commandChain = commandChain.catch(() => undefined).then(() => {
+          if (commandGeneration !== generation
+            || commandControlGeneration !== controlGeneration) return undefined;
+          return dispatchCommand(value, commandControlGeneration);
+        });
+      }
       return;
     }
     if (validateMediaGrant(value)) {
@@ -987,7 +1028,9 @@ export function createMonitorRelayClient({
     clearTimers();
     closeSocket(1000, "connection_replaced");
     claim = nextClaim;
-    if (snapshot.roomSessionId !== claim.room_session_id) {
+    controlRevocationPending = false;
+    const roomChanged = snapshot.roomSessionId !== claim.room_session_id;
+    if (roomChanged) {
       publications.reset(claim.room_session_id, null);
       handledCommands.clear();
       appliedAcks.clear();
@@ -997,6 +1040,7 @@ export function createMonitorRelayClient({
       roomSessionId: claim.room_session_id,
       producerLeaseExpiresAtMs: claim.expires_at_ms,
       connectionGeneration,
+      ...(roomChanged ? { acceptedStateRevision: -1 } : {}),
       error: null,
     });
     return new Promise((resolve) => {
@@ -1022,6 +1066,8 @@ export function createMonitorRelayClient({
         if (generation !== connectionGeneration || socket !== nextSocket) return;
         socket = null;
         publications.transportInterrupted();
+        claimStore.clear();
+        claim = null;
         if (heartbeatTimer !== null) timerApi.clearInterval(heartbeatTimer);
         heartbeatTimer = null;
         callbacks.onMediaGrant?.(null);
@@ -1049,8 +1095,10 @@ export function createMonitorRelayClient({
     desiredActive = true;
     update({ status: reconnecting ? "reconnecting" : "claiming", error: null });
     try {
-      const stored = claimStore.load(relayUrl, now());
-      claim = stored || await claimMonitor(relayUrl, fetchImpl);
+      // Reloading the page also resets its monotonic state cursor. Reusing a
+      // stored token could reconnect to an older room revision and permanently
+      // conflict, so every explicit start obtains a fresh room session.
+      claim = await claimMonitor(relayUrl, fetchImpl);
       claimStore.save(claim);
       return connect(claim, reconnecting);
     } catch (error) {
@@ -1058,8 +1106,8 @@ export function createMonitorRelayClient({
         status: error?.code === "monitor_busy" ? "busy" : "error",
         error: error?.message || "Relay claim 失败",
       });
-      if (desiredActive && error?.retryAtMs) {
-        scheduleReconnect(Math.max(250, error.retryAtMs - now() + 50));
+      if (desiredActive && isFiniteNonNegative(error?.retryAfterMs)) {
+        scheduleReconnect(Math.max(250, error.retryAfterMs + 50));
       }
       return false;
     }
@@ -1085,11 +1133,11 @@ export function createMonitorRelayClient({
   }
 
   function publishState(value) {
-    return claim ? publications.offerState(value) : false;
+    return claim ? publications.offerState({ ...value, timestamp_ms: relayNow() }) : false;
   }
 
   function publishPose(value) {
-    return claim ? publications.offerPose(value) : false;
+    return claim ? publications.offerPose({ ...value, timestamp_ms: relayNow() }) : false;
   }
 
   function requestMediaGrant({ runtimeSessionId, eventId, scope, expiresInMs }) {
@@ -1116,6 +1164,18 @@ export function createMonitorRelayClient({
     }));
   }
 
+  function revokeControl() {
+    const sent = Boolean(claim && send({
+      type: "control_revoke",
+      room_session_id: claim.room_session_id,
+    }));
+    if (sent) {
+      controlGeneration += 1;
+      controlRevocationPending = true;
+    }
+    return sent;
+  }
+
   function sendMediaSignal(value) {
     if (!claim || !validMediaSignal(value, false)) return false;
     if (value.room_session_id !== claim.room_session_id || value.target_id === "monitor") return false;
@@ -1130,6 +1190,7 @@ export function createMonitorRelayClient({
     sendControlAck,
     requestMediaGrant,
     revokeMediaGrant,
+    revokeControl,
     sendMediaSignal,
     setCallbacks(next = {}) {
       callbacks = {

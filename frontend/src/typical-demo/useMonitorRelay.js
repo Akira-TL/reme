@@ -59,20 +59,20 @@ export function useMonitorRelay({
   useEffect(() => () => client.stop(), [client]);
 
   useEffect(() => {
-    if (!snapshot.roomSessionId || !stateEnvelope) return;
+    if (snapshot.status !== "connected" || !snapshot.roomSessionId || !stateEnvelope) return;
     const value = typeof stateEnvelope === "function"
       ? stateEnvelope(snapshot.roomSessionId)
       : stateEnvelope;
     if (value) client.publishState(value);
-  }, [client, snapshot.connectionGeneration, snapshot.roomSessionId, stateEnvelope]);
+  }, [client, snapshot.connectionGeneration, snapshot.roomSessionId, snapshot.status, stateEnvelope]);
 
   useEffect(() => {
-    if (!snapshot.roomSessionId || !poseFrame) return;
+    if (snapshot.status !== "connected" || !snapshot.roomSessionId || !poseFrame) return;
     const value = typeof poseFrame === "function"
       ? poseFrame(snapshot.roomSessionId)
       : poseFrame;
     if (value) client.publishPose(value);
-  }, [client, poseFrame, snapshot.roomSessionId]);
+  }, [client, poseFrame, snapshot.roomSessionId, snapshot.status]);
 
   const startDemo = useCallback(() => client.start(), [client]);
   const stopDemo = useCallback(() => client.stop(), [client]);
@@ -90,6 +90,7 @@ export function useMonitorRelay({
     (grantId) => client.revokeMediaGrant(grantId),
     [client],
   );
+  const revokeControl = useCallback(() => client.revokeControl(), [client]);
   const sendMediaSignal = useCallback(
     (signal) => client.sendMediaSignal(signal),
     [client],
@@ -105,6 +106,7 @@ export function useMonitorRelay({
     sendControlAck,
     requestMediaGrant,
     revokeMediaGrant,
+    revokeControl,
     sendMediaSignal,
   };
 }

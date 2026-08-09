@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDecisionRuntime } from "../hooks/useDecisionRuntime";
 import { usePerceptionRuntime } from "../hooks/usePerceptionRuntime";
 import { isFallSafetyDecision } from "./phoneState";
@@ -16,10 +16,12 @@ const TRIGGER_LABELS = {
   family_unresponsive: "家属未确认",
 };
 
-export function useFallLiveLink({ enabled, videoElement, sceneId }) {
+export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGeneration = 0 }) {
+  const [authorizationClockMs, setAuthorizationClockMs] = useState(() => performance.now());
   const perception = usePerceptionRuntime({
     videoElement,
     sceneId,
+    sourceGeneration,
     enabled: Boolean(enabled && videoElement),
   });
   const decision = useDecisionRuntime({
@@ -29,18 +31,32 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     enabled: Boolean(enabled && videoElement),
   });
   const current = decision.decision?.scene_id === sceneId ? decision.decision : null;
-  const fallEpisodeActive = useMemo(
-    () => [current, ...decision.history]
-      .some((item) => item?.scene_id === sceneId && isFallSafetyDecision(item)),
-    [current, decision.history, sceneId],
+  const latchedSafetyDecision = decision.safetyLatch?.scene_id === sceneId
+    ? decision.safetyLatch
+    : null;
+  const currentAuthority = Boolean(
+    current
+      && ["family_notification_required", "urgent_attention"].includes(current.state),
   );
-  const kitchenConsentActive = useMemo(
-    () => [current, ...decision.history].some((item) => (
-      item?.scene_id === "kitchen"
-      && item.action === "notify_family"
-      && Boolean(item.family_notification)
-    )),
-    [current, decision.history],
+  const fallEpisodeActive = useMemo(
+    () => [current, latchedSafetyDecision, ...decision.history]
+      .some((item) => item?.scene_id === sceneId && isFallSafetyDecision(item)),
+    [current, decision.history, latchedSafetyDecision, sceneId],
+  );
+  useEffect(() => {
+    const expiresAtMs = decision.mediaAuthorization?.expiresAtMonotonicMs;
+    if (!Number.isFinite(expiresAtMs)) return undefined;
+    const remainingMs = Math.max(0, expiresAtMs - performance.now());
+    const timer = window.setTimeout(
+      () => setAuthorizationClockMs(expiresAtMs),
+      remainingMs + 5,
+    );
+    return () => window.clearTimeout(timer);
+  }, [decision.mediaAuthorization?.expiresAtMonotonicMs]);
+
+  const kitchenConsentActive = Boolean(
+    decision.mediaAuthorization?.sceneId === "kitchen"
+      && decision.mediaAuthorization.expiresAtMonotonicMs > authorizationClockMs,
   );
 
   const active = Boolean(
@@ -50,7 +66,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
   );
 
   const phase = useMemo(() => {
-    if (!enabled || !active) return "idle";
+    if (!enabled) return "idle";
     if (current && fallEpisodeActive) {
       if (current.state === "check_in_required") return "checking";
       if (["family_notification_required", "urgent_attention"].includes(current.state)) {
@@ -58,6 +74,8 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
       }
       if (current.state === "resolved") return "resolved";
     }
+    if (latchedSafetyDecision) return "emergency";
+    if (!active) return "idle";
     // 决策尚未跟上最新转移时短暂显示"候选"；check-in 一到即被上面的分支接管。
     const transition = perception.transition;
     if (
@@ -67,14 +85,17 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
       return "candidate";
     }
     return "idle";
-  }, [active, current, enabled, fallEpisodeActive, perception.transition]);
+  }, [active, current, enabled, fallEpisodeActive, latchedSafetyDecision, perception.transition]);
 
   const fallState = useMemo(() => {
-    if (!active) return null;
-    const trigger = current?.alarm ? TRIGGER_LABELS[current.alarm.trigger] || "" : "";
-    const decisionMessage = current?.family_notification
-      || current?.elder_message
-      || current?.reason_summary
+    if (!enabled) return null;
+    const displayDecision = currentAuthority ? current : latchedSafetyDecision || current;
+    const trigger = displayDecision?.alarm
+      ? TRIGGER_LABELS[displayDecision.alarm.trigger] || ""
+      : "";
+    const decisionMessage = displayDecision?.family_notification
+      || displayDecision?.elder_message
+      || displayDecision?.reason_summary
       || "";
     switch (phase) {
       case "checking":
@@ -100,7 +121,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
           message: "统一运行时链路已接入：请在镜头前演示跌倒动作，无需按键触发",
         };
     }
-  }, [active, current, phase]);
+  }, [current, currentAuthority, enabled, latchedSafetyDecision, phase]);
 
   const respondSafe = useCallback((decisionId = null) => {
     return decision.respondSafe(decisionId);
@@ -118,7 +139,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
 
   const familyVideoAllowed = Boolean(active && (
     (sceneId === "kitchen" && kitchenConsentActive)
-    || (sceneId === "fall" && phase === "emergency")
+    || (sceneId === "fall" && phase === "emergency" && currentAuthority)
   ));
   const emergencyNote = sceneId === "bathroom"
     ? "浴室永不开放原画"
@@ -134,6 +155,10 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     showEmergencyVideo: familyVideoAllowed,
     familyVideoAllowed,
     kitchenConsentActive,
+    currentAuthority,
+    safetyDecision: currentAuthority ? current : latchedSafetyDecision,
+    mediaAuthorization: decision.mediaAuthorization,
+    fallMediaAuthorization: decision.fallMediaAuthorization,
     connection: decision.connection,
     perceptionState: perception.runtime.state,
     runtime: perception.runtime,
@@ -146,6 +171,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId }) {
     respondConsentGranted: decision.respondConsentGranted,
     respondConsentDenied: decision.respondConsentDenied,
     startDemoConversation: decision.startDemoConversation,
+    switchScene: decision.switchScene,
     confirmAlarm,
     resetSceneState: decision.resetSceneState,
     replayVoice: decision.replayVoice,

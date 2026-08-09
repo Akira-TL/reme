@@ -2,6 +2,7 @@ import LockRoundedIcon from "@mui/icons-material/LockRounded";
 import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import VideocamOffRoundedIcon from "@mui/icons-material/VideocamOffRounded";
 import { useEffect, useRef } from "react";
+import { isPoseFresh } from "./viewerState.js";
 
 const EDGES = Object.freeze([
   [0, 1], [0, 2], [1, 3], [2, 4],
@@ -60,13 +61,13 @@ export function SkeletonStage({
   revealVideo,
   highPrivacyEnabled,
   grant,
-  nowMs,
+  localNowMs,
   relayConnected,
   runtimeStatus,
   onRetryPlayback,
 }) {
   const canvasRef = useRef(null);
-  const frameFresh = Boolean(pose && nowMs - pose.timestamp_ms <= 2_500);
+  const frameFresh = isPoseFresh(pose, localNowMs);
   const visiblePose = frameFresh ? pose : null;
   const videoLive = revealVideo && mediaStatus === "live";
 

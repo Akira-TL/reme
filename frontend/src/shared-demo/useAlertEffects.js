@@ -8,7 +8,7 @@ function getAudioContext(contextRef) {
   return contextRef.current;
 }
 
-async function playAlarm(contextRef) {
+async function playAlarm(contextRef, activeNodesRef) {
   const context = getAudioContext(contextRef);
   if (!context) return false;
   try {
@@ -25,6 +25,8 @@ async function playAlarm(contextRef) {
       gain.gain.exponentialRampToValueAtTime(0.14, start + offset + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.19);
       oscillator.connect(gain).connect(context.destination);
+      activeNodesRef.current.add(oscillator);
+      oscillator.onended = () => activeNodesRef.current.delete(oscillator);
       oscillator.start(start + offset);
       oscillator.stop(start + offset + 0.2);
     }
@@ -38,6 +40,7 @@ export function useAlertEffects({ enabled, emergency, decisionId }) {
   const contextRef = useRef(null);
   const notifiedRef = useRef(null);
   const flashTimerRef = useRef(0);
+  const activeNodesRef = useRef(new Set());
   const [flashActive, setFlashActive] = useState(false);
   const [soundBlocked, setSoundBlocked] = useState(false);
 
@@ -58,7 +61,20 @@ export function useAlertEffects({ enabled, emergency, decisionId }) {
     if (!enabled) {
       window.clearTimeout(flashTimerRef.current);
       navigator.vibrate?.(0);
-      return;
+      notifiedRef.current = null;
+      for (const oscillator of activeNodesRef.current) {
+        try {
+          oscillator.stop();
+        } catch {
+          // A scheduled oscillator may already have stopped.
+        }
+      }
+      activeNodesRef.current.clear();
+      const resetTimer = window.setTimeout(() => {
+        setFlashActive(false);
+        setSoundBlocked(false);
+      }, 0);
+      return () => window.clearTimeout(resetTimer);
     }
     if (!emergency || !decisionId) return;
     const key = `${decisionId}:emergency`;
@@ -68,17 +84,26 @@ export function useAlertEffects({ enabled, emergency, decisionId }) {
     window.setTimeout(() => setFlashActive(true), 0);
     window.clearTimeout(flashTimerRef.current);
     flashTimerRef.current = window.setTimeout(() => setFlashActive(false), 2400);
-    void playAlarm(contextRef).then((played) => setSoundBlocked(!played));
+    void playAlarm(contextRef, activeNodesRef).then((played) => setSoundBlocked(!played));
+    return undefined;
   }, [decisionId, emergency, enabled]);
 
   useEffect(() => () => {
     window.clearTimeout(flashTimerRef.current);
     navigator.vibrate?.(0);
+    for (const oscillator of activeNodesRef.current) {
+      try {
+        oscillator.stop();
+      } catch {
+        // Continue stopping the remaining alert nodes.
+      }
+    }
+    activeNodesRef.current.clear();
     void contextRef.current?.close?.();
   }, []);
 
   const retrySound = useCallback(async () => {
-    const played = await playAlarm(contextRef);
+    const played = await playAlarm(contextRef, activeNodesRef);
     setSoundBlocked(!played);
     return played;
   }, []);

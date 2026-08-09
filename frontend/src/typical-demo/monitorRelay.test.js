@@ -176,6 +176,28 @@ test("producer claim 使用无 body POST，token 只保存到 sessionStorage 适
   assert.equal(store.load("http://127.0.0.1:8787", 32_000), null);
 });
 
+test("producer busy claim exposes a clock-skew-safe relative retry", async () => {
+  await assert.rejects(
+    () => claimMonitor("http://127.0.0.1:8787", async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: "monitor_busy",
+        retry_at_ms: 31_000,
+        server_time_ms: 1_000,
+        retry_after_ms: 30_000,
+      }),
+    })),
+    (error) => {
+      assert.equal(error.code, "monitor_busy");
+      assert.equal(error.retryAtMs, 31_000);
+      assert.equal(error.serverTimeMs, 1_000);
+      assert.equal(error.retryAfterMs, 30_000);
+      return true;
+    },
+  );
+});
+
 test("control_ack 与 Relay exact shape 对齐且 applied 必须带 revision", () => {
   const ack = createExactControlAck({
     roomSessionId: "room-1",
@@ -307,6 +329,18 @@ test("Monitor client 使用 generation 隔离迟到消息、10 秒 heartbeat 和
     reason: "local_confirmation_required",
   });
 
+  socket.message({
+    type: "controller_status",
+    room_session_id: "room-1",
+    controller: { viewer_id: "viewer-1", lease_id: "lease-1", expires_at_ms: 32_000 },
+    server_time_ms: 2_000,
+  });
+  assert.equal(client.revokeControl(), true);
+  assert.deepEqual(socket.sent.at(-1), {
+    type: "control_revoke",
+    room_session_id: "room-1",
+  });
+
   client.stop();
   currentNow = 4_000;
   socket.message({
@@ -319,6 +353,95 @@ test("Monitor client 使用 generation 隔离迟到消息、10 秒 heartbeat 和
   });
   assert.equal(client.getSnapshot().viewerCount, 0);
   assert.equal(client.getSnapshot().status, "idle");
+});
+
+test("fresh busy claim schedules reconnect from relative server delay despite local clock skew", async () => {
+  const timers = fakeTimers();
+  const client = createMonitorRelayClient({
+    relayUrl: "http://127.0.0.1:8787",
+    fetchImpl: async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: "monitor_busy",
+        retry_at_ms: 31_000,
+        server_time_ms: 1_000,
+        retry_after_ms: 30_000,
+      }),
+    }),
+    WebSocketImpl: FakeSocket,
+    claimStore: createSessionClaimStore(memoryStorage()),
+    timerApi: timers,
+    now: () => 9_000_000_000,
+  });
+
+  assert.equal(await client.start(), false);
+  assert.equal(client.getSnapshot().status, "busy");
+  assert.equal([...timers.timeouts.values()][0].milliseconds, 30_050);
+  client.stop();
+});
+
+test("Monitor reclaim cancels queued and late old-control commands", async () => {
+  FakeSocket.instances = [];
+  const received = [];
+  let releaseFirst;
+  const firstBlocked = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const client = createMonitorRelayClient({
+    relayUrl: "http://127.0.0.1:8787",
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        room_name: "shared-live-demo",
+        room_session_id: "room-1",
+        producer_token: TOKEN,
+        expires_at_ms: 31_000,
+      }),
+    }),
+    WebSocketImpl: FakeSocket,
+    claimStore: createSessionClaimStore(memoryStorage()),
+    timerApi: fakeTimers(),
+    now: () => 2_000,
+    async onCommand(value) {
+      received.push(value.command_id);
+      if (value.command_id === "command-first") await firstBlocked;
+      return { phase: "awaiting_local_confirmation", reason: "local_confirmation_required" };
+    },
+  });
+  const started = client.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const socket = FakeSocket.instances[0];
+  socket.open();
+  await started;
+  socket.message({
+    type: "monitor_ready",
+    room_name: "shared-live-demo",
+    room_session_id: "room-1",
+    expires_at_ms: 32_000,
+    viewer_count: 1,
+    max_viewers: 5,
+    controller: { viewer_id: "viewer-1", lease_id: "lease-1", expires_at_ms: 32_000 },
+    heartbeat_interval_ms: 10_000,
+    server_time_ms: 2_000,
+  });
+  socket.message(command("start_capture", { command_id: "command-first" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  socket.message(command("start_capture", {
+    command_id: "command-queued",
+    command_sequence: 2,
+  }));
+  assert.equal(client.revokeControl(), true);
+  socket.message(command("start_capture", {
+    command_id: "command-late",
+    command_sequence: 3,
+  }));
+  releaseFirst();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(received, ["command-first"]);
+  assert.equal(socket.sent.some((value) => value.command_id === "command-first"), false);
+  client.stop();
 });
 
 test("applied ACK 等待对应权威 state revision 被 Relay 接收", async () => {
@@ -373,5 +496,61 @@ test("applied ACK 等待对应权威 state revision 被 Relay 接收", async () 
     state_revision: 1,
     reason: null,
   });
+  client.stop();
+});
+
+test("Monitor uses Relay time for publications and never resumes a stored room after reload", async () => {
+  FakeSocket.instances = [];
+  const storage = memoryStorage();
+  const store = createSessionClaimStore(storage);
+  store.save({
+    relay_url: "http://127.0.0.1:8787",
+    room_name: "shared-live-demo",
+    room_session_id: "room-stale",
+    producer_token: TOKEN,
+    expires_at_ms: 99_000,
+  });
+  let claimRequests = 0;
+  const freshToken = "b".repeat(64);
+  const client = createMonitorRelayClient({
+    relayUrl: "http://127.0.0.1:8787",
+    fetchImpl: async () => {
+      claimRequests += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          room_name: "shared-live-demo",
+          room_session_id: "room-1",
+          producer_token: freshToken,
+          expires_at_ms: 32_000,
+        }),
+      };
+    },
+    WebSocketImpl: FakeSocket,
+    claimStore: store,
+    timerApi: fakeTimers(),
+    now: () => 10_000,
+  });
+  const started = client.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const socket = FakeSocket.instances[0];
+  assert.equal(claimRequests, 1);
+  assert.deepEqual(socket.protocols, ["reme-monitor-v1", `reme-token-${freshToken}`]);
+  socket.open();
+  await started;
+  socket.message({
+    type: "monitor_ready",
+    room_name: "shared-live-demo",
+    room_session_id: "room-1",
+    expires_at_ms: 32_000,
+    viewer_count: 0,
+    max_viewers: 5,
+    controller: null,
+    heartbeat_interval_ms: 10_000,
+    server_time_ms: 2_000,
+  });
+  assert.equal(client.getSnapshot().serverTimeOffsetMs, -8_000);
+  client.publishState(demoState(0));
+  assert.equal(socket.sent.at(-1).timestamp_ms, 2_000);
   client.stop();
 });

@@ -100,6 +100,23 @@ button, input { font: inherit; }
 .viewer-control-trigger.MuiIconButton-root { position: relative; width: 42px; height: 42px; border: 1px solid #ffd3b7; border-radius: 13px; color: var(--viewer-accent); background: #fff8f2; }
 .viewer-control-trigger > span { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border: 2px solid #fff; border-radius: 50%; background: #31a34a; }
 
+.viewer-state-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 18px 12px;
+  padding: 10px 12px;
+  border: 1px solid #dedad6;
+  border-radius: 13px;
+  color: #625e59;
+  background: #f5f4f2;
+}
+.viewer-state-unavailable.is-emergency { border-color: #ffc5c1; color: #b52626; background: #fff1f1; }
+.viewer-state-unavailable > svg { flex: 0 0 auto; }
+.viewer-state-unavailable b, .viewer-state-unavailable span { display: block; }
+.viewer-state-unavailable b { font-size: 11px; }
+.viewer-state-unavailable span { margin-top: 2px; font-size: 9px; line-height: 1.4; }
+
 .viewer-page { min-height: calc(100dvh - 260px); padding: 0 18px 108px; }
 
 .viewer-stage {

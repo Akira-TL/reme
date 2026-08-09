@@ -146,6 +146,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const [history, setHistory] = useState([]);
   const [deadline, setDeadline] = useState(null);
   const [alarm, setAlarm] = useState(null);
+  const [safetyLatch, setSafetyLatch] = useState(null);
+  const [mediaAuthorization, setMediaAuthorization] = useState(null);
+  const [fallMediaAuthorization, setFallMediaAuthorization] = useState(null);
   const [mimoRequest, setMimoRequest] = useState({
     status: "idle",
     scenario: null,
@@ -183,6 +186,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         setHistory([]);
         setDeadline(null);
         setAlarm(null);
+        setSafetyLatch(null);
+        setMediaAuthorization(null);
+        setFallMediaAuthorization(null);
         setMimoRequest({
           status: "idle",
           scenario: null,
@@ -711,7 +717,33 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         });
         if (!disposed) {
           const next = pluckDecision(result);
-          if (next) ingestDecision(next);
+          if (next) {
+            ingestDecision(next);
+            if (
+              response === "consent_granted"
+              && target.scene_id === "kitchen"
+              && next.scene_id === "kitchen"
+              && next.action === "notify_family"
+              && next.family_notification
+            ) {
+              const issuedAtMs = Date.now();
+              const issuedAtMonotonicMs = performance.now();
+              setMediaAuthorization({
+                sceneId: "kitchen",
+                requestDecisionId: target.decision_id,
+                decisionId: next.decision_id,
+                issuedAtMs,
+                expiresAtMs: issuedAtMs + 60_000,
+                issuedAtMonotonicMs,
+                expiresAtMonotonicMs: issuedAtMonotonicMs + 60_000,
+              });
+            } else if (
+              target.scene_id === "kitchen"
+              && (response === "consent_denied" || response === "none")
+            ) {
+              setMediaAuthorization(null);
+            }
+          }
         }
         return true;
       } catch {
@@ -738,6 +770,33 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       }
 
       latestDecision = payload;
+      if (
+        payload.scene_id === "fall"
+        && ["family_notification_required", "urgent_attention"].includes(payload.state)
+      ) {
+        setSafetyLatch(payload);
+        setFallMediaAuthorization((current) => {
+          if (current?.sceneId === "fall") {
+            return { ...current, decisionId: payload.decision_id };
+          }
+          const issuedAtMs = Date.now();
+          const issuedAtMonotonicMs = performance.now();
+          return {
+            sceneId: "fall",
+            decisionId: payload.decision_id,
+            issuedAtMs,
+            expiresAtMs: issuedAtMs + 30_000,
+            issuedAtMonotonicMs,
+            expiresAtMonotonicMs: issuedAtMonotonicMs + 30_000,
+          };
+        });
+      } else if (payload.scene_id === "fall" && payload.state === "resolved") {
+        setSafetyLatch(null);
+        setFallMediaAuthorization(null);
+      }
+      if (payload.scene_id === "kitchen" && payload.state === "consent_required") {
+        setMediaAuthorization(null);
+      }
       setDecision(payload);
       setHistory((current) => [payload, ...current].slice(0, 5));
 
@@ -870,6 +929,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           clearAlarmState();
           clearCountdown();
           setDecision(null);
+          setSafetyLatch(null);
+          setMediaAuthorization(null);
+          setFallMediaAuthorization(null);
           setHistory([]);
           setMimoRequest({
             status: "idle",
@@ -972,6 +1034,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             clearAlarmState();
             clearCountdown();
             setDecision(null);
+            setSafetyLatch(null);
+            setMediaAuthorization(null);
+            setFallMediaAuthorization(null);
             setHistory([]);
           })
           .catch((error) => {
@@ -1007,6 +1072,8 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       setConnection("connecting");
       setReason("");
       setDecision(null);
+      setMediaAuthorization(null);
+      setFallMediaAuthorization(null);
       setHistory([]);
       setDeadline(null);
       setAlarm(null);
@@ -1091,6 +1158,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
   const startDemoConversation = useCallback((scenario) => (
     apiRef.current.startDemoConversation?.(scenario) || Promise.resolve(null)
   ), []);
+  const switchScene = useCallback((nextSceneId) => (
+    apiRef.current.switchScene?.(nextSceneId) || Promise.resolve()
+  ), []);
   const confirmAlarm = useCallback((decisionId = null) => {
     const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
     return apiRef.current.confirmAlarm?.(expectedDecisionId)
@@ -1118,12 +1188,16 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     history,
     deadline,
     alarm,
+    safetyLatch,
+    mediaAuthorization,
+    fallMediaAuthorization,
     mimoRequest,
     respondSafe,
     respondNeedHelp,
     respondConsentGranted,
     respondConsentDenied,
     startDemoConversation,
+    switchScene,
     confirmAlarm,
     dismissAlarm,
     replayVoice,

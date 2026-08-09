@@ -70,6 +70,13 @@ const RUNTIME_COPY = Object.freeze({
   error: "本地运行时异常",
 });
 
+const UNAVAILABLE_COPY = Object.freeze({
+  monitor_offline: "Monitor 已离线，当前状态不可用",
+  stale: "Relay 判定状态已过期，等待新的权威快照",
+  not_published: "Monitor 尚未发布当前权威状态",
+  protocol_invalid: "Relay 消息不符合协议，旧状态已停止使用",
+});
+
 const ACK_COPY = Object.freeze({
   sent: "已发送，等待 Relay 回执",
   received: "Relay 已接收",
@@ -111,6 +118,13 @@ function secondsRemaining(deadlineMs, nowMs) {
   return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));
 }
 
+function unavailableCopy(relay) {
+  if (relay.latestProtocolError && relay.unavailableReason === "protocol_invalid") {
+    return `协议校验失败：${relay.latestProtocolError}`;
+  }
+  return UNAVAILABLE_COPY[relay.unavailableReason] || "当前权威状态不可用";
+}
+
 function readStoredBoolean(key, fallback) {
   try {
     const stored = window.localStorage.getItem(key);
@@ -143,7 +157,9 @@ function ConnectionBanner({ relay, grant, nowMs }) {
       <div className="public-room-stats">
         <span><b>{relay.viewerCount}</b> / {relay.maxViewers} 在线</span>
         <span className={grant ? "is-video-live" : ""}>
-          {grant ? `原画开放 ${remaining}s · 全部 Viewer 可见` : "日常仅同步骨架与状态"}
+          {grant
+            ? `原画开放 ${remaining}s · 全部 Viewer 可见`
+            : relay.unavailableReason ? "当前权威状态不可用" : "日常仅同步骨架与状态"}
         </span>
       </div>
     </aside>
@@ -156,6 +172,18 @@ function StatusCard({ snapshot, relay }) {
   const runtime = snapshot?.state.runtime;
   const capture = snapshot?.state.capture;
   const status = (() => {
+    if (relay.unavailableReason && care?.phase === "emergency") return {
+      tone: "danger",
+      Icon: EmergencyRoundedIcon,
+      title: "上次紧急告警 · 当前状态已过期",
+      body: `${care.message || "曾收到权威紧急告警"}；${unavailableCopy(relay)}。请勿把它当作当前现场状态。`,
+    };
+    if (relay.unavailableReason) return {
+      tone: "offline",
+      Icon: HealthAndSafetyRoundedIcon,
+      title: "当前状态不可用",
+      body: `${unavailableCopy(relay)}；不会继续把上一次“正常”状态显示为最新事实。`,
+    };
     if (!relay.monitorOnline) return {
       tone: "offline",
       Icon: ShieldRoundedIcon,
@@ -209,15 +237,20 @@ function FamilyTimeline({ snapshot, relay }) {
   const scene = SCENE_COPY[sceneId];
   const care = snapshot?.state.care;
   const capture = snapshot?.state.capture;
+  const unavailable = Boolean(relay.unavailableReason);
   const rows = [
     {
-      time: formatTime(snapshot?.timestamp_ms),
-      text: care?.message || `当前位于${scene.room}，${CAPTURE_COPY[capture?.status] || "等待状态"}`,
+      time: unavailable ? "状态" : formatTime(snapshot?.timestamp_ms),
+      text: unavailable
+        ? unavailableCopy(relay)
+        : care?.message || `当前位于${scene.room}，${CAPTURE_COPY[capture?.status] || "等待状态"}`,
       active: true,
     },
     {
       time: "当前",
-      text: relay.monitorOnline ? RUNTIME_COPY[snapshot?.state.runtime.status] || "等待本地运行时" : "Monitor 当前离线",
+      text: unavailable
+        ? "旧状态、旧骨架与旧原画均不作为当前事实"
+        : relay.monitorOnline ? RUNTIME_COPY[snapshot?.state.runtime.status] || "等待本地运行时" : "Monitor 当前离线",
     },
     {
       time: "房间",
@@ -240,7 +273,16 @@ function FamilyTimeline({ snapshot, relay }) {
   );
 }
 
-function HomePage({ relay, snapshot, pose, media, activeGrant, highPrivacyEnabled, nowMs }) {
+function HomePage({
+  relay,
+  snapshot,
+  pose,
+  media,
+  activeGrant,
+  highPrivacyEnabled,
+  localNowMs,
+  relayNowMs,
+}) {
   const sceneId = snapshot?.state.scene_id || "living";
   return (
     <main className="viewer-page viewer-home-page">
@@ -252,8 +294,8 @@ function HomePage({ relay, snapshot, pose, media, activeGrant, highPrivacyEnable
         revealVideo={Boolean(activeGrant && !highPrivacyEnabled)}
         highPrivacyEnabled={highPrivacyEnabled}
         grant={activeGrant}
-        nowMs={nowMs}
-        relayConnected={relay.connection === "connected" && relay.monitorOnline}
+        localNowMs={localNowMs}
+        relayConnected={relay.connection === "connected" && relay.monitorOnline && !relay.unavailableReason}
         runtimeStatus={snapshot?.state.runtime.status}
         onRetryPlayback={media.retryPlayback}
       />
@@ -262,7 +304,7 @@ function HomePage({ relay, snapshot, pose, media, activeGrant, highPrivacyEnable
           <VideocamRoundedIcon />
           <div>
             <b>{highPrivacyEnabled ? "本页已主动隐藏授权原画" : "事件期原画已向全部在线 Viewer 开放"}</b>
-            <span>{secondsRemaining(activeGrant.expires_at_ms, nowMs)} 秒后自动关闭 · {media.error || "RTP 不经过 Relay 存储"}</span>
+            <span>{secondsRemaining(activeGrant.expires_at_ms, relayNowMs)} 秒后自动关闭 · {media.error || "RTP 不经过 Relay 存储"}</span>
           </div>
         </div>
       )}
@@ -288,7 +330,7 @@ function DashboardPage({ relay, snapshot, activeGrant, nowMs }) {
         <h2>本次同步摘要</h2>
         <div className="summary-metrics">
           <div><GroupsRoundedIcon /><b>{relay.viewerCount}</b><span>在线 Viewer</span></div>
-          <div><DashboardRoundedIcon /><b>{snapshot?.state_revision ?? "—"}</b><span>状态 revision</span></div>
+          <div><DashboardRoundedIcon /><b>{relay.unavailableReason ? "不可用" : snapshot?.state_revision ?? "—"}</b><span>状态 revision</span></div>
           <div><VideocamRoundedIcon /><b>{activeGrant ? `${secondsRemaining(activeGrant.expires_at_ms, nowMs)}s` : "关闭"}</b><span>原画窗口</span></div>
         </div>
         <p><LockRoundedIcon /> 固定公开演示房间；这些数字不是医疗指标或准确率。</p>
@@ -375,10 +417,10 @@ function CommandButton({ icon: Icon, children, onClick, disabled, tone = "defaul
 
 function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueError }) {
   const desktop = useMediaQuery("(min-width: 900px)");
-  const disabled = !relay.ownsControl || !snapshot;
+  const pending = hasPendingCommand(relay);
+  const disabled = !relay.ownsControl || !snapshot || pending;
   const decisionId = snapshot?.state.care.decision_id;
   const leaseSeconds = relay.ownsControl ? secondsRemaining(relay.lease?.expires_at_ms, nowMs) : 0;
-  const pending = hasPendingCommand(relay);
   return (
     <Drawer
       anchor={desktop ? "right" : "bottom"}
@@ -461,21 +503,22 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
   );
 }
 
-function EmergencyDialog({ open, onClose, care, activeGrant, nowMs, ownsControl, onIssue, soundBlocked, onRetrySound }) {
+function EmergencyDialog({ open, onClose, care, activeGrant, nowMs, ownsControl, onIssue, soundBlocked, onRetrySound, stale }) {
   if (!care) return null;
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth slotProps={{ paper: { className: "emergency-dialog" } }}>
       <IconButton className="emergency-close" onClick={onClose} aria-label="收起紧急提醒"><CloseRoundedIcon /></IconButton>
       <span className="emergency-dialog-mark"><EmergencyRoundedIcon /></span>
-      <small>紧急风险提醒</small>
-      <h2>检测到需要关注的安全事件</h2>
+      <small>{stale ? "历史紧急告警 · 当前状态不可用" : "紧急风险提醒"}</small>
+      <h2>{stale ? "上次检测到需要关注的安全事件" : "检测到需要关注的安全事件"}</h2>
       <p>{care.message || "权威规则已升级并通知家属，请尽快确认。"}</p>
+      {stale && <p role="status">该告警被安全锁存，但已不是当前现场状态；请等待新的权威快照。</p>}
       <div className="emergency-dialog-context">
         <AlarmRoundedIcon />
         <div><b>{activeGrant ? `原画开放还剩 ${secondsRemaining(activeGrant.expires_at_ms, nowMs)} 秒` : "当前保持匿名骨架"}</b><span>固定公开房间内全部在线 Viewer 可见授权原画</span></div>
       </div>
-      <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={!ownsControl || !care.decision_id} onClick={() => onIssue({ name: "confirm_alarm", decision_id: care.decision_id })}>确认已收到告警</Button>
-      <Button variant="outlined" startIcon={<VolumeUpRoundedIcon />} disabled={!ownsControl || !care.decision_id} onClick={() => onIssue({ name: "replay_voice", decision_id: care.decision_id })}>重播现场问询</Button>
+      <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={stale || !ownsControl || !care.decision_id} onClick={() => onIssue({ name: "confirm_alarm", decision_id: care.decision_id })}>确认已收到告警</Button>
+      <Button variant="outlined" startIcon={<VolumeUpRoundedIcon />} disabled={stale || !ownsControl || !care.decision_id} onClick={() => onIssue({ name: "replay_voice", decision_id: care.decision_id })}>重播现场问询</Button>
       {soundBlocked && <Button variant="text" onClick={onRetrySound}>点击启用本页告警声音</Button>}
       {!ownsControl && <small className="emergency-control-note">接管控制后才能提交处理命令；告警本身始终可见。</small>}
     </Dialog>
@@ -498,10 +541,11 @@ export function ViewerApp() {
   }, []);
 
   const snapshot = relay.state;
+  const relayNowMs = nowMs + (relay.serverTimeOffsetMs || 0);
   const sceneId = snapshot?.state.scene_id || "living";
   const activeGrant = useMemo(
-    () => selectActiveMediaGrant(relay, nowMs),
-    [nowMs, relay],
+    () => selectActiveMediaGrant(relay, relayNowMs),
+    [relay, relayNowMs],
   );
   const media = useViewerMedia({
     grant: activeGrant,
@@ -514,6 +558,7 @@ export function ViewerApp() {
     sendMediaSignal: relay.sendMediaSignal,
   });
   const emergency = snapshot?.state.care.phase === "emergency";
+  const emergencyStale = Boolean(emergency && (relay.stateStale || relay.unavailableReason));
   const decisionId = snapshot?.state.care.decision_id;
   const alertEffects = useAlertEffects({
     enabled: notificationsEnabled,
@@ -529,7 +574,9 @@ export function ViewerApp() {
   };
 
   const headerSubtitle = activeTab === "home"
-    ? `${SCENE_COPY[sceneId].label} · ${relay.connection === "connected" ? "Relay 已连接" : "正在重连"}`
+    ? relay.unavailableReason
+      ? "当前权威状态不可用 · 等待恢复"
+      : `${SCENE_COPY[sceneId].label} · ${relay.connection === "connected" ? "Relay 已连接" : "正在重连"}`
     : activeTab === "dashboard"
       ? "外婆 · 本次公开演示"
       : "管理本页显示与提醒";
@@ -537,7 +584,7 @@ export function ViewerApp() {
   return (
     <div className={`viewer-app ${alertEffects.flashActive ? "is-flashing" : ""}`}>
       <div className="alert-flash-layer" aria-hidden="true" />
-      <ConnectionBanner relay={relay} grant={activeGrant} nowMs={nowMs} />
+      <ConnectionBanner relay={relay} grant={activeGrant} nowMs={relayNowMs} />
       <div className="viewer-shell">
         <header className="viewer-header">
           <div><h1>{activeTab === "home" ? "外婆家" : activeTab === "dashboard" ? "关怀看板" : "设置"}</h1><p>{headerSubtitle}</p></div>
@@ -547,8 +594,15 @@ export function ViewerApp() {
           </IconButton>
         </header>
 
-        {activeTab === "home" && <HomePage relay={relay} snapshot={snapshot} pose={relay.pose} media={media} activeGrant={activeGrant} highPrivacyEnabled={highPrivacyEnabled} nowMs={nowMs} />}
-        {activeTab === "dashboard" && <DashboardPage relay={relay} snapshot={snapshot} activeGrant={activeGrant} nowMs={nowMs} />}
+        {relay.unavailableReason && (
+          <aside className={`viewer-state-unavailable ${emergencyStale ? "is-emergency" : ""}`} role="alert">
+            <HealthAndSafetyRoundedIcon />
+            <div><b>{emergencyStale ? "历史紧急告警已锁存，当前状态不可用" : "当前状态不可用"}</b><span>{unavailableCopy(relay)}</span></div>
+          </aside>
+        )}
+
+        {activeTab === "home" && <HomePage relay={relay} snapshot={snapshot} pose={relay.pose} media={media} activeGrant={activeGrant} highPrivacyEnabled={highPrivacyEnabled} localNowMs={nowMs} relayNowMs={relayNowMs} />}
+        {activeTab === "dashboard" && <DashboardPage relay={relay} snapshot={snapshot} activeGrant={activeGrant} nowMs={relayNowMs} />}
         {activeTab === "settings" && (
           <SettingsPage
             relay={relay}
@@ -570,17 +624,18 @@ export function ViewerApp() {
         <TuneRoundedIcon /><span>{relay.ownsControl ? "远程控制中" : "打开路演控制"}</span>
       </button>
 
-      <ControlDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} relay={relay} snapshot={snapshot} nowMs={nowMs} onIssue={issueCommand} issueError={issueError} />
+      <ControlDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} relay={relay} snapshot={snapshot} nowMs={relayNowMs} onIssue={issueCommand} issueError={issueError} />
       <EmergencyDialog
         open={Boolean(emergency && decisionId !== dismissedEmergency)}
         onClose={() => setDismissedEmergency(decisionId)}
         care={snapshot?.state.care}
         activeGrant={activeGrant}
-        nowMs={nowMs}
+        nowMs={relayNowMs}
         ownsControl={relay.ownsControl}
         onIssue={issueCommand}
         soundBlocked={alertEffects.soundBlocked}
         onRetrySound={alertEffects.retrySound}
+        stale={emergencyStale}
       />
     </div>
   );

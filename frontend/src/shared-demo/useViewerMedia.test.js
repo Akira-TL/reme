@@ -1,6 +1,54 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeIceCandidate } from "./useViewerMedia.js";
+import {
+  canViewerMediaBecomeLive,
+  classifyViewerConnectionState,
+  createNegotiationWatchdog,
+  createRecvOnlyOffer,
+  hasLiveVideoTrack,
+  normalizeIceCandidate,
+  VIEWER_DISCONNECT_GRACE_MS,
+  VIEWER_NEGOTIATION_TIMEOUT_MS,
+} from "./useViewerMedia.js";
+
+class FakeViewerPeer {
+  constructor() {
+    this.transceivers = [];
+    this.localDescription = null;
+  }
+
+  addTransceiver(kind, options) {
+    this.transceivers.push({ kind, options });
+  }
+
+  async createOffer() {
+    return { type: "offer", sdp: "viewer-recvonly-offer" };
+  }
+
+  async setLocalDescription(description) {
+    this.localDescription = description;
+  }
+}
+
+function fakeTimers() {
+  const timeouts = new Map();
+  let nextId = 1;
+  return {
+    setTimeout(callback, milliseconds) {
+      const id = nextId++;
+      timeouts.set(id, { callback, milliseconds });
+      return id;
+    },
+    clearTimeout(id) {
+      timeouts.delete(id);
+    },
+    runAll() {
+      for (const { callback } of [...timeouts.values()]) callback();
+      timeouts.clear();
+    },
+    timeouts,
+  };
+}
 
 test("ICE normalization always emits the exact nullable wire shape", () => {
   assert.deepEqual(normalizeIceCandidate({
@@ -32,4 +80,112 @@ test("ICE normalization uses toJSON without leaking extension keys", () => {
     sdpMLineIndex: 1,
     usernameFragment: "ufrag",
   });
+});
+
+test("Viewer creates the offer with one recvonly video transceiver", async () => {
+  const peer = new FakeViewerPeer();
+  const offer = await createRecvOnlyOffer(peer);
+  assert.deepEqual(peer.transceivers, [{
+    kind: "video",
+    options: { direction: "recvonly" },
+  }]);
+  assert.deepEqual(offer, { type: "offer", sdp: "viewer-recvonly-offer" });
+  assert.deepEqual(peer.localDescription, offer);
+});
+
+test("Viewer fails closed when recvonly negotiation is unavailable", async () => {
+  await assert.rejects(
+    createRecvOnlyOffer({ createOffer() {} }),
+    /recvonly transceiver/,
+  );
+});
+
+test("Viewer negotiation timeout closes the peer and falls back to skeleton", () => {
+  const timers = fakeTimers();
+  const peer = { closed: false, close() { this.closed = true; } };
+  let status = "connecting";
+  let mode = "video";
+  const watchdog = createNegotiationWatchdog({
+    timerApi: timers,
+    onTimeout() {
+      peer.close();
+      status = "failed";
+      mode = "skeleton";
+    },
+  });
+
+  assert.equal(watchdog.start(), true);
+  assert.equal(timers.timeouts.size, 1);
+  assert.equal([...timers.timeouts.values()][0].milliseconds, VIEWER_NEGOTIATION_TIMEOUT_MS);
+  assert.ok(VIEWER_NEGOTIATION_TIMEOUT_MS >= 5_000);
+  assert.ok(VIEWER_NEGOTIATION_TIMEOUT_MS <= 8_000);
+
+  timers.runAll();
+  assert.equal(peer.closed, true);
+  assert.equal(status, "failed");
+  assert.equal(mode, "skeleton");
+});
+
+test("Viewer live success clears the generation negotiation timeout", () => {
+  const timers = fakeTimers();
+  let timeoutCount = 0;
+  const watchdog = createNegotiationWatchdog({
+    timerApi: timers,
+    onTimeout() { timeoutCount += 1; },
+  });
+
+  watchdog.start();
+  assert.equal(watchdog.complete(), true);
+  assert.equal(timers.timeouts.size, 0);
+  timers.runAll();
+  assert.equal(timeoutCount, 0);
+  assert.equal(watchdog.complete(), false);
+});
+
+test("connected is live only when a non-ended video track exists", () => {
+  const connected = { connectionState: "connected" };
+  assert.equal(canViewerMediaBecomeLive(connected, null), false);
+  assert.equal(canViewerMediaBecomeLive(connected, {
+    getTracks: () => [{ kind: "audio", readyState: "live" }],
+  }), false);
+  assert.equal(canViewerMediaBecomeLive(connected, {
+    getVideoTracks: () => [{ kind: "video", readyState: "ended" }],
+  }), false);
+  const stream = {
+    getVideoTracks: () => [{ kind: "video", readyState: "live" }],
+  };
+  assert.equal(hasLiveVideoTrack(stream), true);
+  assert.equal(canViewerMediaBecomeLive(connected, stream), true);
+  assert.equal(canViewerMediaBecomeLive({ connectionState: "connecting" }, stream), false);
+});
+
+test("transient disconnected uses grace while failed and closed fail immediately", () => {
+  assert.equal(classifyViewerConnectionState("disconnected"), "grace");
+  assert.equal(classifyViewerConnectionState("connected"), "connected");
+  assert.equal(classifyViewerConnectionState("failed"), "failed");
+  assert.equal(classifyViewerConnectionState("closed"), "failed");
+  assert.equal(classifyViewerConnectionState("connecting"), "waiting");
+
+  const recoveredTimers = fakeTimers();
+  let failureCount = 0;
+  const recovered = createNegotiationWatchdog({
+    timerApi: recoveredTimers,
+    timeoutMs: VIEWER_DISCONNECT_GRACE_MS,
+    onTimeout() { failureCount += 1; },
+  });
+  recovered.start();
+  recovered.complete();
+  recoveredTimers.runAll();
+  assert.equal(failureCount, 0);
+
+  const sustainedTimers = fakeTimers();
+  const sustained = createNegotiationWatchdog({
+    timerApi: sustainedTimers,
+    timeoutMs: VIEWER_DISCONNECT_GRACE_MS,
+    onTimeout() { failureCount += 1; },
+  });
+  sustained.start();
+  assert.equal([...sustainedTimers.timeouts.values()][0].milliseconds, 2_000);
+  sustainedTimers.runAll();
+  assert.equal(failureCount, 1);
 });

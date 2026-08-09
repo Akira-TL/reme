@@ -10,13 +10,59 @@ import {
 test("摄像头错误不能继续显示为连接中", () => {
   const health = getCameraHealth({ cameraReady: false, cameraError: "权限被拒绝" });
   assert.equal(health.state, "degraded");
-  assert.equal(health.label, "摄像头不可用");
+  assert.equal(health.label, "媒体源不可用");
+});
+
+test("屏幕和文件输入不会被错误标为摄像头", () => {
+  assert.equal(getCameraHealth({
+    cameraReady: true,
+    sourceKind: "display",
+    sourceLabel: "演示窗口",
+  }).label, "屏幕采集已连接");
+  assert.equal(getCameraHealth({
+    cameraReady: false,
+    sourceStatus: "stopped",
+  }).label, "媒体源未启动");
 });
 
 test("后端 JPEG 推理运行中显示姿态服务已就绪", () => {
-  const health = getModelHealth({ perceptionState: "running", inputMode: "jpeg" });
+  const health = getModelHealth({
+    perceptionState: "running",
+    inputMode: "jpeg",
+    modelCapabilities: { fall_temporal: { status: "configured" } },
+    effectiveModels: {
+      pose_extractor: { loaded: true },
+      posture_classifier: { loaded: true },
+      fall_temporal: { loaded: true, fallback: false },
+    },
+  });
   assert.equal(health.state, "online");
-  assert.equal(health.label, "后端姿态已就绪");
+  assert.equal(health.label, "后端模型链路已就绪");
+});
+
+test("MIL 缺失时明确显示确定性转变降级", () => {
+  const health = getModelHealth({
+    perceptionState: "running",
+    inputMode: "jpeg",
+    modelCapabilities: { fall_temporal: { status: "degraded" } },
+    effectiveModels: {
+      pose_extractor: { loaded: true },
+      posture_classifier: { loaded: true },
+      fall_temporal: { loaded: false, fallback: true },
+    },
+  });
+  assert.equal(health.state, "degraded");
+  assert.match(health.detail, /确定性门禁/);
+});
+
+test("仅配置模型但没有逐项 effective 状态时 fail closed", () => {
+  const health = getModelHealth({
+    perceptionState: "running",
+    inputMode: "jpeg",
+    modelCapabilities: { fall_temporal: { status: "configured" } },
+  });
+  assert.equal(health.state, "degraded");
+  assert.match(health.label, /未报告/);
 });
 
 test("后端 landmarks 模式被前端明确判为不兼容", () => {

@@ -87,16 +87,88 @@ test("浴室硬门、厨房当前授权和跌倒权威升级决定 grant", () =>
   }).code, "bathroom_video_forbidden");
   assert.equal(mediaGrantEligibility({
     sceneId: "kitchen",
-    careDecision: { scene_id: "kitchen", response: "consent_granted" },
+    careDecision: { scene_id: "kitchen", decision_id: "decision-shared" },
+    kitchenAuthorization: {
+      sceneId: "kitchen",
+      requestDecisionId: "decision-question",
+      decisionId: "decision-shared",
+      expiresAtMonotonicMs: 70_000,
+    },
+    now: 1_000,
   }).durationMs, 60_000);
   assert.equal(mediaGrantEligibility({
     sceneId: "kitchen",
-    careDecision: { scene_id: "living", response: "consent_granted" },
+    careDecision: {
+      scene_id: "kitchen",
+      decision_id: "decision-notification-without-receipt",
+      action: "notify_family",
+      family_notification: "不能据此推断授权",
+    },
   }).allowed, false);
   assert.equal(mediaGrantEligibility({
+    sceneId: "kitchen",
+    careDecision: { scene_id: "kitchen", decision_id: "decision-shared" },
+    kitchenAuthorization: {
+      sceneId: "kitchen",
+      requestDecisionId: "decision-question",
+      decisionId: "decision-shared",
+      expiresAtMonotonicMs: 1_500,
+    },
+    now: 1_000,
+  }).allowed, false);
+  assert.equal(mediaGrantEligibility({
+    sceneId: "kitchen",
+    careDecision: { scene_id: "kitchen", decision_id: "decision-shared" },
+    kitchenAuthorization: {
+      sceneId: "kitchen",
+      requestDecisionId: "decision-question",
+      decisionId: "decision-shared",
+      expiresAtMonotonicMs: 31_000,
+    },
+    now: 11_000,
+  }).durationMs, 20_000);
+  assert.equal(mediaGrantEligibility({
     sceneId: "fall",
-    careDecision: { scene_id: "fall", state: "urgent_attention" },
+    careDecision: {
+      scene_id: "fall",
+      decision_id: "fall-authority",
+      state: "urgent_attention",
+    },
+    fallAuthorization: {
+      sceneId: "fall",
+      decisionId: "fall-authority",
+      expiresAtMonotonicMs: 31_000,
+    },
+    now: 1_000,
   }).durationMs, 30_000);
+  assert.equal(mediaGrantEligibility({
+    sceneId: "fall",
+    careDecision: {
+      scene_id: "fall",
+      decision_id: "fall-authority",
+      state: "urgent_attention",
+    },
+    fallAuthorization: {
+      sceneId: "fall",
+      decisionId: "fall-authority",
+      expiresAtMonotonicMs: 31_000,
+    },
+    now: 11_000,
+  }).durationMs, 20_000);
+  assert.equal(mediaGrantEligibility({
+    sceneId: "fall",
+    careDecision: {
+      scene_id: "fall",
+      decision_id: "fall-authority",
+      state: "urgent_attention",
+    },
+    fallAuthorization: {
+      sceneId: "fall",
+      decisionId: "fall-authority",
+      expiresAtMonotonicMs: 1_500,
+    },
+    now: 1_000,
+  }).allowed, false);
 });
 
 test("权威状态显式区分 room session 与 runtime session", () => {
@@ -110,13 +182,13 @@ test("权威状态显式区分 room session 与 runtime session", () => {
     capture: { active: true },
     runtime: { state: "running", inputMode: "jpeg", personDetected: true, skeletonSource: "a_backend" },
     care: { phase: "idle" },
-    mediaGrant: null,
   });
   assert.equal(state.room_session_id, "room-1");
   assert.equal(state.runtime_session_id, "runtime-9");
   assert.notEqual(state.room_session_id, state.runtime_session_id);
   assert.equal(state.state.source_generation, 3);
-  assert.equal(state.state.runtime.capability, "backend_jpeg_movenet");
+  assert.equal(state.state.runtime.status, "ready");
+  assert.equal(state.state.runtime.capability, "live");
 });
 
 test("ACK 明确区分等待本机确认和终态", () => {
@@ -126,11 +198,20 @@ test("ACK 明确区分等待本机确认和终态", () => {
     phase: "awaiting_local_confirmation",
     code: "local_confirmation_required",
     stateRevision: 4,
-    runtimeSessionId: "runtime-1",
     timestampMs: 2_000,
   });
   assert.equal(ack.phase, "awaiting_local_confirmation");
   assert.equal(ack.state_revision, 4);
+  assert.equal(ack.reason, "local_confirmation_required");
+  assert.deepEqual(Object.keys(ack).sort(), [
+    "command_id",
+    "phase",
+    "reason",
+    "room_session_id",
+    "state_revision",
+    "timestamp_ms",
+    "type",
+  ]);
   assert.throws(() => createControlAck({
     roomSessionId: "room-1",
     commandId: "command-1",

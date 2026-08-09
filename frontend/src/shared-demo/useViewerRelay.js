@@ -11,9 +11,11 @@ import {
   ownsControllerLease,
   reduceViewerState,
 } from "./viewerState.js";
+import { synchronizeCommandCursor } from "./viewerCommandCursor.js";
 
 const HEARTBEAT_MS = 10_000;
 const COMMAND_TTL_MS = 8_000;
+const LOCAL_CONFIRMATION_TTL_MS = 60_000;
 const MAX_RETRY_MS = 8_000;
 const MAX_SIGNAL_BUFFER = 64;
 
@@ -33,13 +35,20 @@ export function useViewerRelay() {
   const socketRef = useRef(null);
   const retryTimerRef = useRef(0);
   const attemptsRef = useRef(0);
-  const commandCursorRef = useRef({ roomSessionId: null, next: 0 });
+  const commandCursorRef = useRef({ roomSessionId: null, leaseId: null, next: 1 });
   const signalListenersRef = useRef(new Set());
   const signalBufferRef = useRef([]);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    commandCursorRef.current = synchronizeCommandCursor(commandCursorRef.current, {
+      roomSessionId: state.roomSessionId,
+      leaseId: state.lease?.lease_id || null,
+    });
+  }, [state.lease?.lease_id, state.roomSessionId]);
 
   const deliverMediaSignal = useCallback((signal) => {
     if (signalListenersRef.current.size === 0) {
@@ -83,7 +92,10 @@ export function useViewerRelay() {
       try {
         socket = new WebSocket(relayWebSocketUrl(), VIEWER_PROTOCOL);
       } catch {
-        dispatch({ type: "disconnected" });
+        dispatch({
+          type: "disconnected",
+          timestampMs: Date.now() + (stateRef.current.serverTimeOffsetMs || 0),
+        });
         scheduleReconnect();
         return;
       }
@@ -96,13 +108,21 @@ export function useViewerRelay() {
       socket.onmessage = (event) => {
         if (socketRef.current !== socket) return;
         if (typeof event.data !== "string") {
-          dispatch({ type: "protocol_invalid", reason: "binary_frame_rejected" });
+          dispatch({
+            type: "protocol_invalid",
+            reason: "binary_frame_rejected",
+            timestampMs: Date.now() + (stateRef.current.serverTimeOffsetMs || 0),
+          });
           socket.close(1003, "binary_frame_rejected");
           return;
         }
         const message = parseViewerMessage(event.data);
         if (!message) {
-          dispatch({ type: "protocol_invalid", reason: "invalid_server_message" });
+          dispatch({
+            type: "protocol_invalid",
+            reason: "invalid_server_message",
+            timestampMs: Date.now() + (stateRef.current.serverTimeOffsetMs || 0),
+          });
           socket.close(1003, "invalid_server_message");
           return;
         }
@@ -115,13 +135,16 @@ export function useViewerRelay() {
           }
           return;
         }
-        dispatch({ type: "message", message });
+        dispatch({ type: "message", message, receivedAtMs: Date.now() });
       };
       socket.onclose = () => {
         if (socketRef.current !== socket) return;
         socketRef.current = null;
         signalBufferRef.current = [];
-        dispatch({ type: "disconnected" });
+        dispatch({
+          type: "disconnected",
+          timestampMs: Date.now() + (stateRef.current.serverTimeOffsetMs || 0),
+        });
         scheduleReconnect();
       };
       socket.onerror = () => {
@@ -206,22 +229,30 @@ export function useViewerRelay() {
 
   const sendCommand = useCallback((command) => {
     const current = stateRef.current;
-    const nowMs = Date.now();
+    const nowMs = Date.now() + (current.serverTimeOffsetMs || 0);
     if (!ownsControllerLease(current, nowMs)) {
       return { ok: false, reason: "需要先接管控制" };
     }
     if (!current.roomSessionId || !current.state) {
       return { ok: false, reason: "等待权威状态后再操作" };
     }
-    if (commandCursorRef.current.roomSessionId !== current.roomSessionId) {
-      commandCursorRef.current = { roomSessionId: current.roomSessionId, next: 0 };
+    if (current.unavailableReason || current.stateStale) {
+      return { ok: false, reason: "当前权威状态不可用，请等待恢复" };
     }
+    commandCursorRef.current = synchronizeCommandCursor(commandCursorRef.current, {
+      roomSessionId: current.roomSessionId,
+      leaseId: current.lease.lease_id,
+    });
     const envelope = createControlCommand({
       roomSessionId: current.roomSessionId,
       commandId: createOpaqueId("cmd"),
       commandSequence: commandCursorRef.current.next,
       issuedAtMs: nowMs,
-      expiresAtMs: nowMs + COMMAND_TTL_MS,
+      expiresAtMs: nowMs + (
+        ["select_source", "start_capture"].includes(command.name)
+          ? LOCAL_CONFIRMATION_TTL_MS
+          : COMMAND_TTL_MS
+      ),
       expectedStateRevision: current.state.state_revision,
       command,
     });
@@ -243,7 +274,9 @@ export function useViewerRelay() {
 
   const sendMediaSignal = useCallback((message) => sendJson(socketRef.current, message), []);
 
-  const ownsControl = ownsControllerLease(state);
+  const ownsControl = ownsControllerLease(state)
+    && !state.unavailableReason
+    && !state.stateStale;
 
   return {
     ...state,

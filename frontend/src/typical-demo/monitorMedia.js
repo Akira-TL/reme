@@ -5,6 +5,7 @@ import {
 } from "./monitorRelay.js";
 
 const MAX_PENDING_ICE_PER_VIEWER = 16;
+const DEFAULT_SIGNAL_QUEUE_LIMIT = 64;
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -57,6 +58,8 @@ export function validateActiveGrantContext({
   sourceGeneration,
   sceneId,
   stream,
+  authorized = false,
+  authorityKey = null,
   connected = true,
   nowMs = Date.now(),
 }) {
@@ -92,8 +95,61 @@ export function validateActiveGrantContext({
   if (grant.scope !== "kitchen_moment" && grant.scope !== "fall_emergency") {
     return { ok: false, reason: "invalid_media_grant" };
   }
+  if (!authorized || authorityKey !== `${grant.scope}:${grant.event_id}`) {
+    return { ok: false, reason: "media_authority_unavailable" };
+  }
   if (activeTracks(stream).length === 0) return { ok: false, reason: "remote_stream_unavailable" };
   return { ok: true, grant };
+}
+
+export function createBoundedMediaSignalDispatcher({
+  limit = DEFAULT_SIGNAL_QUEUE_LIMIT,
+} = {}) {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new TypeError("signal queue limit 无效");
+  let handler = null;
+  let queue = [];
+  let chain = Promise.resolve();
+
+  function enqueue(value) {
+    if (queue.length >= limit) {
+      const oldIceIndex = queue.findIndex((item) => item?.signal_type === "ice_candidate");
+      if (oldIceIndex >= 0) queue.splice(oldIceIndex, 1);
+      else queue.shift();
+    }
+    queue.push(value);
+  }
+
+  function dispatch(value) {
+    if (typeof handler !== "function") {
+      enqueue(value);
+      return true;
+    }
+    const activeHandler = handler;
+    chain = chain.catch(() => undefined).then(() => activeHandler(value));
+    return true;
+  }
+
+  function setHandler(nextHandler) {
+    handler = typeof nextHandler === "function" ? nextHandler : null;
+    if (!handler || queue.length === 0) return;
+    const buffered = queue;
+    queue = [];
+    for (const value of buffered) dispatch(value);
+  }
+
+  return Object.freeze({
+    dispatch,
+    setHandler,
+    clearHandler(expectedHandler = null) {
+      if (expectedHandler === null || handler === expectedHandler) handler = null;
+    },
+    clear() {
+      queue = [];
+    },
+    get pendingCount() {
+      return queue.length;
+    },
+  });
 }
 
 export function createMediaSignal({
@@ -273,6 +329,7 @@ export function createMonitorMediaProducer({
       sourceGeneration: context.sourceGeneration,
       sceneId: context.sceneId,
       stream: context.stream,
+      authorityKey: context.authorityKey,
       generation,
     };
     for (const track of activeTracks(context.stream)) {
@@ -304,6 +361,9 @@ export function createMonitorMediaProducer({
     if (next.sourceGeneration !== active.sourceGeneration) return "media_source_changed";
     if (next.sceneId === "bathroom") return "bathroom_privacy_lock";
     if (next.sceneId !== active.sceneId) return "scene_changed";
+    if (!next.authorized || next.authorityKey !== active.authorityKey) {
+      return "media_authority_changed";
+    }
     if (next.stream !== active.stream || activeTracks(next.stream).length === 0) {
       return "remote_stream_unavailable";
     }
@@ -428,7 +488,17 @@ export function createMonitorMediaProducer({
         return { ok: false, reason: "grant_changed_during_answer" };
       }
       const sdp = peer.pc.localDescription?.sdp || answer?.sdp;
-      sendForActive(viewerId, "answer", { type: "answer", sdp }, expectedGeneration);
+      const answerSent = sendForActive(
+        viewerId,
+        "answer",
+        { type: "answer", sdp },
+        expectedGeneration,
+      );
+      if (!answerSent) {
+        closePeer(viewerId, "answer_signal_failed");
+        update({ error: "Relay 未接受媒体回答，Viewer 连接已安全关闭" });
+        return { ok: false, reason: "answer_signal_failed" };
+      }
       return { ok: true, viewerId };
     } catch (error) {
       closePeer(viewerId, "peer_negotiation_failed");

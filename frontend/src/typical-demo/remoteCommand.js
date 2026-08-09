@@ -47,6 +47,7 @@ export function parseControlCommand(value) {
     || !validId(value.room_session_id)
     || !validId(value.command_id)
     || !validInteger(value.command_sequence)
+    || value.command_sequence === 0
     || !validInteger(value.issued_at_ms)
     || !validInteger(value.expires_at_ms)
     || value.expires_at_ms <= value.issued_at_ms
@@ -141,25 +142,25 @@ export function createControlAck({
   roomSessionId,
   commandId,
   phase,
-  code,
-  stateRevision,
-  runtimeSessionId = null,
+  stateRevision = null,
   timestampMs = Date.now(),
-  detail = null,
+  reason = null,
+  code = null,
 }) {
   if (!["received", "awaiting_local_confirmation", ...TERMINAL_PHASES].includes(phase)) {
     throw new TypeError(`unsupported ACK phase: ${phase}`);
+  }
+  if (phase === "applied" && !Number.isSafeInteger(stateRevision)) {
+    throw new TypeError("applied ACK requires a state revision");
   }
   return {
     type: ACK_TYPE,
     room_session_id: roomSessionId,
     command_id: commandId,
     phase,
-    code,
-    state_revision: stateRevision,
-    runtime_session_id: runtimeSessionId,
     timestamp_ms: timestampMs,
-    ...(detail ? { detail } : {}),
+    state_revision: Number.isSafeInteger(stateRevision) ? stateRevision : null,
+    reason: reason || code || null,
   };
 }
 
@@ -173,9 +174,31 @@ export function buildDemoState({
   capture,
   runtime,
   care,
-  mediaGrant,
   timestampMs = Date.now(),
 }) {
+  const captureStatus = capture?.status === "ready" || capture?.active
+    ? "active"
+    : capture?.status === "requesting"
+      ? "starting"
+      : capture?.status === "error" || capture?.status === "unsupported"
+        ? "error"
+        : "idle";
+  const runtimeStatus = runtime?.state === "running"
+    ? "ready"
+    : runtime?.state === "starting"
+      ? "connecting"
+      : ["degraded", "input_unavailable"].includes(runtime?.state)
+        ? "degraded"
+        : runtime?.state === "error"
+          ? "error"
+          : "offline";
+  const carePhase = care?.phase === "emergency"
+    ? "emergency"
+    : ["candidate", "checking"].includes(care?.phase)
+      ? "checking"
+      : care?.phase === "resolved"
+        ? "resolved"
+        : "idle";
   return {
     schema_version: "reme-demo-state/v1",
     room_session_id: roomSessionId,
@@ -186,52 +209,73 @@ export function buildDemoState({
       scene_id: sceneId,
       source_generation: sourceGeneration,
       capture: {
-        status: capture?.status || (capture?.active ? "active" : "stopped"),
+        status: captureStatus,
         source_id: source?.id || null,
         source_kind: source?.kind || null,
         remote_video: source?.remote_video || "unavailable",
-        error: capture?.error || "",
+        error: capture?.error || null,
       },
       runtime: {
-        status: runtime?.state || "offline",
+        status: runtimeStatus,
         capability: runtime?.inputMode === "jpeg"
-          ? "backend_jpeg_movenet"
+          ? "live"
           : "unavailable",
-        detail: runtime?.reason || "",
+        detail: runtime?.reason || null,
       },
       care: {
-        phase: care?.phase || "idle",
+        phase: carePhase,
         decision_id: care?.decisionId || null,
         consent: care?.consent || "none",
-        alarm_authoritative: Boolean(care?.alarmAuthoritative),
-        message: care?.message || "",
+        alarm_authoritative: carePhase === "emergency" && Boolean(care?.alarmAuthoritative),
+        message: care?.message || null,
       },
-      media_grant: mediaGrant ? {
-        grant_id: mediaGrant.grant_id,
-        scope: mediaGrant.scope,
-        expires_at_ms: mediaGrant.expires_at_ms,
-      } : null,
+      media_grant: null,
     },
   };
 }
 
-export function mediaGrantEligibility({ sceneId, careDecision, now = Date.now() }) {
+export function mediaGrantEligibility({
+  sceneId,
+  careDecision,
+  kitchenAuthorization = null,
+  fallAuthorization = null,
+  now = Date.now(),
+}) {
   if (sceneId === "bathroom") return { allowed: false, code: "bathroom_video_forbidden" };
   if (sceneId === "kitchen") {
+    const remainingMs = Number(
+      kitchenAuthorization?.expiresAtMonotonicMs ?? kitchenAuthorization?.expiresAtMs,
+    ) - now;
     const consented = careDecision?.scene_id === "kitchen"
-      && (
-        careDecision?.response === "consent_granted"
-        || (careDecision?.action === "notify_family" && Boolean(careDecision?.family_notification))
-      );
+      && careDecision?.decision_id === kitchenAuthorization?.decisionId
+      && kitchenAuthorization?.sceneId === "kitchen"
+      && typeof kitchenAuthorization?.requestDecisionId === "string"
+      && remainingMs >= 1_000;
     return consented
-      ? { allowed: true, scope: "kitchen_consent", durationMs: 60_000, now }
+      ? {
+          allowed: true,
+          scope: "kitchen_moment",
+          durationMs: Math.min(60_000, Math.floor(remainingMs)),
+          now,
+        }
       : { allowed: false, code: "current_consent_required" };
   }
   if (sceneId === "fall") {
+    const remainingMs = Number(
+      fallAuthorization?.expiresAtMonotonicMs ?? fallAuthorization?.expiresAtMs,
+    ) - now;
     const escalated = careDecision?.scene_id === "fall"
-      && ["family_notification_required", "urgent_attention"].includes(careDecision?.state);
+      && ["family_notification_required", "urgent_attention"].includes(careDecision?.state)
+      && fallAuthorization?.sceneId === "fall"
+      && fallAuthorization?.decisionId === careDecision?.decision_id
+      && remainingMs >= 1_000;
     return escalated
-      ? { allowed: true, scope: "fall_escalation", durationMs: 30_000, now }
+      ? {
+          allowed: true,
+          scope: "fall_emergency",
+          durationMs: Math.min(30_000, Math.floor(remainingMs)),
+          now,
+        }
       : { allowed: false, code: "authoritative_escalation_required" };
   }
   return { allowed: false, code: "event_video_not_available" };

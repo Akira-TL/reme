@@ -9,23 +9,68 @@ export function describeSkeletonSource(source) {
 
 export function getCameraHealth(camera = {}) {
   if (camera.cameraReady) {
-    return { state: "online", label: "摄像头已连接", detail: "浏览器现场视频流可用" };
+    const labels = {
+      camera: "摄像头已连接",
+      display: "屏幕采集已连接",
+      file: "本地视频已载入",
+    };
+    return {
+      state: "online",
+      label: labels[camera.sourceKind] || "媒体源已连接",
+      detail: camera.sourceLabel || "浏览器本地视频源可用",
+    };
   }
   if (camera.cameraError) {
-    return { state: "degraded", label: "摄像头不可用", detail: camera.cameraError };
+    return { state: "degraded", label: "媒体源不可用", detail: camera.cameraError };
   }
-  return { state: "loading", label: "摄像头连接中", detail: "正在请求浏览器摄像头" };
+  if (["stopped", "idle"].includes(camera.sourceStatus)) {
+    return { state: "loading", label: "媒体源未启动", detail: "请在 Monitor 本机开始演示并选择媒体源" };
+  }
+  return { state: "loading", label: "媒体源连接中", detail: "正在等待本机权限或视频就绪" };
 }
 
 export function getModelHealth(camera = {}) {
   const perceptionState = camera.perceptionState || "offline";
   const inputMode = camera.inputMode || null;
+  const configuredModels = camera.modelCapabilities;
+  const effectiveModels = camera.effectiveModels;
+  const pose = effectiveModels?.pose_extractor;
+  const posture = effectiveModels?.posture_classifier;
+  const fallTemporal = effectiveModels?.fall_temporal;
 
   if (perceptionState === "running" && inputMode === "jpeg") {
+    if (!effectiveModels) {
+      return {
+        state: "degraded",
+        label: "模型有效状态未报告",
+        detail: "后端仅报告了配置，未逐项确认 MoveNet、姿态分类与连续模型的实际加载状态",
+      };
+    }
+    if (!pose?.loaded || !posture?.loaded) {
+      return {
+        state: "degraded",
+        label: "后端模型链路不完整",
+        detail: pose?.error || posture?.error || "MoveNet 或姿态分类器未确认加载",
+      };
+    }
+    if (fallTemporal?.fallback && !fallTemporal.loaded) {
+      return {
+        state: "degraded",
+        label: "姿态已就绪 · 连续增强降级",
+        detail: "MoveNet 与姿态分类已运行；MIL v3 不可用，跌倒转变仅使用确定性门禁",
+      };
+    }
+    if (!fallTemporal?.loaded) {
+      return {
+        state: "degraded",
+        label: "连续模型状态未知",
+        detail: fallTemporal?.error || "MIL v3 未确认加载，界面不会假定连续增强可用",
+      };
+    }
     return {
       state: "online",
-      label: "后端姿态已就绪",
-      detail: "浏览器上传 JPEG 帧，姿态提取与分类由统一后端执行",
+      label: "后端模型链路已就绪",
+      detail: "MoveNet、姿态分类与 MIL v3 连续增强已由当前统一后端会话逐项确认加载",
     };
   }
   if (inputMode && inputMode !== "jpeg") {
@@ -52,7 +97,9 @@ export function getModelHealth(camera = {}) {
   return {
     state: "loading",
     label: "后端姿态连接中",
-    detail: "等待统一后端 JPEG 推理会话启动",
+    detail: configuredModels
+      ? "模型已配置，等待统一后端 JPEG 会话逐项确认实际加载"
+      : "等待统一后端 JPEG 推理会话启动",
   };
 }
 

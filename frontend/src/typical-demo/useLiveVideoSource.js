@@ -385,17 +385,20 @@ export function useLiveVideoSource({
         const endedEvent = videoTrack ? "ended" : "ended";
         const handleEnded = () => {
           if (!generationBarrierRef.current.isCurrent(generation) || !mountedRef.current) return;
-          cameraReadyRef.current = false;
-          setMediaStreams({ local: null, remote: null });
-          setSourceState((current) => ({
-            ...current,
+          const endedGeneration = beginGeneration("source_ended");
+          setSourceState({
             status: "ended",
+            descriptor: nextDescriptor,
+            generation: endedGeneration,
+            permission: request.kind === SOURCE_KINDS.FILE
+              ? PERMISSION_STATES.NOT_REQUIRED
+              : PERMISSION_STATES.GRANTED,
             error: request.kind === SOURCE_KINDS.FILE
               ? null
               : { code: "source_ended", message: request.kind === SOURCE_KINDS.DISPLAY
                   ? "屏幕共享已停止"
                   : "摄像头连接已中断，请检查设备后重试" },
-          }));
+          });
         };
         endedTarget.addEventListener(endedEvent, handleEnded, { once: true });
         resource.cleanup.push(() => endedTarget.removeEventListener(endedEvent, handleEnded));

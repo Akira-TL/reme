@@ -10,15 +10,27 @@ import SyncRoundedIcon from "@mui/icons-material/SyncRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import { Button, ButtonBase } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { relayHttpBase } from "../shared-demo/config";
 import { AcceptanceControls } from "./AcceptanceControls";
 import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
+import { MonitorControlPanel } from "./MonitorControlPanel";
+import {
+  confirmLocalMonitorCommand,
+  executeMonitorCommand,
+  switchAndCommitMonitorScene,
+} from "./monitorCommandExecutor";
+import { createDemoStateEnvelope, createPoseFrame } from "./monitorRelay";
+import { createBoundedMediaSignalDispatcher } from "./monitorMedia";
 import { RuntimeDebugPanel } from "./RuntimeDebugPanel";
 import { shouldAutoOpenFamilyVideo, shouldCloseFamilyVideo } from "./phoneState";
+import { buildDemoState, mediaGrantEligibility } from "./remoteCommand";
 import { getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus";
 import { DEMO_SCENES } from "./scenes";
 import { useFallLiveLink } from "./useFallLiveLink";
-import { useLiveDemoCamera } from "./useLiveDemoCamera";
+import { useLiveVideoSource } from "./useLiveVideoSource";
+import { useMonitorMediaProducer } from "./useMonitorMediaProducer";
+import { useMonitorRelay } from "./useMonitorRelay";
 
 const SCENE_ICONS = {
   living: DirectionsWalkRoundedIcon,
@@ -27,26 +39,108 @@ const SCENE_ICONS = {
   fall: EmergencyRoundedIcon,
 };
 
+const ACTIVE_SAFETY_PHASES = new Set(["candidate", "checking", "emergency"]);
+const LOCAL_RTC_CONFIGURATION = Object.freeze({ iceServers: [] });
+
+function careConsent(decision, kitchenAuthorized) {
+  if (kitchenAuthorized) return "granted";
+  if (decision?.response === "consent_denied") return "denied";
+  if (decision?.state === "consent_required" || decision?.consent_required) return "pending";
+  return "none";
+}
+
+function careMessage(decision) {
+  return decision?.family_notification
+    || decision?.elder_message
+    || decision?.reason_summary
+    || null;
+}
+
 export function TypicalDemoApp() {
   const [sceneId, setSceneId] = useState("fall");
   const [familyViewOpen, setFamilyViewOpen] = useState(false);
   const [videoElement, setVideoElement] = useState(null);
   const [pendingScenario, setPendingScenario] = useState(null);
+  const [demoStarted, setDemoStarted] = useState(false);
+  const [demoStarting, setDemoStarting] = useState(false);
+  const [sourceGeneration, setSourceGeneration] = useState(0);
+  const [stateRevision, setStateRevision] = useState(0);
+  const [pendingCommands, setPendingCommands] = useState([]);
+  const [confirmingCommands, setConfirmingCommands] = useState([]);
+  const [grantMessage, setGrantMessage] = useState(null);
+  const [grantClockMs, setGrantClockMs] = useState(() => Date.now());
+  const [authorizationClockMs, setAuthorizationClockMs] = useState(() => performance.now());
+  const [mediaSignalDispatcher] = useState(() => createBoundedMediaSignalDispatcher());
   const autoConversationRef = useRef(null);
+  const revisionRef = useRef(0);
+  const stateFingerprintRef = useRef(null);
+  const commandContextRef = useRef(null);
+  const commandActionsRef = useRef({});
+  const roomSessionRef = useRef(null);
+  const confirmingCommandIdsRef = useRef(new Set());
+  const controlGenerationRef = useRef(0);
+  const pendingCommandGenerationsRef = useRef(new Map());
+  const grantAttemptsRef = useRef(new Map());
+  const relayClockOffsetRef = useRef(0);
   const conversationGuardRef = useRef({
     status: "idle",
     scenario: null,
     waitingResponse: false,
   });
 
+  const bumpStateRevision = useCallback(() => {
+    const next = revisionRef.current + 1;
+    revisionRef.current = next;
+    if (commandContextRef.current) {
+      commandContextRef.current = { ...commandContextRef.current, stateRevision: next };
+    }
+    setStateRevision(next);
+    return next;
+  }, []);
+  const relayNow = useCallback(
+    () => Date.now() + relayClockOffsetRef.current,
+    [],
+  );
+
+  const handleRemoteCommand = useCallback(async (envelope) => {
+    const expectedControlGeneration = controlGenerationRef.current;
+    const result = await executeMonitorCommand(envelope, {
+      getContext: () => commandContextRef.current || {},
+      getActions: () => commandActionsRef.current,
+      getControlGeneration: () => controlGenerationRef.current,
+      expectedControlGeneration,
+      now: relayNow,
+    });
+    if (result.phase === "awaiting_local_confirmation") {
+      pendingCommandGenerationsRef.current.set(
+        envelope.command_id,
+        expectedControlGeneration,
+      );
+      setPendingCommands((current) => (
+        current.some((item) => item.command_id === envelope.command_id)
+          ? current
+          : [...current, envelope]
+      ));
+      return result;
+    }
+    if (result.phase === "applied") {
+      return { ...result, stateRevision: bumpStateRevision() };
+    }
+    if (result.authoritativeStateCommitted) bumpStateRevision();
+    return result;
+  }, [bumpStateRevision, relayNow]);
+
+  const relayUrl = useMemo(() => relayHttpBase().toString(), []);
+
   const scene = useMemo(
     () => DEMO_SCENES.find((item) => item.id === sceneId),
     [sceneId],
   );
   const live = useFallLiveLink({
-    enabled: true,
+    enabled: demoStarted,
     videoElement,
     sceneId,
+    sourceGeneration,
   });
   const {
     active: liveActive,
@@ -54,8 +148,12 @@ export function TypicalDemoApp() {
     triggerDebugScenario,
     resetSceneState,
     startDemoConversation,
+    switchScene,
   } = live;
-  const effectivePhase = liveActive ? live.phase : "idle";
+  // Transport loss degrades availability, but it must not silently lower an
+  // already authoritative safety decision. Stopping the demo is the explicit
+  // boundary that clears the latched phase.
+  const effectivePhase = demoStarted ? live.phase : "idle";
   const kitchenShareDecision = useMemo(
     () => [live.decision?.decision, ...(live.decision?.history || [])]
       .find((item) => (
@@ -67,16 +165,56 @@ export function TypicalDemoApp() {
   );
   const kitchenShared = Boolean(kitchenShareDecision);
   const kitchenNotification = kitchenShareDecision?.family_notification || "";
+  const kitchenAuthorization = live.mediaAuthorization;
+  const kitchenAuthorizationActive = live.kitchenConsentActive;
+  const activeGrant = grantMessage?.grant?.status === "active"
+    && grantMessage.grant.expires_at_ms > grantClockMs
+    ? grantMessage.grant
+    : null;
+  const familyGrantActive = Boolean(
+    activeGrant
+      && sceneId !== "bathroom"
+      && (
+        (sceneId === "kitchen" && activeGrant.scope === "kitchen_moment")
+        || (sceneId === "fall" && activeGrant.scope === "fall_emergency")
+      )
+      && (
+        (sceneId === "kitchen" && kitchenAuthorizationActive)
+        || (sceneId === "fall" && live.familyVideoAllowed)
+      ),
+  );
   const deviceViewMode = sceneId === "bathroom" ? "skeleton" : "video_skeleton";
   const autoFamilyViewOpen = shouldAutoOpenFamilyVideo(sceneId, effectivePhase);
   const effectiveFamilyViewOpen = familyViewOpen
     && !shouldCloseFamilyVideo(effectivePhase);
-  const phoneViewMode = (autoFamilyViewOpen || effectiveFamilyViewOpen) && live.familyVideoAllowed
+  const phoneViewMode = (autoFamilyViewOpen || effectiveFamilyViewOpen) && familyGrantActive
     ? "video_skeleton"
     : "skeleton";
   const skeletonColor = ["candidate", "checking"].includes(effectivePhase)
     ? "#ff3b30"
     : "#ff5a00";
+  const onSourceGenerationChange = useCallback(({ generation }) => {
+    setSourceGeneration(generation);
+  }, []);
+  const media = useLiveVideoSource({
+    deviceViewMode,
+    phoneViewMode,
+    skeletonColor,
+    backendLandmarkFrame: live.landmarkFrame,
+    autoStart: false,
+    onSourceGenerationChange,
+  });
+
+  useEffect(() => {
+    if (!demoStarted) return undefined;
+    const tick = () => {
+      setGrantClockMs(relayNow());
+      setAuthorizationClockMs(performance.now());
+    };
+    tick();
+    const timer = window.setInterval(tick, 250);
+    return () => window.clearInterval(timer);
+  }, [demoStarted, relayNow]);
   const {
     videoRef,
     deviceCanvasRef,
@@ -89,12 +227,9 @@ export function TypicalDemoApp() {
     cameraError,
     error: cameraRuntimeError,
     retry: retryCamera,
-  } = useLiveDemoCamera({
-    deviceViewMode,
-    phoneViewMode,
-    skeletonColor,
-    backendLandmarkFrame: live.landmarkFrame,
-  });
+    sourceStatus,
+    source: sourceDescriptor,
+  } = media;
 
   useEffect(() => {
     setVideoElement(videoRef.current);
@@ -109,8 +244,13 @@ export function TypicalDemoApp() {
     cameraError,
     error: cameraRuntimeError,
     retry: retryCamera,
+    sourceStatus,
+    sourceKind: sourceDescriptor?.kind || null,
+    sourceLabel: sourceDescriptor?.label || null,
     perceptionState: liveRuntime?.state || "offline",
     inputMode: liveRuntime?.inputMode || null,
+    modelCapabilities: liveRuntime?.modelCapabilities || null,
+    effectiveModels: liveRuntime?.effectiveModels || null,
     perceptionReason: liveRuntime?.reason || "",
   }), [
     backendSkeletonActive,
@@ -119,22 +259,355 @@ export function TypicalDemoApp() {
     cameraReady,
     cameraRuntimeError,
     liveRuntime?.inputMode,
+    liveRuntime?.modelCapabilities,
+    liveRuntime?.effectiveModels,
     liveRuntime?.reason,
     liveRuntime?.state,
     personDetected,
     retryCamera,
     skeletonSource,
+    sourceDescriptor?.kind,
+    sourceDescriptor?.label,
+    sourceStatus,
   ]);
 
   const cameraHealth = getCameraHealth(cameraState);
   const modelHealth = getModelHealth(cameraState);
   const linkHealth = getLinkHealth(live);
 
-  const selectScene = useCallback((nextScene) => {
-    setSceneId(nextScene);
+  const currentDecision = live.decision?.decision || null;
+  const authorizedKitchenDecision = kitchenAuthorizationActive
+    ? [currentDecision, ...live.decision.history].find(
+        (item) => item?.decision_id === kitchenAuthorization?.decisionId,
+      ) || null
+    : null;
+  const authorityDecision = sceneId === "kitchen" && authorizedKitchenDecision
+    ? authorizedKitchenDecision
+    : sceneId === "fall" && effectivePhase === "emergency"
+      ? live.safetyDecision || currentDecision
+      : currentDecision;
+  const consent = careConsent(currentDecision, kitchenAuthorizationActive);
+  const alarmAuthoritative = effectivePhase === "emergency"
+    && ["family_notification_required", "urgent_attention"].includes(authorityDecision?.state);
+  const currentFallAuthority = Boolean(
+    sceneId === "fall"
+      && liveActive
+      && live.connection === "open"
+      && live.currentAuthority,
+  );
+  const mediaAuthorityEligibility = useMemo(() => mediaGrantEligibility({
+    sceneId,
+    careDecision: authorityDecision,
+    kitchenAuthorization,
+    fallAuthorization: live.fallMediaAuthorization,
+    now: authorizationClockMs,
+  }), [
+    authorityDecision,
+    authorizationClockMs,
+    kitchenAuthorization,
+    live.fallMediaAuthorization,
+    sceneId,
+  ]);
+  const mediaAuthorityKey = mediaAuthorityEligibility.allowed
+    && authorityDecision?.decision_id
+    ? `${mediaAuthorityEligibility.scope}:${authorityDecision.decision_id}`
+    : null;
+  const mediaAuthorityActive = Boolean(
+    mediaAuthorityKey
+      && liveActive
+      && live.connection === "open"
+      && (sceneId !== "fall" || currentFallAuthority),
+  );
+  const relayRuntime = useMemo(() => {
+    if (!demoStarted) return liveRuntime;
+    if (
+      liveActive
+      && live.connection === "open"
+      && (effectivePhase !== "emergency" || currentFallAuthority)
+    ) return liveRuntime;
+    return {
+      ...liveRuntime,
+      state: "degraded",
+      reason: live.connection !== "open"
+        ? "决策链路不可用；既有安全状态保持锁定，事件原画已关闭"
+        : "感知链路不可用；既有安全状态保持锁定，事件原画已关闭",
+    };
+  }, [currentFallAuthority, demoStarted, effectivePhase, live.connection, liveActive, liveRuntime]);
+  const stateFingerprint = JSON.stringify([
+    liveRuntime?.sessionId || null,
+    sceneId,
+    media.sourceGeneration,
+    media.sourceStatus,
+    sourceDescriptor?.id || null,
+    sourceDescriptor?.kind || null,
+    sourceDescriptor?.remote_video || null,
+    media.sourceError?.code || null,
+    relayRuntime?.state || null,
+    relayRuntime?.inputMode || null,
+    relayRuntime?.reason || null,
+    effectivePhase,
+    authorityDecision?.decision_id || null,
+    kitchenAuthorization?.expiresAtMs || null,
+    consent,
+    alarmAuthoritative,
+    careMessage(authorityDecision),
+  ]);
+
+  useEffect(() => {
+    if (!demoStarted || !liveRuntime?.sessionId) return undefined;
+    if (stateFingerprintRef.current === stateFingerprint) return undefined;
+    const timer = window.setTimeout(() => {
+      if (stateFingerprintRef.current === stateFingerprint) return;
+      stateFingerprintRef.current = stateFingerprint;
+      bumpStateRevision();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [bumpStateRevision, demoStarted, liveRuntime?.sessionId, stateFingerprint]);
+
+  const stateEnvelope = useCallback((roomSessionId) => {
+    if (
+      !liveRuntime?.sessionId
+      || !Number.isSafeInteger(stateRevision)
+      || stateFingerprintRef.current !== stateFingerprint
+    ) return null;
+    const built = buildDemoState({
+      roomSessionId,
+      runtimeSessionId: liveRuntime.sessionId,
+      stateRevision,
+      sceneId,
+      sourceGeneration: media.sourceGeneration,
+      source: sourceDescriptor,
+      capture: {
+        status: media.sourceStatus,
+        active: media.ready,
+        error: media.sourceError?.message || null,
+      },
+      runtime: relayRuntime,
+      care: {
+        phase: effectivePhase,
+        decisionId: authorityDecision?.decision_id || null,
+        consent,
+        alarmAuthoritative,
+        message: careMessage(authorityDecision),
+      },
+    });
+    return createDemoStateEnvelope({
+      roomSessionId,
+      runtimeSessionId: liveRuntime.sessionId,
+      stateRevision,
+      state: built.state,
+      timestampMs: built.timestamp_ms,
+    });
+  }, [
+    alarmAuthoritative,
+    authorityDecision,
+    consent,
+    effectivePhase,
+    liveRuntime,
+    media.ready,
+    media.sourceError?.message,
+    media.sourceGeneration,
+    media.sourceStatus,
+    sceneId,
+    sourceDescriptor,
+    relayRuntime,
+    stateFingerprint,
+    stateRevision,
+  ]);
+
+  const poseFrame = useCallback((roomSessionId) => {
+    const runtimeSessionId = liveRuntime?.sessionId;
+    const frameSequence = live.landmarkFrame?.payload?.frame_index;
+    if (
+      !runtimeSessionId
+      || !Number.isSafeInteger(frameSequence)
+      || live.landmarkFrame?.sourceGeneration !== media.sourceGeneration
+      || stateFingerprintRef.current !== stateFingerprint
+    ) return null;
+    const sourceWidth = Math.max(1, Math.round(videoElement?.videoWidth || 640));
+    const sourceHeight = Math.max(1, Math.round(videoElement?.videoHeight || 360));
+    return createPoseFrame({
+      roomSessionId,
+      runtimeSessionId,
+      frameSequence,
+      sourceWidth,
+      sourceHeight,
+      landmarks: live.landmarkFrame?.landmarks || [],
+      landmarkQuality: liveRuntime?.landmarkQuality || "unavailable",
+    });
+  }, [
+    live.landmarkFrame,
+    liveRuntime?.landmarkQuality,
+    liveRuntime?.sessionId,
+    media.sourceGeneration,
+    stateFingerprint,
+    videoElement,
+  ]);
+
+  const monitor = useMonitorRelay({
+    relayUrl,
+    enabled: demoStarted,
+    stateEnvelope,
+    poseFrame,
+    onCommand: handleRemoteCommand,
+    onMediaGrant: setGrantMessage,
+    onMediaSignal: mediaSignalDispatcher.dispatch,
+  });
+  const sendMonitorAck = monitor.sendControlAck;
+  const requestMonitorGrant = monitor.requestMediaGrant;
+  const controllerLeaseId = monitor.controller?.lease_id || null;
+
+  useEffect(() => {
+    controlGenerationRef.current += 1;
+    pendingCommandGenerationsRef.current.clear();
+    const timer = window.setTimeout(() => setPendingCommands([]), 0);
+    return () => window.clearTimeout(timer);
+  }, [controllerLeaseId, monitor.roomSessionId]);
+
+  useEffect(() => {
+    relayClockOffsetRef.current = monitor.serverTimeOffsetMs || 0;
+    const timer = window.setTimeout(() => setGrantClockMs(relayNow()), 0);
+    return () => window.clearTimeout(timer);
+  }, [monitor.serverTimeOffsetMs, relayNow]);
+
+  useEffect(() => {
+    if (!grantMessage?.grant || !monitor.roomSessionId || !liveRuntime?.sessionId) return;
+    const key = [
+      monitor.roomSessionId,
+      liveRuntime.sessionId,
+      media.sourceGeneration,
+      grantMessage.grant.scope,
+      grantMessage.grant.event_id,
+    ].join(":");
+    if (grantMessage.grant.status === "active") {
+      grantAttemptsRef.current.set(
+        key,
+        { status: "accepted", attemptedAtMs: relayNow() },
+      );
+    } else {
+      grantAttemptsRef.current.delete(key);
+    }
+  }, [
+    grantMessage,
+    liveRuntime?.sessionId,
+    media.sourceGeneration,
+    monitor.roomSessionId,
+    relayNow,
+  ]);
+
+  useEffect(() => {
+    if (!monitor.connected || !liveRuntime?.sessionId) return undefined;
+    const timer = window.setInterval(() => bumpStateRevision(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [bumpStateRevision, liveRuntime?.sessionId, monitor.connected]);
+
+  const mediaProducer = useMonitorMediaProducer({
+    connected: monitor.connected,
+    roomSessionId: monitor.roomSessionId,
+    runtimeSessionId: liveRuntime?.sessionId || null,
+    sourceGeneration: media.sourceGeneration,
+    sceneId,
+    remoteStream: media.remoteStream,
+    authorized: mediaAuthorityActive,
+    authorityKey: mediaAuthorityKey,
+    grantMessage,
+    sendSignal: monitor.sendMediaSignal,
+    revokeMediaGrant: monitor.revokeMediaGrant,
+    rtcConfiguration: LOCAL_RTC_CONFIGURATION,
+    now: relayNow,
+  });
+
+  useEffect(() => {
+    mediaSignalDispatcher.setHandler(mediaProducer.handleMediaSignal);
+    return () => mediaSignalDispatcher.clearHandler(mediaProducer.handleMediaSignal);
+  }, [mediaProducer.handleMediaSignal, mediaSignalDispatcher]);
+
+  const startLocalDemo = useCallback(async () => {
+    setDemoStarting(true);
+    try {
+      const claimed = await monitor.startDemo();
+      if (!claimed) return false;
+      setDemoStarted(true);
+      await media.selectCamera({ facingMode: "user" });
+      return true;
+    } finally {
+      setDemoStarting(false);
+    }
+  }, [media, monitor]);
+
+  const stopLocalDemo = useCallback(() => {
+    mediaProducer.stop("monitor_stopped");
+    media.stop();
+    monitor.stopDemo();
+    setDemoStarted(false);
+    setPendingScenario(null);
+    setPendingCommands([]);
+    setConfirmingCommands([]);
+    confirmingCommandIdsRef.current.clear();
+    pendingCommandGenerationsRef.current.clear();
+    setGrantMessage(null);
+    mediaSignalDispatcher.clear();
     setFamilyViewOpen(false);
-    autoConversationRef.current = null;
-  }, []);
+  }, [media, mediaProducer, mediaSignalDispatcher, monitor]);
+
+  const revokeRemoteControl = useCallback(() => {
+    controlGenerationRef.current += 1;
+    pendingCommandGenerationsRef.current.clear();
+    const sent = monitor.revokeControl();
+    if (sent) setPendingCommands([]);
+    return sent;
+  }, [monitor]);
+
+  const roomPresentation = useMemo(() => ({
+    connectionLabel: ({
+      claiming: "正在取得 producer 租约",
+      connecting: "正在连接 Relay",
+      reconnecting: "Relay 重连中",
+      connected: mediaProducer.connectivity === "local_network_only"
+        ? "Relay 在线 · 原画仅局域网"
+        : "Relay 与 TURN 在线",
+      busy: "producer 已被其他 Monitor 占用",
+      error: monitor.error || "Relay 连接失败",
+    })[monitor.status] || (demoStarted ? "等待本地 Relay" : "尚未加入房间"),
+    roomSessionId: monitor.roomSessionId,
+    viewerCount: monitor.viewerCount,
+    maxViewers: monitor.maxViewers,
+    monitorOnline: monitor.connected,
+    controllerActive: Boolean(monitor.controller),
+    controllerLabel: monitor.controller
+      ? `Viewer ${monitor.controller.viewer_id.slice(-6)} · ${Math.max(0, Math.ceil((monitor.controller.expires_at_ms - grantClockMs) / 1000))} 秒`
+      : "尚无 Viewer 接管",
+    stateRevision,
+    mediaGrantLabel: activeGrant
+      ? `${activeGrant.scope === "kitchen_moment" ? "厨房授权" : "跌倒升级"} · ${Math.max(0, Math.ceil((activeGrant.expires_at_ms - grantClockMs) / 1000))} 秒`
+      : "未开放",
+  }), [
+    activeGrant,
+    demoStarted,
+    grantClockMs,
+    mediaProducer.connectivity,
+    monitor.connected,
+    monitor.controller,
+    monitor.error,
+    monitor.maxViewers,
+    monitor.roomSessionId,
+    monitor.status,
+    monitor.viewerCount,
+    stateRevision,
+  ]);
+
+  const selectScene = useCallback((nextScene, execution = null) => (
+    switchAndCommitMonitorScene({
+      nextScene,
+      switchScene,
+      execution,
+      commitScene(committedScene) {
+        setSceneId(committedScene);
+        setFamilyViewOpen(false);
+        autoConversationRef.current = null;
+      },
+    })
+  ), [switchScene]);
 
 
   const markSafe = live.respondSafe;
@@ -151,9 +624,258 @@ export function TypicalDemoApp() {
 
   const resetAcceptance = useCallback(() => {
     setPendingScenario(null);
-    resetSceneState()
-      .then(() => triggerDebugScenario("normal"));
+    return resetSceneState()
+      .then(() => {
+        const triggered = triggerDebugScenario("normal");
+        return {
+          ok: triggered,
+          code: triggered ? "demo_reset" : "scenario_unavailable",
+        };
+      });
   }, [resetSceneState, triggerDebugScenario]);
+
+  const runRemoteScenario = useCallback(async (scenario, execution = null) => {
+    if (scenario === "fall" && sceneId !== "fall") {
+      const switched = await selectScene("fall", execution);
+      if (switched?.ok === false) return switched;
+    }
+    const authority = execution?.revalidate();
+    if (authority && !authority.ok) return { ok: false, code: authority.code };
+    const triggered = triggerDebugScenario(scenario);
+    return {
+      ok: triggered,
+      code: triggered ? "scenario_started" : "scenario_unavailable",
+    };
+  }, [sceneId, selectScene, triggerDebugScenario]);
+
+  const submitRemoteResponse = useCallback((decisionId, response) => {
+    const responders = {
+      safe: live.respondSafe,
+      need_help: live.respondNeedHelp,
+      consent_granted: live.respondConsentGranted,
+      consent_denied: live.respondConsentDenied,
+    };
+    const responder = responders[response];
+    return responder
+      ? responder(decisionId)
+      : Promise.resolve({ ok: false, code: "response_not_supported" });
+  }, [
+    live.respondConsentDenied,
+    live.respondConsentGranted,
+    live.respondNeedHelp,
+    live.respondSafe,
+  ]);
+
+  const startRemoteCapture = useCallback(() => {
+    if (media.sourceStatus === "stopped" || media.sourceStatus === "ended" || media.sourceError) {
+      return media.retry();
+    }
+    if (media.ready) return Promise.resolve({ ok: true, code: "capture_already_active" });
+    return media.selectCamera({ facingMode: "user" });
+  }, [media]);
+
+  const selectRemoteSource = useCallback(
+    (sourceId, options = {}) => media.selectSource(sourceId, options),
+    [media],
+  );
+
+  useEffect(() => {
+    commandContextRef.current = {
+      roomSessionId: monitor.roomSessionId,
+      stateRevision,
+      sceneId,
+      decisionId: authorityDecision?.decision_id || null,
+      activeSafetyEvent: ACTIVE_SAFETY_PHASES.has(effectivePhase),
+      sources: media.availableSources,
+    };
+    commandActionsRef.current = {
+      selectScene,
+      selectSource: selectRemoteSource,
+      startCapture: startRemoteCapture,
+      stopCapture: media.stop,
+      runDemoScenario: runRemoteScenario,
+      resetDemo: resetAcceptance,
+      startConversation: startDemoConversation,
+      submitResponse: submitRemoteResponse,
+      confirmAlarm: live.confirmAlarm,
+      replayVoice: live.replayVoice,
+    };
+  }, [
+    authorityDecision?.decision_id,
+    effectivePhase,
+    live.confirmAlarm,
+    live.replayVoice,
+    media.availableSources,
+    media.stop,
+    monitor.roomSessionId,
+    resetAcceptance,
+    runRemoteScenario,
+    sceneId,
+    selectRemoteSource,
+    selectScene,
+    startDemoConversation,
+    startRemoteCapture,
+    stateRevision,
+    submitRemoteResponse,
+  ]);
+
+  const confirmPendingCommand = useCallback(async (commandId, options = {}) => {
+    const pending = pendingCommands.find((item) => item.command_id === commandId);
+    if (!pending || confirmingCommandIdsRef.current.has(commandId)) return;
+    confirmingCommandIdsRef.current.add(commandId);
+    const confirmationGeneration = pendingCommandGenerationsRef.current.get(commandId);
+    pendingCommandGenerationsRef.current.delete(commandId);
+    setPendingCommands((current) => current.filter((item) => item.command_id !== commandId));
+    setConfirmingCommands((current) => [...current, pending]);
+    const actions = {
+      ...commandActionsRef.current,
+      selectSource: (sourceId) => selectRemoteSource(sourceId, options),
+    };
+    try {
+      let result = Number.isSafeInteger(confirmationGeneration)
+        ? await confirmLocalMonitorCommand(pending, actions, {
+            getContext: () => commandContextRef.current || {},
+            getControlGeneration: () => controlGenerationRef.current,
+            expectedControlGeneration: confirmationGeneration,
+            now: relayNow,
+          })
+        : { phase: "rejected", code: "controller_lease_ended" };
+      const roomStillCurrent = roomSessionRef.current === pending.room_session_id;
+      const controlStillCurrent = controlGenerationRef.current === confirmationGeneration;
+      const expired = pending.expires_at_ms <= relayNow();
+      if (result.phase === "applied" && (!roomStillCurrent || !controlStillCurrent || expired)) {
+        if (result.code !== "capture_already_active") media.stop();
+        result = {
+          phase: "rejected",
+          code: expired
+            ? "command_expired"
+            : controlStillCurrent
+              ? "stale_room_session"
+              : "controller_lease_ended",
+        };
+      }
+      if (roomStillCurrent && controlStillCurrent) {
+        const nextRevision = result.phase === "applied" ? bumpStateRevision() : null;
+        sendMonitorAck({
+          commandId,
+          phase: result.phase,
+          stateRevision: nextRevision,
+          reason: result.code || result.detail || null,
+        });
+      }
+    } finally {
+      confirmingCommandIdsRef.current.delete(commandId);
+      setConfirmingCommands((current) => (
+        current.filter((item) => item.command_id !== commandId)
+      ));
+    }
+  }, [bumpStateRevision, media, pendingCommands, relayNow, selectRemoteSource, sendMonitorAck]);
+
+  const rejectPendingCommand = useCallback((commandId, reason = "local_confirmation_denied") => {
+    pendingCommandGenerationsRef.current.delete(commandId);
+    setPendingCommands((current) => current.filter((item) => item.command_id !== commandId));
+    sendMonitorAck({
+      commandId,
+      phase: "rejected",
+      stateRevision: null,
+      reason,
+    });
+  }, [sendMonitorAck]);
+
+  useEffect(() => {
+    if (roomSessionRef.current === monitor.roomSessionId) return;
+    roomSessionRef.current = monitor.roomSessionId;
+    setPendingCommands([]);
+    setConfirmingCommands([]);
+    confirmingCommandIdsRef.current.clear();
+    pendingCommandGenerationsRef.current.clear();
+    setGrantMessage(null);
+    grantAttemptsRef.current.clear();
+    mediaSignalDispatcher.clear();
+  }, [mediaSignalDispatcher, monitor.roomSessionId]);
+
+  useEffect(() => {
+    if (pendingCommands.length === 0) return undefined;
+    const nextExpiry = Math.min(...pendingCommands.map((item) => item.expires_at_ms));
+    const timer = window.setTimeout(() => {
+      const now = relayNow();
+      setPendingCommands((current) => {
+        const expired = current.filter((item) => item.expires_at_ms <= now);
+        for (const item of expired) {
+          pendingCommandGenerationsRef.current.delete(item.command_id);
+          sendMonitorAck({
+            commandId: item.command_id,
+            phase: "rejected",
+            stateRevision: null,
+            reason: "command_expired",
+          });
+        }
+        return current.filter((item) => item.expires_at_ms > now);
+      });
+    }, Math.max(0, nextExpiry - relayNow()) + 5);
+    return () => window.clearTimeout(timer);
+  }, [pendingCommands, relayNow, sendMonitorAck]);
+
+  useEffect(() => {
+    const runtimeSessionId = liveRuntime?.sessionId;
+    const attemptNowMs = relayNow();
+    const eligibility = mediaAuthorityEligibility;
+    if (
+      !monitor.connected
+      || !liveActive
+      || live.connection !== "open"
+      || (sceneId === "fall" && !currentFallAuthority)
+      || !runtimeSessionId
+      || !eligibility.allowed
+      || !authorityDecision?.decision_id
+      || !media.ready
+      || sourceDescriptor?.remote_video !== "available"
+      || stateFingerprintRef.current !== stateFingerprint
+    ) return;
+    if (monitor.acceptedStateRevision < stateRevision) return undefined;
+    const eventKey = [
+      monitor.roomSessionId,
+      runtimeSessionId,
+      media.sourceGeneration,
+      eligibility.scope,
+      authorityDecision.decision_id,
+    ].join(":");
+    const previousAttempt = grantAttemptsRef.current.get(eventKey);
+    if (previousAttempt?.status === "accepted") return undefined;
+    if (
+      previousAttempt?.status === "pending"
+      && attemptNowMs - previousAttempt.attemptedAtMs < 1_500
+    ) return undefined;
+    const sent = requestMonitorGrant({
+      runtimeSessionId,
+      eventId: authorityDecision.decision_id,
+      scope: eligibility.scope,
+      expiresInMs: eligibility.durationMs,
+    });
+    if (!sent) return undefined;
+    grantAttemptsRef.current.set(eventKey, { status: "pending", attemptedAtMs: attemptNowMs });
+    const retryTimer = window.setTimeout(() => setGrantClockMs(relayNow()), 1_550);
+    return () => window.clearTimeout(retryTimer);
+  }, [
+    authorityDecision,
+    grantClockMs,
+    currentFallAuthority,
+    live.connection,
+    liveActive,
+    liveRuntime?.sessionId,
+    mediaAuthorityEligibility,
+    media.ready,
+    media.sourceGeneration,
+    monitor.connected,
+    monitor.acceptedStateRevision,
+    monitor.roomSessionId,
+    requestMonitorGrant,
+    relayNow,
+    sceneId,
+    sourceDescriptor?.remote_video,
+    stateRevision,
+    stateFingerprint,
+  ]);
 
   useEffect(() => {
     if (
@@ -279,6 +1001,21 @@ export function TypicalDemoApp() {
         </div>
       </header>
 
+      <MonitorControlPanel
+        started={demoStarted}
+        starting={demoStarting}
+        onStart={startLocalDemo}
+        onStop={stopLocalDemo}
+        media={media}
+        room={roomPresentation}
+        pendingCommands={pendingCommands}
+        confirmingCommands={confirmingCommands}
+        onConfirmCommand={confirmPendingCommand}
+        onRejectCommand={rejectPendingCommand}
+        onRevokeControl={revokeRemoteControl}
+        nowMs={grantClockMs}
+      />
+
       <nav className="scene-tabs" aria-label="选择典型演示场景">
         {DEMO_SCENES.map((item, index) => {
           const SceneIcon = SCENE_ICONS[item.id];
@@ -325,7 +1062,7 @@ export function TypicalDemoApp() {
           viewMode={phoneViewMode}
           familyViewOpen={effectiveFamilyViewOpen}
           autoFamilyViewOpen={autoFamilyViewOpen}
-          familyVideoAllowed={live.familyVideoAllowed}
+          familyVideoAllowed={familyGrantActive}
           onToggleFamilyView={() => setFamilyViewOpen((current) => !current)}
           onContact={contactEmergency}
           onSafe={markSafe}

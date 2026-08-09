@@ -19,6 +19,8 @@ export function useMonitorMediaProducer({
   sourceGeneration = 0,
   sceneId = "living",
   remoteStream = null,
+  authorized = false,
+  authorityKey = null,
   grantMessage = null,
   incomingSignal = null,
   sendSignal,
@@ -38,7 +40,18 @@ export function useMonitorMediaProducer({
     sourceGeneration,
     sceneId,
     stream: remoteStream,
-  }), [connected, remoteStream, roomSessionId, runtimeSessionId, sceneId, sourceGeneration]);
+    authorized,
+    authorityKey,
+  }), [
+    authorized,
+    authorityKey,
+    connected,
+    remoteStream,
+    roomSessionId,
+    runtimeSessionId,
+    sceneId,
+    sourceGeneration,
+  ]);
 
   const producer = useMemo(() => createMonitorMediaProducer({
     RTCPeerConnectionImpl,
