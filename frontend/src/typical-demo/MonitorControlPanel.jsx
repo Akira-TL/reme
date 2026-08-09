@@ -158,7 +158,7 @@ export function MonitorControlPanel({
       >
         <strong>{homeSurface ? "公开双端演示" : "公开演示房间"}</strong>
         <span>{homeSurface
-          ? "无账号验证 · 启动会请求本机相机与麦克风；麦克风默认禁用，仅在问询窗口录制并按需把问询语音送 MiMo；跌倒确认等事件可按需选定单帧或短片送 MiMo（非连续上传）；事件期原画仅在当前授权窗口对全部在线 Viewer 开放"
+          ? "无账号验证 · 启动只请求本机相机；麦克风仅在问询窗口按需请求并录制，问询语音可按需送 MiMo；跌倒确认等事件可按需选定单帧或短片送 MiMo（非连续上传）；事件期原画仅在当前授权窗口对全部在线 Viewer 开放"
           : "无身份认证 · 事件期原画会发给全部在线 Viewer · 不代表生产隐私方案"}</span>
       </Alert>
 
@@ -170,11 +170,11 @@ export function MonitorControlPanel({
           <div>
             <small>{homeSurface ? "HOME CARE" : "MONITOR PRODUCER"}</small>
             <strong>{started
-              ? homeSurface ? "家中关怀正在运行" : "演示控制端在线"
+              ? homeSurface ? "本机关怀会话已启动" : "演示控制端在线"
               : homeSurface ? "开始本机关怀" : "准备进入固定公开房间"}</strong>
             <p>{started
-              ? homeSurface ? "感知、关怀和家庭同步都以当前会话为准" : `房间会话 ${room.roomSessionId || "正在建立"}`
-              : homeSurface ? "点击后由本机请求相机与麦克风权限；任一能力不可用都会明确显示" : "点击后先取得唯一 producer 租约，再由本机确认媒体权限"}</p>
+              ? homeSurface ? "本机采集独立运行；感知与家庭同步按各自连接状态降级" : `房间会话 ${room.roomSessionId || "正在建立"}`
+              : homeSurface ? "点击后先请求本机相机权限；Relay 或后端离线时会明确降级，不阻断本机采集" : "点击后先请求本机媒体权限；producer 租约会并行建立"}</p>
           </div>
           {started ? (
             <Button color="inherit" variant="outlined" startIcon={<StopRoundedIcon />} onClick={onStop}>
@@ -188,7 +188,7 @@ export function MonitorControlPanel({
               disabled={starting}
               onClick={onStart}
             >
-              {starting ? "正在连接…" : homeSurface ? "开始关怀" : "开始演示"}
+              {starting ? "等待本机权限…" : homeSurface ? "开始关怀" : "开始演示"}
             </Button>
           )}
         </div>

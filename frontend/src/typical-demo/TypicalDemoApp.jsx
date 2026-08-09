@@ -15,6 +15,7 @@ import { AcceptanceControls } from "./AcceptanceControls";
 import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
 import { HomeCarePrompt } from "./HomeCarePrompt";
+import { startLocalDemoSession } from "./localDemoStart";
 import { MonitorControlPanel } from "./MonitorControlPanel";
 import {
   confirmLocalMonitorCommand,
@@ -541,11 +542,11 @@ export function TypicalDemoApp({ surface = "debug" }) {
   const startLocalDemo = useCallback(async () => {
     setDemoStarting(true);
     try {
-      const claimed = await monitor.startDemo();
-      if (!claimed) return false;
-      setDemoStarted(true);
-      await media.selectCamera({ facingMode: "user" });
-      return true;
+      return await startLocalDemoSession({
+        markStarted: () => setDemoStarted(true),
+        startCapture: () => media.selectCamera({ facingMode: "user" }),
+        startRelay: monitor.startDemo,
+      });
     } finally {
       setDemoStarting(false);
     }

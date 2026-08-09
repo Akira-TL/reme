@@ -29,6 +29,7 @@
 ### `/home`
 
 - 保留真实 camera/display/file 输入、本机权限确认、统一后端 JPEG 感知、A/B/MiMo 状态、Relay producer 与 grant-bound WebRTC。
+- 点击开始后必须在当前本机手势中立即请求媒体权限；Relay producer claim 与本机采集并行，Relay 失败只能降级家庭同步，不能阻断或撤销本机媒体。
 - 默认从 `living` 场景开始；场景切换继续调用真实后端，不注入合成关键点。
 - 不渲染 `ChildPhone`、`AcceptanceControls`、`RuntimeDebugPanel`、Debug 重置或人工 fall trigger。
 - 不向远程 Viewer 暴露场景注入、媒体源控制、本人回应或重播语音等工程命令；家属只可确认当前权威告警。
@@ -87,6 +88,7 @@ npm run build
 浏览器验收：
 
 - `/home`：390×844、430×932、1440×900，无手机外框、无横向滚动，媒体权限与失败状态可见；
+- `/home` 在 Relay 离线时仍触发本机媒体权限并开放媒体源操作，同时把家庭同步明确显示为不可用；
 - `/family`：390×844 与桌面，无手机外框、无远程路演控制，首页/看板/设置可用；
 - `/debug`：1920×1080 保留 ABC 同屏、手机模拟和 Debug；
 - 未启动后端/Relay时三个入口均 fail-visible，控制台无新增错误；
