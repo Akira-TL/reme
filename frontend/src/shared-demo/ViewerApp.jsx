@@ -25,6 +25,7 @@ import PrivacyTipRoundedIcon from "@mui/icons-material/PrivacyTipRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import RestaurantRoundedIcon from "@mui/icons-material/RestaurantRounded";
 import ScreenShareRoundedIcon from "@mui/icons-material/ScreenShareRounded";
+import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
 import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
@@ -40,8 +41,12 @@ import {
   Switch,
   useMediaQuery,
 } from "@mui/material";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { relayAvailabilityCopy } from "./config.js";
+import {
+  createFamilyTimelineState,
+  reduceFamilyTimeline,
+} from "./familyTimeline.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
   buildWeekDays,
@@ -49,7 +54,7 @@ import {
   filterTimelineEventsByDate,
   shiftDateKey,
   timelineDateHeading,
-} from "./timeline.js";
+} from "./timelineDates.js";
 import { useAlertEffects } from "./useAlertEffects.js";
 import { useViewerMedia } from "./useViewerMedia.js";
 import { useViewerRelay } from "./useViewerRelay.js";
@@ -292,17 +297,34 @@ function HomePage({
 }
 
 const TIMELINE_ICONS = Object.freeze({
-  care: FavoriteRoundedIcon,
-  privacy: LockRoundedIcon,
+  sync: SensorsRoundedIcon,
+  care: HealthAndSafetyRoundedIcon,
+  media: VideocamRoundedIcon,
+  consent: PrivacyTipRoundedIcon,
   scene: HomeRoundedIcon,
-  device: VideocamRoundedIcon,
+  capture: CameraFrontRoundedIcon,
   runtime: HealthAndSafetyRoundedIcon,
-  session: DashboardRoundedIcon,
+  acknowledgement: CheckCircleRoundedIcon,
 });
 
 function TimelineEventCard({ event }) {
   const [expanded, setExpanded] = useState(false);
   const EventIcon = TIMELINE_ICONS[event.kind] || CalendarMonthRoundedIcon;
+  const dateTime = event.timestampMs > 0
+    ? new Date(event.timestampMs).toISOString()
+    : undefined;
+  const details = [
+    {
+      label: "数据来源",
+      value: event.source === "command_ack" ? "Relay 命令回执" : "Relay 权威快照",
+    },
+    ...(Number.isSafeInteger(event.stateRevision)
+      ? [{ label: "状态版本", value: `revision ${event.stateRevision}` }]
+      : []),
+    ...(event.sceneId
+      ? [{ label: "演示场景", value: SCENE_COPY[event.sceneId]?.label || event.sceneId }]
+      : []),
+  ];
   return (
     <article className={`timeline-event-card is-${event.tone}`}>
       <button
@@ -312,13 +334,13 @@ function TimelineEventCard({ event }) {
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="timeline-event-marker"><EventIcon /></span>
-        <span className="timeline-event-time"><time>{formatTime(event.occurredAtMs)}</time><small>{event.category}</small></span>
-        <span className="timeline-event-copy"><b>{event.title}</b><span>{event.summary}</span></span>
+        <span className="timeline-event-time"><time dateTime={dateTime}>{formatTime(event.timestampMs)}</time><small>{event.label}</small></span>
+        <span className="timeline-event-copy"><b>{event.title}</b><span>{event.detail}</span></span>
         <ExpandMoreRoundedIcon className={expanded ? "is-expanded" : ""} />
       </button>
       {expanded && (
         <div className="timeline-event-details">
-          {event.details.map((detail) => (
+          {details.map((detail) => (
             <div key={detail.label}><span>{detail.label}</span><b>{detail.value}</b></div>
           ))}
           <p>只记录本次公开演示会话中的结构化状态，不包含原始画面、音频或骨架正文。</p>
@@ -328,10 +350,15 @@ function TimelineEventCard({ event }) {
   );
 }
 
-function TimelinePage({ timeline, selectedDateKey, onSelectDate, nowMs }) {
+function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs }) {
   const weekDays = buildWeekDays(selectedDateKey, nowMs);
   const todayKey = dateKeyFromTimestamp(nowMs);
   const events = filterTimelineEventsByDate(timeline.events, selectedDateKey);
+  const interrupted = Boolean(
+    relay.unavailableReason
+      || !relay.monitorOnline
+      || relay.connection !== "connected",
+  );
   const canGoForward = shiftDateKey(selectedDateKey, 7) <= todayKey;
   const changeWeek = (offset) => {
     const candidate = shiftDateKey(selectedDateKey, offset * 7);
@@ -363,9 +390,14 @@ function TimelinePage({ timeline, selectedDateKey, onSelectDate, nowMs }) {
         </div>
       </section>
 
-      <aside className="timeline-session-note">
-        <LockRoundedIcon />
-        <div><b>仅显示当前房间会话</b><span>公开演示不保存跨天家庭历史；刷新或换房间后清空。</span></div>
+      <aside className={`timeline-session-note ${interrupted ? "is-interrupted" : ""}`}>
+        {interrupted ? <RefreshRoundedIcon /> : <LockRoundedIcon />}
+        <div>
+          <b>{interrupted ? "同步已中断，以下不是当前现场" : "仅显示当前房间会话"}</b>
+          <span>{interrupted
+            ? "保留本页此前收到的记录；恢复后继续追加权威更新。"
+            : "公开演示不保存跨天家庭历史；刷新或换房间后清空。"}</span>
+        </div>
         <strong>{events.length} 条</strong>
       </aside>
 
@@ -379,9 +411,13 @@ function TimelinePage({ timeline, selectedDateKey, onSelectDate, nowMs }) {
       ) : (
         <section className="timeline-empty-state" role="status">
           <span><EventBusyRoundedIcon /></span>
-          <h2>{selectedDateKey === todayKey ? "等待本次会话事件" : "这一天没有可用记录"}</h2>
+          <h2>{selectedDateKey === todayKey
+            ? interrupted ? "正在连接家中端" : "等待本次会话事件"
+            : "这一天没有可用记录"}</h2>
           <p>{selectedDateKey === todayKey
-            ? "Monitor 发布新的权威状态后，关键变化会出现在这里。"
+            ? interrupted
+              ? "收到第一个权威状态后，时间线会从这里开始。"
+              : "Monitor 发布新的权威状态后，关键变化会出现在这里。"
             : "跨天历史服务尚未接入，因此不会用演示文案填充真实时间线。"}</p>
         </section>
       )}
@@ -600,6 +636,11 @@ export function ViewerApp() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [issueError, setIssueError] = useState("");
   const [dismissedEmergency, setDismissedEmergency] = useState(null);
+  const [timeline, dispatchTimeline] = useReducer(
+    reduceFamilyTimeline,
+    undefined,
+    createFamilyTimelineState,
+  );
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [highPrivacyEnabled, setHighPrivacyEnabled] = useStoredBoolean("reme.viewer.highPrivacy", true);
   const [notificationsEnabled, setNotificationsEnabled] = useStoredBoolean("reme.viewer.notifications", true);
@@ -610,6 +651,14 @@ export function ViewerApp() {
   }, []);
 
   const snapshot = relay.state;
+  useEffect(() => {
+    dispatchTimeline({
+      type: "observe",
+      roomSessionId: relay.roomSessionId,
+      snapshot,
+      acks: relay.acks,
+    });
+  }, [relay.acks, relay.roomSessionId, snapshot]);
   const relayNowMs = nowMs + (relay.serverTimeOffsetMs || 0);
   const sceneId = snapshot?.state.scene_id || "living";
   const activeGrant = useMemo(
@@ -680,7 +729,8 @@ export function ViewerApp() {
         {activeTab === "home" && <HomePage relay={relay} snapshot={snapshot} pose={relay.pose} media={media} activeGrant={activeGrant} highPrivacyEnabled={highPrivacyEnabled} localNowMs={nowMs} relayNowMs={relayNowMs} />}
         {activeTab === "timeline" && (
           <TimelinePage
-            timeline={relay.timeline}
+            timeline={timeline}
+            relay={relay}
             selectedDateKey={selectedTimelineDate}
             onSelectDate={setSelectedTimelineDate}
             nowMs={nowMs}

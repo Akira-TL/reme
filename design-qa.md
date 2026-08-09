@@ -55,7 +55,7 @@ A separate focused crop was not required: the target timeline panel and implemen
   - Post-fix evidence: `viewer-timeline-final-390x844.png` and the regenerated `timeline-comparison.png`.
 
 - [P2] Idle care-message updates could append duplicate “back to daily observation” entries.
-  - Location: `frontend/src/shared-demo/timeline.js` semantic change detection.
+  - Location: `frontend/src/shared-demo/familyTimeline.js` semantic change detection.
   - Evidence: the live Relay changed explanatory copy while care remained `idle`, causing the visual list to grow across keepalives.
   - Impact: the timeline could imply multiple life events where only status wording changed.
   - Fix: care entries now require phase, consent, alarm authority, or non-idle decision identity changes; message-only idle updates are ignored and covered by a deterministic test.

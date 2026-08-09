@@ -1,5 +1,3 @@
-import { createTimelineState, ingestTimelineSnapshot } from "./timeline.js";
-
 const TERMINAL_ACK_PHASES = new Set(["applied", "rejected", "failed"]);
 const MAX_ACKS = 12;
 
@@ -18,7 +16,6 @@ export function createViewerState() {
     lastStateRevision: null,
     pose: null,
     mediaGrant: null,
-    timeline: createTimelineState(),
     acks: [],
     unavailableReason: "not_published",
     latestProtocolError: null,
@@ -42,7 +39,6 @@ function resetRoomState(state, roomSessionId) {
     lastStateRevision: null,
     pose: null,
     mediaGrant: null,
-    timeline: createTimelineState(roomSessionId),
     acks: [],
     unavailableReason: roomSessionId ? "not_published" : "monitor_offline",
   };
@@ -267,7 +263,6 @@ export function reduceViewerState(state, action) {
       mediaGrant: sameMediaGrant(state.mediaGrant, projectedGrant)
         ? state.mediaGrant
         : projectedGrant,
-      timeline: ingestTimelineSnapshot(state.timeline, state.roomSessionId, value),
       unavailableReason: null,
     };
   }

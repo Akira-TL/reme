@@ -1,10 +1,11 @@
 # 家属端独立时间线规格
 
-- Status: accepted-for-local-implementation
+- Status: accepted-for-lbx-frontend
 - Type: frontend feature
 - Date: 2026-08-09
-- Branch: `codex/lbx-timeline`
-- Base: `origin/lbx-frontend@961361dcd3b843d8e56ae20b5bf0025b3cdfed3c`
+- Integration branch: `codex/lbx-timeline`
+- Merge target: `lbx-frontend`
+- Bases: `origin/lbx-frontend@961361dcd3b843d8e56ae20b5bf0025b3cdfed3c`, `lbx-frontend@5a6e5db0`
 - Related: ADR-0002, ADR-0006, `.scratch/public-dual-device-demo/spec.md`
 
 ## 1. 目标与假设
@@ -49,11 +50,11 @@ No-Go 条件：
 
 本轮数据源为内存中的当前房间会话投影：
 
-- 输入：严格校验后的 `reme-demo-state/v1`；
+- 输入：严格校验后的 `reme-demo-state/v1`，以及已应用的家属告警确认 ACK；
 - 记录：初始权威状态，以及 care、consent、scene、capture、runtime 的有意义变化；
 - 去重：只按语义签名追加，keepalive revision 不产生条目；
 - 生命周期：页面刷新或 `room_session_id` 变化即清空；
-- 上限：最近 80 条结构化条目；不保存骨架、图片、视频、音频或自由对话全文。
+- 上限：最近 12 条结构化条目；不保存骨架、图片、视频、音频或自由对话全文。
 
 ## 4. 后续数据库 Gate
 
