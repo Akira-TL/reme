@@ -20,10 +20,10 @@ cp .dev.vars.example .dev.vars
 npm run dev -- --ip 127.0.0.1 --port 8787
 ```
 
-The checked-in origin allowlist includes the standard Vite development and
-preview ports `5173`, `4173`, and `4174` on `localhost` and `127.0.0.1`. Add an
-explicit LAN origin before opening the frontend from a phone; do not replace the
-allowlist with `*`.
+The checked-in origin allowlist includes the current public demo origins and
+the standard Vite development and preview ports `5173`, `4173`, and `4174` on
+`localhost` and `127.0.0.1`. Add an explicit LAN origin before opening the
+frontend from a phone; do not replace the allowlist with `*`.
 
 The unified launcher creates a random `BACKEND_PUBLISH_TOKEN` and injects it
 into both backend and Relay. Manual Wrangler development uses the ignored
@@ -172,10 +172,11 @@ logs the incomplete configuration instead of leaking a partial credential.
 
 `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` are the Cloudflare Realtime TURN key ID
 and API token. The Worker exchanges them server-side for one-hour ephemeral ICE
-credentials. `ALLOWED_ORIGINS` must also be replaced with the actual HTTPS Home
-and Family origins. The implementation does not require a separate Reme media
-server or cloud recording store; TURN account usage is subject to the deployed
-Cloudflare account's current limits and pricing.
+credentials. A deployment under different domains must replace the checked-in
+`ALLOWED_ORIGINS` with its exact HTTPS Home and Family origins. The
+implementation does not require a separate Reme media server or cloud recording
+store; TURN account usage is subject to the deployed Cloudflare account's
+current limits and pricing.
 
 ## Verification
 
