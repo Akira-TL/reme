@@ -8,9 +8,11 @@ import {
   createSourceGenerationBarrier,
   detectVideoSourceCapabilities,
   getCaptureStreamMethod,
+  MEDIA_FAILURE_STAGES,
   normalizeFacingMode,
   oppositeFacingMode,
   PERMISSION_STATES,
+  readMediaPermissionState,
   releaseVideoSourceResource,
   REMOTE_VIDEO_STATES,
   SOURCE_KINDS,
@@ -77,11 +79,15 @@ function paintTarget(canvas, source) {
 function browserDependencies() {
   const browserNavigator = typeof navigator === "undefined" ? null : navigator;
   const mediaDevices = browserNavigator?.mediaDevices || null;
+  const permissions = browserNavigator?.permissions || null;
   const videoPrototype = typeof HTMLVideoElement === "undefined"
     ? null
     : HTMLVideoElement.prototype;
   const urlApi = typeof URL === "undefined" ? null : URL;
-  return { mediaDevices, videoPrototype, urlApi };
+  const isSecureContext = typeof globalThis.isSecureContext === "boolean"
+    ? globalThis.isSecureContext
+    : true;
+  return { isSecureContext, mediaDevices, permissions, videoPrototype, urlApi };
 }
 
 function initialSourceState(capabilities) {
@@ -128,6 +134,7 @@ function requestedDescriptor(request, capabilities) {
 function sourceCapability(capabilities, kind) {
   return capabilities[kind] || {
     available: false,
+    disabled_code: "unsupported",
     disabled_reason: "未知媒体源",
     remote_video: REMOTE_VIDEO_STATES.UNAVAILABLE,
   };
@@ -285,12 +292,13 @@ export function useLiveVideoSource({
       permission: initialPermission,
       error: capability.available
         ? null
-        : { code: "unsupported", message: capability.disabled_reason },
+        : { code: capability.disabled_code || "unsupported", message: capability.disabled_reason },
     });
     if (!capability.available) return false;
 
     const resource = createResource();
     let nextDescriptor;
+    let failureStage = MEDIA_FAILURE_STAGES.CAPTURE;
     try {
       const video = videoRef.current;
       if (!video) throw new Error("VideoElementUnavailable");
@@ -323,6 +331,7 @@ export function useLiveVideoSource({
         return false;
       }
 
+      failureStage = MEDIA_FAILURE_STAGES.PLAYBACK;
       video.pause?.();
       if (resource.stream) {
         video.removeAttribute?.("src");
@@ -429,7 +438,16 @@ export function useLiveVideoSource({
         urlApi: dependencies.urlApi,
       });
       if (!generationBarrierRef.current.isCurrent(generation)) return false;
-      const failure = classifyVideoSourceError(sourceFailure, request.kind);
+      const permissionState = await readMediaPermissionState(
+        dependencies.permissions,
+        request.kind,
+      );
+      if (!generationBarrierRef.current.isCurrent(generation)) return false;
+      const failure = classifyVideoSourceError(sourceFailure, request.kind, {
+        stage: failureStage,
+        isSecureContext: dependencies.isSecureContext,
+        permissionState,
+      });
       cameraReadyRef.current = false;
       setSourceState({
         status: "error",
@@ -440,7 +458,15 @@ export function useLiveVideoSource({
       });
       return false;
     }
-  }, [beginGeneration, capabilities, dependencies.mediaDevices, dependencies.urlApi, refreshCameraDevices]);
+  }, [
+    beginGeneration,
+    capabilities,
+    dependencies.isSecureContext,
+    dependencies.mediaDevices,
+    dependencies.permissions,
+    dependencies.urlApi,
+    refreshCameraDevices,
+  ]);
 
   const requestSource = useCallback((request) => {
     lastRequestRef.current = request;

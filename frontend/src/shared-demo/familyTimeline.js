@@ -116,7 +116,9 @@ function initialEvent(snapshot, current) {
     kind: "sync",
     label: "开始同步",
     title: emergency ? "已同步一项需要关注的安全事件" : "已同步家中端当前状态",
-    detail: current.careMessage || baselineDetail(current),
+    detail: current.carePhase === "idle"
+      ? baselineDetail(current)
+      : current.careMessage || baselineDetail(current),
     timestampMs: snapshot.timestamp_ms,
     tone: emergency ? "danger" : "neutral",
     ...snapshotMetadata(snapshot),
@@ -124,12 +126,12 @@ function initialEvent(snapshot, current) {
 }
 
 function careEvent(snapshot, previous, current) {
-  const phaseChanged = current.carePhase !== previous.carePhase;
-  const activeDecisionChanged = current.carePhase !== "idle"
-    && current.careDecisionId !== previous.careDecisionId;
-  const activeMessageChanged = current.carePhase !== "idle"
-    && current.careMessage !== previous.careMessage;
-  if (!phaseChanged && !activeDecisionChanged && !activeMessageChanged) return null;
+  if (current.carePhase === "idle" && previous.carePhase === "idle") return null;
+  if (
+    current.carePhase === previous.carePhase
+    && current.careDecisionId === previous.careDecisionId
+    && current.careMessage === previous.careMessage
+  ) return null;
 
   const copy = {
     idle: {

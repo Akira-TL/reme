@@ -55,4 +55,4 @@ The event reducer is consumed by the standalone `时间线` bottom-navigation pa
 
 - The reducer now supplies the dedicated fourth bottom-navigation page, including applied alarm-confirmation ACK events and interrupted-state disclosure.
 - Idle care copy/decision churn is ignored so explanatory keepalives cannot fabricate repeated household events.
-- Integrated branch verification: `npm test` 112/112, `npm run lint`, `npm run build`, and `git diff --check` passed.
+- Final `lbx-frontend` integration verification: frontend `npm test` 155/155, lint, build, route-build 4/4; Relay 20/20 plus typecheck; `git diff --check` passed.

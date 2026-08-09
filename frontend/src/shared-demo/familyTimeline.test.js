@@ -91,6 +91,24 @@ test("unchanged keepalives and replayed revisions do not create timeline noise",
   assert.match(state.events[0].detail, /客厅日常/);
 });
 
+test("idle decision copy changes neither create events nor become a normality claim", () => {
+  let state = observe(createFamilyTimelineState(), snapshot({
+    revision: 1,
+    careMessage: "状态正常，无需打扰",
+    decisionId: "decision-1",
+  }));
+  state = observe(state, snapshot({
+    revision: 2,
+    careMessage: "画面信息不足或动作不明，继续观察",
+    decisionId: "decision-2",
+  }));
+
+  assert.equal(state.events.length, 1);
+  assert.match(state.events[0].detail, /客厅日常/);
+  assert.doesNotMatch(state.events[0].detail, /状态正常/);
+  assert.doesNotMatch(state.events[0].detail, /画面信息不足/);
+});
+
 test("authoritative revision order wins when a source timestamp moves backwards", () => {
   let state = observe(createFamilyTimelineState(), snapshot({
     revision: 1,

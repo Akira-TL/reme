@@ -56,6 +56,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
   const decisionRuntime = live.decision || {};
   const decision = decisionRuntime.decision;
   const mimoRequest = decisionRuntime.mimoRequest || {};
+  const visualContext = decisionRuntime.visualContext || {};
   const voice = live.voice || {};
   const cameraHealth = getCameraHealth(camera);
   const modelHealth = getModelHealth(camera);
@@ -89,6 +90,7 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       mimo_model: MIMO_MODEL,
       mimo_configured: MIMO_CONFIGURED,
       mimo_request: mimoRequest,
+      visual_context: visualContext,
       voice,
     },
   };
@@ -180,6 +182,10 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
               <DebugValue label="MiMo 返回来源" value={mimoRequest.source || "—"} />
               <DebugValue label="MiMo Decision ID" value={mimoRequest.decisionId || "—"} wide />
               {mimoRequest.error && <DebugValue label="MiMo 请求错误" value={mimoRequest.error} wide />}
+              <DebugValue label="视觉上下文状态" value={visualContext.status || "idle"} />
+              <DebugValue label="视觉帧数量" value={visualContext.frameCount ?? 0} />
+              <DebugValue label="视觉 Decision ID" value={visualContext.decisionId || "—"} wide />
+              {visualContext.error && <DebugValue label="视觉上下文错误" value={visualContext.error} wide />}
               <DebugValue label="决策状态" value={decision?.state || "等待决策"} />
               <DebugValue label="决策来源" value={decision?.source || "—"} />
               <DebugValue label="动作" value={decision?.action || "—"} />

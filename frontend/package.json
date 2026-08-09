@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "node --test"
+    "test": "node --test",
+    "test:route-build": "node --test scripts/assert-route-build.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

@@ -638,7 +638,12 @@ export function createLatestPublicationQueue(send, canSend = () => true) {
     },
     offerState(value) {
       if (!validateDemoStateEnvelope(value, roomSessionId)) return false;
-      if (runtimeSessionId !== null && value.runtime_session_id !== runtimeSessionId) {
+      const runtimeChanged = runtimeSessionId !== null
+        && value.runtime_session_id !== runtimeSessionId;
+      if (runtimeChanged) {
+        latestState = null;
+        stateInFlight = null;
+        acceptedStateRevision = -1;
         latestPose = null;
         poseInFlight = null;
         acceptedPoseSequence = -1;
@@ -1133,7 +1138,15 @@ export function createMonitorRelayClient({
   }
 
   function publishState(value) {
-    return claim ? publications.offerState({ ...value, timestamp_ms: relayNow() }) : false;
+    if (!claim) return false;
+    const previousRuntimeSessionId = publications.snapshot().runtimeSessionId;
+    const offered = publications.offerState({ ...value, timestamp_ms: relayNow() });
+    if (
+      offered
+      && previousRuntimeSessionId !== null
+      && previousRuntimeSessionId !== value.runtime_session_id
+    ) update({ acceptedStateRevision: -1 });
+    return offered;
   }
 
   function publishPose(value) {

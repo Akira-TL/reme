@@ -69,10 +69,21 @@ button, input { font: inherit; }
 .public-room-label > svg { flex: 0 0 auto; color: var(--viewer-accent); font-size: 23px; }
 .public-room-label b, .public-room-label small { display: block; }
 .public-room-label b { font-size: 12px; }
-.public-room-label small { margin-top: 1px; color: #8c7564; font-size: 9px; }
+.public-room-label small { margin-top: 1px; color: #765f4e; font-size: 9px; font-weight: 500; }
 .public-room-stats { display: flex; align-items: center; gap: 7px; flex: 0 0 auto; }
 .public-room-stats > span { padding: 6px 8px; border-radius: 9px; color: #7c6b5d; background: #f4ede7; font-size: 9px; font-weight: 700; }
 .public-room-stats > span.is-video-live { color: #b72323; background: #ffe4e1; }
+
+.viewer-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 .viewer-shell {
   position: relative;
@@ -401,8 +412,10 @@ button, input { font: inherit; }
 .home-profile-card > span svg { font-size: 34px; }
 .home-profile-card h2 { margin: 0; font-size: 20px; }
 .home-profile-card p { margin: 3px 0; color: var(--viewer-muted); font-size: 10px; }
-.home-profile-card b { color: #2b9b3e; font-size: 9px; }
-.home-profile-card b i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #2b9b3e; }
+.home-profile-card b { font-size: 9px; }
+.home-profile-card b.is-online { color: #2b9b3e; }
+.home-profile-card b.is-offline { color: #736d68; }
+.home-profile-card b i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .home-profile-card > svg { color: #8d8985; font-size: 18px; }
 .settings-group { margin-top: 20px; }
 .settings-group > h2 { margin: 0 0 8px 5px; font-size: 17px; }
@@ -562,4 +575,325 @@ button, input { font: inherit; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 1ms !important; animation-iteration-count: 1 !important; }
+}
+
+/* The family surface is a native responsive page, never a simulated phone. */
+html, body, #root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.viewer-app.is-family-surface {
+  width: 100%;
+  max-width: 100%;
+  min-height: 100dvh;
+  padding:
+    calc(82px + env(safe-area-inset-top))
+    max(16px, env(safe-area-inset-right))
+    calc(28px + env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+  background: linear-gradient(180deg, #fffaf6 0, #fff 220px);
+}
+
+.viewer-app.is-family-surface .public-room-banner {
+  top: calc(10px + env(safe-area-inset-top));
+  width: min(840px, calc(100vw - 24px));
+  min-width: 0;
+  box-shadow: 0 8px 24px rgba(76, 52, 31, 0.08);
+}
+
+.viewer-app.is-family-surface .public-room-label,
+.viewer-app.is-family-surface .public-room-label > span,
+.viewer-app.is-family-surface .viewer-header > div,
+.viewer-app.is-family-surface .family-status-card > div,
+.viewer-app.is-family-surface .care-moment-card > div,
+.viewer-app.is-family-surface .settings-row > div,
+.viewer-app.is-family-surface .truth-list p {
+  min-width: 0;
+}
+
+.viewer-app.is-family-surface .public-room-label small {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.viewer-app.is-family-surface .public-room-stats > span {
+  min-width: 0;
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.viewer-app.is-family-surface .viewer-shell {
+  width: 100%;
+  max-width: 960px;
+  min-height: calc(100dvh - 110px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  margin: 0 auto;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.viewer-app.is-family-surface .viewer-header,
+.viewer-app.is-family-surface .viewer-state-unavailable,
+.viewer-app.is-family-surface .viewer-page {
+  width: min(100%, 760px);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.viewer-app.is-family-surface .viewer-header {
+  padding-inline: 18px;
+  background: transparent;
+}
+
+.viewer-app.is-family-surface .viewer-header p,
+.viewer-app.is-family-surface .viewer-state-unavailable span,
+.viewer-app.is-family-surface .grant-disclosure span,
+.viewer-app.is-family-surface .family-status-card p,
+.viewer-app.is-family-surface .care-moment-card p,
+.viewer-app.is-family-surface .timeline-row p,
+.viewer-app.is-family-surface .timeline-disclosure,
+.viewer-app.is-family-surface .timeline-interrupted,
+.viewer-app.is-family-surface .dashboard-summary > p,
+.viewer-app.is-family-surface .truth-list small,
+.viewer-app.is-family-surface .settings-row p,
+.viewer-app.is-family-surface .emergency-dialog-context span,
+.viewer-app.is-family-surface .emergency-control-note {
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.viewer-app.is-family-surface .viewer-state-unavailable {
+  padding: 12px 14px;
+}
+
+.viewer-app.is-family-surface .viewer-state-unavailable b,
+.viewer-app.is-family-surface .grant-disclosure b,
+.viewer-app.is-family-surface .care-moment-card b {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.viewer-app.is-family-surface .care-moment-card small,
+.viewer-app.is-family-surface .summary-metrics span,
+.viewer-app.is-family-surface .capability-grid span,
+.viewer-app.is-family-surface .home-profile-card p,
+.viewer-app.is-family-surface .home-profile-card b,
+.viewer-app.is-family-surface .setting-state {
+  font-size: 10px !important;
+  line-height: 1.4;
+}
+
+.viewer-app.is-family-surface .stage-connection-pill,
+.viewer-app.is-family-surface .stage-local-pill,
+.viewer-app.is-family-surface .stage-mode-pill {
+  min-height: 32px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.viewer-app.is-family-surface .viewer-bottom-nav.MuiBottomNavigation-root {
+  bottom: max(10px, env(safe-area-inset-bottom));
+  width: min(560px, calc(100vw - 20px));
+  min-height: 64px;
+  height: calc(64px + env(safe-area-inset-bottom));
+  border-radius: 20px;
+}
+
+.viewer-app.is-family-surface .viewer-bottom-nav .MuiBottomNavigationAction-root,
+.viewer-app.is-family-surface .emergency-close.MuiIconButton-root,
+.viewer-app.is-family-surface .emergency-dialog .MuiButton-root,
+.viewer-app.is-family-surface .settings-row-action .MuiSwitch-root {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.viewer-app.is-family-surface .emergency-close.MuiIconButton-root {
+  width: 44px;
+  height: 44px;
+}
+
+.viewer-app.is-family-surface .emergency-dialog .MuiButton-root {
+  width: 100%;
+  border-radius: 13px;
+}
+
+.family-confirm-error {
+  margin: 9px 0 0 !important;
+  padding: 10px 12px;
+  border-radius: 11px;
+  color: #a92121 !important;
+  background: #fff0ef;
+  font-size: 11px !important;
+  line-height: 1.45 !important;
+}
+
+@media (max-width: 560px) {
+  .viewer-app.is-family-surface {
+    padding:
+      calc(124px + env(safe-area-inset-top))
+      max(0px, env(safe-area-inset-right))
+      calc(18px + env(safe-area-inset-bottom))
+      max(0px, env(safe-area-inset-left));
+    background: #fff;
+  }
+
+  .viewer-app.is-family-surface .public-room-banner {
+    top: calc(7px + env(safe-area-inset-top));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
+    width: calc(100vw - 14px);
+    min-height: 0;
+    padding: 9px 10px;
+    border-radius: 14px;
+  }
+
+  .viewer-app.is-family-surface .public-room-label b {
+    font-size: 11px;
+  }
+
+  .viewer-app.is-family-surface .public-room-label small {
+    font-size: 10px;
+  }
+
+  .viewer-app.is-family-surface .public-room-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 5px;
+  }
+
+  .viewer-app.is-family-surface .public-room-stats > span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 4px 6px;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+
+  .viewer-app.is-family-surface .public-room-stats > span.is-video-live {
+    white-space: normal;
+  }
+
+  .viewer-app.is-family-surface .viewer-shell {
+    min-height: calc(100dvh - 124px - env(safe-area-inset-top));
+  }
+
+  .viewer-app.is-family-surface .viewer-header {
+    min-height: 68px;
+    padding: 12px 16px 10px;
+  }
+
+  .viewer-app.is-family-surface .viewer-page {
+    min-height: calc(100dvh - 250px);
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .viewer-app.is-family-surface .viewer-state-unavailable {
+    width: calc(100% - 32px);
+  }
+
+  .viewer-app.is-family-surface .viewer-stage {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .viewer-app.is-family-surface .family-status-card {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .viewer-app.is-family-surface .family-status-icon {
+    width: 48px;
+    height: 48px;
+  }
+
+  .viewer-app.is-family-surface .care-moment-card {
+    grid-template-columns: 44px minmax(0, 1fr) 20px;
+  }
+
+  .viewer-app.is-family-surface .care-moment-card > span {
+    width: 42px;
+    height: 42px;
+  }
+
+  .viewer-app.is-family-surface .family-timeline {
+    padding: 16px 14px;
+    border-radius: 18px;
+  }
+
+  .viewer-app.is-family-surface .timeline-heading h2 {
+    font-size: 21px;
+  }
+
+  .viewer-app.is-family-surface .timeline-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .viewer-app.is-family-surface .timeline-list::before {
+    left: 17px;
+  }
+
+  .viewer-app.is-family-surface .timeline-marker {
+    width: 36px;
+    height: 36px;
+  }
+
+  .viewer-app.is-family-surface .summary-metrics,
+  .viewer-app.is-family-surface .capability-grid {
+    min-width: 0;
+  }
+
+  .viewer-app.is-family-surface .settings-row {
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    padding-inline: 10px;
+  }
+
+  .viewer-app.is-family-surface .settings-row-icon {
+    width: 42px;
+    height: 42px;
+  }
+}
+
+@media (max-width: 360px) {
+  .viewer-app.is-family-surface {
+    padding-top: calc(148px + env(safe-area-inset-top));
+  }
+
+  .viewer-app.is-family-surface .public-room-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .viewer-app.is-family-surface .public-room-stats > span {
+    white-space: normal;
+  }
+
+  .viewer-app.is-family-surface .viewer-shell {
+    min-height: calc(100dvh - 148px - env(safe-area-inset-top));
+  }
+}
+
+@media (min-width: 900px) {
+  .viewer-app.is-family-surface {
+    padding-top: calc(88px + env(safe-area-inset-top));
+  }
+
+  .viewer-app.is-family-surface .viewer-shell,
+  .viewer-app.is-family-surface .viewer-page {
+    min-height: 0;
+  }
+
+  .viewer-app.is-family-surface .viewer-header {
+    padding-top: 24px;
+  }
 }

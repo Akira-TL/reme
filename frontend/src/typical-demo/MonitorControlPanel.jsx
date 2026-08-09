@@ -6,6 +6,7 @@ import ComputerRoundedIcon from "@mui/icons-material/ComputerRounded";
 import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
 import LockOpenRoundedIcon from "@mui/icons-material/LockOpenRounded";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import PrivacyTipRoundedIcon from "@mui/icons-material/PrivacyTipRounded";
 import StopRoundedIcon from "@mui/icons-material/StopRounded";
 import UploadFileRoundedIcon from "@mui/icons-material/UploadFileRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
@@ -46,6 +47,7 @@ function sourceStatusLabel(status) {
 }
 
 export function MonitorControlPanel({
+  surface = "debug",
   started,
   starting = false,
   onStart,
@@ -59,12 +61,14 @@ export function MonitorControlPanel({
   onRevokeControl,
   nowMs,
 }) {
+  const homeSurface = surface === "home";
   const fileInputRef = useRef(null);
   const pendingFileCommandRef = useRef(null);
   const filePickerIntentRef = useRef(null);
   const cameraActive = media.source?.kind === "camera";
   const sourceValue = media.source?.id || "";
   const roomSessionId = room.roomSessionId || null;
+  const sourcePickerLabel = homeSurface ? "选择相机或视频" : "选择媒体源";
 
   useEffect(() => {
     const commandId = pendingFileCommandRef.current;
@@ -145,14 +149,21 @@ export function MonitorControlPanel({
   }
 
   return (
-    <section className="monitor-control-panel" aria-label="公开演示房间与媒体源">
+    <section
+      className={`monitor-control-panel ${homeSurface ? "is-home-control" : ""} ${homeSurface && !started ? "is-idle" : ""}`}
+      aria-label={homeSurface ? "家中数据采集与本机媒体源" : "公开演示房间与媒体源"}
+    >
       <Alert
-        severity="warning"
-        icon={<WarningAmberRoundedIcon fontSize="inherit" />}
+        severity={homeSurface ? "info" : "warning"}
+        icon={homeSurface
+          ? <PrivacyTipRoundedIcon fontSize="inherit" />
+          : <WarningAmberRoundedIcon fontSize="inherit" />}
         className="public-room-warning"
       >
-        <strong>公开演示房间</strong>
-        <span>无身份认证 · 事件期原画会发给全部在线 Viewer · 不代表生产隐私方案</span>
+        <strong>{homeSurface ? "公开演示 · 无账号验证" : "公开演示房间"}</strong>
+        <span>{homeSurface
+          ? "启动只请求本机相机；麦克风仅在问询窗口按需请求并录制，问询语音可按需送 MiMo；跌倒确认等事件可按需选定单帧或短片送 MiMo（非连续上传）；事件期原画仅在当前授权窗口对全部在线 Viewer 开放。"
+          : "无身份认证 · 事件期原画会发给全部在线 Viewer · 不代表生产隐私方案"}</span>
       </Alert>
 
       <div className="monitor-control-grid">
@@ -161,30 +172,33 @@ export function MonitorControlPanel({
             {started ? <CastRoundedIcon /> : <LockOpenRoundedIcon />}
           </span>
           <div>
-            <small>MONITOR PRODUCER</small>
-            <strong>{started ? "演示控制端在线" : "准备进入固定公开房间"}</strong>
+            <small>{homeSurface ? "当前通道 · 本机视频" : "MONITOR PRODUCER"}</small>
+            <strong>{started
+              ? homeSurface ? "视频通道采集中" : "演示控制端在线"
+              : homeSurface ? "开启本机视频采集" : "准备进入固定公开房间"}</strong>
             <p>{started
-              ? `房间会话 ${room.roomSessionId || "正在建立"}`
-              : "点击后先取得唯一 producer 租约，再由本机确认媒体权限"}</p>
+              ? homeSurface ? "视频采集、姿态感知和事件同步都以当前会话为准" : `房间会话 ${room.roomSessionId || "正在建立"}`
+              : homeSurface ? "点击后先请求本机相机权限；Relay 或后端离线时会明确降级，不阻断本机采集" : "点击后先请求本机媒体权限；producer 租约会并行建立"}</p>
           </div>
           {started ? (
             <Button color="inherit" variant="outlined" startIcon={<StopRoundedIcon />} onClick={onStop}>
-              停止演示
+              {homeSurface ? "停止视频采集" : "停止演示"}
             </Button>
           ) : (
             <Button
-              color="warning"
+              className={homeSurface ? "home-primary-action" : undefined}
+              color={homeSurface ? "inherit" : "warning"}
               variant="contained"
-              startIcon={<PlayArrowRoundedIcon />}
+              startIcon={homeSurface ? <VideocamRoundedIcon /> : <PlayArrowRoundedIcon />}
               disabled={starting}
               onClick={onStart}
             >
-              {starting ? "正在进入…" : "开始演示"}
+              {starting ? homeSurface ? "正在开启…" : "正在连接…" : homeSurface ? "开启视频采集" : "开始演示"}
             </Button>
           )}
         </div>
 
-        <div className="monitor-source-block">
+        {(!homeSurface || started) && <div className="monitor-source-block">
           <div className="monitor-section-heading">
             <div>
               <small>本机媒体源</small>
@@ -198,13 +212,13 @@ export function MonitorControlPanel({
           </div>
           <div className="monitor-source-actions">
             <FormControl size="small" fullWidth disabled={!started || media.sourceStatus === "requesting" || confirmingCommands.length > 0}>
-              <InputLabel id="monitor-source-label">选择媒体源</InputLabel>
+              <InputLabel id="monitor-source-label">{sourcePickerLabel}</InputLabel>
               <Select
                 labelId="monitor-source-label"
                 value={sourceValue}
-                label="选择媒体源"
+                label={sourcePickerLabel}
                 onChange={chooseSource}
-                renderValue={(selected) => media.availableSources.find((item) => item.id === selected)?.label || media.source?.label || "选择媒体源"}
+                renderValue={(selected) => media.availableSources.find((item) => item.id === selected)?.label || media.source?.label || sourcePickerLabel}
               >
                 {media.availableSources.map((source) => {
                   const SourceIcon = SOURCE_ICONS[source.kind] || VideocamRoundedIcon;
@@ -218,18 +232,20 @@ export function MonitorControlPanel({
                 })}
               </Select>
             </FormControl>
-            <Tooltip title={cameraActive ? "在手机上切换前后摄像头" : "当前不是摄像头源"}>
-              <span>
-                <Button
-                  variant="outlined"
-                  startIcon={<CameraswitchRoundedIcon />}
-                  disabled={!started || !cameraActive || media.sourceStatus === "requesting" || confirmingCommands.length > 0}
-                  onClick={() => void media.switchCameraFacing()}
-                >
-                  前后切换
-                </Button>
-              </span>
-            </Tooltip>
+            {!homeSurface && (
+              <Tooltip title={cameraActive ? "在手机上切换前后摄像头" : "当前不是摄像头源"}>
+                <span>
+                  <Button
+                    variant="outlined"
+                    startIcon={<CameraswitchRoundedIcon />}
+                    disabled={!started || !cameraActive || media.sourceStatus === "requesting" || confirmingCommands.length > 0}
+                    onClick={() => void media.switchCameraFacing()}
+                  >
+                    前后切换
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </div>
           <input
             ref={fileInputRef}
@@ -242,39 +258,43 @@ export function MonitorControlPanel({
           <p className={media.sourceError ? "is-error" : ""}>
             {media.sourceError?.message
               || media.source?.disabled_reason
-              || `源 generation ${media.sourceGeneration} · 权限 ${media.permissionState}`}
+              || (homeSurface
+                ? media.source ? `当前：${media.source.label}` : "请选择本机相机、屏幕或视频"
+                : `源 generation ${media.sourceGeneration} · 权限 ${media.permissionState}`)}
           </p>
-        </div>
+        </div>}
 
-        <div className="monitor-room-block">
+        {(!homeSurface || started) && <div className="monitor-room-block">
           <div className="monitor-section-heading">
-            <div><small>RELAY</small><strong>{room.connectionLabel}</strong></div>
+            <div><small>{homeSurface ? "公开演示连接" : "RELAY"}</small><strong>{room.connectionLabel}</strong></div>
             <Chip
               size="small"
               icon={<GroupsRoundedIcon />}
-              label={`${room.viewerCount || 0}/${room.maxViewers || 5} Viewer`}
+              label={homeSurface
+                ? `${room.viewerCount || 0} 个 Viewer 在线`
+                : `${room.viewerCount || 0}/${room.maxViewers || 5} Viewer`}
               color={room.monitorOnline ? "success" : "default"}
             />
           </div>
           <dl>
             <div>
-              <dt>控制权</dt>
+              <dt>{homeSurface ? "Viewer 处理" : "控制权"}</dt>
               <dd className="monitor-controller-value">
                 <span>{room.controllerLabel || "尚无 Viewer 接管"}</span>
                 {room.controllerActive && (
                   <Button size="small" color="warning" onClick={onRevokeControl}>
-                    收回
+                    {homeSurface ? "结束 Viewer 处理" : "收回"}
                   </Button>
                 )}
               </dd>
             </div>
-            <div><dt>权威状态</dt><dd>revision {room.stateRevision ?? 0}</dd></div>
+            {!homeSurface && <div><dt>权威状态</dt><dd>revision {room.stateRevision ?? 0}</dd></div>}
             <div><dt>事件原画</dt><dd>{room.mediaGrantLabel || "未开放"}</dd></div>
           </dl>
-        </div>
+        </div>}
       </div>
 
-      <div className={`monitor-confirmation-queue ${pendingCommands.length ? "has-pending" : ""}`}>
+      {!homeSurface && <div className={`monitor-confirmation-queue ${pendingCommands.length ? "has-pending" : ""}`}>
         <div>
           <small>远程命令与本机确认</small>
           <strong>{pendingCommands.length
@@ -316,7 +336,7 @@ export function MonitorControlPanel({
             <Chip size="small" color="warning" label="本机处理中" />
           </article>
         ))}
-      </div>
+      </div>}
     </section>
   );
 }

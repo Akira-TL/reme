@@ -91,8 +91,8 @@ export function SkeletonStage({
   })();
 
   return (
-    <section className={`viewer-stage scene-${sceneId} ${videoLive ? "has-video" : ""}`} aria-label="外婆家实时状态">
-      <img className="viewer-stage-environment" src={SCENE_IMAGES[sceneId]} alt="" />
+    <section className={`viewer-stage scene-${sceneId || "unavailable"} ${videoLive ? "has-video" : ""}`} aria-label="外婆家实时状态">
+      {SCENE_IMAGES[sceneId] && <img className="viewer-stage-environment" src={SCENE_IMAGES[sceneId]} alt="" />}
       <video
         ref={videoRef}
         className={`viewer-stage-video ${videoLive ? "is-visible" : ""}`}

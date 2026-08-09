@@ -5,7 +5,7 @@
 - Date: 2026-08-09
 - Integration branch: `codex/lbx-timeline`
 - Merge target: `lbx-frontend`
-- Bases: `origin/lbx-frontend@961361dcd3b843d8e56ae20b5bf0025b3cdfed3c`, `lbx-frontend@5a6e5db0`
+- Bases: `origin/lbx-frontend@961361dcd3b843d8e56ae20b5bf0025b3cdfed3c`, local P0 integration `lbx-frontend@ef65c357`
 - Related: ADR-0002, ADR-0006, `.scratch/public-dual-device-demo/spec.md`
 
 ## 1. 目标与假设

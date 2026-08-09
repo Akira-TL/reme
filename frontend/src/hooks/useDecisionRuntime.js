@@ -139,6 +139,18 @@ function createVoiceState() {
   };
 }
 
+function createVisualContextState() {
+  return {
+    status: "idle",
+    decisionId: null,
+    sceneId: null,
+    frameCount: 0,
+    requestedAt: null,
+    respondedAt: null,
+    error: "",
+  };
+}
+
 export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled = true }) {
   const [connection, setConnection] = useState("closed");
   const [reason, setReason] = useState("");
@@ -158,6 +170,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     decisionId: null,
     error: "",
   });
+  const [visualContext, setVisualContext] = useState(createVisualContextState);
   const [voice, setVoice] = useState(createVoiceState);
 
   const sceneRef = useRef(sceneId);
@@ -198,6 +211,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           decisionId: null,
           error: "",
         });
+        setVisualContext(createVisualContextState());
         setVoice(createVoiceState());
       }, 0);
       return () => window.clearTimeout(timer);
@@ -822,13 +836,53 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       const channels = Array.isArray(payload.confirm_channels) ? payload.confirm_channels : [];
       if (channels.includes("frame")) {
         const imageB64 = captureJpegBase64(videoRef.current);
+        const requestedAt = Date.now();
+        const request = {
+          decisionId: payload.decision_id,
+          sceneId: payload.scene_id || sceneRef.current,
+          frameCount: imageB64 ? 1 : 0,
+          requestedAt,
+        };
         if (imageB64) {
+          setVisualContext({
+            status: "sending",
+            ...request,
+            respondedAt: null,
+            error: "",
+          });
           uploadDangerFrame(httpBase, {
-            sceneId: payload.scene_id || sceneRef.current,
+            sceneId: request.sceneId,
             decisionId: payload.decision_id,
             timestampMs: performance.now(),
             imageB64,
-          }).catch(() => {});
+          }).then(() => {
+            if (disposed) return;
+            setVisualContext((current) => current.decisionId === request.decisionId
+              ? {
+                  ...current,
+                  status: "sent",
+                  respondedAt: Date.now(),
+                  error: "",
+                }
+              : current);
+          }).catch((error) => {
+            if (disposed) return;
+            setVisualContext((current) => current.decisionId === request.decisionId
+              ? {
+                  ...current,
+                  status: "failed",
+                  respondedAt: Date.now(),
+                  error: error?.message || "视觉确认发送失败",
+                }
+              : current);
+          });
+        } else {
+          setVisualContext({
+            status: "failed",
+            ...request,
+            respondedAt: Date.now(),
+            error: "未获得可发送的当前画面",
+          });
         }
       }
       if (payload.alarm) {
@@ -942,6 +996,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             decisionId: null,
             error: "",
           });
+          setVisualContext(createVisualContextState());
           setVoice((current) => ({
             ...current,
             listening: false,
@@ -1038,6 +1093,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
             setMediaAuthorization(null);
             setFallMediaAuthorization(null);
             setHistory([]);
+            setVisualContext(createVisualContextState());
           })
           .catch((error) => {
             if (!disposed) setReason(error.message || "B 场景重置失败");
@@ -1086,6 +1142,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         decisionId: null,
         error: "",
       });
+      setVisualContext(createVisualContextState());
       setVoice(createVoiceState());
       prepareMicrophone().catch(() => {});
       try {
@@ -1192,6 +1249,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     mediaAuthorization,
     fallMediaAuthorization,
     mimoRequest,
+    visualContext,
     respondSafe,
     respondNeedHelp,
     respondConsentGranted,
