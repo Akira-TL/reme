@@ -4,16 +4,19 @@ Cloudflare Worker + SQLite Durable Object for the fixed `shared-live-demo`
 prototype room. This room intentionally has no identity authentication and is
 not a production privacy or access-control design.
 
-The Relay coordinates structured state, a 17-point pose projection, one remote
-controller lease, command acknowledgements, and event-scoped WebRTC signalling.
-It rejects binary WebSocket frames, raw-media fields, data URLs, and JSON larger
-than 16 KiB. RTP media never passes through the Worker or SQLite.
+The Relay coordinates transport/presentation state, a persisted backend-owned
+`reme-family-event/v1`, a 17-point pose projection, one remote controller
+lease, command acknowledgements, and event-scoped WebRTC signalling. It rejects
+browser-authored care facts, binary WebSocket frames, raw-media fields, data
+URLs, and JSON larger than 16 KiB. RTP media never passes through the Worker or
+SQLite.
 
 ## Local development
 
 ```bash
 npm ci
 npm run types
+cp .dev.vars.example .dev.vars
 npm run dev -- --ip 127.0.0.1 --port 8787
 ```
 
@@ -22,14 +25,17 @@ preview ports `5173`, `4173`, and `4174` on `localhost` and `127.0.0.1`. Add an
 explicit LAN origin before opening the frontend from a phone; do not replace the
 allowlist with `*`.
 
-This local stage provides signalling only and deliberately has no TURN
-credential service. Cross-NAT clear video must be shown as unavailable/LAN-only
-until the separately approved deployment phase configures short-lived TURN
-credentials.
+The unified launcher creates a random `BACKEND_PUBLISH_TOKEN` and injects it
+into both backend and Relay. Manual Wrangler development uses the ignored
+`.dev.vars` file. `TURN_KEY_ID=local-disabled` makes `/api/rtc-config` return
+STUN-only capability; public cross-NAT video therefore remains explicitly
+unavailable until deployment configures Cloudflare Realtime TURN.
 
 ## HTTP and WebSocket entrypoints
 
 - `GET /health`: stateless Worker health.
+- `GET /api/rtc-config`: exact short-lived `reme-rtc-config/v1`; returns STUN
+  locally and ephemeral STUN/TURN credentials in a configured deployment.
 - `GET /api/status`: current public room status, without tokens.
 - `POST /api/monitor/claim`: bodyless, passwordless producer claim. Returns a
   256-bit token, a new `room_session_id`, and a 30-second expiry. A live lease
@@ -38,6 +44,14 @@ credentials.
 - `GET /ws/monitor`: protocols `reme-monitor-v1` and
   `reme-token-${producer_token}`.
 - `GET /ws/viewer`: public protocol `reme-viewer-v1`, capped at five sockets.
+
+Backend-only ingress requires `Authorization: Bearer
+${BACKEND_PUBLISH_TOKEN}` and is not a browser API:
+
+- `GET /api/backend/context`: current Relay `room_session_id`.
+- `POST /api/backend/family-event`: persist and broadcast the exact latest
+  backend FamilyEvent. Revisions must strictly increase within one runtime;
+  exact retries are idempotent.
 
 The Monitor sends `monitor_heartbeat` every 10 seconds. Producer and controller
 leases both expire after 30 seconds. Authoritative state must also be refreshed
@@ -79,14 +93,21 @@ Viewer lifecycle and controller lease:
 
 State and pose are the exact `reme-demo-state/v4` and
 `reme-pose-frame-17/v1` contracts exported by `src/protocol.ts`. Monitor state
-must publish `state.media_grant=null`; the Relay projects its own active grant
-for Viewers. In v4, `state.care.decision` is the exact current
-`reme-care-decision/v1-experiment` snapshot (or `null`). Its B-owned
-`family_delivery` explicitly separates `none`, `notification`, `action_card`,
-and `alarm`; only `family_delivery=alarm` with a non-null `alarm` may drive
-emergency UI, alert channels, or fall video. `phase` is presentation metadata
-and never substitutes for that discriminator. A new Viewer receives the current
-state and only a pose received within the last 2.5 seconds.
+must publish `state.media_grant=null` and the fixed empty care projection
+`{"phase":"idle","consent":"none","decision":null}`. Any Home-authored care
+fact is rejected. The Relay projects its own active grant for Viewers. A new
+Viewer receives the current transport state, the persisted latest FamilyEvent,
+and only a pose received within the last 2.5 seconds.
+
+Family care, alarm, privacy mode and action-card facts come only from
+`reme-family-event/v1`, whose care projection uses
+`reme-care-decision/v1-experiment`. Its B-owned `family_delivery` explicitly
+separates `none`, `notification`, `action_card`, and `alarm`; only
+`family_delivery=alarm` with a non-null `alarm` may drive emergency UI, alert
+channels, or fall video. The event carries separate room/runtime generations
+and a backend-owned revision. Its `reme-media-authorization/v1` is a business
+authorization; it is not a WebRTC MediaGrant. In the anonymous fixed room,
+Family action cards omit the elder's verbatim quote.
 
 Commands are sent directly from the controller Viewer to the Relay and then
 unchanged to the Monitor:
@@ -105,9 +126,9 @@ most recent 256 rows in the active room.
 Media grant and signalling:
 
 ```json
-{"type":"media_grant_request","room_session_id":"room-...","runtime_session_id":"runtime-...","event_id":"decision-...","scope":"kitchen_moment","expires_in_ms":60000}
+{"type":"media_grant_request","room_session_id":"room-...","runtime_session_id":"runtime-...","event_id":"authorization-...","scope":"kitchen_moment","expires_in_ms":60000}
 {"type":"media_grant_revoke","room_session_id":"room-...","grant_id":"grant-..."}
-{"type":"media_grant","room_session_id":"room-...","grant":{"grant_id":"grant-...","event_id":"decision-...","scope":"kitchen_moment","expires_at_ms":0,"status":"active"},"audience":"all_viewers","reason":null}
+{"type":"media_grant","room_session_id":"room-...","grant":{"grant_id":"grant-...","event_id":"authorization-...","scope":"kitchen_moment","expires_at_ms":0,"status":"active"},"audience":"all_viewers","reason":null}
 {"schema_version":"reme-media-signal/v1","room_session_id":"room-...","grant_id":"grant-...","target_id":"monitor","signal_type":"offer","signal":{"type":"offer","sdp":"..."}}
 {"schema_version":"reme-media-signal/v1","room_session_id":"room-...","grant_id":"grant-...","target_id":"viewer-...","signal_type":"answer","signal":{"type":"answer","sdp":"..."}}
 ```
@@ -116,15 +137,45 @@ The Relay adds `from_id` when forwarding a signal. Each Viewer creates a
 `recvonly` video peer and sends the offer to `monitor`; the Monitor answers that
 specific `viewer_id`. ICE always targets the opposite peer. A Viewer joining
 during either active grant receives the remaining grant projection and starts
-the same offer flow immediately. Kitchen grants require current-event consent
-and last at most 60 seconds. Fall grants require the current event's exact
-`care.decision.decision_id`, `care.decision.family_delivery=alarm`, and a
-non-null `care.decision.alarm`, and last at most 30 seconds. Bathroom,
-source/session/scene changes,
-capture loss, stale authority, producer loss, and expiry all revoke the grant
-fail-closed. A repeated grant for the same room event can use only the time
-remaining before that event's first persisted grant deadline; it cannot restart
-the 60/30-second window.
+the same offer flow immediately. Kitchen grants require the exact active
+backend `kitchen_moment` Authorization plus `family_delivery=notification`, and
+last at most 60 seconds. Fall grants require the exact active
+`fall_emergency` Authorization, whose FamilyEvent must carry
+`family_delivery=alarm` and a valid alarm, and last at most 30 seconds. Bathroom,
+`privacy_mode=hidden`, Authorization loss/expiry, source/session/scene changes,
+capture loss, stale transport authority, and producer loss revoke the grant
+fail-closed. Re-requesting a grant cannot extend it beyond the backend
+Authorization deadline.
+
+## Deployment secrets
+
+Production must set three Worker secrets; never commit their values or expose
+them through Vite variables:
+
+```bash
+npx wrangler secret put BACKEND_PUBLISH_TOKEN
+npx wrangler secret put TURN_KEY_ID
+npx wrangler secret put TURN_KEY_API_TOKEN
+```
+
+Generate `BACKEND_PUBLISH_TOKEN` as at least 32 random bytes and configure the
+backend publisher with the same value:
+
+```bash
+REME_FAMILY_RELAY_URL=https://your-relay-worker.example
+REME_FAMILY_RELAY_PUBLISH_TOKEN=<same value as BACKEND_PUBLISH_TOKEN>
+```
+
+Those two backend settings are server-only. If either is absent, the backend
+keeps its local safety state machine running but disables Relay publication and
+logs the incomplete configuration instead of leaking a partial credential.
+
+`TURN_KEY_ID` and `TURN_KEY_API_TOKEN` are the Cloudflare Realtime TURN key ID
+and API token. The Worker exchanges them server-side for one-hour ephemeral ICE
+credentials. `ALLOWED_ORIGINS` must also be replaced with the actual HTTPS Home
+and Family origins. The implementation does not require a separate Reme media
+server or cloud recording store; TURN account usage is subject to the deployed
+Cloudflare account's current limits and pricing.
 
 ## Verification
 

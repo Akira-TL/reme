@@ -34,6 +34,10 @@ from reme.runtime.decision.config import (
 from reme.runtime.decision.context import discover_scenes
 from reme.runtime.decision.danger import DangerConfirmController, DangerRejectedError
 from reme.runtime.decision.deadline import MonotonicDeadlineScheduler
+from reme.runtime.decision.family_event import (
+    FamilyEventAuthority,
+    build_relay_family_transport_from_env,
+)
 from reme.runtime.decision.policy import (
     DecisionPublisher,
     DecisionRejectedError,
@@ -121,6 +125,7 @@ def build_decision_handler(
     danger: DangerConfirmController | None = None,
     voice_dialogue: VoiceDialogueController | None = None,
     voice_dir: Path | None = None,
+    family_authority: FamilyEventAuthority | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Create the request handler bound to one DecisionService.
 
@@ -506,6 +511,8 @@ def build_decision_handler(
                 # Live buffers reset with the episode, or replays from an
                 # earlier timestamp would trip the ingest watermark.
                 ingest.reset_scene(scene_id)
+            if family_authority is not None:
+                family_authority.reset_scene()
             self._send_json(HTTPStatus.OK, {"reset": scene_id})
 
         # -- runtime routes -------------------------------------------------
@@ -563,6 +570,8 @@ def build_decision_handler(
                 _, status = registry.replace_active(request)
             else:
                 status = registry.start(request)
+            if family_authority is not None:
+                family_authority.begin_runtime(request.session_id)
             self._announce_session(status)
             if bridge is not None:
                 # Subscribe to A only after the buffers are clean, so no event
@@ -573,6 +582,8 @@ def build_decision_handler(
                     # Without this the registry would stay RUNNING with no feed
                     # and every retry would 409 on the active session (Codex R4).
                     bridge.stop()
+                    if family_authority is not None:
+                        family_authority.stop_runtime(request.session_id)
                     registry.stop(request.session_id)
                     self._send_error_json(
                         HTTPStatus.SERVICE_UNAVAILABLE,
@@ -602,6 +613,8 @@ def build_decision_handler(
             if ingest is not None:
                 ingest.reset_scene(scene_id)
             service.reset_scene(scene_id)
+            if family_authority is not None:
+                family_authority.reset_scene()
             self._send_json(
                 HTTPStatus.OK,
                 {
@@ -636,6 +649,8 @@ def build_decision_handler(
             # or in-flight events from A land while the buffers are resetting.
             if bridge is not None:
                 bridge.stop()
+            if family_authority is not None:
+                family_authority.stop_runtime(session_id)
             status = registry.stop(session_id)
             self._announce_session(status)
             self._send_json(HTTPStatus.OK, status.to_payload())
@@ -896,12 +911,14 @@ class DecisionRuntime:
     danger: DangerConfirmController | None
     voice_dialogue: VoiceDialogueController
     emergency_publisher: EmergencyDecisionPublisher | None
+    family_authority: FamilyEventAuthority
     deadline_scheduler: MonotonicDeadlineScheduler
 
     def shutdown(self, bridge: PerceptionBridgeLike | None = None) -> None:
         if bridge is not None:
             bridge.stop()
         self.deadline_scheduler.close()
+        self.family_authority.close()
         if self.emergency_publisher is not None:
             self.emergency_publisher.close()
         self.hub.close_all()
@@ -918,10 +935,18 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
     hub = DecisionEventHub()
     ingest = EventIngest()
     local_publisher = RuntimeDecisionPublisher(registry=registry, hub=hub)
+    family_authority = FamilyEventAuthority(
+        registry=registry,
+        transport=build_relay_family_transport_from_env(),
+    )
     emergency_publisher = build_miloco_emergency_publisher()
-    publisher: DecisionPublisher = local_publisher
+    publisher: DecisionPublisher = DecisionPublisherFanout(local_publisher, family_authority)
     if emergency_publisher is not None:
-        publisher = DecisionPublisherFanout(local_publisher, emergency_publisher)
+        publisher = DecisionPublisherFanout(
+            local_publisher,
+            family_authority,
+            emergency_publisher,
+        )
     deadline_scheduler = MonotonicDeadlineScheduler()
     service = DecisionService(
         scenes=scenes,
@@ -946,6 +971,7 @@ def build_decision_runtime(config: ServerConfig) -> DecisionRuntime:
         danger=danger,
         voice_dialogue=voice_dialogue,
         emergency_publisher=emergency_publisher,
+        family_authority=family_authority,
         deadline_scheduler=deadline_scheduler,
     )
 

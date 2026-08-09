@@ -84,6 +84,7 @@ import {
 import { useAlertEffects } from "./useAlertEffects.js";
 import { useViewerMedia } from "./useViewerMedia.js";
 import { useViewerRelay } from "./useViewerRelay.js";
+import { useRtcConfiguration } from "./useRtcConfiguration.js";
 import {
   hasPendingCommand,
   selectActiveMediaGrant,
@@ -242,11 +243,9 @@ function ConnectionBanner({ relay, grant, nowMs, familySurface = false }) {
   );
 }
 
-function StatusCard({ snapshot, relay, familySurface = false }) {
+function StatusCard({ snapshot, relay, decision, familySurface = false }) {
   const truth = deriveFamilyTruth(snapshot, relay);
-  const sceneId = truth.sceneId;
-  const care = snapshot?.state.care;
-  const decision = care?.decision;
+  const sceneId = truth.sceneId || decision?.scene_id || null;
   const careMessage = decision?.family_notification
     || decision?.elder_message
     || decision?.reason_summary
@@ -259,8 +258,8 @@ function StatusCard({ snapshot, relay, familySurface = false }) {
       && decision?.alarm) return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
-      title: "上次紧急告警 · 当前状态已过期",
-      body: `${careMessage || "曾收到权威紧急告警"}；${unavailableCopy(relay, familySurface)}。请勿把它当作当前现场状态。`,
+      title: "紧急告警仍待处理 · 现场传输不可用",
+      body: `${careMessage || "后端已发布权威紧急告警"}；${unavailableCopy(relay, familySurface)}。告警不会因浏览器离线而被取消。`,
     };
     if (relay.unavailableReason) return {
       tone: "offline",
@@ -296,7 +295,7 @@ function StatusCard({ snapshot, relay, familySurface = false }) {
       title: "家属收到普通关怀通知",
       body: careMessage || "这条通知不附带行动卡或安全告警。",
     };
-    if (care?.phase === "checking") return {
+    if (["check_in_required", "consent_required"].includes(decision?.state)) return {
       tone: "warning",
       Icon: AlarmRoundedIcon,
       title: "正在先询问本人",
@@ -361,8 +360,9 @@ function HomePage({
   relayNowMs,
   familySurface = false,
   familyAcknowledgementControl = null,
+  decision = null,
 }) {
-  const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
+  const sceneId = deriveFamilyTruth(snapshot, relay).sceneId || decision?.scene_id || null;
   return (
     <main className="viewer-page viewer-home-page">
       <SkeletonStage
@@ -389,9 +389,11 @@ function HomePage({
           </div>
         </div>
       )}
-      <StatusCard snapshot={snapshot} relay={relay} familySurface={familySurface} />
+      <StatusCard snapshot={snapshot} relay={relay} decision={decision} familySurface={familySurface} />
       {familyAcknowledgementControl}
-      {sceneId === "kitchen" && snapshot?.state.care.consent === "granted" && (
+      {sceneId === "kitchen"
+        && relay.familyEvent?.authorization?.status === "active"
+        && relay.familyEvent.authorization.scope === "kitchen_moment" && (
         <article className="care-moment-card">
           <span><RestaurantRoundedIcon /></span>
           <div><small>本人已授权</small><b>外婆分享了厨房里的生活片段</b><p>授权只属于当前事件；过期或切换场景后自动关闭。</p></div>
@@ -439,7 +441,6 @@ function FamilyActionCard({
         <b>{card.event}</b>
         <p>关怀判断：{card.system_judgment}</p>
         <p>建议动作：{card.suggested_action} · {card.time_window}</p>
-        <p>本人原话：{card.elder_quote}</p>
         {canConfirm && (
           <Button
             size="small"
@@ -583,7 +584,6 @@ function TimelineEventCard({ event }) {
       : []),
     ...(event.actionCard
       ? [
-          { label: "本人原话", value: event.actionCard.elder_quote },
           { label: "系统判断", value: event.actionCard.system_judgment },
           { label: "处理时效", value: event.actionCard.time_window },
         ]
@@ -1084,17 +1084,16 @@ function CommandButton({ icon: Icon, children, onClick, disabled, tone = "defaul
   return <Button className={`command-button is-${tone}`} startIcon={<Icon />} onClick={onClick} disabled={disabled}>{children}</Button>;
 }
 
-function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueError }) {
+function ControlDrawer({ open, onClose, relay, snapshot, decision, nowMs, onIssue, issueError }) {
   const desktop = useMediaQuery("(min-width: 900px)");
   const pending = hasPendingCommand(relay);
   const disabled = !relay.ownsControl || !snapshot || pending;
-  const decisionId = snapshot?.state.care.decision?.decision_id;
-  const decision = snapshot?.state.care.decision;
+  const decisionId = decision?.decision_id;
   const alarmActive = decision?.family_delivery === "alarm" && Boolean(decision?.alarm);
   const actionCardPending = decision?.family_delivery === "action_card"
     && decision?.action_card?.status === "pending";
   const familyNotificationPending = selectFamilyAcknowledgementCommand(
-    snapshot?.state.care.decision,
+    decision,
   ) === "confirm_family_notification";
   const leaseSeconds = relay.ownsControl ? secondsRemaining(relay.lease?.expires_at_ms, nowMs) : 0;
   return (
@@ -1265,6 +1264,7 @@ function EmergencyDialog({
 export function ViewerApp({ surface = "family" }) {
   const familySurface = surface === "family";
   const relay = useViewerRelay();
+  const rtc = useRtcConfiguration();
   const {
     claimControl,
     controller,
@@ -1302,16 +1302,19 @@ export function ViewerApp({ surface = "family" }) {
   }, []);
 
   const snapshot = relay.state;
+  const careDecision = relay.familyEvent?.care || null;
   useEffect(() => {
     dispatchTimeline({
       type: "observe",
       roomSessionId: relay.roomSessionId,
       snapshot,
+      familyEvent: relay.familyEvent,
       acks: relay.acks,
     });
-  }, [relay.acks, relay.roomSessionId, snapshot]);
+  }, [relay.acks, relay.familyEvent, relay.roomSessionId, snapshot]);
   const relayNowMs = nowMs + (relay.serverTimeOffsetMs || 0);
   const sceneId = deriveFamilyTruth(snapshot, relay).sceneId
+    || careDecision?.scene_id
     || (familySurface ? null : "living");
   const activeGrant = useMemo(
     () => selectActiveMediaGrant(relay, relayNowMs),
@@ -1326,14 +1329,11 @@ export function ViewerApp({ surface = "family" }) {
     viewerId: relay.viewerId,
     subscribeMediaSignals: relay.subscribeMediaSignals,
     sendMediaSignal: relay.sendMediaSignal,
+    rtcConfiguration: rtc.configuration,
   });
-  const careDecision = snapshot?.state.care.decision || null;
-  const historicalAlarm = careDecision?.family_delivery === "alarm"
-    && Boolean(careDecision?.alarm);
-  const emergencyStale = Boolean(
-    historicalAlarm && (relay.stateStale || relay.unavailableReason),
-  );
-  const currentAlarm = !emergencyStale && historicalAlarm ? careDecision.alarm : null;
+  const currentAlarm = careDecision?.family_delivery === "alarm"
+    ? careDecision.alarm
+    : null;
   const emergency = Boolean(currentAlarm);
   const decisionId = careDecision?.decision_id || null;
   const familyAcknowledgementCommand = selectFamilyAcknowledgementCommand(careDecision);
@@ -1592,9 +1592,9 @@ export function ViewerApp({ surface = "family" }) {
         </header>
 
         {relay.unavailableReason && activeTab !== "timeline" && (
-          <aside className={`viewer-state-unavailable ${emergencyStale ? "is-emergency" : ""}`} role="alert">
+          <aside className="viewer-state-unavailable" role="alert">
             <HealthAndSafetyRoundedIcon />
-            <div><b>{emergencyStale ? "仅保留历史告警记录，当前状态不可用" : "当前状态不可用"}</b><span>{unavailableCopy(relay, familySurface)}</span></div>
+            <div><b>现场传输状态不可用</b><span>{unavailableCopy(relay, familySurface)}；后端已发布的关怀事件仍单独保留。</span></div>
           </aside>
         )}
 
@@ -1609,6 +1609,7 @@ export function ViewerApp({ surface = "family" }) {
             localNowMs={nowMs}
             relayNowMs={relayNowMs}
             familySurface={familySurface}
+            decision={careDecision}
             familyAcknowledgementControl={familySurface ? (
               <>
                 <FamilyActionCard
@@ -1684,7 +1685,7 @@ export function ViewerApp({ surface = "family" }) {
         </button>
       )}
 
-      {!familySurface && <ControlDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} relay={relay} snapshot={snapshot} nowMs={relayNowMs} onIssue={issueCommand} issueError={issueError} />}
+      {!familySurface && <ControlDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} relay={relay} snapshot={snapshot} decision={careDecision} nowMs={relayNowMs} onIssue={issueCommand} issueError={issueError} />}
       <EmergencyDialog
         open={Boolean(emergency && decisionId !== dismissedEmergency)}
         onClose={() => setDismissedEmergency(decisionId)}

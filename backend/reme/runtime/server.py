@@ -131,6 +131,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             voice_dir=(
                 decision_config.voice_dir if decision_config.voice_dir.is_dir() else None
             ),
+            family_authority=decision.family_authority,
         )
         server = build_server(
             decision_config,

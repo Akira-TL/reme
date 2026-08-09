@@ -33,35 +33,77 @@ function ready(state, room = "room-1") {
   });
 }
 
-function careDecision(scene, overrides = {}) {
+function familyCare(scene, overrides = {}) {
   return {
     schema_version: "reme-care-decision/v1-experiment",
     scene_id: scene,
-    decision_id: "decision-1",
+    decision_id: `decision-${scene}`,
     timestamp_ms: 1_000,
     state: "observe",
     risk_level: 1,
     privacy_mode: "skeleton_only",
-    need_dialogue: false,
-    dialogue_goal: null,
-    elder_message: null,
     family_notification: null,
     action: "observe",
     family_delivery: "none",
-    reason_summary: "当前关怀状态。",
+    reason_summary: "后端面向家属投影的权威状态。",
     uncertainty: "low",
     fallback_used: false,
     source: "rule",
     demo_mode: "live",
-    consent_required: false,
-    response_timeout_ms: null,
-    response_deadline_ms: null,
     action_card: null,
     visual_context: null,
     alarm: null,
-    voice_asset: null,
-    confirm_channels: null,
     ...overrides,
+  };
+}
+
+function mediaAuthorization(scene, overrides = {}) {
+  const decisionId = overrides.decision_id || `decision-${scene}`;
+  return {
+    schema_version: "reme-media-authorization/v1",
+    authorization_id: `authorization-${scene}`,
+    decision_id: decisionId,
+    event_id: decisionId,
+    runtime_session_id: "runtime-1",
+    scene_id: scene,
+    scope: scene === "fall" ? "fall_emergency" : "kitchen_moment",
+    audience: "public_demo_viewers",
+    status: "active",
+    issued_at_ms: 1_000,
+    expires_at_ms: 5_000,
+    ...overrides,
+  };
+}
+
+function familyEvent(scene, { revision = 0, care = {}, authorization } = {}) {
+  const authorizedCare = authorization === undefined
+    ? scene === "kitchen"
+      ? {
+          state: "resolved",
+          risk_level: 0,
+          action: "notify_family",
+          family_delivery: "notification",
+          family_notification: "已确认厨房时刻，可查看短时画面。",
+        }
+      : {
+          state: "urgent_attention",
+          risk_level: 4,
+          action: "show_urgent_attention",
+          family_delivery: "alarm",
+          family_notification: "请立即关注",
+          alarm: { channels: ["flash"], trigger: "visual_confirm" },
+        }
+    : {};
+  return {
+    schema_version: "reme-family-event/v1",
+    room_session_id: "room-1",
+    runtime_session_id: "runtime-1",
+    revision,
+    timestamp_ms: 1_000 + revision,
+    care: familyCare(scene, { ...authorizedCare, ...care }),
+    authorization: authorization === undefined
+      ? mediaAuthorization(scene)
+      : authorization,
   };
 }
 
@@ -85,8 +127,8 @@ function snapshot({ scene = "kitchen", revision = 1, runtime = "runtime-1" } = {
       runtime: { status: "ready", capability: "live", detail: null },
       care: {
         phase: "idle",
-        consent: scene === "kitchen" ? "granted" : "none",
-        decision: careDecision(scene),
+        consent: "none",
+        decision: null,
       },
       media_grant: null,
     },
@@ -133,12 +175,20 @@ test("controller ownership requires matching unexpired viewer lease", () => {
 test("authorized video fails closed for bathroom and high privacy", () => {
   let state = ready(createViewerState());
   state = message(state, "demo_state", snapshot());
+  state = message(state, "family_event", familyEvent("kitchen", {
+    care: {
+      state: "resolved",
+      risk_level: 0,
+      action: "notify_family",
+      family_notification: "已确认厨房时刻，可查看短时画面。",
+    },
+  }));
   state = message(state, "media_grant", {
     type: "media_grant",
     room_session_id: "room-1",
     grant: {
       grant_id: "grant-1",
-      event_id: "decision-1",
+      event_id: "authorization-kitchen",
       scope: "kitchen_moment",
       expires_at_ms: 5000,
       status: "active",
@@ -179,26 +229,23 @@ test("keepalive state revisions preserve the active grant identity", () => {
   assert.equal(state.mediaGrant, grant);
 });
 
-test("fall media stays closed until the current decision carries an alarm", () => {
+test("fall media stays closed until the backend publishes an active authorization", () => {
   let state = ready(createViewerState());
   const fallState = snapshot({ scene: "fall" });
-  fallState.state.care = {
-    phase: "checking",
-    consent: "none",
-    decision: careDecision("fall", {
-      state: "check_in_required",
-      need_dialogue: true,
-      elder_message: "正在询问本人",
-      action: "ask_elder",
-    }),
-  };
   state = message(state, "demo_state", fallState);
+  state = message(state, "family_event", familyEvent("fall", {
+    authorization: null,
+    care: {
+      state: "check_in_required",
+      action: "ask_elder",
+    },
+  }));
   state = message(state, "media_grant", {
     type: "media_grant",
     room_session_id: "room-1",
     grant: {
       grant_id: "grant-fall",
-      event_id: "decision-1",
+      event_id: "authorization-fall",
       scope: "fall_emergency",
       expires_at_ms: 5000,
       status: "active",
@@ -207,27 +254,17 @@ test("fall media stays closed until the current decision carries an alarm", () =
     reason: null,
   });
   assert.equal(selectActiveMediaGrant(state, 4000), null);
-  state = {
-    ...state,
-    state: {
-      ...fallState,
-      state: {
-        ...fallState.state,
-        care: {
-          ...fallState.state.care,
-          phase: "emergency",
-          decision: careDecision("fall", {
-            state: "urgent_attention",
-            risk_level: 4,
-            action: "show_urgent_attention",
-            family_notification: "请立即关注",
-            family_delivery: "alarm",
-            alarm: { channels: ["flash"], trigger: "visual_confirm" },
-          }),
-        },
-      },
+  state = message(state, "family_event", familyEvent("fall", {
+    revision: 1,
+    care: {
+      state: "urgent_attention",
+      risk_level: 4,
+      action: "show_urgent_attention",
+      family_delivery: "alarm",
+      family_notification: "请立即关注",
+      alarm: { channels: ["flash"], trigger: "visual_confirm" },
     },
-  };
+  }));
   assert.equal(selectActiveMediaGrant(state, 4000)?.grant_id, "grant-fall");
 });
 
@@ -275,19 +312,14 @@ test("state unavailable clears old normal state and accepts a fresh same-revisio
 test("an unavailable alarm snapshot is retained only as stale history", () => {
   let state = ready(createViewerState());
   const emergency = snapshot({ scene: "fall", revision: 4 });
-  emergency.state.care = {
-    phase: "emergency",
-    consent: "none",
-    decision: careDecision("fall", {
-      state: "urgent_attention",
-      risk_level: 4,
-      action: "show_urgent_attention",
-      family_notification: "上次收到权威紧急告警",
-      family_delivery: "alarm",
-      alarm: { channels: ["ring"], trigger: "visual_confirm" },
-    }),
-  };
   state = message(state, "demo_state", emergency);
+  state = message(state, "family_event", familyEvent("fall", {
+    revision: 4,
+    care: {
+      family_notification: "上次收到权威紧急告警",
+      alarm: { channels: ["ring"], trigger: "visual_confirm" },
+    },
+  }));
   state = message(state, "state_unavailable", {
     type: "state_unavailable",
     reason: "not_published",
@@ -295,6 +327,8 @@ test("an unavailable alarm snapshot is retained only as stale history", () => {
   assert.equal(state.state, emergency);
   assert.equal(state.stateStale, true);
   assert.equal(state.unavailableReason, "not_published");
+  assert.equal(state.familyEvent.care.family_delivery, "alarm");
+  assert.equal(state.familyEvent.care.alarm.trigger, "visual_confirm");
   assert.equal(selectActiveMediaGrant(state, 4_000), null);
 });
 

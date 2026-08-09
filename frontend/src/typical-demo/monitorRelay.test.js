@@ -15,44 +15,6 @@ import {
 
 const TOKEN = "a".repeat(64);
 
-function careDecision(overrides = {}) {
-  return {
-    schema_version: "reme-care-decision/v1-experiment",
-    scene_id: "living",
-    decision_id: "decision-1",
-    timestamp_ms: 1_000,
-    state: "observe",
-    risk_level: 1,
-    privacy_mode: "skeleton_only",
-    need_dialogue: false,
-    dialogue_goal: null,
-    elder_message: null,
-    family_notification: null,
-    action: "observe",
-    family_delivery: "none",
-    reason_summary: "姿态和持续时间综合判断。",
-    uncertainty: "low",
-    fallback_used: false,
-    source: "rule",
-    demo_mode: "live",
-    consent_required: false,
-    response_timeout_ms: null,
-    response_deadline_ms: null,
-    action_card: null,
-    visual_context: {
-      sent_to_mimo: false,
-      type: null,
-      start_ms: null,
-      end_ms: null,
-      sample_count: null,
-    },
-    alarm: null,
-    voice_asset: null,
-    confirm_channels: null,
-    ...overrides,
-  };
-}
-
 function demoState(revision, runtimeSessionId = "runtime-1") {
   return createDemoStateEnvelope({
     roomSessionId: "room-1",
@@ -110,19 +72,17 @@ function command(name = "start_capture", overrides = {}) {
   };
 }
 
-test("Monitor accepts only an exact v4 CareDecision snapshot", () => {
+test("Monitor accepts only presentation state and rejects browser care", () => {
   const state = demoState(1);
-  state.state.care.decision = careDecision();
-
   assert.equal(validateDemoStateEnvelope(state), true);
 
-  const mismatchedPhase = structuredClone(state);
-  mismatchedPhase.state.care.phase = "emergency";
-  assert.equal(validateDemoStateEnvelope(mismatchedPhase), false);
-
-  const inventedSource = structuredClone(state);
-  inventedSource.state.care.decision.source = "inferred";
-  assert.equal(validateDemoStateEnvelope(inventedSource), false);
+  const browserCare = structuredClone(state);
+  browserCare.state.care = {
+    phase: "emergency",
+    consent: "granted",
+    decision: { decision_id: "browser-invented" },
+  };
+  assert.equal(validateDemoStateEnvelope(browserCare), false);
 });
 
 class FakeSocket {

@@ -1,0 +1,5 @@
+# Used only when running Wrangler manually. The unified Reme launcher injects
+# its own random backend token and the same local-disabled TURN markers.
+BACKEND_PUBLISH_TOKEN=replace-with-a-random-64-hex-character-token
+TURN_KEY_ID=local-disabled
+TURN_KEY_API_TOKEN=local-disabled

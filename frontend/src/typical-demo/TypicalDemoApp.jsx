@@ -27,7 +27,7 @@ import { createDemoStateEnvelope, createPoseFrame } from "./monitorRelay";
 import { createBoundedMediaSignalDispatcher } from "./monitorMedia";
 import { RuntimeDebugPanel } from "./RuntimeDebugPanel";
 import { shouldAutoOpenFamilyVideo } from "./phoneState";
-import { homePrivacyViewMode, privacyAllowsEventVideo } from "./privacyPresentation";
+import { homePrivacyViewMode } from "./privacyPresentation";
 import { buildDemoState, mediaGrantEligibility } from "./remoteCommand";
 import { getCameraHealth, getLinkHealth, getModelHealth } from "./runtimeStatus";
 import { DEMO_SCENES } from "./scenes";
@@ -42,6 +42,7 @@ import { useFallLiveLink } from "./useFallLiveLink";
 import { useLiveVideoSource } from "./useLiveVideoSource";
 import { useMonitorMediaProducer } from "./useMonitorMediaProducer";
 import { useMonitorRelay } from "./useMonitorRelay";
+import { useRtcConfiguration } from "../shared-demo/useRtcConfiguration.js";
 
 const SCENE_ICONS = {
   living: DirectionsWalkRoundedIcon,
@@ -50,16 +51,8 @@ const SCENE_ICONS = {
   fall: EmergencyRoundedIcon,
 };
 
-const LOCAL_RTC_CONFIGURATION = Object.freeze({ iceServers: [] });
-
-function careConsent(decision, kitchenAuthorized) {
-  if (kitchenAuthorized) return "granted";
-  if (decision?.response === "consent_denied") return "denied";
-  if (decision?.state === "consent_required" || decision?.consent_required) return "pending";
-  return "none";
-}
-
 export function TypicalDemoApp({ surface = "debug" }) {
+  const rtc = useRtcConfiguration();
   const normalizedSurface = normalizeSurface(surface);
   const debugInterface = exposesDebugInterface(normalizedSurface);
   const [sceneId, setSceneId] = useState(() => initialSceneForSurface(normalizedSurface));
@@ -73,8 +66,9 @@ export function TypicalDemoApp({ surface = "debug" }) {
   const [pendingCommands, setPendingCommands] = useState([]);
   const [confirmingCommands, setConfirmingCommands] = useState([]);
   const [grantMessage, setGrantMessage] = useState(null);
+  const [familyEvent, setFamilyEvent] = useState(null);
   const [grantClockMs, setGrantClockMs] = useState(() => Date.now());
-  const [authorizationClockMs, setAuthorizationClockMs] = useState(() => performance.now());
+  const [authorizationClockMs, setAuthorizationClockMs] = useState(() => Date.now());
   const [mediaSignalDispatcher] = useState(() => createBoundedMediaSignalDispatcher());
   const autoConversationRef = useRef(null);
   const revisionRef = useRef(0);
@@ -180,8 +174,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
   );
   const kitchenShared = Boolean(kitchenShareDecision);
   const kitchenNotification = kitchenShareDecision?.family_notification || "";
-  const kitchenAuthorization = live.mediaAuthorization;
-  const kitchenAuthorizationActive = live.kitchenConsentActive;
   const activeGrant = grantMessage?.grant?.status === "active"
     && grantMessage.grant.expires_at_ms > grantClockMs
     ? grantMessage.grant
@@ -189,15 +181,10 @@ export function TypicalDemoApp({ surface = "debug" }) {
   const familyGrantActive = Boolean(
     activeGrant
       && sceneId !== "bathroom"
-      && privacyAllowsEventVideo(sceneId, projectedDecision)
-      && (
-        (sceneId === "kitchen" && activeGrant.scope === "kitchen_moment")
-        || (sceneId === "fall" && activeGrant.scope === "fall_emergency")
-      )
-      && (
-        (sceneId === "kitchen" && kitchenAuthorizationActive)
-        || (sceneId === "fall" && live.familyVideoAllowed)
-      ),
+      && familyEvent?.authorization?.status === "active"
+      && familyEvent.authorization.authorization_id === activeGrant.event_id
+      && familyEvent.authorization.scope === activeGrant.scope
+      && familyEvent.authorization.scene_id === sceneId,
   );
   const deviceViewMode = homePrivacyViewMode(sceneId, projectedDecision);
   const autoFamilyViewOpen = shouldAutoOpenFamilyVideo(sceneId, projectedDecision);
@@ -227,7 +214,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     if (!demoStarted) return undefined;
     const tick = () => {
       setGrantClockMs(relayNow());
-      setAuthorizationClockMs(performance.now());
+      setAuthorizationClockMs(relayNow());
     };
     tick();
     const timer = window.setInterval(tick, 250);
@@ -296,21 +283,19 @@ export function TypicalDemoApp({ surface = "debug" }) {
   const modelHealth = getModelHealth(cameraState);
   const linkHealth = getLinkHealth(live);
 
-  const consent = careConsent(currentDecision, kitchenAuthorizationActive);
   const mediaAuthorityEligibility = useMemo(() => mediaGrantEligibility({
     sceneId,
-    careDecision: projectedDecision,
-    kitchenAuthorization,
+    runtimeSessionId: liveRuntime?.sessionId || null,
+    authorization: familyEvent?.authorization || null,
     now: authorizationClockMs,
   }), [
     authorizationClockMs,
-    kitchenAuthorization,
-    projectedDecision,
+    familyEvent?.authorization,
+    liveRuntime?.sessionId,
     sceneId,
   ]);
   const mediaAuthorityKey = mediaAuthorityEligibility.allowed
-    && projectedDecision?.decision_id
-    ? `${mediaAuthorityEligibility.scope}:${projectedDecision.decision_id}`
+    ? `${mediaAuthorityEligibility.scope}:${mediaAuthorityEligibility.eventId}`
     : null;
   const mediaAuthorityActive = Boolean(
     mediaAuthorityKey
@@ -342,9 +327,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
     relayRuntime?.state || null,
     relayRuntime?.inputMode || null,
     relayRuntime?.reason || null,
-    kitchenAuthorization?.expiresAtMs || null,
-    consent,
-    projectedDecision,
   ]);
 
   useEffect(() => {
@@ -377,10 +359,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
         error: media.sourceError?.message || null,
       },
       runtime: relayRuntime,
-      care: {
-        consent,
-        decision: projectedDecision,
-      },
     });
     return createDemoStateEnvelope({
       roomSessionId,
@@ -390,13 +368,11 @@ export function TypicalDemoApp({ surface = "debug" }) {
       timestampMs: built.timestamp_ms,
     });
   }, [
-    consent,
     liveRuntime,
     media.ready,
     media.sourceError?.message,
     media.sourceGeneration,
     media.sourceStatus,
-    projectedDecision,
     sceneId,
     sourceDescriptor,
     relayRuntime,
@@ -439,6 +415,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     stateEnvelope,
     poseFrame,
     onCommand: handleRemoteCommand,
+    onFamilyEvent: setFamilyEvent,
     onMediaGrant: setGrantMessage,
     onMediaSignal: mediaSignalDispatcher.dispatch,
   });
@@ -502,7 +479,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     grantMessage,
     sendSignal: monitor.sendMediaSignal,
     revokeMediaGrant: monitor.revokeMediaGrant,
-    rtcConfiguration: LOCAL_RTC_CONFIGURATION,
+    rtcConfiguration: rtc.configuration,
     now: relayNow,
   });
 
@@ -818,7 +795,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
       || live.connection !== "open"
       || !runtimeSessionId
       || !eligibility.allowed
-      || !projectedDecision?.decision_id
       || !media.ready
       || sourceDescriptor?.remote_video !== "available"
       || stateFingerprintRef.current !== stateFingerprint
@@ -829,7 +805,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
       runtimeSessionId,
       media.sourceGeneration,
       eligibility.scope,
-      projectedDecision.decision_id,
+      eligibility.eventId,
     ].join(":");
     const previousAttempt = grantAttemptsRef.current.get(eventKey);
     if (previousAttempt?.status === "accepted") return undefined;
@@ -839,7 +815,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     ) return undefined;
     const sent = requestMonitorGrant({
       runtimeSessionId,
-      eventId: projectedDecision.decision_id,
+      eventId: eligibility.eventId,
       scope: eligibility.scope,
       expiresInMs: eligibility.durationMs,
     });
@@ -858,7 +834,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
     monitor.connected,
     monitor.acceptedStateRevision,
     monitor.roomSessionId,
-    projectedDecision,
     requestMonitorGrant,
     relayNow,
     sceneId,

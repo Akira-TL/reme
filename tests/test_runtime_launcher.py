@@ -73,7 +73,7 @@ def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> N
     assert commands["BACKEND"][-2:] == ["--browser-input-mode", "jpeg"]
     assert "--a-events-url" not in commands["BACKEND"]
     assert commands["FRONTEND"][-3:] == ["--port", "14174", "--strictPort"]
-    assert commands["RELAY"][-6:] == [
+    assert commands["RELAY"][4:10] == [
         "--ip",
         "127.0.0.1",
         "--port",
@@ -81,6 +81,9 @@ def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> N
         "--var",
         "ALLOWED_ORIGINS:http://127.0.0.1:14174,http://localhost:14174",
     ]
+    assert f"BACKEND_PUBLISH_TOKEN:{config.backend_publish_token}" in commands["RELAY"]
+    assert "TURN_KEY_ID:local-disabled" in commands["RELAY"]
+    assert "TURN_KEY_API_TOKEN:local-disabled" in commands["RELAY"]
     assert config.backend_http_url == "http://127.0.0.1:18770"
     assert config.acceptance_url == "http://127.0.0.1:14174/"
     assert config.viewer_url == "http://127.0.0.1:14174/viewer.html"
@@ -160,9 +163,14 @@ def test_tls_uses_same_origin_runtime_and_relay_proxies(tmp_path: Path) -> None:
     assert env["VITE_REME_RELAY_URL"] == "https://192.168.1.42:4174/_reme/relay/"
     assert env["REME_VITE_BACKEND_PROXY_TARGET"] == "http://127.0.0.1:8770"
     assert env["REME_VITE_RELAY_PROXY_TARGET"] == "http://127.0.0.1:8787"
+    assert env["REME_FAMILY_RELAY_URL"] == "http://127.0.0.1:8787"
+    assert env["REME_FAMILY_RELAY_PUBLISH_TOKEN"] == config.backend_publish_token
     assert env["REME_VITE_TLS_CERT"] == str(cert)
     assert env["REME_VITE_TLS_KEY"] == str(key)
-    assert commands["RELAY"][-1].startswith("ALLOWED_ORIGINS:https://")
+    assert any(
+        value.startswith("ALLOWED_ORIGINS:https://")
+        for value in commands["RELAY"]
+    )
 
 
 def test_tls_certificate_and_key_are_required_as_a_pair(tmp_path: Path) -> None:

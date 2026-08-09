@@ -1,13 +1,13 @@
-import {
-  isCareDecision,
-  mapCareDecisionToPhase,
-} from "./careDecision.js";
+import { isFamilyCare } from "./careDecision.js";
 
 export const VIEWER_PROTOCOL = "reme-viewer-v1";
 export const DEMO_STATE_SCHEMA = "reme-demo-state/v4";
 export const CONTROL_COMMAND_SCHEMA = "reme-control-command/v1";
 export const POSE_FRAME_SCHEMA = "reme-pose-frame-17/v1";
 export const MEDIA_SIGNAL_SCHEMA = "reme-media-signal/v1";
+export const FAMILY_EVENT_SCHEMA = "reme-family-event/v1";
+export const MEDIA_AUTHORIZATION_SCHEMA = "reme-media-authorization/v1";
+export const RTC_CONFIG_SCHEMA = "reme-rtc-config/v1";
 
 export const SCENE_IDS = Object.freeze(["living", "kitchen", "bathroom", "fall"]);
 export const SOURCE_IDS = Object.freeze([
@@ -110,6 +110,83 @@ function isMediaGrant(value, { allowInactive = false } = {}) {
       : value.status === "active");
 }
 
+function isMediaAuthorization(value) {
+  if (!(hasExactKeys(value, [
+    "schema_version",
+    "authorization_id",
+    "decision_id",
+    "event_id",
+    "runtime_session_id",
+    "scene_id",
+    "scope",
+    "audience",
+    "status",
+    "issued_at_ms",
+    "expires_at_ms",
+  ])
+    && value.schema_version === MEDIA_AUTHORIZATION_SCHEMA
+    && isOpaqueId(value.authorization_id)
+    && isOpaqueId(value.decision_id)
+    && isOpaqueId(value.event_id)
+    && isOpaqueId(value.runtime_session_id)
+    && SCENE_IDS.includes(value.scene_id)
+    && ["kitchen_moment", "fall_emergency"].includes(value.scope)
+    && value.audience === "public_demo_viewers"
+    && ["active", "revoked", "expired"].includes(value.status)
+    && isTimestamp(value.issued_at_ms)
+    && isTimestamp(value.expires_at_ms)
+    && value.expires_at_ms > value.issued_at_ms)) return false;
+  const maximumTtlMs = value.scope === "kitchen_moment" ? 60_000 : 30_000;
+  return value.expires_at_ms - value.issued_at_ms <= maximumTtlMs;
+}
+
+export function isFamilyEvent(value) {
+  if (!hasExactKeys(value, [
+    "schema_version",
+    "room_session_id",
+    "runtime_session_id",
+    "revision",
+    "timestamp_ms",
+    "care",
+    "authorization",
+  ])) return false;
+  if (value.schema_version !== FAMILY_EVENT_SCHEMA
+    || !isOpaqueId(value.room_session_id)
+    || !isOpaqueId(value.runtime_session_id)
+    || !isRevision(value.revision)
+    || !isTimestamp(value.timestamp_ms)
+    || (value.care !== null && !isFamilyCare(value.care))
+    || (value.authorization !== null && !isMediaAuthorization(value.authorization))) {
+    return false;
+  }
+  const authorization = value.authorization;
+  if (authorization !== null && authorization.runtime_session_id !== value.runtime_session_id) {
+    return false;
+  }
+  if (authorization?.status === "active") {
+    const care = value.care;
+    if (!care
+      || authorization.decision_id !== care.decision_id
+      || authorization.event_id !== care.decision_id
+      || authorization.scene_id !== care.scene_id
+      || care.privacy_mode === "hidden"
+      || care.scene_id === "bathroom") return false;
+    if (authorization.scope === "kitchen_moment") {
+      if (care.scene_id !== "kitchen"
+        || care.state !== "resolved"
+        || care.action !== "notify_family"
+        || care.family_delivery !== "notification"
+        || care.risk_level !== 0
+        || care.family_notification === null
+        || care.action_card !== null
+        || care.alarm !== null) return false;
+    } else if (care.scene_id !== "fall"
+      || care.family_delivery !== "alarm"
+      || care.alarm === null) return false;
+  }
+  return true;
+}
+
 function isCaptureState(value) {
   if (!hasExactKeys(value, [
     "status",
@@ -134,11 +211,10 @@ function isRuntimeState(value) {
 }
 
 function isCareState(value) {
-  if (!hasExactKeys(value, ["phase", "consent", "decision"])
-    || !["idle", "checking", "attention", "emergency", "resolved"].includes(value.phase)
-    || !["none", "pending", "granted", "denied"].includes(value.consent)
-    || (value.decision !== null && !isCareDecision(value.decision))) return false;
-  return value.phase === mapCareDecisionToPhase(value.decision);
+  return hasExactKeys(value, ["phase", "consent", "decision"])
+    && value.phase === "idle"
+    && value.consent === "none"
+    && value.decision === null;
 }
 
 export function isDemoState(value) {
@@ -168,8 +244,6 @@ export function isDemoState(value) {
     && isCaptureState(value.state.capture)
     && isRuntimeState(value.state.runtime)
     && isCareState(value.state.care)
-    && (value.state.care.decision === null
-      || value.state.care.decision.scene_id === value.state.scene_id)
     && (value.state.media_grant === null || isMediaGrant(value.state.media_grant));
 }
 
@@ -375,6 +449,7 @@ export function parseViewerMessage(raw) {
   if (typeof raw !== "string" || raw.length > 16_384) return null;
   try {
     const value = JSON.parse(raw);
+    if (isFamilyEvent(value)) return { kind: "family_event", value };
     if (isDemoState(value)) return { kind: "demo_state", value };
     if (isPoseFrame(value)) return { kind: "pose_frame", value };
     if (isForwardedMediaSignal(value)) return { kind: "media_signal", value };

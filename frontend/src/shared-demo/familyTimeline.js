@@ -112,12 +112,20 @@ function timelineEvent({
 
 function snapshotMetadata(snapshot, current) {
   return {
-    source: "demo_state",
-    stateRevision: snapshot.state_revision,
+    source: snapshot.schema_version === "reme-family-event/v1"
+      ? "family_event"
+      : "demo_state",
+    stateRevision: Number.isSafeInteger(snapshot.state_revision)
+      ? snapshot.state_revision
+      : snapshot.revision,
     sceneId: current.sceneId,
     captureStatus: current.captureStatus,
     runtimeStatus: current.runtimeStatus,
   };
+}
+
+function eventRevision(value) {
+  return Number.isSafeInteger(value.state_revision) ? value.state_revision : value.revision;
 }
 
 function cloneAssessment(value) {
@@ -150,22 +158,47 @@ function cloneAssessment(value) {
 
 function projectSnapshot(snapshot) {
   const state = snapshot.state;
-  const decision = state.care.decision;
   return Object.freeze({
     sceneId: state.scene_id,
     captureStatus: state.capture.status,
     runtimeStatus: state.runtime.status,
-    carePhase: state.care.phase,
-    careDecisionId: decision?.decision_id || null,
-    careConsent: state.care.consent,
-    careMessage: decision?.family_notification
-      || decision?.elder_message
-      || decision?.reason_summary
-      || null,
-    careAssessment: cloneAssessment(projectCareAssessment(decision)),
-    alarmActive: decision?.family_delivery === "alarm" && Boolean(decision?.alarm),
+    carePhase: "idle",
+    careDecisionId: null,
+    careConsent: "none",
+    careMessage: null,
+    careAssessment: null,
+    alarmActive: false,
     mediaGrantId: state.media_grant?.grant_id || null,
     mediaGrantScope: state.media_grant?.scope || null,
+  });
+}
+
+function projectFamilyEvent(event, snapshot) {
+  const decision = event.care;
+  const state = snapshot?.state;
+  const carePhase = ["check_in_required", "consent_required"].includes(decision?.state)
+    ? "checking"
+    : decision?.state === "resolved"
+      ? "resolved"
+      : decision?.family_delivery === "alarm"
+      ? "emergency"
+      : ["notification", "action_card"].includes(decision?.family_delivery)
+        ? "attention"
+        : "idle";
+  const kitchenAuthorized = event.authorization?.status === "active"
+    && event.authorization.scope === "kitchen_moment";
+  return Object.freeze({
+    sceneId: decision?.scene_id || state?.scene_id || null,
+    captureStatus: state?.capture?.status || null,
+    runtimeStatus: state?.runtime?.status || null,
+    carePhase,
+    careDecisionId: decision?.decision_id || null,
+    careConsent: kitchenAuthorized ? "granted" : "none",
+    careMessage: decision?.family_notification || decision?.reason_summary || null,
+    careAssessment: cloneAssessment(projectCareAssessment(decision)),
+    alarmActive: decision?.family_delivery === "alarm" && Boolean(decision?.alarm),
+    mediaGrantId: null,
+    mediaGrantScope: null,
   });
 }
 
@@ -205,7 +238,7 @@ function assessmentEvent(snapshot, previous, current) {
         ? "通知已送达"
         : status.label;
   return timelineEvent({
-    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:presentation`,
+    id: `state:${snapshot.room_session_id}:${eventRevision(snapshot)}:presentation`,
     kind: assessment.presentationKind,
     label: presentationLabel,
     title: assessment.verdict,
@@ -268,7 +301,7 @@ function fallbackCareEvent(snapshot, previous, current) {
   }[current.carePhase];
   if (!copy) return null;
   return timelineEvent({
-    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:care`,
+    id: `state:${snapshot.room_session_id}:${eventRevision(snapshot)}:care`,
     kind: "care",
     label: "关怀进展",
     timestampMs: snapshot.timestamp_ms,
@@ -311,7 +344,7 @@ function consentEvent(snapshot, previous, current) {
   }[current.careConsent];
   if (!copy) return null;
   return timelineEvent({
-    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:consent`,
+    id: `state:${snapshot.room_session_id}:${eventRevision(snapshot)}:consent`,
     kind: "consent",
     label: "关怀授权",
     timestampMs: snapshot.timestamp_ms,
@@ -324,7 +357,7 @@ function mediaEvent(snapshot, previous, current) {
   if (current.mediaGrantId === (previous?.mediaGrantId || null)) return null;
   if (!current.mediaGrantId) {
     return timelineEvent({
-      id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:media`,
+      id: `state:${snapshot.room_session_id}:${eventRevision(snapshot)}:media`,
       kind: "media",
       label: "隐私处理",
       title: "事件期原画已经关闭",
@@ -337,7 +370,7 @@ function mediaEvent(snapshot, previous, current) {
     });
   }
   return timelineEvent({
-    id: `state:${snapshot.room_session_id}:${snapshot.state_revision}:media`,
+    id: `state:${snapshot.room_session_id}:${eventRevision(snapshot)}:media`,
     kind: "media",
     label: "隐私处理",
     title: "事件期原画已经限时开放",
@@ -425,6 +458,9 @@ export function createFamilyTimelineState() {
     roomSessionId: null,
     lastStateRevision: null,
     lastSnapshot: null,
+    lastFamilyRevision: null,
+    lastFamilyRuntimeSessionId: null,
+    lastFamilySnapshot: null,
     seenAckIds: [],
     nextBatchOrder: 1,
     events: [],
@@ -435,6 +471,7 @@ export function reduceFamilyTimeline(state, action) {
   if (action.type !== "observe") return state;
   const observedRoomSessionId = action.roomSessionId
     || action.snapshot?.room_session_id
+    || action.familyEvent?.room_session_id
     || null;
   let next = state;
 
@@ -462,6 +499,34 @@ export function reduceFamilyTimeline(state, action) {
       ...next,
       lastStateRevision: snapshot.state_revision,
       lastSnapshot: current,
+    };
+  }
+
+  const familyEvent = action.familyEvent;
+  const familyRuntimeChanged = familyEvent
+    && next.lastFamilyRuntimeSessionId !== null
+    && next.lastFamilyRuntimeSessionId !== familyEvent.runtime_session_id;
+  if (
+    familyEvent
+    && familyEvent.room_session_id === next.roomSessionId
+    && Number.isSafeInteger(familyEvent.revision)
+    && (
+      familyRuntimeChanged
+      || next.lastFamilyRevision === null
+      || familyEvent.revision > next.lastFamilyRevision
+    )
+  ) {
+    const current = projectFamilyEvent(familyEvent, snapshot);
+    newEvents.push(...transitionEvents(
+      familyEvent,
+      familyRuntimeChanged ? null : next.lastFamilySnapshot,
+      current,
+    ).filter((event) => event.kind !== "media"));
+    next = {
+      ...next,
+      lastFamilyRevision: familyEvent.revision,
+      lastFamilyRuntimeSessionId: familyEvent.runtime_session_id,
+      lastFamilySnapshot: current,
     };
   }
 

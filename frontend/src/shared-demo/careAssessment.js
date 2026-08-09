@@ -74,7 +74,6 @@ export function projectCareAssessment(decision) {
   const actionCard = familyDelivery === "action_card" && decision.action_card
     ? Object.freeze({
         event: boundedText(decision.action_card.event),
-        elder_quote: boundedText(decision.action_card.elder_quote),
         system_judgment: boundedText(decision.action_card.system_judgment),
         suggested_action: boundedText(decision.action_card.suggested_action),
         time_window: boundedText(decision.action_card.time_window),
@@ -83,7 +82,10 @@ export function projectCareAssessment(decision) {
     : null;
   if (familyDelivery === "action_card" && (
     !actionCard
-    || Object.values(actionCard).some((value) => value === null)
+    || !actionCard.event
+    || !actionCard.system_judgment
+    || !actionCard.suggested_action
+    || !actionCard.time_window
   )) return null;
   const alarm = familyDelivery === "alarm" && decision.alarm
     ? Object.freeze({

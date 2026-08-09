@@ -72,12 +72,39 @@ const ACTION_CARD_KEYS = [
   "time_window",
   "status",
 ];
+const FAMILY_ACTION_CARD_KEYS = [
+  "event",
+  "system_judgment",
+  "suggested_action",
+  "time_window",
+  "status",
+];
 const VISUAL_CONTEXT_KEYS = [
   "sent_to_mimo",
   "type",
   "start_ms",
   "end_ms",
   "sample_count",
+];
+const FAMILY_CARE_KEYS = [
+  "schema_version",
+  "scene_id",
+  "decision_id",
+  "timestamp_ms",
+  "state",
+  "risk_level",
+  "privacy_mode",
+  "family_notification",
+  "action",
+  "family_delivery",
+  "reason_summary",
+  "uncertainty",
+  "fallback_used",
+  "source",
+  "demo_mode",
+  "action_card",
+  "visual_context",
+  "alarm",
 ];
 
 function isRecord(value) {
@@ -128,6 +155,15 @@ function isActionCard(value) {
   return hasExactKeys(value, ACTION_CARD_KEYS)
     && isText(value.event)
     && isText(value.elder_quote)
+    && isText(value.system_judgment)
+    && isText(value.suggested_action)
+    && isText(value.time_window)
+    && CARD_STATUSES.has(value.status);
+}
+
+function isFamilyActionCard(value) {
+  return hasExactKeys(value, FAMILY_ACTION_CARD_KEYS)
+    && isText(value.event)
     && isText(value.system_judgment)
     && isText(value.suggested_action)
     && isText(value.time_window)
@@ -250,6 +286,37 @@ export function isCareDecision(value) {
   if (value.confirm_channels !== null) {
     if (!isUniqueClosedList(value.confirm_channels, CONFIRM_CHANNELS)
       || value.action !== "ask_elder") return false;
+  }
+  return isFamilyDeliveryConsistent(value);
+}
+
+export function isFamilyCare(value) {
+  if (!hasExactKeys(value, FAMILY_CARE_KEYS) || containsEncodedMedia(value)) return false;
+  if (value.schema_version !== CARE_DECISION_SCHEMA
+    || !SCENE_IDS.has(value.scene_id)
+    || !isOpaqueId(value.decision_id)
+    || !isTimestamp(value.timestamp_ms)
+    || !DECISION_STATES.has(value.state)
+    || !Number.isSafeInteger(value.risk_level)
+    || value.risk_level < 0
+    || value.risk_level > 4
+    || !PRIVACY_MODES.has(value.privacy_mode)
+    || !isText(value.family_notification, { nullable: true })
+    || !DECISION_ACTIONS.has(value.action)
+    || !FAMILY_DELIVERIES.has(value.family_delivery)
+    || !isText(value.reason_summary)
+    || !UNCERTAINTIES.has(value.uncertainty)
+    || typeof value.fallback_used !== "boolean"
+    || !DECISION_SOURCES.has(value.source)
+    || !DEMO_MODES.has(value.demo_mode)) return false;
+  if (value.action === "notify_family" && value.family_notification === null) return false;
+  if (value.state === "degraded" && !value.fallback_used) return false;
+  if (value.source === "degraded" && value.state !== "degraded") return false;
+  if (value.action_card !== null && !isFamilyActionCard(value.action_card)) return false;
+  if (value.visual_context !== null && !isVisualContext(value.visual_context)) return false;
+  if (value.alarm !== null && (!isAlarm(value.alarm)
+    || !["family_notification_required", "urgent_attention"].includes(value.state))) {
+    return false;
   }
   return isFamilyDeliveryConsistent(value);
 }

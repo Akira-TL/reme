@@ -10,6 +10,13 @@
   "vars": {
     "ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:4174,http://127.0.0.1:4174"
   },
+  "secrets": {
+    "required": [
+      "BACKEND_PUBLISH_TOKEN",
+      "TURN_KEY_ID",
+      "TURN_KEY_API_TOKEN"
+    ]
+  },
   "durable_objects": {
     "bindings": [
       {

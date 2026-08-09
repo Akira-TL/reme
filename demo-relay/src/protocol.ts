@@ -3,6 +3,9 @@ export const DEMO_STATE_SCHEMA_VERSION = "reme-demo-state/v4";
 export const CONTROL_COMMAND_SCHEMA_VERSION = "reme-control-command/v1";
 export const POSE_FRAME_SCHEMA_VERSION = "reme-pose-frame-17/v1";
 export const MEDIA_SIGNAL_SCHEMA_VERSION = "reme-media-signal/v1";
+export const FAMILY_EVENT_SCHEMA_VERSION = "reme-family-event/v1";
+export const MEDIA_AUTHORIZATION_SCHEMA_VERSION = "reme-media-authorization/v1";
+export const RTC_CONFIG_SCHEMA_VERSION = "reme-rtc-config/v1";
 
 export const SCENE_IDS = ["living", "kitchen", "bathroom", "fall"] as const;
 export const MEDIA_GRANT_SCOPES = ["kitchen_moment", "fall_emergency"] as const;
@@ -134,9 +137,9 @@ export interface DemoState {
     detail: string | null;
   };
   care: {
-    phase: "idle" | "checking" | "attention" | "emergency" | "resolved";
-    consent: "none" | "pending" | "granted" | "denied";
-    decision: CareDecision | null;
+    phase: "idle";
+    consent: "none";
+    decision: null;
   };
   media_grant: ActiveMediaGrant | null;
 }
@@ -148,6 +151,57 @@ export interface DemoStateEnvelope {
   state_revision: number;
   timestamp_ms: number;
   state: DemoState;
+}
+
+export interface FamilyCare {
+  schema_version: "reme-care-decision/v1-experiment";
+  scene_id: SceneId;
+  decision_id: string;
+  timestamp_ms: number;
+  state: CareDecision["state"];
+  risk_level: number;
+  privacy_mode: CareDecision["privacy_mode"];
+  family_notification: string | null;
+  action: CareDecision["action"];
+  family_delivery: CareDecision["family_delivery"];
+  reason_summary: string;
+  uncertainty: CareDecision["uncertainty"];
+  source: CareDecision["source"];
+  fallback_used: boolean;
+  demo_mode: CareDecision["demo_mode"];
+  action_card: {
+    event: string;
+    system_judgment: string;
+    suggested_action: string;
+    time_window: string;
+    status: "pending" | "confirmed" | "done";
+  } | null;
+  visual_context: CareDecision["visual_context"];
+  alarm: CareDecision["alarm"];
+}
+
+export interface MediaAuthorization {
+  schema_version: typeof MEDIA_AUTHORIZATION_SCHEMA_VERSION;
+  authorization_id: string;
+  decision_id: string;
+  event_id: string;
+  runtime_session_id: string;
+  scene_id: SceneId;
+  scope: MediaGrantScope;
+  audience: "public_demo_viewers";
+  status: "active" | "revoked" | "expired";
+  issued_at_ms: number;
+  expires_at_ms: number;
+}
+
+export interface FamilyEvent {
+  schema_version: typeof FAMILY_EVENT_SCHEMA_VERSION;
+  room_session_id: string;
+  runtime_session_id: string;
+  revision: number;
+  timestamp_ms: number;
+  care: FamilyCare | null;
+  authorization: MediaAuthorization | null;
 }
 
 export interface PoseFrame {
@@ -300,6 +354,13 @@ const ACTION_CARD_KEYS = [
   "system_judgment",
   "time_window",
 ] as const;
+const FAMILY_ACTION_CARD_KEYS = [
+  "event",
+  "status",
+  "suggested_action",
+  "system_judgment",
+  "time_window",
+] as const;
 const CARE_VISUAL_CONTEXT_KEYS = [
   "end_ms",
   "sample_count",
@@ -351,6 +412,48 @@ const MEDIA_SIGNAL_KEYS = [
   "signal",
   "signal_type",
   "target_id",
+] as const;
+const FAMILY_EVENT_KEYS = [
+  "authorization",
+  "care",
+  "revision",
+  "room_session_id",
+  "runtime_session_id",
+  "schema_version",
+  "timestamp_ms",
+] as const;
+const FAMILY_CARE_KEYS = [
+  "action",
+  "action_card",
+  "alarm",
+  "decision_id",
+  "demo_mode",
+  "fallback_used",
+  "family_delivery",
+  "family_notification",
+  "privacy_mode",
+  "reason_summary",
+  "risk_level",
+  "scene_id",
+  "schema_version",
+  "source",
+  "state",
+  "timestamp_ms",
+  "uncertainty",
+  "visual_context",
+] as const;
+const MEDIA_AUTHORIZATION_KEYS = [
+  "audience",
+  "authorization_id",
+  "decision_id",
+  "event_id",
+  "expires_at_ms",
+  "issued_at_ms",
+  "runtime_session_id",
+  "scene_id",
+  "schema_version",
+  "scope",
+  "status",
 ] as const;
 
 const FORBIDDEN_RAW_MEDIA_KEYS = new Set([
@@ -444,6 +547,46 @@ export function validatePoseFrame(
   )) && !containsForbiddenRawMedia(value);
 }
 
+export function validateFamilyEvent(
+  value: unknown,
+  roomSessionId?: string,
+): value is FamilyEvent {
+  if (!isExactObject(value, FAMILY_EVENT_KEYS)) return false;
+  if (value.schema_version !== FAMILY_EVENT_SCHEMA_VERSION) return false;
+  if (!isOpaqueId(value.room_session_id)
+    || (roomSessionId !== undefined && value.room_session_id !== roomSessionId)
+    || !isOpaqueId(value.runtime_session_id)
+    || !isNonNegativeSafeInteger(value.revision)
+    || !isFiniteNonNegativeNumber(value.timestamp_ms)) return false;
+  if (value.care !== null && !validateFamilyCare(value.care)) return false;
+  if (value.authorization !== null
+    && !validateMediaAuthorization(value.authorization)) return false;
+  if (value.authorization?.runtime_session_id !== undefined
+    && value.authorization.runtime_session_id !== value.runtime_session_id) return false;
+  if (value.authorization?.status === "active") {
+    const care = value.care;
+    if (care === null
+      || value.authorization.decision_id !== care.decision_id
+      || value.authorization.event_id !== care.decision_id
+      || value.authorization.scene_id !== care.scene_id
+      || care.privacy_mode === "hidden"
+      || care.scene_id === "bathroom") return false;
+    if (value.authorization.scope === "kitchen_moment") {
+      if (care.scene_id !== "kitchen"
+        || care.state !== "resolved"
+        || care.action !== "notify_family"
+        || care.family_delivery !== "notification"
+        || care.risk_level !== 0
+        || care.family_notification === null
+        || care.action_card !== null
+        || care.alarm !== null) return false;
+    } else if (care.scene_id !== "fall"
+      || care.family_delivery !== "alarm"
+      || care.alarm === null) return false;
+  }
+  return !containsForbiddenRawMedia(value);
+}
+
 export function validateControlCommand(value: unknown): value is ControlCommand {
   if (!isExactObject(value, CONTROL_COMMAND_KEYS)) return false;
   if (value.schema_version !== CONTROL_COMMAND_SCHEMA_VERSION) return false;
@@ -507,6 +650,108 @@ export function validateMediaSignal(value: unknown): value is MediaSignal {
   return validateSessionDescription(value.signal, value.signal_type);
 }
 
+function validateFamilyCare(value: unknown): value is FamilyCare {
+  if (!isExactObject(value, FAMILY_CARE_KEYS)) return false;
+  if (value.schema_version !== "reme-care-decision/v1-experiment"
+    || !isSceneId(value.scene_id)
+    || !isOpaqueId(value.decision_id)
+    || !isFiniteNonNegativeNumber(value.timestamp_ms)
+    || !isNonNegativeSafeInteger(value.risk_level)
+    || value.risk_level > 4
+    || !isBoundedString(value.reason_summary, 2_000)
+    || typeof value.fallback_used !== "boolean") return false;
+  if (![
+    "normal", "observe", "check_in_required", "consent_required",
+    "family_notification_required", "urgent_attention", "resolved", "degraded",
+  ].includes(value.state as string)) return false;
+  if (!["visible", "blurred", "skeleton_only", "hidden"]
+    .includes(value.privacy_mode as string)) return false;
+  if (!["none", "observe", "ask_elder", "notify_family", "show_urgent_attention", "mark_resolved"]
+    .includes(value.action as string)) return false;
+  if (!["none", "notification", "action_card", "alarm"]
+    .includes(value.family_delivery as string)) return false;
+  if (!["low", "medium", "high", "unknown"].includes(value.uncertainty as string)) return false;
+  if (!["rule", "mimo", "mock", "record", "degraded"].includes(value.source as string)) {
+    return false;
+  }
+  if (!["live", "mock", "record"].includes(value.demo_mode as string)) return false;
+  if (!isNullableText(value.family_notification)) return false;
+  const actionCard = value.action_card;
+  const alarm = value.alarm;
+  if (actionCard !== null && !validateFamilyActionCard(actionCard)) return false;
+  if (value.visual_context !== null && !validateCareVisualContext(value.visual_context)) {
+    return false;
+  }
+  if (alarm !== null && !validateAlarm(alarm)) return false;
+  if (value.state === "degraded" && !value.fallback_used) return false;
+  if (value.source === "degraded" && value.state !== "degraded") return false;
+  if (alarm !== null
+    && value.state !== "family_notification_required"
+    && value.state !== "urgent_attention") return false;
+  if (actionCard !== null && alarm !== null) return false;
+  if (value.family_delivery === "action_card") {
+    if (actionCard === null || alarm !== null) return false;
+    if (actionCard.status === "pending") {
+      return value.state === "family_notification_required"
+        && value.action === "notify_family"
+        && value.family_notification !== null
+        && value.risk_level === 2;
+    }
+    return value.state === "resolved"
+      && value.action === "mark_resolved"
+      && value.risk_level === 0;
+  }
+  if (actionCard !== null) return false;
+  if (value.family_delivery === "alarm") {
+    return alarm !== null
+      && value.risk_level >= 3
+      && value.family_notification !== null
+      && (value.action === "notify_family" || value.action === "show_urgent_attention");
+  }
+  if (alarm !== null) return false;
+  if (value.family_delivery === "notification") {
+    return value.family_notification !== null
+      && (value.action === "notify_family" || value.action === "show_urgent_attention")
+      && (value.state === "family_notification_required"
+        || value.state === "urgent_attention"
+        || value.state === "resolved");
+  }
+  return value.family_notification === null
+    && value.action !== "notify_family"
+    && value.action !== "show_urgent_attention"
+    && value.state !== "family_notification_required"
+    && value.state !== "urgent_attention";
+}
+
+function validateFamilyActionCard(
+  value: unknown,
+): value is NonNullable<FamilyCare["action_card"]> {
+  if (!isExactObject(value, FAMILY_ACTION_CARD_KEYS)) return false;
+  return isBoundedString(value.event, 2_000)
+    && isBoundedString(value.system_judgment, 2_000)
+    && isBoundedString(value.suggested_action, 2_000)
+    && isBoundedString(value.time_window, 2_000)
+    && (value.status === "pending" || value.status === "confirmed" || value.status === "done");
+}
+
+function validateMediaAuthorization(value: unknown): value is MediaAuthorization {
+  if (!isExactObject(value, MEDIA_AUTHORIZATION_KEYS)) return false;
+  if (value.schema_version !== MEDIA_AUTHORIZATION_SCHEMA_VERSION) return false;
+  if (!(isOpaqueId(value.authorization_id)
+    && isOpaqueId(value.decision_id)
+    && isOpaqueId(value.event_id)
+    && isOpaqueId(value.runtime_session_id)
+    && isSceneId(value.scene_id)
+    && isMediaGrantScope(value.scope)
+    && value.audience === "public_demo_viewers"
+    && ["active", "revoked", "expired"].includes(value.status as string)
+    && isFiniteNonNegativeNumber(value.issued_at_ms)
+    && isFiniteNonNegativeNumber(value.expires_at_ms)
+    && value.expires_at_ms > value.issued_at_ms)) return false;
+  const maximumTtlMs = value.scope === "kitchen_moment" ? 60_000 : 30_000;
+  return value.expires_at_ms - value.issued_at_ms <= maximumTtlMs;
+}
+
 export function withMediaGrant(
   envelope: DemoStateEnvelope,
   grant: ActiveMediaGrant | null,
@@ -542,7 +787,6 @@ function validateStateBody(value: unknown, requireRelayOwnedGrant: boolean): val
   if (!validateCapture(value.capture) || !validateRuntime(value.runtime) || !validateCare(value.care)) {
     return false;
   }
-  if (value.care.decision !== null && value.care.decision.scene_id !== value.scene_id) return false;
   if (requireRelayOwnedGrant) return value.media_grant === null;
   return value.media_grant === null || validateActiveGrant(value.media_grant);
 }
@@ -592,34 +836,10 @@ function validateRuntime(value: unknown): value is DemoState["runtime"] {
 }
 
 function validateCare(value: unknown): value is DemoState["care"] {
-  if (!isExactObject(value, CARE_KEYS)) return false;
-  if (
-    value.phase !== "idle"
-    && value.phase !== "checking"
-    && value.phase !== "attention"
-    && value.phase !== "emergency"
-    && value.phase !== "resolved"
-  ) return false;
-  if (
-    value.consent !== "none"
-    && value.consent !== "pending"
-    && value.consent !== "granted"
-    && value.consent !== "denied"
-  ) return false;
-  if (value.decision !== null && !validateCareDecision(value.decision)) return false;
-  const expectedPhase = value.decision === null
-    ? "idle"
-    : value.decision.state === "check_in_required" || value.decision.state === "consent_required"
-      ? "checking"
-      : value.decision.state === "resolved"
-        ? "resolved"
-        : value.decision.family_delivery === "alarm"
-          ? "emergency"
-          : value.decision.family_delivery === "notification"
-              || value.decision.family_delivery === "action_card"
-            ? "attention"
-            : "idle";
-  return value.phase === expectedPhase;
+  return isExactObject(value, CARE_KEYS)
+    && value.phase === "idle"
+    && value.consent === "none"
+    && value.decision === null;
 }
 
 export function validateCareDecision(value: unknown): value is CareDecision {

@@ -48,7 +48,7 @@ test("state parser accepts exact v4 shape and rejects extra keys", () => {
   }), false);
 });
 
-test("v4 carries the exact CareDecision and rejects invented fields", () => {
+test("v4 rejects browser-authored care even when it resembles a CareDecision", () => {
   const state = validState();
   state.state.care.decision = {
     schema_version: "reme-care-decision/v1-experiment",
@@ -84,20 +84,85 @@ test("v4 carries the exact CareDecision and rejects invented fields", () => {
     voice_asset: null,
     confirm_channels: null,
   };
+  state.state.care.phase = "idle";
+  assert.equal(isDemoState(state), false);
 
-  assert.equal(isDemoState(state), true);
+  const forgedConsent = validState();
+  forgedConsent.state.care.consent = "granted";
+  assert.equal(isDemoState(forgedConsent), false);
+});
 
-  const mismatchedPhase = structuredClone(state);
-  mismatchedPhase.state.care.phase = "checking";
-  assert.equal(isDemoState(mismatchedPhase), false);
-
-  const inventedSource = structuredClone(state);
-  inventedSource.state.care.decision.source = "guessed";
-  assert.equal(isDemoState(inventedSource), false);
-
-  const rawVisualPayload = structuredClone(state);
-  rawVisualPayload.state.care.decision.visual_context.image_url = "data:image/jpeg;base64,no";
-  assert.equal(isDemoState(rawVisualPayload), false);
+test("FamilyEvent is exact, revisioned, and binds active authorization", () => {
+  const care = {
+    schema_version: "reme-care-decision/v1-experiment",
+    scene_id: "kitchen",
+    decision_id: "decision-kitchen",
+    timestamp_ms: 1_000,
+    state: "resolved",
+    risk_level: 0,
+    privacy_mode: "skeleton_only",
+    family_notification: "本人同意分享当前厨房片段。",
+    action: "notify_family",
+    family_delivery: "notification",
+    reason_summary: "本人已明确同意本次事件级分享。",
+    uncertainty: "low",
+    fallback_used: false,
+    source: "rule",
+    demo_mode: "live",
+    action_card: null,
+    visual_context: null,
+    alarm: null,
+  };
+  const authorization = {
+    schema_version: "reme-media-authorization/v1",
+    authorization_id: "authorization-kitchen",
+    decision_id: "decision-kitchen",
+    event_id: "decision-kitchen",
+    runtime_session_id: "runtime-1",
+    scene_id: "kitchen",
+    scope: "kitchen_moment",
+    audience: "public_demo_viewers",
+    status: "active",
+    issued_at_ms: 1_000,
+    expires_at_ms: 61_000,
+  };
+  const event = {
+    schema_version: "reme-family-event/v1",
+    room_session_id: "room-1",
+    runtime_session_id: "runtime-1",
+    revision: 2,
+    timestamp_ms: 1_000,
+    care,
+    authorization,
+  };
+  assert.equal(parseViewerMessage(JSON.stringify(event))?.kind, "family_event");
+  assert.equal(parseViewerMessage(JSON.stringify({ ...event, revision: 2.5 })), null);
+  assert.equal(parseViewerMessage(JSON.stringify({
+    ...event,
+    authorization: { ...authorization, decision_id: "decision-other" },
+  })), null);
+  assert.equal(parseViewerMessage(JSON.stringify({
+    ...event,
+    authorization: { ...authorization, expires_at_ms: 61_001 },
+  })), null);
+  assert.equal(parseViewerMessage(JSON.stringify({
+    ...event,
+    authorization: null,
+    care: {
+      ...care,
+      state: "family_notification_required",
+      risk_level: 2,
+      family_delivery: "action_card",
+      action_card: {
+        event: "待处理事项",
+        elder_quote: "公开房间不得透传本人原话",
+        system_judgment: "需要家属协助",
+        suggested_action: "联系本人",
+        time_window: "今天",
+        status: "pending",
+      },
+    },
+  })), null);
 });
 
 test("viewer ready and presence reject out-of-contract audience sizes", () => {

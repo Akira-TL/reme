@@ -1,12 +1,13 @@
 # Remaining cross-boundary gaps
 
-Status: Gated follow-ups
+Status: Remaining non-goals and gated follow-ups
 Reviewed: 2026-08-09
 
 The current patch closes the executable demo's server-deadline, ask-first frame,
-family acknowledgement and privacy-presentation seams. The items below are not
-silently implemented because each changes product architecture, deployment
-authority or persistence policy.
+family acknowledgement, backend FamilyEvent, event Authorization, Relay grant,
+reconnect recovery and dynamic RTC configuration seams. The items below remain
+outside the fixed public-demo contract because they require identity,
+notification, retention or deployment decisions.
 
 ## P1 — required before a real household deployment
 
@@ -34,33 +35,21 @@ authority or persistence policy.
      idempotent prompt receipt) without making safety escalation depend forever
      on a browser acknowledgement.
 
-4. **Durable consent receipt**
-   - Kitchen event-video authorization is still a short-lived Home-local receipt
-     derived from the current B decision. It fails closed on reload, but B and
-     Relay do not own the original consent record.
-   - Gate: version a consent-grant/revoke record with subject, scope, audience,
-     issued/expiry times and decision provenance.
-
-5. **Persistent care history**
+4. **Persistent cross-day care history**
    - Family timeline data is presentation memory plus demo fixtures, not an
      authoritative cross-day history.
    - Gate: retention/privacy policy and an explicit persistent event schema.
 
 ## P1 — deployment seams
 
-1. **Public-internet media requires TURN fallback**
-   - The current WebRTC path intentionally reports LAN/STUN-only capability.
-     Restrictive NAT/firewall pairs can therefore fail even while Relay state
-     synchronization works.
-   - Gate: a server-side short-lived TURN credential endpoint, abuse controls
-     and usage monitoring. Never ship the long-lived TURN key to the browser.
-
-2. **Production origins and URLs are not configured**
+1. **Production origins, secrets and account limits are not configured**
    - `demo-relay/wrangler.jsonc` allows localhost origins only.
    - A deployment must set the real HTTPS Home/Family origins and the frontend
-     Relay URL; camera capture also requires a secure context on non-localhost.
+     Relay URL, provision Cloudflare Realtime TURN key secrets and confirm
+     account limits/monitoring; camera capture also requires a secure context on
+     non-localhost.
 
-3. **Fixed room sharding is demo-only**
+2. **Fixed room sharding is demo-only**
    - `shared-live-demo` is intentionally one Durable Object coordination atom.
      A household product needs one independently authorized object per household
      or care session, plus lifecycle cleanup.

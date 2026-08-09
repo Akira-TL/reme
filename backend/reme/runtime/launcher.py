@@ -6,6 +6,7 @@ import argparse
 import ipaddress
 import os
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -16,7 +17,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
 from typing import Any, TextIO, cast
@@ -63,6 +64,7 @@ class LocalDemoConfig:
     mimo_env: Path = DEFAULT_MIMO_ENV
     tls_cert: Path | None = None
     tls_key: Path | None = None
+    backend_publish_token: str = field(default_factory=lambda: secrets.token_hex(32))
 
     @property
     def frontend_dir(self) -> Path:
@@ -271,6 +273,8 @@ def build_child_env(
     env["REME_VITE_BACKEND_PROXY_TARGET"] = config.backend_probe_url
     env["REME_VITE_RELAY_PROXY_TARGET"] = config.relay_probe_url
     env["REME_VITE_PUBLIC_HOST"] = config.client_host
+    env["REME_FAMILY_RELAY_URL"] = config.relay_probe_url
+    env["REME_FAMILY_RELAY_PUBLISH_TOKEN"] = config.backend_publish_token
     if config.tls_enabled:
         assert config.tls_cert_path is not None
         assert config.tls_key_path is not None
@@ -350,6 +354,12 @@ def build_child_commands(config: LocalDemoConfig) -> dict[str, list[str]]:
             str(config.relay_port),
             "--var",
             f"ALLOWED_ORIGINS:{config.allowed_origins}",
+            "--var",
+            f"BACKEND_PUBLISH_TOKEN:{config.backend_publish_token}",
+            "--var",
+            "TURN_KEY_ID:local-disabled",
+            "--var",
+            "TURN_KEY_API_TOKEN:local-disabled",
         ],
     }
 

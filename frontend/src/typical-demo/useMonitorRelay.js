@@ -16,6 +16,7 @@ export function useMonitorRelay({
   stateEnvelope = null,
   poseFrame = null,
   onCommand = null,
+  onFamilyEvent = null,
   onMediaGrant = null,
   onMediaSignal = null,
   onEvent = null,
@@ -42,8 +43,8 @@ export function useMonitorRelay({
   ]);
 
   useEffect(() => {
-    client.setCallbacks({ onCommand, onMediaGrant, onMediaSignal, onEvent });
-  }, [client, onCommand, onEvent, onMediaGrant, onMediaSignal]);
+    client.setCallbacks({ onCommand, onFamilyEvent, onMediaGrant, onMediaSignal, onEvent });
+  }, [client, onCommand, onEvent, onFamilyEvent, onMediaGrant, onMediaSignal]);
 
   const snapshot = useSyncExternalStore(
     client.subscribe,

@@ -14,6 +14,8 @@ export function createViewerState() {
     state: null,
     stateStale: false,
     lastStateRevision: null,
+    familyEvent: null,
+    lastFamilyRevision: null,
     pose: null,
     mediaGrant: null,
     acks: [],
@@ -37,6 +39,8 @@ function resetRoomState(state, roomSessionId) {
     state: null,
     stateStale: false,
     lastStateRevision: null,
+    familyEvent: null,
+    lastFamilyRevision: null,
     pose: null,
     mediaGrant: null,
     acks: [],
@@ -52,13 +56,13 @@ function mergeAck(acks, nextAck) {
   return next.slice(0, MAX_ACKS);
 }
 
-function hasAlarmSnapshot(snapshot) {
-  const decision = snapshot?.state?.care?.decision;
+function hasAlarmFamilyEvent(event) {
+  const decision = event?.care;
   return Boolean(decision?.family_delivery === "alarm" && decision?.alarm);
 }
 
 function unavailableState(state, reason) {
-  const historicalAlarmState = hasAlarmSnapshot(state.state)
+  const historicalAlarmState = hasAlarmFamilyEvent(state.familyEvent)
     ? state.state
     : null;
   return {
@@ -266,6 +270,24 @@ export function reduceViewerState(state, action) {
       unavailableReason: null,
     };
   }
+  if (kind === "family_event") {
+    if (!sameRoom(state, value.room_session_id)) return state;
+    const runtimeChanged = state.familyEvent
+      && state.familyEvent.runtime_session_id !== value.runtime_session_id;
+    if (!runtimeChanged
+      && Number.isSafeInteger(state.lastFamilyRevision)
+      && value.revision <= state.lastFamilyRevision) return state;
+    const authorization = value.authorization;
+    const keepGrant = authorization?.status === "active"
+      && state.mediaGrant?.event_id === authorization.authorization_id
+      && state.mediaGrant?.scope === authorization.scope;
+    return {
+      ...state,
+      familyEvent: value,
+      lastFamilyRevision: value.revision,
+      mediaGrant: keepGrant ? state.mediaGrant : null,
+    };
+  }
   if (kind === "pose_frame") {
     if (!sameRoom(state, value.room_session_id)
       || !state.state
@@ -321,7 +343,9 @@ export function selectActiveMediaGrant(
 ) {
   const grant = state.mediaGrant;
   const snapshot = state.state;
-  const decision = snapshot?.state.care.decision;
+  const familyEvent = state.familyEvent;
+  const authorization = familyEvent?.authorization;
+  const decision = familyEvent?.care;
   if (state.unavailableReason
     || state.stateStale
     || !grant
@@ -330,20 +354,31 @@ export function selectActiveMediaGrant(
     || !snapshot
     || snapshot.room_session_id !== state.roomSessionId
     || snapshot.state.scene_id === "bathroom"
+    || snapshot.state.runtime.status !== "ready"
     || snapshot.state.capture.status !== "active"
     || snapshot.state.capture.remote_video !== "available"
-    || grant.event_id !== decision?.decision_id) return null;
+    || !familyEvent
+    || familyEvent.room_session_id !== state.roomSessionId
+    || familyEvent.runtime_session_id !== snapshot.runtime_session_id
+    || authorization?.status !== "active"
+    || authorization.expires_at_ms <= nowMs
+    || authorization.authorization_id !== grant.event_id
+    || authorization.scope !== grant.scope
+    || authorization.scene_id !== snapshot.state.scene_id
+    || authorization.decision_id !== decision?.decision_id
+    || authorization.event_id !== decision?.decision_id
+    || decision.privacy_mode === "hidden") return null;
   if (grant.scope === "kitchen_moment") {
-    return snapshot.state.scene_id === "kitchen"
-      && snapshot.state.care.consent === "granted"
+    return decision.scene_id === "kitchen"
+      && decision.family_delivery === "notification"
       ? grant
       : null;
   }
-  return grant.scope === "fall_emergency"
-    && decision.family_delivery === "alarm"
-    && decision.alarm !== null
-    ? grant
-    : null;
+  if (grant.scope !== "fall_emergency"
+    || decision.scene_id !== "fall"
+    || decision.family_delivery !== "alarm"
+    || decision.alarm === null) return null;
+  return grant;
 }
 
 export function canRevealAuthorizedVideo(

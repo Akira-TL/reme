@@ -1,9 +1,3 @@
-import {
-  mapCareDecisionToPhase,
-  projectCareDecision,
-} from "../shared-demo/careDecision.js";
-import { privacyAllowsEventVideo } from "./privacyPresentation.js";
-
 const COMMAND_SCHEMA = "reme-control-command/v1";
 const ACK_TYPE = "control_ack";
 
@@ -187,7 +181,6 @@ export function buildDemoState({
   source,
   capture,
   runtime,
-  care,
   timestampMs = Date.now(),
 }) {
   const captureStatus = capture?.status === "ready" || capture?.active
@@ -206,10 +199,6 @@ export function buildDemoState({
         : runtime?.state === "error"
           ? "error"
           : "offline";
-  const decision = projectCareDecision(care?.decision);
-  // `phase` is protocol compatibility vocabulary only. Derive it from the
-  // authoritative decision so a local perception candidate cannot reach Family.
-  const carePhase = mapCareDecisionToPhase(decision);
   return {
     schema_version: "reme-demo-state/v4",
     room_session_id: roomSessionId,
@@ -234,9 +223,9 @@ export function buildDemoState({
         detail: runtime?.reason || null,
       },
       care: {
-        phase: carePhase,
-        consent: care?.consent || "none",
-        decision,
+        phase: "idle",
+        consent: "none",
+        decision: null,
       },
       media_grant: null,
     },
@@ -245,46 +234,34 @@ export function buildDemoState({
 
 export function mediaGrantEligibility({
   sceneId,
-  careDecision,
-  kitchenAuthorization = null,
+  runtimeSessionId,
+  authorization = null,
   now = Date.now(),
 }) {
   if (sceneId === "bathroom") return { allowed: false, code: "bathroom_video_forbidden" };
-  if (!privacyAllowsEventVideo(sceneId, careDecision)) {
-    return { allowed: false, code: "decision_privacy_hidden" };
+  if (!authorization || authorization.status !== "active") {
+    return { allowed: false, code: "backend_authorization_required" };
   }
-  if (sceneId === "kitchen") {
-    const remainingMs = Number(
-      kitchenAuthorization?.expiresAtMonotonicMs ?? kitchenAuthorization?.expiresAtMs,
-    ) - now;
-    const consented = careDecision?.scene_id === "kitchen"
-      && careDecision?.decision_id === kitchenAuthorization?.decisionId
-      && kitchenAuthorization?.sceneId === "kitchen"
-      && typeof kitchenAuthorization?.requestDecisionId === "string"
-      && remainingMs >= 1_000;
-    return consented
-      ? {
-          allowed: true,
-          scope: "kitchen_moment",
-          durationMs: Math.min(60_000, Math.floor(remainingMs)),
-          now,
-        }
-      : { allowed: false, code: "current_consent_required" };
+  if (authorization.scene_id !== sceneId
+    || authorization.runtime_session_id !== runtimeSessionId) {
+    return { allowed: false, code: "stale_backend_authorization" };
   }
-  if (sceneId === "fall") {
-    const alarmAuthorized = careDecision?.scene_id === "fall"
-      && typeof careDecision?.decision_id === "string"
-      && careDecision.family_delivery === "alarm"
-      && careDecision.alarm !== null
-      && typeof careDecision.alarm === "object";
-    return alarmAuthorized
-      ? {
-          allowed: true,
-          scope: "fall_emergency",
-          durationMs: 30_000,
-          now,
-        }
-      : { allowed: false, code: "authoritative_escalation_required" };
+  const remainingMs = authorization.expires_at_ms - now;
+  if (remainingMs < 1_000) return { allowed: false, code: "backend_authorization_expired" };
+  const expectedScope = sceneId === "kitchen"
+    ? "kitchen_moment"
+    : sceneId === "fall" ? "fall_emergency" : null;
+  if (expectedScope === null || authorization.scope !== expectedScope) {
+    return { allowed: false, code: "event_video_not_available" };
   }
-  return { allowed: false, code: "event_video_not_available" };
+  return {
+    allowed: true,
+    scope: authorization.scope,
+    eventId: authorization.authorization_id,
+    durationMs: Math.min(
+      authorization.scope === "kitchen_moment" ? 60_000 : 30_000,
+      Math.floor(remainingMs),
+    ),
+    now,
+  };
 }

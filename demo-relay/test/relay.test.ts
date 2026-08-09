@@ -11,10 +11,10 @@ import {
   type ControlAck,
   type ControlCommand,
   type DemoStateEnvelope,
+  type FamilyEvent,
   type PoseFrame,
 } from "../src/index";
 import {
-  type CareDecision,
   MOVENET_KEYPOINT_NAMES,
   validateDemoState,
 } from "../src/protocol";
@@ -54,26 +54,19 @@ afterEach(async () => {
 });
 
 describe("public dual-device relay", () => {
-  it("accepts an exact v4 CareDecision and rejects invented provenance", () => {
+  it("accepts presentation-only v4 state and rejects browser-authored care", () => {
     const claim = { room_session_id: "room-assessment" } as Claim;
-    const state = makeState(claim, 1, {
-      care: {
-        phase: "checking",
-        decision: "decision-assessment",
-        consent: "none",
-        authoritative: false,
-      },
-    });
+    const state = makeState(claim, 1);
     expect(validateDemoState(state, claim.room_session_id, true)).toBe(true);
-    const mismatchedPhase = structuredClone(state);
-    mismatchedPhase.state.care.phase = "emergency";
-    expect(validateDemoState(mismatchedPhase, claim.room_session_id, true)).toBe(false);
-    const invalid = structuredClone(state) as unknown as Record<string, unknown>;
-    const invalidState = invalid.state as Record<string, unknown>;
-    const invalidCare = invalidState.care as Record<string, unknown>;
-    const invalidDecision = invalidCare.decision as Record<string, unknown>;
-    invalidDecision.source = "guessed";
-    expect(validateDemoState(invalid, claim.room_session_id, true)).toBe(false);
+    const forged = structuredClone(state) as unknown as {
+      state: { care: { phase: string; consent: string; decision: unknown } };
+    };
+    forged.state.care = {
+      phase: "emergency",
+      consent: "granted",
+      decision: { decision_id: "browser-invented" },
+    };
+    expect(validateDemoState(forged, claim.room_session_id, true)).toBe(false);
   });
 
   it("claims one passwordless 30 second producer lease and never accepts a request body", async () => {
@@ -138,6 +131,97 @@ describe("public dual-device relay", () => {
     const heartbeat = await nextType(monitor, "monitor_heartbeat_ack");
     expect(heartbeat).toMatchObject({ room_session_id: claim.room_session_id });
     expect(numberField(heartbeat, "expires_at_ms")).toBeGreaterThan(claim.expires_at_ms - 1_000);
+  });
+
+  it("authenticates backend ingress and returns only short-lived browser RTC credentials", async () => {
+    const claim = await claimMonitor();
+    const denied = await relayFetch("/api/backend/context");
+    expect(denied.status).toBe(401);
+    const deniedShortToken = await relayFetch("/api/backend/context", {
+      headers: { Authorization: "Bearer short" },
+    });
+    expect(deniedShortToken.status).toBe(401);
+
+    const context = await relayFetch("/api/backend/context", {
+      headers: { Authorization: "Bearer test-backend-secret" },
+    });
+    expect(context.status).toBe(200);
+    await expect(context.json()).resolves.toEqual({
+      schema_version: "reme-backend-relay-context/v1",
+      room_session_id: claim.room_session_id,
+    });
+    const directEvent: FamilyEvent = {
+      schema_version: "reme-family-event/v1",
+      room_session_id: claim.room_session_id,
+      runtime_session_id: "runtime-backend",
+      revision: 0,
+      timestamp_ms: Date.now(),
+      care: null,
+      authorization: null,
+    };
+    const publish = await relayFetch("/api/backend/family-event", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-backend-secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(directEvent),
+    });
+    expect(publish.status).toBe(202);
+    await expect(publish.json()).resolves.toEqual({ accepted_revision: 0 });
+
+    const rtc = await relayFetch("/api/rtc-config");
+    expect(rtc.status).toBe(200);
+    const rtcBody = await rtc.json<Record<string, unknown>>();
+    expect(rtcBody).toMatchObject({
+      schema_version: "reme-rtc-config/v1",
+      capability: "stun_only",
+    });
+    expect(rtc.headers.get("Cache-Control")).toBe("no-store");
+    expect(JSON.stringify(rtcBody)).not.toContain("test-backend-secret");
+  });
+
+  it("persists and replays the backend FamilyEvent with monotonic runtime revisions", async () => {
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const viewer = await connectViewerAndReady();
+    const state = makeState(claim, 1, { scene: "fall" });
+    const event = makeFamilyEvent(claim, state, "decision-family", "fall_emergency");
+
+    await publishFamilyEvent(event);
+    await expect(nextSchema(monitor, "reme-family-event/v1")).resolves.toEqual(event);
+    await expect(nextSchema(viewer, "reme-family-event/v1")).resolves.toEqual(event);
+
+    const conflict = structuredClone(event);
+    if (conflict.care === null) throw new Error("family care fixture missing");
+    conflict.care.reason_summary = "conflicting same revision";
+    await expect(roomStub().publishFamilyEvent(conflict, event.timestamp_ms)).resolves.toEqual({
+      ok: false,
+      error: "family_revision_conflict",
+    });
+    const overlong = structuredClone(event);
+    overlong.revision = 1;
+    overlong.timestamp_ms += 1;
+    if (overlong.authorization === null) throw new Error("authorization fixture missing");
+    overlong.authorization.expires_at_ms = overlong.authorization.issued_at_ms + 30_001;
+    await expect(roomStub().publishFamilyEvent(overlong, overlong.timestamp_ms))
+      .resolves.toEqual({ ok: false, error: "invalid_family_event" });
+    const next = structuredClone(event);
+    next.revision = 1;
+    next.timestamp_ms += 1;
+    await publishFamilyEvent(next);
+
+    const late = await connectViewerAndReady();
+    await expect(nextSchema(late, "reme-family-event/v1")).resolves.toEqual(next);
+
+    const skippedRuntime = structuredClone(next);
+    skippedRuntime.runtime_session_id = "runtime-new";
+    if (skippedRuntime.authorization !== null) {
+      skippedRuntime.authorization.runtime_session_id = "runtime-new";
+    }
+    await expect(roomStub().publishFamilyEvent(skippedRuntime, next.timestamp_ms + 1))
+      .resolves.toEqual({ ok: true, accepted_revision: 1 });
   });
 
   it("reconnects the same producer token without a delayed old close releasing the new socket", async () => {
@@ -491,6 +575,12 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(emergency));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      emergency,
+      "decision-locked",
+      "fall_emergency",
+    ));
     await claimControl(viewer, claim.room_session_id);
 
     const command = {
@@ -522,6 +612,12 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(statusOnly));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      statusOnly,
+      "decision-status-only",
+      null,
+    ));
 
     monitor.send(JSON.stringify({
       type: "media_grant_request",
@@ -532,7 +628,7 @@ describe("public dual-device relay", () => {
       expires_in_ms: 30_000,
     }));
     await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({
-      code: "authoritative_fall_required",
+      code: "backend_authorization_required",
     });
 
     await claimControl(viewer, claim.room_session_id);
@@ -570,18 +666,24 @@ describe("public dual-device relay", () => {
         delivery: "action_card",
       },
     });
-    if (cardState.state.care.decision === null) throw new Error("decision fixture missing");
-    cardState.state.care.decision.action_card = {
-      event: "牙疼影响进食",
-      elder_quote: "牙疼，饭咬不动。",
-      system_judgment: "需要家属协助预约",
-      suggested_action: "预约口腔检查",
-      time_window: "3 天内",
-      status: "pending",
-    };
     monitor.send(JSON.stringify(cardState));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    const cardEvent = makeFamilyEvent(claim, cardState, "decision-card", null);
+    if (cardEvent.care === null) throw new Error("family care fixture missing");
+    cardEvent.care.state = "family_notification_required";
+    cardEvent.care.risk_level = 2;
+    cardEvent.care.action = "notify_family";
+    cardEvent.care.family_delivery = "action_card";
+    cardEvent.care.family_notification = "请查看行动卡";
+    cardEvent.care.action_card = {
+      event: "需要家属协助",
+      system_judgment: "普通关怀事件需要家属安排",
+      suggested_action: "联系本人并安排后续事项",
+      time_window: "3 天内",
+      status: "pending",
+    };
+    await publishFamilyEvent(cardEvent);
     await claimControl(viewer, claim.room_session_id);
 
     const command = {
@@ -611,6 +713,19 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(notificationState));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    const notificationEvent = makeFamilyEvent(
+      claim,
+      notificationState,
+      "decision-notification",
+      null,
+    );
+    if (notificationEvent.care === null) throw new Error("family care fixture missing");
+    notificationEvent.care.state = "family_notification_required";
+    notificationEvent.care.risk_level = 3;
+    notificationEvent.care.action = "notify_family";
+    notificationEvent.care.family_delivery = "notification";
+    notificationEvent.care.family_notification = "请家人留意";
+    await publishFamilyEvent(notificationEvent);
     await claimControl(viewer, claim.room_session_id);
 
     const command = {
@@ -711,11 +826,17 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewerA, "reme-demo-state/v4");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      kitchen,
+      "decision-kitchen",
+      "kitchen_moment",
+    ));
     monitor.send(JSON.stringify({
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
       runtime_session_id: kitchen.runtime_session_id,
-      event_id: "decision-kitchen",
+      event_id: "authorization-decision-kitchen",
       scope: "kitchen_moment",
       expires_in_ms: 60_000,
     }));
@@ -753,11 +874,17 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      kitchen,
+      "decision-signal",
+      "kitchen_moment",
+    ));
     monitor.send(JSON.stringify({
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
       runtime_session_id: kitchen.runtime_session_id,
-      event_id: "decision-signal",
+      event_id: "authorization-decision-signal",
       scope: "kitchen_moment",
       expires_in_ms: 60_000,
     }));
@@ -817,11 +944,17 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      kitchen,
+      "decision-runtime-gate",
+      "kitchen_moment",
+    ));
     const request = {
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
       runtime_session_id: kitchen.runtime_session_id,
-      event_id: "decision-runtime-gate",
+      event_id: "authorization-decision-runtime-gate",
       scope: "kitchen_moment",
       expires_in_ms: 60_000,
     };
@@ -871,11 +1004,17 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      kitchen,
+      "decision-privacy-gate",
+      "kitchen_moment",
+    ));
     const request = {
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
       runtime_session_id: kitchen.runtime_session_id,
-      event_id: "decision-privacy-gate",
+      event_id: "authorization-decision-privacy-gate",
       scope: "kitchen_moment",
       expires_in_ms: 60_000,
     };
@@ -891,17 +1030,22 @@ describe("public dual-device relay", () => {
         authoritative: false,
       },
     });
-    if (hidden.state.care.decision === null) throw new Error("decision fixture missing");
-    hidden.state.care.decision.privacy_mode = "hidden";
     monitor.send(JSON.stringify(hidden));
     await nextType(monitor, "state_accepted");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      hidden,
+      "decision-privacy-gate",
+      "kitchen_moment",
+      { revision: 1, authorizationStatus: "revoked", privacyMode: "hidden" },
+    ));
     await expect(nextWhere(viewer, (value) => typeOf(value) === "media_grant"
       && field(objectField(value, "grant"), "status") === "revoked")).resolves.toMatchObject({
-        reason: "grant_authority_lost",
+        reason: "backend_authorization_lost",
       });
     monitor.send(JSON.stringify(request));
     await expect(nextType(monitor, "protocol_error")).resolves.toMatchObject({
-      code: "decision_privacy_hidden",
+      code: "backend_authorization_required",
     });
   });
 
@@ -924,12 +1068,18 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      kitchen,
+      "decision-fixed-window",
+      "kitchen_moment",
+    ));
     const leaseId = await claimControl(viewer, claim.room_session_id);
     const request = {
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
       runtime_session_id: kitchen.runtime_session_id,
-      event_id: "decision-fixed-window",
+      event_id: "authorization-decision-fixed-window",
       scope: "kitchen_moment",
       expires_in_ms: 60_000,
     };
@@ -1004,11 +1154,17 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(fall));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      fall,
+      "decision-fall",
+      "fall_emergency",
+    ));
     monitor.send(JSON.stringify({
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
       runtime_session_id: fall.runtime_session_id,
-      event_id: "decision-fall",
+      event_id: "authorization-decision-fall",
       scope: "fall_emergency",
       expires_in_ms: 30_001,
     }));
@@ -1019,7 +1175,7 @@ describe("public dual-device relay", () => {
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
       runtime_session_id: fall.runtime_session_id,
-      event_id: "decision-fall",
+      event_id: "authorization-decision-fall",
       scope: "fall_emergency",
       expires_in_ms: 30_000,
     }));
@@ -1077,11 +1233,17 @@ describe("public dual-device relay", () => {
     monitor.send(JSON.stringify(kitchen));
     await nextType(monitor, "state_accepted");
     await nextSchema(viewer, "reme-demo-state/v4");
+    await publishFamilyEvent(makeFamilyEvent(
+      claim,
+      kitchen,
+      "decision-expiry",
+      "kitchen_moment",
+    ));
     monitor.send(JSON.stringify({
       type: "media_grant_request",
       room_session_id: claim.room_session_id,
       runtime_session_id: kitchen.runtime_session_id,
-      event_id: "decision-expiry",
+      event_id: "authorization-decision-expiry",
       scope: "kitchen_moment",
       expires_in_ms: 1_000,
     }));
@@ -1104,6 +1266,8 @@ describe("public dual-device relay", () => {
     expect(status.monitor_online).toBe(false);
     expect(status.controller).toBeNull();
     expect(status.active_media_grant).toBeNull();
+    now.mockReturnValue(baseTime + 60_001);
+    expect(await runDurableObjectAlarm(roomStub())).toBe(true);
     await expect(runDurableObjectAlarm(roomStub())).resolves.toBe(false);
   });
 });
@@ -1130,6 +1294,7 @@ async function resetRoomStorage(): Promise<void> {
       state.storage.sql.exec("DELETE FROM controller_lease");
       state.storage.sql.exec("DELETE FROM latest_pose");
       state.storage.sql.exec("DELETE FROM latest_state");
+      state.storage.sql.exec("DELETE FROM latest_family_event");
       state.storage.sql.exec("DELETE FROM producer_lease");
       state.storage.sql.exec("DELETE FROM room");
     });
@@ -1198,75 +1363,11 @@ function makeState(
       decision: string | null;
       consent: "none" | "pending" | "granted" | "denied";
       authoritative: boolean;
-      delivery?: CareDecision["family_delivery"];
+      delivery?: "none" | "notification" | "action_card" | "alarm";
     };
   } = {},
 ): DemoStateEnvelope {
-  const care = options.care ?? {
-    phase: "idle" as const,
-    decision: null,
-    consent: "none" as const,
-    authoritative: false,
-  };
   const scene = options.scene ?? "living";
-  const familyDelivery: CareDecision["family_delivery"] = care.authoritative
-    ? "alarm"
-    : care.delivery ?? "none";
-  const decisionState: CareDecision["state"] = care.phase === "checking"
-    ? care.consent === "pending" ? "consent_required" : "check_in_required"
-    : care.phase === "attention" || care.phase === "emergency"
-      ? "family_notification_required"
-      : care.phase === "resolved"
-        ? "resolved"
-        : "observe";
-  const needDialogue = care.phase === "checking";
-  const decision = care.decision === null ? null : {
-    schema_version: "reme-care-decision/v1-experiment" as const,
-    scene_id: scene,
-    decision_id: care.decision,
-    timestamp_ms: Date.now(),
-    state: decisionState,
-    risk_level: care.consent === "pending" || familyDelivery === "action_card"
-      ? 2
-      : familyDelivery === "alarm" ? 3 : 1,
-    privacy_mode: "skeleton_only" as const,
-    need_dialogue: needDialogue,
-    dialogue_goal: needDialogue ? "understand_need" : null,
-    elder_message: needDialogue ? "演示状态" : null,
-    family_notification: familyDelivery === "none" ? null : "演示状态",
-    action: care.phase === "checking"
-      ? "ask_elder" as const
-      : familyDelivery === "alarm"
-        ? "show_urgent_attention" as const
-        : familyDelivery === "action_card" || familyDelivery === "notification"
-          ? "notify_family" as const
-        : care.phase === "resolved"
-          ? "mark_resolved" as const
-          : "observe" as const,
-    family_delivery: familyDelivery,
-    reason_summary: "演示状态",
-    uncertainty: "low" as const,
-    fallback_used: false,
-    source: "rule" as const,
-    demo_mode: "live" as const,
-    consent_required: care.consent === "pending",
-    response_timeout_ms: needDialogue ? 8_000 : null,
-    response_deadline_ms: needDialogue ? 1_008_000 : null,
-    action_card: familyDelivery === "action_card" ? {
-      event: "需要家属协助",
-      elder_quote: "请帮我处理一下。",
-      system_judgment: "本人表达了具体生活需要",
-      suggested_action: "今天联系本人",
-      time_window: "今天",
-      status: "pending" as const,
-    } : null,
-    visual_context: null,
-    alarm: familyDelivery === "alarm"
-      ? { channels: ["vibrate", "ring", "flash"] as Array<"vibrate" | "ring" | "flash">, trigger: "visual_confirm" as const }
-      : null,
-    voice_asset: null,
-    confirm_channels: needDialogue ? ["frame", "voice"] as Array<"frame" | "voice"> : null,
-  };
   return {
     schema_version: "reme-demo-state/v4",
     room_session_id: claim.room_session_id,
@@ -1285,13 +1386,89 @@ function makeState(
       },
       runtime: { status: "ready", capability: "live", detail: null },
       care: {
-        phase: care.phase,
-        consent: care.consent,
-        decision,
+        phase: "idle",
+        consent: "none",
+        decision: null,
       },
       media_grant: null,
     },
   };
+}
+
+function makeFamilyEvent(
+  claim: Claim,
+  state: DemoStateEnvelope,
+  decisionId: string,
+  scope: "kitchen_moment" | "fall_emergency" | null,
+  {
+    revision = 0,
+    authorizationStatus = "active",
+    privacyMode = "skeleton_only",
+    expiresInMs = scope === "fall_emergency" ? 30_000 : 60_000,
+  }: {
+    revision?: number;
+    authorizationStatus?: "active" | "revoked" | "expired";
+    privacyMode?: "visible" | "blurred" | "skeleton_only" | "hidden";
+    expiresInMs?: number;
+  } = {},
+): FamilyEvent {
+  const timestampMs = Date.now();
+  const sceneId = state.state.scene_id;
+  const alarm = scope === "fall_emergency"
+    ? { channels: ["vibrate", "ring"] as Array<"vibrate" | "ring">, trigger: "visual_confirm" as const }
+    : null;
+  const care = {
+    schema_version: "reme-care-decision/v1-experiment" as const,
+    scene_id: sceneId,
+    decision_id: decisionId,
+    timestamp_ms: timestampMs,
+    state: scope === "kitchen_moment" ? "resolved" as const
+      : scope === "fall_emergency" ? "family_notification_required" as const
+        : "observe" as const,
+    risk_level: scope === "fall_emergency" ? 3 : 0,
+    privacy_mode: privacyMode,
+    family_notification: scope === null ? null : "后端权威家属事件",
+    action: scope === null ? "observe" as const : "notify_family" as const,
+    family_delivery: scope === "fall_emergency" ? "alarm" as const
+      : scope === "kitchen_moment" ? "notification" as const
+        : "none" as const,
+    reason_summary: "后端权威家属事件",
+    uncertainty: "low" as const,
+    source: "rule" as const,
+    fallback_used: false,
+    demo_mode: "live" as const,
+    action_card: null,
+    visual_context: null,
+    alarm,
+  };
+  return {
+    schema_version: "reme-family-event/v1",
+    room_session_id: claim.room_session_id,
+    runtime_session_id: state.runtime_session_id,
+    revision,
+    timestamp_ms: timestampMs,
+    care,
+    authorization: scope === null ? null : {
+      schema_version: "reme-media-authorization/v1",
+      authorization_id: `authorization-${decisionId}`,
+      decision_id: decisionId,
+      event_id: decisionId,
+      runtime_session_id: state.runtime_session_id,
+      scene_id: sceneId,
+      scope,
+      audience: "public_demo_viewers",
+      status: authorizationStatus,
+      issued_at_ms: timestampMs,
+      expires_at_ms: timestampMs + expiresInMs,
+    },
+  };
+}
+
+async function publishFamilyEvent(event: FamilyEvent): Promise<void> {
+  await expect(roomStub().publishFamilyEvent(event, event.timestamp_ms)).resolves.toEqual({
+    ok: true,
+    accepted_revision: event.revision,
+  });
 }
 
 function makePose(claim: Claim, runtimeSessionId: string, sequence: number): PoseFrame {

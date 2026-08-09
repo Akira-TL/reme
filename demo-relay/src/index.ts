@@ -6,6 +6,7 @@ import {
   CONTROL_COMMAND_SCHEMA_VERSION,
   createForwardedMediaSignal,
   DEMO_STATE_SCHEMA_VERSION,
+  FAMILY_EVENT_SCHEMA_VERSION,
   isExactObject,
   isOpaqueId,
   MEDIA_SIGNAL_SCHEMA_VERSION,
@@ -16,6 +17,7 @@ import {
   type ControlAckPhase,
   type ControlCommand,
   type DemoStateEnvelope,
+  type FamilyEvent,
   type MediaGrantRequest,
   type MediaGrantScope,
   type MediaSignal,
@@ -23,6 +25,7 @@ import {
   validateControlAck,
   validateControlCommand,
   validateDemoState,
+  validateFamilyEvent,
   validateMediaGrantRequest,
   validateMediaGrantRevoke,
   validateMediaSignal,
@@ -35,6 +38,7 @@ export type {
   ControlAck,
   ControlCommand,
   DemoStateEnvelope,
+  FamilyEvent,
   MediaSignal,
   PoseFrame,
 } from "./protocol";
@@ -52,6 +56,10 @@ const MAX_SIGNAL_MESSAGES_PER_GRANT = 160;
 const MAX_COMMAND_LIFETIME_MS = 60_000;
 const MAX_CLOCK_SKEW_MS = 5_000;
 const MAX_TERMINAL_COMMAND_HISTORY = 256;
+const MAX_BACKEND_BODY_BYTES = 32_768;
+const RTC_CONFIG_TTL_SECONDS = 3_600;
+const BACKEND_CONTEXT_SCHEMA_VERSION = "reme-backend-relay-context/v1";
+const RTC_CONFIG_SCHEMA_VERSION = "reme-rtc-config/v1";
 
 interface SqlRow {
   [key: string]: SqlStorageValue;
@@ -82,6 +90,14 @@ interface LatestPoseRow extends SqlRow {
   runtime_session_id: string;
   frame_sequence: number;
   pose_json: string;
+  received_at_ms: number;
+}
+
+interface LatestFamilyEventRow extends SqlRow {
+  room_session_id: string;
+  runtime_session_id: string;
+  revision: number;
+  event_json: string;
   received_at_ms: number;
 }
 
@@ -181,6 +197,23 @@ interface MediaGrantWire {
   reason: string | null;
 }
 
+export interface BackendContext {
+  schema_version: typeof BACKEND_CONTEXT_SCHEMA_VERSION;
+  room_session_id: string | null;
+}
+
+export type FamilyEventPublishResult =
+  | { ok: true; accepted_revision: number }
+  | {
+    ok: false;
+    error:
+      | "no_room_session"
+      | "invalid_family_event"
+      | "stale_room_session"
+      | "family_revision_conflict"
+      | "non_increasing_family_revision";
+  };
+
 type StateAuthority =
   | { status: "fresh"; row: LatestStateRow; state: DemoStateEnvelope }
   | { status: "missing" | "stale" };
@@ -232,6 +265,7 @@ export class DemoRoom extends DurableObject<Env> {
     );
     this.ctx.storage.sql.exec("DELETE FROM latest_state");
     this.ctx.storage.sql.exec("DELETE FROM latest_pose");
+    this.ctx.storage.sql.exec("DELETE FROM latest_family_event");
     this.ctx.storage.sql.exec("DELETE FROM controller_lease");
     this.ctx.storage.sql.exec("DELETE FROM commands");
     this.ctx.storage.sql.exec("DELETE FROM media_grant_audience");
@@ -266,6 +300,61 @@ export class DemoRoom extends DurableObject<Env> {
       active_media_grant: this.activeGrant(nowMs),
       server_time_ms: nowMs,
     };
+  }
+
+  async getBackendContext(): Promise<BackendContext> {
+    return {
+      schema_version: BACKEND_CONTEXT_SCHEMA_VERSION,
+      room_session_id: this.room()?.room_session_id ?? null,
+    };
+  }
+
+  async publishFamilyEvent(
+    event: FamilyEvent,
+    nowMs = Date.now(),
+  ): Promise<FamilyEventPublishResult> {
+    const room = this.room();
+    if (room === null) return { ok: false, error: "no_room_session" };
+    if (event.room_session_id !== room.room_session_id) {
+      return { ok: false, error: "stale_room_session" };
+    }
+    if (!validateFamilyEvent(event, room.room_session_id)) {
+      return { ok: false, error: "invalid_family_event" };
+    }
+    if (event.timestamp_ms > nowMs + MAX_CLOCK_SKEW_MS) {
+      return { ok: false, error: "invalid_family_event" };
+    }
+    const previousRow = this.latestFamilyEvent();
+    const previous = previousRow === null ? null : parseStoredFamilyEvent(previousRow);
+    const runtimeChanged = previous !== null
+      && previous.runtime_session_id !== event.runtime_session_id;
+    if (!runtimeChanged && previousRow !== null && event.revision <= previousRow.revision) {
+      if (
+        event.revision === previousRow.revision
+        && canonicalJson(event) === previousRow.event_json
+      ) return { ok: true, accepted_revision: event.revision };
+      return {
+        ok: false,
+        error: event.revision === previousRow.revision
+          ? "family_revision_conflict"
+          : "non_increasing_family_revision",
+      };
+    }
+
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO latest_family_event
+         (singleton, room_session_id, runtime_session_id, revision, event_json, received_at_ms)
+       VALUES (1, ?, ?, ?, ?, ?)`,
+      event.room_session_id,
+      event.runtime_session_id,
+      event.revision,
+      canonicalJson(event),
+      nowMs,
+    );
+    this.revokeGrantIfFamilyAuthorityLost(event, nowMs);
+    this.broadcastAll(event);
+    await this.scheduleNextAlarm(nowMs);
+    return { ok: true, accepted_revision: event.revision };
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -387,6 +476,14 @@ export class DemoRoom extends DurableObject<Env> {
         pose_json TEXT NOT NULL,
         received_at_ms INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS latest_family_event (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        room_session_id TEXT NOT NULL,
+        runtime_session_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        event_json TEXT NOT NULL,
+        received_at_ms INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS controller_lease (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         room_session_id TEXT NOT NULL,
@@ -425,6 +522,8 @@ export class DemoRoom extends DurableObject<Env> {
         ON media_grants (status, expires_at_ms);
       INSERT OR IGNORE INTO _sql_schema_migrations (id, applied_at_ms)
         VALUES (1, ${Date.now()});
+      INSERT OR IGNORE INTO _sql_schema_migrations (id, applied_at_ms)
+        VALUES (2, ${Date.now()});
     `);
   }
 
@@ -487,6 +586,7 @@ export class DemoRoom extends DurableObject<Env> {
       heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
       server_time_ms: nowMs,
     });
+    this.sendLatestFamilyEvent(server);
     this.broadcastPresence(nowMs);
     return new Response(null, {
       status: 101,
@@ -534,6 +634,7 @@ export class DemoRoom extends DurableObject<Env> {
       server_time_ms: nowMs,
     });
     this.sendLatestState(server, viewerId, nowMs);
+    this.sendLatestFamilyEvent(server);
     this.sendLatestPose(server, nowMs);
     if (activeGrant !== null && this.viewerInGrantAudience(activeGrant.grant_id, viewerId)) {
       sendJson(server, this.mediaGrantWire(activeGrant, "active", null));
@@ -1073,7 +1174,11 @@ export class DemoRoom extends DurableObject<Env> {
       this.recordRejectedCommand(value, nowMs, "state_revision_mismatch");
       return;
     }
-    const safetyReason = commandSafetyRejection(value, authority.state);
+    const safetyReason = commandSafetyRejection(
+      value,
+      authority.state,
+      this.currentFamilyEvent(),
+    );
     if (safetyReason !== null) {
       this.recordRejectedCommand(value, nowMs, safetyReason);
       return;
@@ -1158,16 +1263,14 @@ export class DemoRoom extends DurableObject<Env> {
       });
       return;
     }
-    const rejection = grantRejection(value, authority.state);
+    const familyEvent = this.currentFamilyEvent();
+    const rejection = grantRejection(value, authority.state, familyEvent, nowMs);
     if (rejection !== null) {
       sendJson(ws, { type: "protocol_error", code: rejection });
       return;
     }
-    const previousDeadline = this.eventGrantDeadline(value);
-    if (previousDeadline !== null && previousDeadline <= nowMs) {
-      sendJson(ws, { type: "protocol_error", code: "event_grant_window_expired" });
-      return;
-    }
+    const authorization = familyEvent?.authorization;
+    if (authorization === null || authorization === undefined) return;
     const current = this.activeGrantRow(nowMs);
     if (
       current !== null
@@ -1175,7 +1278,7 @@ export class DemoRoom extends DurableObject<Env> {
       && current.runtime_session_id === value.runtime_session_id
       && current.event_id === value.event_id
       && current.scope === value.scope
-      && (previousDeadline === null || current.expires_at_ms <= previousDeadline)
+      && current.expires_at_ms <= authorization.expires_at_ms
     ) {
       this.broadcastGrantWire(current, this.mediaGrantWire(current, "active", null));
       return;
@@ -1184,7 +1287,7 @@ export class DemoRoom extends DurableObject<Env> {
     const grantId = `grant-${crypto.randomUUID()}`;
     const expiresAtMs = Math.min(
       nowMs + value.expires_in_ms,
-      previousDeadline ?? Number.POSITIVE_INFINITY,
+      authorization.expires_at_ms,
     );
     this.ctx.storage.sql.exec(
       `INSERT INTO media_grants
@@ -1364,6 +1467,10 @@ export class DemoRoom extends DurableObject<Env> {
       this.broadcastGrantWire(grant, this.mediaGrantWire(grant, "expired", "grant_expired"));
       this.clearGrantAudience(grant.grant_id);
     }
+    const authorization = this.currentFamilyEvent()?.authorization;
+    if (authorization?.status === "active" && authorization.expires_at_ms <= nowMs) {
+      this.revokeActiveGrants(nowMs, "backend_authorization_expired", "expired");
+    }
     this.pruneTerminalCommands();
     this.pruneInactiveGrantAudience();
   }
@@ -1376,6 +1483,10 @@ export class DemoRoom extends DurableObject<Env> {
     if (controller !== null) times.push(controller.expires_at_ms);
     const grant = this.activeGrantRow(nowMs);
     if (grant !== null) times.push(grant.expires_at_ms);
+    const authorization = this.currentFamilyEvent()?.authorization;
+    if (authorization?.status === "active" && authorization.expires_at_ms > nowMs) {
+      times.push(authorization.expires_at_ms);
+    }
     const state = this.latestState();
     if (
       state !== null
@@ -1400,20 +1511,38 @@ export class DemoRoom extends DurableObject<Env> {
   private revokeGrantIfAuthorityLost(state: DemoStateEnvelope, nowMs: number): void {
     const grant = this.activeGrantRow(nowMs);
     if (grant === null) return;
-    const decision = state.state.care.decision;
+    const familyEvent = this.currentFamilyEvent();
+    const authorization = familyEvent?.authorization;
     const valid = grant.runtime_session_id === state.runtime_session_id
       && state.state.runtime.status === "ready"
       && state.state.capture.status === "active"
       && state.state.capture.remote_video === "available"
       && state.state.scene_id !== "bathroom"
-      && decision?.decision_id === grant.event_id
-      && decision.privacy_mode !== "hidden"
+      && authorization?.status === "active"
+      && authorization.expires_at_ms > nowMs
+      && authorization.authorization_id === grant.event_id
+      && authorization.runtime_session_id === state.runtime_session_id
+      && authorization.scene_id === state.state.scene_id
+      && authorization.scope === grant.scope
+      && familyEvent?.care?.privacy_mode !== "hidden"
       && (grant.scope === "kitchen_moment"
-        ? state.state.scene_id === "kitchen" && state.state.care.consent === "granted"
-        : state.state.scene_id === "fall"
-          && decision.family_delivery === "alarm"
-          && decision.alarm !== null);
+        ? familyEvent?.care?.family_delivery === "notification"
+        : familyEvent?.care?.family_delivery === "alarm"
+          && familyEvent.care.alarm !== null);
     if (!valid) this.revokeActiveGrants(nowMs, "grant_authority_lost", "revoked");
+  }
+
+  private revokeGrantIfFamilyAuthorityLost(event: FamilyEvent, nowMs: number): void {
+    const grant = this.activeGrantRow(nowMs);
+    if (grant === null) return;
+    const authorization = event.authorization;
+    const valid = authorization?.status === "active"
+      && authorization.expires_at_ms > nowMs
+      && event.room_session_id === grant.room_session_id
+      && event.runtime_session_id === grant.runtime_session_id
+      && authorization.authorization_id === grant.event_id
+      && authorization.scope === grant.scope;
+    if (!valid) this.revokeActiveGrants(nowMs, "backend_authorization_lost", "revoked");
   }
 
   private revokeActiveGrants(
@@ -1601,6 +1730,13 @@ export class DemoRoom extends DurableObject<Env> {
       return;
     }
     sendJson(ws, this.projectStateForViewer(value, viewerId, nowMs));
+  }
+
+  private sendLatestFamilyEvent(ws: WebSocket): void {
+    const row = this.latestFamilyEvent();
+    if (row === null) return;
+    const value = parseStoredFamilyEvent(row);
+    if (value !== null) sendJson(ws, value);
   }
 
   private sendLatestPose(ws: WebSocket, nowMs: number): void {
@@ -1810,6 +1946,17 @@ export class DemoRoom extends DurableObject<Env> {
     ));
   }
 
+  private latestFamilyEvent(): LatestFamilyEventRow | null {
+    return firstRow(this.ctx.storage.sql.exec<LatestFamilyEventRow>(
+      "SELECT * FROM latest_family_event WHERE singleton = 1",
+    ));
+  }
+
+  private currentFamilyEvent(): FamilyEvent | null {
+    const row = this.latestFamilyEvent();
+    return row === null ? null : parseStoredFamilyEvent(row);
+  }
+
   private controllerLease(): ControllerLeaseRow | null {
     return firstRow(this.ctx.storage.sql.exec<ControllerLeaseRow>(
       "SELECT * FROM controller_lease WHERE singleton = 1",
@@ -1839,17 +1986,6 @@ export class DemoRoom extends DurableObject<Env> {
       "SELECT * FROM media_grants WHERE grant_id = ?",
       grantId,
     ));
-  }
-
-  private eventGrantDeadline(request: MediaGrantRequest): number | null {
-    const row = firstRow(this.ctx.storage.sql.exec<SqlRow & { deadline_ms: number | null }>(
-      `SELECT MIN(expires_at_ms) AS deadline_ms FROM media_grants
-        WHERE room_session_id = ? AND event_id = ? AND scope = ?`,
-      request.room_session_id,
-      request.event_id,
-      request.scope,
-    ));
-    return typeof row?.deadline_ms === "number" ? row.deadline_ms : null;
   }
 
   private addGrantAudience(grantId: string, viewerId: string): void {
@@ -1931,8 +2067,49 @@ export default {
     }
     try {
       const room = env.DEMO_ROOM.getByName(ROOM_NAME);
+      if (url.pathname.startsWith("/api/backend/")) {
+        if (!(await backendRequestAuthorized(request, env.BACKEND_PUBLISH_TOKEN))) {
+          return jsonWithCors({ error: "backend_unauthorized" }, 401, origin);
+        }
+        if (request.method === "GET" && url.pathname === "/api/backend/context") {
+          return jsonWithCors(await room.getBackendContext(), 200, origin, {
+            "Cache-Control": "no-store",
+          });
+        }
+        if (request.method === "POST" && url.pathname === "/api/backend/family-event") {
+          const body = await request.arrayBuffer();
+          if (body.byteLength === 0 || body.byteLength > MAX_BACKEND_BODY_BYTES) {
+            return jsonWithCors({ error: "invalid_family_event" }, 400, origin);
+          }
+          let value: unknown;
+          try {
+            value = JSON.parse(new TextDecoder().decode(body));
+          } catch {
+            return jsonWithCors({ error: "invalid_family_event" }, 400, origin);
+          }
+          if (!validateFamilyEvent(value)) {
+            return jsonWithCors({ error: "invalid_family_event" }, 422, origin);
+          }
+          const result = await room.publishFamilyEvent(value);
+          if (!result.ok) {
+            const status = result.error === "no_room_session" ? 409
+              : result.error === "stale_room_session" ? 409
+                : result.error.includes("revision") ? 409 : 422;
+            return jsonWithCors({ error: result.error }, status, origin);
+          }
+          return jsonWithCors({ accepted_revision: result.accepted_revision }, 202, origin, {
+            "Cache-Control": "no-store",
+          });
+        }
+        return jsonWithCors({ error: "not_found" }, 404, origin);
+      }
       if (request.method === "GET" && url.pathname === "/health") {
         return jsonWithCors({ ok: true, room_name: ROOM_NAME }, 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/api/rtc-config") {
+        return jsonWithCors(await createRtcConfiguration(env), 200, origin, {
+          "Cache-Control": "no-store",
+        });
       }
       if (request.method === "GET" && url.pathname === "/api/status") {
         return jsonWithCors(await room.getStatus(), 200, origin);
@@ -1975,9 +2152,117 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
+interface RtcIceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
+interface RtcConfigurationWire {
+  schema_version: typeof RTC_CONFIG_SCHEMA_VERSION;
+  iceServers: RtcIceServer[];
+  expires_at_ms: number;
+  capability: "turn" | "stun_only";
+}
+
+async function backendRequestAuthorized(request: Request, secret: string): Promise<boolean> {
+  const header = request.headers.get("Authorization");
+  if (header === null || !header.startsWith("Bearer ")) return false;
+  const supplied = header.slice("Bearer ".length);
+  if (typeof secret !== "string" || secret.length < 16 || supplied.length < 16) return false;
+  const [suppliedHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(supplied)),
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret)),
+  ]);
+  return crypto.subtle.timingSafeEqual(
+    new Uint8Array(suppliedHash),
+    new Uint8Array(expectedHash),
+  );
+}
+
+async function createRtcConfiguration(env: Env): Promise<RtcConfigurationWire> {
+  const expiresAtMs = Date.now() + RTC_CONFIG_TTL_SECONDS * 1_000;
+  if (
+    env.TURN_KEY_ID === "local-disabled"
+    || env.TURN_KEY_API_TOKEN === "local-disabled"
+  ) {
+    return {
+      schema_version: RTC_CONFIG_SCHEMA_VERSION,
+      iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }],
+      expires_at_ms: expiresAtMs,
+      capability: "stun_only",
+    };
+  }
+
+  const response = await fetch(
+    `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(env.TURN_KEY_ID)}`
+      + "/credentials/generate-ice-servers",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ttl: RTC_CONFIG_TTL_SECONDS }),
+    },
+  );
+  if (!response.ok) throw new Error(`TURN credential generation failed (${response.status})`);
+  const value: unknown = await response.json();
+  if (value === null || typeof value !== "object" || !("iceServers" in value)) {
+    throw new Error("TURN credential response is missing iceServers");
+  }
+  const iceServers = normalizeIceServers(value.iceServers);
+  if (iceServers.length === 0 || !iceServers.some((server) => hasTurnUrl(server.urls))) {
+    throw new Error("TURN credential response contains no usable TURN server");
+  }
+  return {
+    schema_version: RTC_CONFIG_SCHEMA_VERSION,
+    iceServers,
+    expires_at_ms: expiresAtMs,
+    capability: "turn",
+  };
+}
+
+function normalizeIceServers(value: unknown): RtcIceServer[] {
+  if (!Array.isArray(value)) return [];
+  const result: RtcIceServer[] = [];
+  for (const item of value) {
+    if (item === null || typeof item !== "object" || !("urls" in item)) continue;
+    const urls = normalizeIceUrls(item.urls);
+    if (urls === null) continue;
+    const normalized: RtcIceServer = { urls };
+    if ("username" in item && typeof item.username === "string") {
+      normalized.username = item.username;
+    }
+    if ("credential" in item && typeof item.credential === "string") {
+      normalized.credential = item.credential;
+    }
+    result.push(normalized);
+  }
+  return result;
+}
+
+function normalizeIceUrls(value: unknown): string | string[] | null {
+  if (typeof value === "string") return isIceUrl(value) ? value : null;
+  if (!Array.isArray(value)) return null;
+  const urls = value.filter((item): item is string => typeof item === "string" && isIceUrl(item));
+  return urls.length > 0 ? urls : null;
+}
+
+function isIceUrl(value: string): boolean {
+  return /^(?:stun|stuns|turn|turns):/i.test(value) && value.length <= 2_048;
+}
+
+function hasTurnUrl(value: string | string[]): boolean {
+  const urls = Array.isArray(value) ? value : [value];
+  return urls.some((url) => /^turns?:/i.test(url));
+}
+
 function grantRejection(
   request: MediaGrantRequest,
   state: DemoStateEnvelope | null,
+  familyEvent: FamilyEvent | null,
+  nowMs: number,
 ): string | null {
   if (state === null) return "state_required_before_grant";
   if (
@@ -1990,63 +2275,79 @@ function grantRejection(
     state.state.capture.status !== "active"
     || state.state.capture.remote_video !== "available"
   ) return "remote_video_unavailable";
-  const decision = state.state.care.decision;
-  if (decision?.decision_id !== request.event_id) return "event_authority_mismatch";
-  if (decision.privacy_mode === "hidden") return "decision_privacy_hidden";
-  if (request.scope === "kitchen_moment") {
-    return state.state.scene_id === "kitchen" && state.state.care.consent === "granted"
-      ? null
-      : "kitchen_consent_required";
+  if (familyEvent === null) return "backend_authorization_required";
+  if (
+    familyEvent.room_session_id !== request.room_session_id
+    || familyEvent.runtime_session_id !== request.runtime_session_id
+  ) return "stale_backend_authorization";
+  const authorization = familyEvent.authorization;
+  if (authorization === null || authorization.status !== "active") {
+    return "backend_authorization_required";
   }
-  return state.state.scene_id === "fall"
-    && decision.family_delivery === "alarm"
-    && decision.alarm !== null
-    ? null
-    : "authoritative_fall_required";
+  if (authorization.expires_at_ms <= nowMs) return "backend_authorization_expired";
+  if (
+    authorization.authorization_id !== request.event_id
+    || authorization.runtime_session_id !== request.runtime_session_id
+    || authorization.scope !== request.scope
+    || authorization.scene_id !== state.state.scene_id
+  ) return "event_authority_mismatch";
+  if (familyEvent.care?.privacy_mode === "hidden") return "decision_privacy_hidden";
+  const decision = familyEvent.care;
+  if (request.scope === "kitchen_moment") {
+    return decision?.scene_id === "kitchen"
+      && decision.family_delivery === "notification"
+      ? null
+      : "authoritative_kitchen_moment_required";
+  }
+  if (decision?.scene_id !== "fall"
+    || decision.family_delivery !== "alarm"
+    || decision.alarm === null) return "authoritative_fall_required";
+  return null;
 }
 
 function commandSafetyRejection(
   command: ControlCommand,
   state: DemoStateEnvelope,
+  familyEvent: FamilyEvent | null,
 ): string | null {
   const body = command.command;
+  const decision = familyEvent?.runtime_session_id === state.runtime_session_id
+    ? familyEvent.care
+    : null;
   if (
     (body.name === "submit_response"
       || body.name === "confirm_alarm"
       || body.name === "confirm_action_card"
       || body.name === "confirm_family_notification"
       || body.name === "replay_voice")
-    && body.decision_id !== state.state.care.decision?.decision_id
+    && body.decision_id !== decision?.decision_id
   ) return "decision_id_mismatch";
   if (body.name === "confirm_alarm" && (
-    state.state.care.decision?.family_delivery !== "alarm"
-    || state.state.care.decision?.alarm === null
+    decision?.family_delivery !== "alarm"
+    || decision.alarm === null
   )) {
     return "alarm_not_current";
   }
   if (
     body.name === "confirm_action_card"
     && (
-      state.state.care.decision?.alarm !== null
-      || state.state.care.decision?.family_delivery !== "action_card"
-      || state.state.care.decision?.action_card?.status !== "pending"
+      decision?.alarm !== null
+      || decision?.family_delivery !== "action_card"
+      || decision.action_card?.status !== "pending"
     )
   ) return "action_card_not_current";
   if (
     body.name === "confirm_family_notification"
     && (
-      state.state.care.decision?.alarm !== null
-      || state.state.care.decision?.action_card !== null
-      || state.state.care.decision?.family_delivery !== "notification"
-      || !state.state.care.decision?.family_notification
-      || (state.state.care.decision.state !== "family_notification_required"
-        && state.state.care.decision.state !== "urgent_attention")
+      decision?.alarm !== null
+      || decision?.action_card !== null
+      || decision?.family_delivery !== "notification"
+      || !decision?.family_notification
+      || (decision.state !== "family_notification_required"
+        && decision.state !== "urgent_attention")
     )
   ) return "family_notification_not_current";
-  if (
-    state.state.care.decision?.family_delivery !== "alarm"
-    || state.state.care.decision?.alarm === null
-  ) return null;
+  if (decision?.family_delivery !== "alarm" || decision.alarm === null) return null;
   if (
     body.name === "reset_demo"
     || body.name === "stop_capture"
@@ -2091,6 +2392,15 @@ function parseStoredState(row: LatestStateRow): DemoStateEnvelope | null {
   try {
     const value: unknown = JSON.parse(row.state_json);
     return validateDemoState(value, row.room_session_id, true) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredFamilyEvent(row: LatestFamilyEventRow): FamilyEvent | null {
+  try {
+    const value: unknown = JSON.parse(row.event_json);
+    return validateFamilyEvent(value, row.room_session_id) ? value : null;
   } catch {
     return null;
   }

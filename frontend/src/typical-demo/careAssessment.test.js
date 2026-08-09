@@ -60,7 +60,7 @@ test("prefers the family verdict and an explicit action-card suggestion", () => 
   assert.equal(assessment.basis, "本人表达了具体生活困难");
   assert.equal(assessment.suggested_action, "今天帮外婆预约口腔科");
   assert.equal(assessment.status, "family_notified");
-  assert.equal(assessment.action_card.elder_quote, "饭咬不动");
+  assert.equal(Object.hasOwn(assessment.action_card, "elder_quote"), false);
 });
 
 test("keeps a deterministic alarm distinct from a care judgment", () => {
