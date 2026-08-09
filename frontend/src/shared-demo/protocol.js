@@ -1,5 +1,5 @@
 export const VIEWER_PROTOCOL = "reme-viewer-v1";
-export const DEMO_STATE_SCHEMA = "reme-demo-state/v1";
+export const DEMO_STATE_SCHEMA = "reme-demo-state/v2";
 export const CONTROL_COMMAND_SCHEMA = "reme-control-command/v1";
 export const POSE_FRAME_SCHEMA = "reme-pose-frame-17/v1";
 export const MEDIA_SIGNAL_SCHEMA = "reme-media-signal/v1";
@@ -61,6 +61,10 @@ function isOpaqueId(value, { nullable = false } = {}) {
 
 function isNullableString(value, maxLength = 240) {
   return value === null || (typeof value === "string" && value.length <= maxLength);
+}
+
+function isBoundedString(value, maxLength = 240) {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
 }
 
 function isTimestamp(value) {
@@ -135,12 +139,53 @@ function isCareState(value) {
     "consent",
     "alarm_authoritative",
     "message",
+    "assessment",
   ])
     && ["idle", "checking", "emergency", "resolved"].includes(value.phase)
     && isOpaqueId(value.decision_id, { nullable: true })
     && ["none", "pending", "granted", "denied"].includes(value.consent)
     && typeof value.alarm_authoritative === "boolean"
-    && isNullableString(value.message);
+    && isNullableString(value.message)
+    && (value.assessment === null || isCareAssessment(value.assessment))
+    && (value.assessment === null || value.decision_id !== null);
+}
+
+function isCareAssessment(value) {
+  if (!hasExactKeys(value, [
+    "verdict",
+    "basis",
+    "uncertainty",
+    "source",
+    "action",
+    "suggested_action",
+    "status",
+    "visual_context",
+  ])) return false;
+  return isBoundedString(value.verdict)
+    && isBoundedString(value.basis)
+    && ["low", "medium", "high", "unknown"].includes(value.uncertainty)
+    && ["rule", "mimo", "mock", "record", "degraded"].includes(value.source)
+    && [
+      "none",
+      "observe",
+      "ask_elder",
+      "notify_family",
+      "show_urgent_attention",
+      "mark_resolved",
+    ].includes(value.action)
+    && isBoundedString(value.suggested_action)
+    && ["observing", "awaiting_response", "family_notified", "resolved", "degraded"]
+      .includes(value.status)
+    && isCareVisualContext(value.visual_context);
+}
+
+function isCareVisualContext(value) {
+  if (!hasExactKeys(value, ["sent_to_mimo", "type", "sample_count"])) return false;
+  if (typeof value.sent_to_mimo !== "boolean") return false;
+  if (!value.sent_to_mimo) return value.type === null && value.sample_count === null;
+  return ["keyframes", "clip"].includes(value.type)
+    && (value.sample_count === null
+      || (Number.isSafeInteger(value.sample_count) && value.sample_count > 0));
 }
 
 export function isDemoState(value) {

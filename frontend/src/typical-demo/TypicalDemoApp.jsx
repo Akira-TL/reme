@@ -12,6 +12,7 @@ import { Button, ButtonBase } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { relayHttpBase } from "../shared-demo/config";
 import { AcceptanceControls } from "./AcceptanceControls";
+import { projectCareAssessment } from "./careAssessment";
 import { ChildPhone } from "./ChildPhone";
 import { DevicePanel } from "./DevicePanel";
 import { HomeCarePrompt } from "./HomeCarePrompt";
@@ -303,6 +304,10 @@ export function TypicalDemoApp({ surface = "debug" }) {
     : sceneId === "fall" && effectivePhase === "emergency"
       ? live.safetyDecision || currentDecision
       : currentDecision;
+  const careAssessment = useMemo(
+    () => projectCareAssessment(authorityDecision),
+    [authorityDecision],
+  );
   const consent = careConsent(currentDecision, kitchenAuthorizationActive);
   const alarmAuthoritative = effectivePhase === "emergency"
     && ["family_notification_required", "urgent_attention"].includes(authorityDecision?.state);
@@ -371,6 +376,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     consent,
     alarmAuthoritative,
     careMessage(authorityDecision),
+    careAssessment,
   ]);
 
   useEffect(() => {
@@ -409,6 +415,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
         consent,
         alarmAuthoritative,
         message: careMessage(authorityDecision),
+        assessment: careAssessment,
       },
     });
     return createDemoStateEnvelope({
@@ -421,6 +428,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
   }, [
     alarmAuthoritative,
     authorityDecision,
+    careAssessment,
     consent,
     effectivePhase,
     liveRuntime,

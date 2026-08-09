@@ -27,10 +27,11 @@ export function shiftDateKey(key, days) {
   return dateKeyFromTimestamp(date.getTime());
 }
 
-export function buildWeekDays(selectedDateKey, nowMs = Date.now()) {
+export function buildWeekDays(selectedDateKey, nowMs = Date.now(), maxDateKey = null) {
   const selected = dateFromKey(selectedDateKey) || new Date(nowMs);
   selected.setHours(12, 0, 0, 0);
   const todayKey = dateKeyFromTimestamp(nowMs);
+  const selectableThrough = dateFromKey(maxDateKey) ? maxDateKey : todayKey;
   const mondayOffset = (selected.getDay() + 6) % 7;
   const monday = new Date(selected);
   monday.setDate(selected.getDate() - mondayOffset);
@@ -44,7 +45,7 @@ export function buildWeekDays(selectedDateKey, nowMs = Date.now()) {
       day: date.getDate(),
       selected: key === selectedDateKey,
       today: key === todayKey,
-      disabled: key > todayKey,
+      disabled: key > selectableThrough,
     };
   });
 }

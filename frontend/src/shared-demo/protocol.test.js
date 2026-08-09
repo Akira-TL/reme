@@ -11,7 +11,7 @@ import {
 
 function validState() {
   return {
-    schema_version: "reme-demo-state/v1",
+    schema_version: "reme-demo-state/v2",
     room_session_id: "room-1",
     runtime_session_id: "runtime-1",
     state_revision: 4,
@@ -33,13 +33,14 @@ function validState() {
         consent: "none",
         alarm_authoritative: false,
         message: null,
+        assessment: null,
       },
       media_grant: null,
     },
   };
 }
 
-test("state parser accepts exact v1 shape and rejects extra keys", () => {
+test("state parser accepts exact v2 shape and rejects extra keys", () => {
   const state = validState();
   assert.equal(isDemoState(state), true);
   assert.equal(parseViewerMessage(JSON.stringify(state))?.kind, "demo_state");
@@ -48,6 +49,36 @@ test("state parser accepts exact v1 shape and rejects extra keys", () => {
     ...state,
     state: { ...state.state, care: { ...state.state.care, made_up: true } },
   }), false);
+});
+
+test("v2 care assessment keeps provenance closed and visual context minimal", () => {
+  const state = validState();
+  state.state.care.phase = "checking";
+  state.state.care.decision_id = "decision-1";
+  state.state.care.assessment = {
+    verdict: "起身后在客厅缓慢走动，暂未看到需要立即处理的变化。",
+    basis: "姿态与房间内活动节奏综合判断。",
+    uncertainty: "medium",
+    source: "mimo",
+    action: "observe",
+    suggested_action: "继续留意下一次状态变化。",
+    status: "observing",
+    visual_context: {
+      sent_to_mimo: true,
+      type: "keyframes",
+      sample_count: 3,
+    },
+  };
+
+  assert.equal(isDemoState(state), true);
+
+  const inventedSource = structuredClone(state);
+  inventedSource.state.care.assessment.source = "guessed";
+  assert.equal(isDemoState(inventedSource), false);
+
+  const rawVisualPayload = structuredClone(state);
+  rawVisualPayload.state.care.assessment.visual_context.image_url = "data:image/jpeg;base64,no";
+  assert.equal(isDemoState(rawVisualPayload), false);
 });
 
 test("viewer ready and presence reject out-of-contract audience sizes", () => {

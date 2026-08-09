@@ -6,6 +6,24 @@ import {
   reduceFamilyTimeline,
 } from "./familyTimeline.js";
 
+function careAssessment(overrides = {}) {
+  return {
+    verdict: "午间活动比近期基线少，建议先问候确认。",
+    basis: "持续静坐触发轻量关怀事件",
+    uncertainty: "medium",
+    source: "mimo",
+    action: "ask_elder",
+    suggested_action: "已发起轻量问候，等待本人回应",
+    status: "awaiting_response",
+    visual_context: {
+      sent_to_mimo: false,
+      type: null,
+      sample_count: null,
+    },
+    ...overrides,
+  };
+}
+
 function snapshot({
   room = "room-1",
   revision = 1,
@@ -19,10 +37,11 @@ function snapshot({
   decisionId = null,
   consent = "none",
   careMessage = null,
+  assessment = null,
   grant = null,
 } = {}) {
   return {
-    schema_version: "reme-demo-state/v1",
+    schema_version: "reme-demo-state/v2",
     room_session_id: room,
     runtime_session_id: "runtime-1",
     state_revision: revision,
@@ -48,6 +67,7 @@ function snapshot({
         consent,
         alarm_authoritative: care === "emergency",
         message: careMessage,
+        assessment,
       },
       media_grant: grant,
     },
@@ -63,69 +83,77 @@ function observe(state, currentSnapshot, acks = []) {
   });
 }
 
-test("the first authoritative state creates one honest connection baseline", () => {
+test("an initial snapshot without a reliable care assessment stays out of the main timeline", () => {
   const state = observe(createFamilyTimelineState(), snapshot());
 
-  assert.equal(state.events.length, 1);
-  assert.equal(state.events[0].kind, "sync");
-  assert.equal(state.events[0].label, "开始同步");
-  assert.match(state.events[0].detail, /客厅日常/);
-  assert.match(state.events[0].detail, /采集未开始/);
-  assert.doesNotMatch(state.events[0].title, /当前位于/);
-  assert.doesNotMatch(state.events[0].detail, /在线访问端/);
+  assert.equal(state.lastStateRevision, 1);
+  assert.equal(state.events.length, 0);
+  assert.equal(state.lastSnapshot.sceneId, "living");
 });
 
-test("unchanged keepalives and replayed revisions do not create timeline noise", () => {
-  let state = observe(createFamilyTimelineState(), snapshot({ revision: 3 }));
-  state = observe(state, snapshot({ revision: 4 }));
-  state = observe(state, snapshot({
-    revision: 5,
-    decisionId: "idle-copy-only",
-    careMessage: "日常观察文案更新",
-  }));
-  state = observe(state, snapshot({ revision: 4, scene: "kitchen" }));
-  state = observe(state, snapshot({ revision: 2, scene: "bathroom" }));
-
-  assert.equal(state.lastStateRevision, 5);
-  assert.equal(state.events.length, 1);
-  assert.match(state.events[0].detail, /客厅日常/);
-});
-
-test("idle decision copy changes neither create events nor become a normality claim", () => {
-  let state = observe(createFamilyTimelineState(), snapshot({
-    revision: 1,
-    careMessage: "状态正常，无需打扰",
+test("an authoritative assessment becomes a family-facing care judgment", () => {
+  const state = observe(createFamilyTimelineState(), snapshot({
+    care: "checking",
     decisionId: "decision-1",
-  }));
-  state = observe(state, snapshot({
-    revision: 2,
-    careMessage: "画面信息不足或动作不明，继续观察",
-    decisionId: "decision-2",
+    assessment: careAssessment({
+      visual_context: {
+        sent_to_mimo: true,
+        type: "keyframes",
+        sample_count: 2,
+      },
+    }),
   }));
 
   assert.equal(state.events.length, 1);
-  assert.match(state.events[0].detail, /客厅日常/);
-  assert.doesNotMatch(state.events[0].detail, /状态正常/);
-  assert.doesNotMatch(state.events[0].detail, /画面信息不足/);
+  assert.equal(state.events[0].kind, "assessment");
+  assert.equal(state.events[0].label, "MiMo 关怀判断");
+  assert.equal(state.events[0].statusLabel, "等待回应");
+  assert.match(state.events[0].title, /建议先问候/);
+  assert.equal(state.events[0].suggestedAction, "已发起轻量问候，等待本人回应");
+  assert.deepEqual(state.events[0].visualContext, {
+    sentToMimo: true,
+    type: "keyframes",
+    sampleCount: 2,
+  });
+  assert.equal(state.events[0].captureLabel, "采集未开始");
+  assert.equal(state.events[0].runtimeLabel, "本地运行时降级");
 });
 
-test("authoritative revision order wins when a source timestamp moves backwards", () => {
+test("keepalives and system-only changes do not become household judgments", () => {
+  let state = observe(createFamilyTimelineState(), snapshot({ revision: 1 }));
+  state = observe(state, snapshot({ revision: 2, scene: "kitchen" }));
+  state = observe(state, snapshot({ revision: 3, capture: "active" }));
+  state = observe(state, snapshot({ revision: 4, runtime: "ready" }));
+  state = observe(state, snapshot({ revision: 3, care: "emergency" }));
+
+  assert.equal(state.lastStateRevision, 4);
+  assert.equal(state.events.length, 0);
+});
+
+test("a changed CareDecision creates a new judgment while a replay does not", () => {
   let state = observe(createFamilyTimelineState(), snapshot({
     revision: 1,
-    timestampMs: 2_000,
+    decisionId: "decision-1",
+    assessment: careAssessment({ status: "observing", action: "observe" }),
   }));
   state = observe(state, snapshot({
     revision: 2,
-    timestampMs: 1_000,
-    scene: "kitchen",
+    decisionId: "decision-1",
+    assessment: careAssessment({ status: "observing", action: "observe" }),
+  }));
+  state = observe(state, snapshot({
+    revision: 3,
+    care: "checking",
+    decisionId: "decision-2",
+    assessment: careAssessment(),
   }));
 
-  assert.equal(state.events[0].kind, "scene");
-  assert.equal(state.events[0].timestampMs, 1_000);
-  assert.equal(state.events[1].kind, "sync");
+  assert.equal(state.events.length, 2);
+  assert.equal(state.events[0].stateRevision, 3);
+  assert.equal(state.events[1].stateRevision, 1);
 });
 
-test("meaningful state transitions become timestamped events in priority order", () => {
+test("assessment, authorization and privacy results keep care-first priority", () => {
   let state = observe(createFamilyTimelineState(), snapshot({ revision: 1 }));
   state = observe(state, snapshot({
     revision: 2,
@@ -136,10 +164,10 @@ test("meaningful state transitions become timestamped events in priority order",
     care: "checking",
     decisionId: "decision-1",
     consent: "pending",
-    careMessage: "正在询问本人是否安全",
+    assessment: careAssessment(),
     grant: {
       grant_id: "grant-1",
-      event_id: "event-1",
+      event_id: "decision-1",
       scope: "kitchen_moment",
       expires_at_ms: 4_000,
       status: "active",
@@ -147,22 +175,35 @@ test("meaningful state transitions become timestamped events in priority order",
   }));
 
   assert.deepEqual(
-    state.events.slice(0, 6).map((event) => event.kind),
-    ["care", "media", "consent", "scene", "capture", "runtime"],
+    state.events.map((event) => event.kind),
+    ["assessment", "consent", "media"],
   );
-  assert.equal(state.events.at(-1).kind, "sync");
-  assert.match(
-    state.events.find((event) => event.kind === "scene").detail,
-    /不等同于对人员位置的判断/,
-  );
-  assert.equal(state.events[0].source, "demo_state");
-  assert.equal(state.events[0].stateRevision, 2);
-  assert.equal(state.events[0].sceneId, "kitchen");
+  assert.equal(state.events.some((event) => event.kind === "scene"), false);
+  assert.equal(state.events.some((event) => event.kind === "capture"), false);
+  assert.equal(state.events.some((event) => event.kind === "runtime"), false);
+});
+
+test("a care phase without an assessment is labeled as progress, not a MiMo verdict", () => {
+  let state = observe(createFamilyTimelineState(), snapshot({ revision: 1 }));
+  state = observe(state, snapshot({
+    revision: 2,
+    care: "checking",
+    decisionId: "decision-fallback",
+    careMessage: "奶奶，您还好吗？",
+  }));
+
+  assert.equal(state.events[0].kind, "care");
+  assert.equal(state.events[0].label, "关怀进展");
+  assert.doesNotMatch(state.events[0].title, /MiMo/);
+  assert.equal(state.events[0].assessmentSource, null);
 });
 
 test("room-session changes discard the previous room timeline", () => {
-  let state = observe(createFamilyTimelineState(), snapshot({ room: "room-1" }));
-  state = observe(state, snapshot({ room: "room-1", revision: 2, scene: "kitchen" }));
+  let state = observe(createFamilyTimelineState(), snapshot({
+    room: "room-1",
+    decisionId: "decision-1",
+    assessment: careAssessment(),
+  }));
   state = reduceFamilyTimeline(state, {
     type: "observe",
     roomSessionId: "room-2",
@@ -173,10 +214,6 @@ test("room-session changes discard the previous room timeline", () => {
   assert.equal(state.roomSessionId, "room-2");
   assert.equal(state.events.length, 0);
   assert.equal(state.lastStateRevision, null);
-
-  state = observe(state, snapshot({ room: "room-2", revision: 1, scene: "bathroom" }));
-  assert.equal(state.events.length, 1);
-  assert.match(state.events[0].detail, /浴室隐私/);
 });
 
 test("an applied family alarm acknowledgement is recorded exactly once", () => {
@@ -197,18 +234,18 @@ test("an applied family alarm acknowledgement is recorded exactly once", () => {
     state.events.filter((event) => event.kind === "acknowledgement").length,
     1,
   );
-  assert.equal(state.events[0].title, "家属端已确认收到告警");
+  assert.equal(state.events[0].title, "家属已经确认收到告警");
   assert.equal(state.events[0].source, "command_ack");
-  assert.equal(state.events[0].stateRevision, 2);
 });
 
-test("the in-memory timeline remains bounded to its newest events", () => {
+test("the in-memory timeline remains bounded to its newest judgments", () => {
   let state = observe(createFamilyTimelineState(), snapshot({ revision: 1 }));
   for (let revision = 2; revision <= 20; revision += 1) {
     state = observe(state, snapshot({
       revision,
       timestampMs: revision * 1_000,
-      scene: revision % 2 === 0 ? "kitchen" : "living",
+      decisionId: `decision-${revision}`,
+      assessment: careAssessment({ verdict: `第 ${revision} 次关怀判断` }),
     }));
   }
 
