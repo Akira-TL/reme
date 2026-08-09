@@ -2,7 +2,7 @@
 
 - Status: Accepted for demo
 - Date: 2026-08-08
-- Owner: C (demo presentation)
+- Owner: Demo Surfaces / Relay
 - Depends on: ADR-0003, ADR-0005, ADR-0007
 
 ## Context
@@ -28,4 +28,4 @@ This intentionally conflicts with the previous blanket statement that judge/fami
 - The demo cannot claim that family-facing output is always de-identified or that the public room is production-secure.
 - Anyone who can load the public Viewer during an active grant may see the temporary clear video. The product must show this plainly before capture starts and while a grant is live.
 - A production design requires a separate ADR for identity, consent proof, encryption/access policy, audit, retention and revocation.
-- Public deployment is not authorized by this ADR; it remains gated on local verification and an explicit deployment decision.
+- Public deployment is not authorized by this ADR alone; cloud-demo deployment authority and runtime/Relay boundaries are defined by ADR-0009.
