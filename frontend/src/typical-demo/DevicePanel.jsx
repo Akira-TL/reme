@@ -11,6 +11,10 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode, surface = "deb
   const cameraHealth = getCameraHealth(camera);
   const modelHealth = getModelHealth(camera);
   const skeletonSource = describeSkeletonSource(camera.skeletonSource);
+  const retryLabel = camera.errorCode === "permission_denied"
+    ? "请先在网站设置中允许，再重试"
+    : "重试媒体请求";
+  const retryCannotHelp = camera.errorCode === "insecure_context";
 
   return (
     <section className={`device-panel ${homeSurface ? "is-home-stage" : ""} tone-${scene.tone}`} aria-label="家中实时画面">
@@ -49,7 +53,13 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode, surface = "deb
         decorativeSet={!homeSurface}
       />
 
-      {camera.error && (
+      {camera.error && retryCannotHelp && (
+        <p className="camera-error is-static" role="alert">
+          {camera.error}
+        </p>
+      )}
+
+      {camera.error && !retryCannotHelp && (
         <Button
           className="camera-error"
           color="error"
@@ -57,7 +67,7 @@ export function DevicePanel({ scene, canvasRef, camera, viewMode, surface = "deb
           startIcon={<RestartAltRoundedIcon />}
           onClick={camera.retry}
         >
-          {camera.error} · 点击重试
+          {camera.error} · {retryLabel}
         </Button>
       )}
     </section>

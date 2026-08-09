@@ -453,6 +453,7 @@ button { font: inherit; }
 .fall-controls > div:first-child { max-width: 65%; }
 .control-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .camera-error { width: 100%; margin-top: 8px; padding: 8px; border: 1px dashed #e29a50; border-radius: 10px; color: #a85d10; background: #fff8ef; font-size: 10px; cursor: pointer; }
+.camera-error.is-static { cursor: default; }
 
 .sync-rail { display: flex; flex-direction: column; align-items: center; color: var(--accent); }
 .sync-rail span { width: 9px; height: 9px; border: 2px solid var(--accent); border-radius: 50%; background: #fff; }

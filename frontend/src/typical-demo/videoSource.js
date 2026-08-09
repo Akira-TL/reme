@@ -19,6 +19,11 @@ export const PERMISSION_STATES = Object.freeze({
   UNAVAILABLE: "unavailable",
 });
 
+export const MEDIA_FAILURE_STAGES = Object.freeze({
+  CAPTURE: "capture",
+  PLAYBACK: "playback",
+});
+
 const DEFAULT_CAMERA_WIDTH = 1280;
 const DEFAULT_CAMERA_HEIGHT = 720;
 const DEFAULT_CAMERA_FPS = 30;
@@ -63,29 +68,44 @@ export function detectVideoSourceCapabilities({
   mediaDevices = null,
   videoPrototype = null,
   urlApi = null,
+  isSecureContext = true,
 } = {}) {
-  const cameraAvailable = callable(mediaDevices?.getUserMedia);
-  const displayAvailable = callable(mediaDevices?.getDisplayMedia);
+  const secureCaptureContext = isSecureContext !== false;
+  const cameraAvailable = secureCaptureContext && callable(mediaDevices?.getUserMedia);
+  const displayAvailable = secureCaptureContext && callable(mediaDevices?.getDisplayMedia);
   const objectUrlAvailable = callable(urlApi?.createObjectURL) && callable(urlApi?.revokeObjectURL);
   const captureStreamMethod = getCaptureStreamMethod(videoPrototype);
+  const insecureCameraReason = "手机摄像头需要已受信任证书的 HTTPS 页面；局域网 HTTP 无法授权";
+  const insecureDisplayReason = "屏幕共享需要受信任的 HTTPS 页面或本机地址";
 
   return {
     camera: {
       available: cameraAvailable,
-      disabled_reason: cameraAvailable ? null : "当前浏览器不支持摄像头采集",
+      disabled_code: cameraAvailable
+        ? null
+        : secureCaptureContext ? "unsupported" : "insecure_context",
+      disabled_reason: cameraAvailable
+        ? null
+        : secureCaptureContext ? "当前浏览器不支持摄像头采集" : insecureCameraReason,
       remote_video: cameraAvailable
         ? REMOTE_VIDEO_STATES.AVAILABLE
         : REMOTE_VIDEO_STATES.UNAVAILABLE,
     },
     display: {
       available: displayAvailable,
-      disabled_reason: displayAvailable ? null : "当前浏览器不支持屏幕或窗口共享",
+      disabled_code: displayAvailable
+        ? null
+        : secureCaptureContext ? "unsupported" : "insecure_context",
+      disabled_reason: displayAvailable
+        ? null
+        : secureCaptureContext ? "当前浏览器不支持屏幕或窗口共享" : insecureDisplayReason,
       remote_video: displayAvailable
         ? REMOTE_VIDEO_STATES.AVAILABLE
         : REMOTE_VIDEO_STATES.UNAVAILABLE,
     },
     file: {
       available: objectUrlAvailable,
+      disabled_code: objectUrlAvailable ? null : "unsupported",
       capture_stream_method: captureStreamMethod,
       disabled_reason: objectUrlAvailable ? null : "当前浏览器不支持本地视频对象 URL",
       remote_video: objectUrlAvailable && captureStreamMethod
@@ -95,6 +115,18 @@ export function detectVideoSourceCapabilities({
           : REMOTE_VIDEO_STATES.UNAVAILABLE,
     },
   };
+}
+
+export async function readMediaPermissionState(permissions, kind) {
+  if (kind !== SOURCE_KINDS.CAMERA || !callable(permissions?.query)) return null;
+  try {
+    const result = await permissions.query({ name: "camera" });
+    return ["granted", "denied", "prompt"].includes(result?.state)
+      ? result.state
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function createSourceDescriptor({
@@ -242,15 +274,99 @@ export function releaseVideoSourceResource(resource, {
   }
 }
 
-export function classifyVideoSourceError(error, kind) {
+export function classifyVideoSourceError(error, kind, {
+  stage = MEDIA_FAILURE_STAGES.CAPTURE,
+  isSecureContext = true,
+  permissionState = null,
+} = {}) {
   const name = error?.name || "Error";
-  if (name === "NotAllowedError" || name === "SecurityError") {
+  const playbackPermission = kind === SOURCE_KINDS.FILE
+    ? PERMISSION_STATES.NOT_REQUIRED
+    : PERMISSION_STATES.GRANTED;
+
+  if (kind !== SOURCE_KINDS.FILE && isSecureContext === false) {
+    return {
+      code: "insecure_context",
+      permission: PERMISSION_STATES.UNAVAILABLE,
+      message: kind === SOURCE_KINDS.DISPLAY
+        ? "屏幕共享需要受信任的 HTTPS 页面或本机地址"
+        : "手机摄像头需要已受信任证书的 HTTPS 页面；局域网 HTTP 无法授权",
+    };
+  }
+
+  if (stage === MEDIA_FAILURE_STAGES.PLAYBACK) {
+    if (error?.code === "media_request_timeout") {
+      return {
+        code: "playback_timeout",
+        permission: playbackPermission,
+        message: kind === SOURCE_KINDS.FILE
+          ? "本地视频已选择，但预览启动超时，请重试"
+          : "摄像头权限已允许，但视频预览启动超时，请重试",
+      };
+    }
+    if (name === "NotAllowedError" || name === "SecurityError") {
+      return {
+        code: "playback_blocked",
+        permission: playbackPermission,
+        message: kind === SOURCE_KINDS.FILE
+          ? "本地视频已选择，但预览被浏览器阻止，请重试"
+          : "摄像头权限已允许，但视频预览被浏览器或系统策略阻止，请重试",
+      };
+    }
+    return {
+      code: "playback_failed",
+      permission: playbackPermission,
+      message: kind === SOURCE_KINDS.FILE
+        ? "本地视频已选择，但预览无法启动，请更换文件后重试"
+        : "摄像头权限已允许，但视频预览无法启动，请重试",
+    };
+  }
+
+  if (error?.code === "media_request_timeout") {
+    return {
+      code: "media_request_timeout",
+      permission: kind === SOURCE_KINDS.FILE
+        ? PERMISSION_STATES.NOT_REQUIRED
+        : PERMISSION_STATES.PROMPT,
+      message: kind === SOURCE_KINDS.FILE
+        ? "本地视频启动超时，请更换文件后重试"
+        : "媒体权限或设备启动超时，请重试",
+    };
+  }
+  if (name === "SecurityError") {
+    return {
+      code: "capture_security_blocked",
+      permission: permissionState === "granted"
+        ? PERMISSION_STATES.GRANTED
+        : PERMISSION_STATES.UNAVAILABLE,
+      message: kind === SOURCE_KINDS.DISPLAY
+        ? "屏幕共享被浏览器安全策略阻止"
+        : "摄像头访问被浏览器或宿主应用的安全策略阻止；请检查网站与系统相机权限",
+    };
+  }
+  if (name === "NotAllowedError" && permissionState === "granted") {
+    return {
+      code: "capture_blocked",
+      permission: PERMISSION_STATES.GRANTED,
+      message: "摄像头权限已允许，但浏览器或系统未能启动设备；请检查系统相机权限和占用情况",
+    };
+  }
+  if (name === "NotAllowedError" && permissionState !== "denied") {
+    return {
+      code: "permission_unresolved",
+      permission: PERMISSION_STATES.PROMPT,
+      message: kind === SOURCE_KINDS.DISPLAY
+        ? "屏幕共享已取消或未获允许"
+        : "摄像头请求未获浏览器允许；这不一定是用户拒绝，请检查网站、系统或嵌入浏览器权限",
+    };
+  }
+  if (name === "NotAllowedError") {
     return {
       code: "permission_denied",
       permission: PERMISSION_STATES.DENIED,
       message: kind === SOURCE_KINDS.DISPLAY
         ? "屏幕共享已取消或权限被拒绝"
-        : "摄像头权限被拒绝，请允许权限后重试",
+        : "摄像头已被网站权限阻止；请先在浏览器的网站设置中改为允许，再点重试",
     };
   }
   if (name === "NotFoundError" || name === "DevicesNotFoundError") {

@@ -5,8 +5,10 @@ import {
   buildSourceCatalog,
   createSourceGenerationBarrier,
   detectVideoSourceCapabilities,
+  MEDIA_FAILURE_STAGES,
   oppositeFacingMode,
   PERMISSION_STATES,
+  readMediaPermissionState,
   releaseVideoSourceResource,
   REMOTE_VIDEO_STATES,
   classifyVideoSourceError,
@@ -43,6 +45,21 @@ test("capability detection keeps local file playback when remote capture is unav
   assert.equal(capabilities.file.available, true);
   assert.equal(capabilities.file.remote_video, REMOTE_VIDEO_STATES.LOCAL_ONLY);
   assert.equal(capabilities.file.capture_stream_method, null);
+});
+
+test("insecure LAN pages explain HTTPS instead of reporting unsupported camera APIs", () => {
+  const capabilities = detectVideoSourceCapabilities({
+    mediaDevices: { getUserMedia() {}, getDisplayMedia() {} },
+    isSecureContext: false,
+    videoPrototype: { captureStream() {} },
+    urlApi: { createObjectURL() {}, revokeObjectURL() {} },
+  });
+
+  assert.equal(capabilities.camera.available, false);
+  assert.equal(capabilities.camera.disabled_code, "insecure_context");
+  assert.match(capabilities.camera.disabled_reason, /HTTPS/);
+  assert.equal(capabilities.display.available, false);
+  assert.equal(capabilities.file.available, true);
 });
 
 test("webkit captureStream is accepted and source catalog exposes opaque camera descriptors", () => {
@@ -162,9 +179,74 @@ test("stale resource release never clears a newer video attachment", () => {
 test("permission failures are explicit and source-specific", () => {
   const denied = new Error("denied");
   denied.name = "NotAllowedError";
-  const failure = classifyVideoSourceError(denied, "display");
+  const failure = classifyVideoSourceError(denied, "camera", {
+    permissionState: "denied",
+  });
 
   assert.equal(failure.code, "permission_denied");
   assert.equal(failure.permission, PERMISSION_STATES.DENIED);
-  assert.match(failure.message, /屏幕共享/);
+  assert.match(failure.message, /网站设置/);
+});
+
+test("granted camera permission is not mislabeled when capture is blocked later", () => {
+  const blocked = new Error("platform blocked capture");
+  blocked.name = "NotAllowedError";
+  const failure = classifyVideoSourceError(blocked, "camera", {
+    permissionState: "granted",
+  });
+
+  assert.equal(failure.code, "capture_blocked");
+  assert.equal(failure.permission, PERMISSION_STATES.GRANTED);
+  assert.match(failure.message, /权限已允许/);
+});
+
+test("unknown camera permission is reported as unresolved instead of denied", () => {
+  const blocked = new Error("embedded browser blocked capture");
+  blocked.name = "NotAllowedError";
+  const failure = classifyVideoSourceError(blocked, "camera", {
+    permissionState: null,
+  });
+
+  assert.equal(failure.code, "permission_unresolved");
+  assert.equal(failure.permission, PERMISSION_STATES.PROMPT);
+  assert.match(failure.message, /不一定是用户拒绝/);
+});
+
+test("video playback policy errors preserve successful camera authorization", () => {
+  const blocked = new Error("autoplay blocked");
+  blocked.name = "NotAllowedError";
+  const failure = classifyVideoSourceError(blocked, "camera", {
+    stage: MEDIA_FAILURE_STAGES.PLAYBACK,
+    permissionState: "denied",
+  });
+
+  assert.equal(failure.code, "playback_blocked");
+  assert.equal(failure.permission, PERMISSION_STATES.GRANTED);
+  assert.match(failure.message, /权限已允许/);
+});
+
+test("playback timeout is distinct from a pending permission prompt", () => {
+  const timedOut = new Error("timeout");
+  timedOut.code = "media_request_timeout";
+  const failure = classifyVideoSourceError(timedOut, "camera", {
+    stage: MEDIA_FAILURE_STAGES.PLAYBACK,
+  });
+
+  assert.equal(failure.code, "playback_timeout");
+  assert.equal(failure.permission, PERMISSION_STATES.GRANTED);
+});
+
+test("permission lookup is optional and only queries camera", async () => {
+  const requested = [];
+  const permissions = {
+    async query(descriptor) {
+      requested.push(descriptor);
+      return { state: "granted" };
+    },
+  };
+
+  assert.equal(await readMediaPermissionState(permissions, "camera"), "granted");
+  assert.equal(await readMediaPermissionState(permissions, "display"), null);
+  assert.equal(await readMediaPermissionState({ query() { throw new Error("unsupported"); } }, "camera"), null);
+  assert.deepEqual(requested, [{ name: "camera" }]);
 });
