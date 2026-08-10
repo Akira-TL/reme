@@ -1084,6 +1084,38 @@ describe("public dual-device relay", () => {
     await expect(stale.json()).resolves.toMatchObject({ error: "timeline_revision_mismatch" });
   });
 
+  it("viewer v2 replays current state and pose alongside authoritative family events", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const state = makeState(claim, 1, { runtimeSession: "runtime-v2-pose" });
+    monitor.send(JSON.stringify(state));
+    await nextType(monitor, "state_accepted");
+    const pose = makePose(claim, state.runtime_session_id, 7);
+    monitor.send(JSON.stringify(pose));
+    await nextType(monitor, "pose_accepted");
+    await expect(roomStub().publishFamilyEvent(
+      makeFamilyEvent(state.runtime_session_id, 1, "decision-v2-pose"),
+    )).resolves.toMatchObject({ ok: true, revision: 1 });
+
+    now.mockReturnValue(baseTime + 4_000);
+    const viewer = await connectViewerV2();
+    await nextType(viewer, "viewer_ready");
+    await expect(nextType(viewer, "family_event")).resolves.toMatchObject({
+      runtime_session_id: state.runtime_session_id,
+      revision: 1,
+    });
+    await expect(nextSchema(viewer, "reme-demo-state/v1")).resolves.toEqual(state);
+    await expect(nextSchema(viewer, "reme-pose-frame-17/v1")).resolves.toEqual(pose);
+
+    const nextPose = makePose(claim, state.runtime_session_id, 8);
+    monitor.send(JSON.stringify(nextPose));
+    await expect(nextSchema(viewer, "reme-pose-frame-17/v1")).resolves.toEqual(nextPose);
+    await nextType(monitor, "pose_accepted");
+  });
+
   it("stores authoritative family events and only sends them to viewer v2", async () => {
     const published = await roomStub().publishFamilyEvent(
       makeFamilyEvent("runtime-family", 1, "decision-family"),

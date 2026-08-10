@@ -72,7 +72,13 @@ export function useMonitorRelay({
       ? poseFrame(snapshot.roomSessionId)
       : poseFrame;
     if (value) client.publishPose(value);
-  }, [client, poseFrame, snapshot.roomSessionId, snapshot.status]);
+  }, [
+    client,
+    poseFrame,
+    snapshot.connectionGeneration,
+    snapshot.roomSessionId,
+    snapshot.status,
+  ]);
 
   const startDemo = useCallback(() => client.start(), [client]);
   const stopDemo = useCallback(() => client.stop(), [client]);

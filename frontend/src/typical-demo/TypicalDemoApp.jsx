@@ -400,7 +400,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
       !runtimeSessionId
       || !Number.isSafeInteger(frameSequence)
       || live.landmarkFrame?.sourceGeneration !== media.sourceGeneration
-      || stateFingerprintRef.current !== stateFingerprint
     ) return null;
     const sourceWidth = Math.max(1, Math.round(videoElement?.videoWidth || 640));
     const sourceHeight = Math.max(1, Math.round(videoElement?.videoHeight || 360));
@@ -418,7 +417,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
     liveRuntime?.landmarkQuality,
     liveRuntime?.sessionId,
     media.sourceGeneration,
-    stateFingerprint,
     videoElement,
   ]);
 
