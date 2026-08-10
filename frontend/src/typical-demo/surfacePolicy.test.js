@@ -14,6 +14,7 @@ test("home starts from the quiet living context while debug keeps the fall accep
 });
 
 test("home accepts only the family alarm receipt command", () => {
+  assert.equal(allowsRemoteCommand("home", "acknowledge_alarm"), true);
   assert.equal(allowsRemoteCommand("home", "confirm_alarm"), true);
   for (const command of [
     "select_scene",
@@ -31,7 +32,7 @@ test("home accepts only the family alarm receipt command", () => {
 });
 
 test("debug retains the complete engineering command surface", () => {
-  for (const command of ["select_scene", "run_demo_scenario", "confirm_alarm"]) {
+  for (const command of ["select_scene", "run_demo_scenario", "acknowledge_alarm", "confirm_alarm"]) {
     assert.equal(allowsRemoteCommand("debug", command), true, command);
   }
   assert.equal(exposesDebugInterface("debug"), true);

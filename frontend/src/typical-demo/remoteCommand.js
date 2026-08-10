@@ -77,6 +77,7 @@ export function parseControlCommand(value) {
       return exactKeys(command, ["name", "decision_id", "response"])
         && validId(command.decision_id)
         && RESPONSES.has(command.response) ? value : null;
+    case "acknowledge_alarm":
     case "confirm_alarm":
     case "replay_voice":
       return exactKeys(command, ["name", "decision_id"]) && validId(command.decision_id)
@@ -112,7 +113,7 @@ export function classifyControlCommand(commandEnvelope, context, now = Date.now(
     return { disposition: "rejected", code: "safety_event_active" };
   }
 
-  if (["submit_response", "confirm_alarm", "replay_voice"].includes(command.name)) {
+  if (["submit_response", "acknowledge_alarm", "confirm_alarm", "replay_voice"].includes(command.name)) {
     if (!context.decisionId || command.decision_id !== context.decisionId) {
       return { disposition: "rejected", code: "stale_decision" };
     }

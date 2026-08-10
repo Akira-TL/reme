@@ -104,6 +104,15 @@ test("control command factory accepts only the strict command union", () => {
     command: { name: "select_scene", scene_id: "kitchen" },
   });
   assert.equal(isControlCommand(command), true);
+  assert.equal(isControlCommand(createControlCommand({
+    roomSessionId: "room-1",
+    commandId: "cmd-ack",
+    commandSequence: 1,
+    issuedAtMs: 1000,
+    expiresAtMs: 9000,
+    expectedStateRevision: 4,
+    command: { name: "acknowledge_alarm", decision_id: "decision-1" },
+  })), true);
   assert.throws(() => createControlCommand({
     ...command,
     roomSessionId: "room-1",

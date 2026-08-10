@@ -29,5 +29,5 @@ export function shouldStopAlarmForDecision(payload) {
 }
 
 export function shouldStopAlarmForResponse(response) {
-  return response === "safe" || response === "card_confirmed";
+  return response === "safe" || response === "alarm_acknowledged";
 }

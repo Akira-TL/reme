@@ -1,4 +1,4 @@
-const HOME_REMOTE_COMMANDS = new Set(["confirm_alarm"]);
+const HOME_REMOTE_COMMANDS = new Set(["acknowledge_alarm", "confirm_alarm"]);
 
 export function normalizeSurface(surface) {
   return surface === "debug" ? "debug" : "home";

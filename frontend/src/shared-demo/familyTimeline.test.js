@@ -183,7 +183,7 @@ test("an applied family alarm acknowledgement is recorded exactly once", () => {
   let state = observe(createFamilyTimelineState(), snapshot());
   const ack = {
     command_id: "command-1",
-    command_name: "confirm_alarm",
+    command_name: "acknowledge_alarm",
     phase: "applied",
     timestamp_ms: 3_000,
     state_revision: 2,

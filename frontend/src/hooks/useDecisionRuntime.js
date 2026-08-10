@@ -1111,9 +1111,9 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         }
         markResponded(target.decision_id);
         clearAlarmState();
-        return submitFor(target, "card_confirmed", "family_input").then((ok) => ({
+        return submitFor(target, "alarm_acknowledged", "family_input").then((ok) => ({
           ok,
-          code: ok ? "alarm_confirmed" : "response_failed",
+          code: ok ? "alarm_acknowledged" : "response_failed",
           decisionId: target.decision_id,
         }));
       },

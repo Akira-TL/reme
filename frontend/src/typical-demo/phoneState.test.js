@@ -36,7 +36,8 @@ test("只有跌倒场景的权威紧急阶段会自动临时开放家属现场�
 
 test("安全回应和已化解决策都停止本地警报", () => {
   assert.equal(shouldStopAlarmForResponse("safe"), true);
-  assert.equal(shouldStopAlarmForResponse("card_confirmed"), true);
+  assert.equal(shouldStopAlarmForResponse("alarm_acknowledged"), true);
+  assert.equal(shouldStopAlarmForResponse("card_confirmed"), false);
   assert.equal(shouldStopAlarmForResponse("need_help"), false);
   assert.equal(shouldStopAlarmForDecision({ state: "resolved" }), true);
   assert.equal(shouldStopAlarmForDecision({ state: "urgent_attention" }), false);

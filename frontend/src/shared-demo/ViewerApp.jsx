@@ -124,7 +124,8 @@ const COMMAND_COPY = Object.freeze({
   reset_demo: "重置演示",
   start_conversation: "发起问询",
   submit_response: "提交本人回应",
-  confirm_alarm: "确认告警",
+  acknowledge_alarm: "确认告警",
+  confirm_alarm: "确认告警（兼容）",
   replay_voice: "重播语音",
   unknown: "远程命令",
 });
@@ -663,7 +664,7 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
           <CommandButton icon={EmergencyRoundedIcon} disabled={disabled || !decisionId} tone="danger" onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "need_help" })}>本人需要帮助</CommandButton>
           <CommandButton icon={VideocamRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_granted" })}>同意分享</CommandButton>
           <CommandButton icon={LockRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_denied" })}>拒绝分享</CommandButton>
-          <CommandButton icon={ShieldRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "confirm_alarm", decision_id: decisionId })}>确认告警</CommandButton>
+          <CommandButton icon={ShieldRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "acknowledge_alarm", decision_id: decisionId })}>确认告警</CommandButton>
           <CommandButton icon={VolumeUpRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "replay_voice", decision_id: decisionId })}>重播语音</CommandButton>
         </div>
       </section>
@@ -752,7 +753,7 @@ function EmergencyDialog({
         </>
       ) : (
         <>
-          <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={stale || !ownsControl || !care.decision_id} onClick={() => onIssue({ name: "confirm_alarm", decision_id: care.decision_id })}>确认已收到告警</Button>
+          <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={stale || !ownsControl || !care.decision_id} onClick={() => onIssue({ name: "acknowledge_alarm", decision_id: care.decision_id })}>确认已收到告警</Button>
           <Button variant="outlined" startIcon={<VolumeUpRoundedIcon />} disabled={stale || !ownsControl || !care.decision_id} onClick={() => onIssue({ name: "replay_voice", decision_id: care.decision_id })}>重播现场问询</Button>
         </>
       )}
@@ -864,7 +865,7 @@ export function ViewerApp({ surface = "family" }) {
 
   const sendFamilyConfirmation = useCallback((targetDecisionId) => {
     const result = sendCommand({
-      name: "confirm_alarm",
+      name: "acknowledge_alarm",
       decision_id: targetDecisionId,
     });
     if (result.ok) {

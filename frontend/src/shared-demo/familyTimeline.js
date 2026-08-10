@@ -315,7 +315,7 @@ function acknowledgementEvents(roomSessionId, acks, seenAckIds) {
   for (const ack of acks || []) {
     if (
       ack?.phase !== "applied"
-      || ack.command_name !== "confirm_alarm"
+      || !["acknowledge_alarm", "confirm_alarm"].includes(ack.command_name)
       || !ack.command_id
       || seen.has(ack.command_id)
     ) continue;
