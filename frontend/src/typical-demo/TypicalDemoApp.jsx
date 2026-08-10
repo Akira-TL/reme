@@ -1116,7 +1116,14 @@ export function TypicalDemoApp({ surface = "debug" }) {
             onReset={resetAcceptance}
           />
 
-          <RuntimeDebugPanel camera={cameraState} live={live} monitor={monitor} scene={scene} />
+          <RuntimeDebugPanel
+            camera={cameraState}
+            live={live}
+            monitor={monitor}
+            scene={scene}
+            mediaProducer={mediaProducer}
+            rtc={rtc}
+          />
 
           <footer className="demo-footer">
             <Button size="small" variant="text" startIcon={<RestartAltRoundedIcon />} onClick={resetAcceptance}>

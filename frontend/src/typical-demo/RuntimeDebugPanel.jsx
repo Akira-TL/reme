@@ -46,7 +46,7 @@ function DebugValue({ label, value, wide = false }) {
   );
 }
 
-export function RuntimeDebugPanel({ camera, live, monitor, scene }) {
+export function RuntimeDebugPanel({ camera, live, monitor, scene, mediaProducer, rtc }) {
   const [open, setOpen] = useState(
     () => new URLSearchParams(window.location.search).get("debug") === "1",
   );
@@ -89,6 +89,12 @@ export function RuntimeDebugPanel({ camera, live, monitor, scene }) {
       latest_pose_sequence: monitor?.latestPoseSequence ?? null,
       pose_in_flight: monitor?.poseInFlight ?? null,
       accepted_pose_sequence: monitor?.acceptedPoseSequence ?? -1,
+      websocket_status: monitor?.status || "unconfigured",
+      last_protocol_error: monitor?.lastProtocolError || null,
+      media_status: mediaProducer?.status || "idle",
+      media_peer_count: mediaProducer?.peerCount ?? 0,
+      rtc_mode: rtc?.configuration?.mode || "unavailable",
+      rtc_error: rtc?.error || null,
     },
     b: {
       connection: decisionRuntime.connection,
@@ -135,6 +141,9 @@ export function RuntimeDebugPanel({ camera, live, monitor, scene }) {
               <DebugValue label="摄像头" value={`${cameraHealth.state} · ${cameraHealth.label}`} />
               <DebugValue label="姿态服务" value={`${modelHealth.state} · ${modelHealth.label}`} />
               <DebugValue label="浏览器上传" value="JPEG · 10 FPS" />
+              <DebugValue label="采集 transport" value={runtime.captureTransport || "not-started"} />
+              <DebugValue label="输入丢帧" value={runtime.droppedInputFrames ?? 0} />
+              <DebugValue label="输入背压" value={runtime.inputBackpressure ? "active" : "clear"} />
               <DebugValue label="推理位置" value="统一后端" />
               <DebugValue label="检测到人物" value={camera.personDetected ? "yes" : "no"} />
               <DebugValue label="骨架显示来源" value={`${camera.skeletonSource || "—"} · ${describeSkeletonSource(camera.skeletonSource)}`} wide />
@@ -164,6 +173,12 @@ export function RuntimeDebugPanel({ camera, live, monitor, scene }) {
               <DebugValue label="Relay pose offered" value={monitor?.latestPoseSequence ?? "—"} />
               <DebugValue label="Relay pose in-flight" value={monitor?.poseInFlight ?? "—"} />
               <DebugValue label="Relay pose ACK" value={monitor?.acceptedPoseSequence ?? "—"} />
+              <DebugValue label="Relay WebSocket" value={monitor?.status || "unconfigured"} />
+              <DebugValue label="Relay 协议错误" value={monitor?.lastProtocolError || "—"} wide />
+              <DebugValue label="WebRTC 模式" value={rtc?.configuration?.mode || "unavailable"} />
+              <DebugValue label="WebRTC producer" value={mediaProducer?.status || "idle"} />
+              <DebugValue label="WebRTC peers" value={mediaProducer?.peerCount ?? 0} />
+              <DebugValue label="WebRTC 最近原因" value={mediaProducer?.lastReason || rtc?.error || "—"} wide />
               <DebugValue label="姿态分类" value={posture ? describePosture(posture.posture) : "等待事件"} />
               <DebugValue label="分类来源" value={posture?.classification_source || "—"} />
               <DebugValue label="姿态置信度" value={percent(posture?.posture_confidence)} />

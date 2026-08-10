@@ -50,6 +50,8 @@ Downloads*.zip
 !.env.example
 node_modules/
 frontend/.vercel/
+frontend/playwright-report/
+frontend/test-results/
 .scratch/runtime/
 
 # CodeGraph local index

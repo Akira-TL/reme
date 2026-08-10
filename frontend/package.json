@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "node --test",
-    "test:route-build": "node --test scripts/assert-route-build.mjs"
+    "test:route-build": "node --test scripts/assert-route-build.mjs",
+    "typecheck:contracts": "tsc -p tsconfig.contracts.json",
+    "e2e": "playwright test",
+    "e2e:list": "playwright test --list"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -21,6 +24,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.58.2",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.0.5",
     "eslint": "^10.8.0",
@@ -28,6 +32,7 @@
     "eslint-plugin-react-refresh": "^0.5.3",
     "globals": "^17.8.0",
     "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
     "vite": "^8.2.0"
   }
 }
