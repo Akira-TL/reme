@@ -23,6 +23,7 @@ from reme.runtime.launcher import (
     ensure_relay_dependencies,
     install_shutdown_signal_handlers,
     load_env_file,
+    preload_demo_history,
     restore_signal_handlers,
     run_local_demo,
     start_process,
@@ -73,13 +74,15 @@ def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> N
     assert commands["BACKEND"][-2:] == ["--browser-input-mode", "jpeg"]
     assert "--a-events-url" not in commands["BACKEND"]
     assert commands["FRONTEND"][-3:] == ["--port", "14174", "--strictPort"]
-    assert commands["RELAY"][-6:] == [
+    assert commands["RELAY"][-8:] == [
         "--ip",
         "127.0.0.1",
         "--port",
         "18787",
         "--var",
         "ALLOWED_ORIGINS:http://127.0.0.1:14174,http://localhost:14174",
+        "--var",
+        f"RUNTIME_INGEST_TOKEN:{config.runtime_ingest_token}",
     ]
     assert config.backend_http_url == "http://127.0.0.1:18770"
     assert config.acceptance_url == "http://127.0.0.1:14174/"
@@ -162,7 +165,11 @@ def test_tls_uses_same_origin_runtime_and_relay_proxies(tmp_path: Path) -> None:
     assert env["REME_VITE_RELAY_PROXY_TARGET"] == "http://127.0.0.1:8787"
     assert env["REME_VITE_TLS_CERT"] == str(cert)
     assert env["REME_VITE_TLS_KEY"] == str(key)
-    assert commands["RELAY"][-1].startswith("ALLOWED_ORIGINS:https://")
+    assert env["REME_FAMILY_RELAY_ENDPOINT"] == "http://127.0.0.1:8787/api/runtime/event"
+    assert env["REME_FAMILY_RELAY_TOKEN"] == config.runtime_ingest_token
+    assert env["REME_HISTORY_RELAY_ENDPOINT"] == "http://127.0.0.1:8787"
+    assert env["REME_HISTORY_RELAY_TOKEN"] == config.runtime_ingest_token
+    assert any(item.startswith("ALLOWED_ORIGINS:https://") for item in commands["RELAY"])
 
 
 def test_tls_certificate_and_key_are_required_as_a_pair(tmp_path: Path) -> None:
@@ -258,6 +265,38 @@ def test_ensure_relay_dependencies_installs_pinned_worker_runtime(
     assert calls == [["npm", "ci"]]
 
 
+def test_preload_demo_history_uses_backend_loader_without_mimo_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = LocalDemoConfig(root=tmp_path, relay_port=18787)
+    calls: list[tuple[list[str], Path, dict[str, str]]] = []
+
+    def fake_run(
+        command: list[str], *, cwd: Path, env: dict[str, str], check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        assert check is True
+        calls.append((command, cwd, env))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(local_demo_module.subprocess, "run", fake_run)
+    preload_demo_history(config, {"TEST": "1"})
+
+    assert calls == [(
+        [
+            sys.executable,
+            "-m",
+            "reme.runtime.history.demo_loader",
+            "--relay-url",
+            "http://127.0.0.1:18787",
+            "--token",
+            config.runtime_ingest_token,
+            "--skip-summaries",
+        ],
+        tmp_path,
+        {"TEST": "1"},
+    )]
+
+
 def test_termination_signal_sets_shutdown_event_and_restores_handlers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -299,6 +338,7 @@ def test_shutdown_event_stops_all_started_services(
     monkeypatch.setattr(local_demo_module, "assert_port_available", lambda *_args: None)
     monkeypatch.setattr(local_demo_module, "ensure_frontend_dependencies", lambda *_args: None)
     monkeypatch.setattr(local_demo_module, "ensure_relay_dependencies", lambda *_args: None)
+    monkeypatch.setattr(local_demo_module, "preload_demo_history", lambda *_args: None)
 
     def fake_start(label: str, *_args: object, **_kwargs: object) -> object:
         started.append(label)

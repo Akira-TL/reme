@@ -6,6 +6,7 @@ import argparse
 import ipaddress
 import os
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -16,7 +17,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
 from typing import Any, TextIO, cast
@@ -63,6 +64,7 @@ class LocalDemoConfig:
     mimo_env: Path = DEFAULT_MIMO_ENV
     tls_cert: Path | None = None
     tls_key: Path | None = None
+    runtime_ingest_token: str = field(default_factory=lambda: secrets.token_hex(32))
 
     @property
     def frontend_dir(self) -> Path:
@@ -271,6 +273,10 @@ def build_child_env(
     env["REME_VITE_BACKEND_PROXY_TARGET"] = config.backend_probe_url
     env["REME_VITE_RELAY_PROXY_TARGET"] = config.relay_probe_url
     env["REME_VITE_PUBLIC_HOST"] = config.client_host
+    env["REME_FAMILY_RELAY_ENDPOINT"] = f"{config.relay_probe_url}/api/runtime/event"
+    env["REME_FAMILY_RELAY_TOKEN"] = config.runtime_ingest_token
+    env["REME_HISTORY_RELAY_ENDPOINT"] = config.relay_probe_url
+    env["REME_HISTORY_RELAY_TOKEN"] = config.runtime_ingest_token
     if config.tls_enabled:
         assert config.tls_cert_path is not None
         assert config.tls_key_path is not None
@@ -350,6 +356,8 @@ def build_child_commands(config: LocalDemoConfig) -> dict[str, list[str]]:
             str(config.relay_port),
             "--var",
             f"ALLOWED_ORIGINS:{config.allowed_origins}",
+            "--var",
+            f"RUNTIME_INGEST_TOKEN:{config.runtime_ingest_token}",
         ],
     }
 
@@ -525,6 +533,35 @@ def ensure_frontend_dependencies(config: LocalDemoConfig, env: dict[str, str]) -
         raise LocalDemoError("frontend native dependencies are incompatible after npm ci")
 
 
+def preload_demo_history(config: LocalDemoConfig, env: dict[str, str]) -> None:
+    """Publish the backend-owned P0 timeline fixture to the local Relay.
+
+    Local startup deliberately skips MiMo summaries: timeline availability is
+    deterministic, while summary generation is an explicit backend operation
+    with external cost/latency and a revision-keyed cache.
+    """
+
+    command = [
+        sys.executable,
+        "-m",
+        "reme.runtime.history.demo_loader",
+        "--relay-url",
+        config.relay_probe_url,
+        "--token",
+        config.runtime_ingest_token,
+        "--skip-summaries",
+    ]
+    try:
+        subprocess.run(
+            command,
+            cwd=config.root,
+            env=env,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise LocalDemoError("P0 Reme history fixture preload failed") from exc
+
+
 def relay_dependencies_ready(config: LocalDemoConfig) -> bool:
     """Return whether the local Worker runtime is installed."""
 
@@ -594,6 +631,7 @@ def run_local_demo(
             timeout_seconds=config.startup_timeout_seconds,
             shutdown_event=stop_requested,
         )
+        preload_demo_history(config, env)
 
         frontend = start_process(
             "FRONTEND",
