@@ -430,6 +430,11 @@ export class DemoRoom extends DurableObject<Env> {
     if (day === null || summary.input_timeline_revision !== day.revision) {
       return { ok: false, error: "timeline_revision_mismatch" };
     }
+    const dayState = JSON.parse(day.state_json) as RemeTimelineDayState;
+    if (
+      summary.summary !== null
+      && summary.summary.input_event_count !== dayState.counts.total
+    ) return { ok: false, error: "summary_event_count_mismatch" };
     const existing = this.remeSummaryRow(summary.dataset_id, summary.date);
     const canonical = canonicalJson(summary);
     if (existing !== null) {

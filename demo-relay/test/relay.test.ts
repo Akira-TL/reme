@@ -1354,7 +1354,7 @@ function makeRemeDay(): RemeTimelineDayState {
       observed_hours: 24,
       missing_intervals: [],
     },
-    counts: { total: 3, activity: 1, device: 1, care: 1 },
+    counts: { total: 4, activity: 2, device: 1, care: 1 },
     items: [
       {
         event_id: "evt-pose-20260809-0810",
@@ -1469,7 +1469,7 @@ function makeRemeSummary(): RemeDiarySummaryState {
       source: "mimo",
       model: "mimo-v2.5",
       generated_at_ms: 1786246797000,
-      input_event_count: 3,
+      input_event_count: 4,
       latency_ms: 9080.4,
       attempts: 1,
     },

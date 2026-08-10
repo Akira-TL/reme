@@ -517,8 +517,8 @@ export function validateRemeTimelineDayState(value: unknown): value is RemeTimel
   let care = 0;
   for (const item of value.items) {
     if (!validateRemeTimelineItem(item)) return false;
-    if (item.kind === "activity") activity += 1;
-    else if (item.kind === "device") device += 1;
+    if (item.kind === "activity") activity += Number(item.occurrence_count);
+    else if (item.kind === "device") device += Number(item.occurrence_count);
     else care += 1;
   }
   if (

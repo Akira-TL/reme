@@ -30,10 +30,14 @@ def test_demo_fixture_projects_eight_backend_owned_days() -> None:
         assert day["mode"] == "mock_fixture"
         assert day["coverage"]["status"] == "complete"
         assert day["coverage"]["observed_hours"] == 24
-        assert day["counts"] == {"total": 3, "activity": 1, "device": 1, "care": 1}
-        assert [item["kind"] for item in day["items"]].count("activity") == 1
-        assert [item["kind"] for item in day["items"]].count("device") == 1
-        assert [item["kind"] for item in day["items"]].count("care_thread") == 1
+        activity_item = next(item for item in day["items"] if item["kind"] == "activity")
+        device_item = next(item for item in day["items"] if item["kind"] == "device")
+        assert day["counts"]["activity"] == activity_item["occurrence_count"]
+        assert day["counts"]["device"] == device_item["occurrence_count"]
+        assert day["counts"]["care"] == 1
+        assert day["counts"]["total"] == (
+            day["counts"]["activity"] + day["counts"]["device"] + day["counts"]["care"]
+        )
 
 
 def test_august_ninth_contains_complete_mock_family_material_thread() -> None:

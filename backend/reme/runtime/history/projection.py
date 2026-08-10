@@ -173,8 +173,16 @@ def project_fixture(value: object) -> ProjectedHistoryFixture:
             events_by_date.get(date_key, []),
             key=lambda item: (item["occurred_at_ms"], item["event_id"]),
         )
-        activity = sum(1 for item in items if item["kind"] == "activity")
-        device = sum(1 for item in items if item["kind"] == "device")
+        activity = sum(
+            int(item["occurrence_count"])
+            for item in items
+            if item["kind"] == "activity"
+        )
+        device = sum(
+            int(item["occurrence_count"])
+            for item in items
+            if item["kind"] == "device"
+        )
         care = sum(1 for item in items if item["kind"] == "care_thread")
         status = "unavailable" if coverage["status"] == "unavailable" else (
             "partial" if coverage["status"] == "partial" else "ready"
