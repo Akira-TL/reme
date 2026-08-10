@@ -13,6 +13,8 @@ import {
   type DemoStateEnvelope,
   type FamilyEvent,
   type PoseFrame,
+  type RemeDiarySummaryState,
+  type RemeTimelineDayState,
 } from "../src/index";
 import { MOVENET_KEYPOINT_NAMES } from "../src/protocol";
 
@@ -972,6 +974,97 @@ describe("public dual-device relay", () => {
     await expect(stale.json()).resolves.toMatchObject({ error: "stale_family_revision" });
   });
 
+  it("stores P0 Reme history snapshots behind runtime auth and exposes read-only Family APIs", async () => {
+    const day = makeRemeDay();
+    const denied = await relayFetch("/api/runtime/reme/day", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer wrong-token",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(day),
+    });
+    expect(denied.status).toBe(401);
+
+    const accepted = await runtimeHistoryPost("/api/runtime/reme/day", day);
+    expect(accepted.status).toBe(202);
+    await expect(accepted.json()).resolves.toEqual({ ok: true, revision: 1 });
+
+    const replay = await runtimeHistoryPost("/api/runtime/reme/day", day);
+    expect(replay.status).toBe(202);
+
+    const conflictDay = structuredClone(day);
+    conflictDay.items[0]!.fact = "同 revision 的不同事实必须拒绝";
+    const conflict = await runtimeHistoryPost("/api/runtime/reme/day", conflictDay);
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({ error: "reme_day_revision_conflict" });
+
+    const summary = makeRemeSummary();
+    const summaryAccepted = await runtimeHistoryPost("/api/runtime/reme/summary", summary);
+    expect(summaryAccepted.status).toBe(202);
+
+    const dates = await relayFetch(
+      "/api/family/reme/dates?dataset_id=reme-aug-2026-demo-v1&from=2026-08-04&to=2026-08-11",
+    );
+    expect(dates.status).toBe(200);
+    expect(dates.headers.get("Cache-Control")).toBe("no-store");
+    await expect(dates.json()).resolves.toMatchObject({
+      schema_version: "reme-date-index/v1",
+      dataset_id: "reme-aug-2026-demo-v1",
+      mode: "mock_fixture",
+      timezone: "Asia/Shanghai",
+      dates: [{
+        date: "2026-08-09",
+        status: "ready",
+        timeline_revision: 1,
+        summary_revision: 1,
+      }],
+    });
+
+    const dayResponse = await relayFetch(
+      "/api/family/reme/day?dataset_id=reme-aug-2026-demo-v1&date=2026-08-09",
+    );
+    expect(dayResponse.status).toBe(200);
+    expect(dayResponse.headers.get("Cache-Control")).toBe("no-store");
+    await expect(dayResponse.json()).resolves.toEqual(day);
+
+    const summaryResponse = await relayFetch(
+      "/api/family/diary-summary?dataset_id=reme-aug-2026-demo-v1&date=2026-08-09",
+    );
+    expect(summaryResponse.status).toBe(200);
+    await expect(summaryResponse.json()).resolves.toEqual(summary);
+
+    const viewer = await connectViewerV2();
+    await nextType(viewer, "viewer_ready");
+    await expect(nextType(viewer, "reme_day_revision")).resolves.toMatchObject({
+      dataset_id: "reme-aug-2026-demo-v1",
+      date: "2026-08-09",
+      timeline_revision: 1,
+      summary_revision: 1,
+      summary_status: "ready",
+    });
+  });
+
+  it("rejects history prompt/raw-media fields and summary revisions for stale timelines", async () => {
+    const day = makeRemeDay();
+    await runtimeHistoryPost("/api/runtime/reme/day", day);
+
+    const unsafe = structuredClone(day) as RemeTimelineDayState & {
+      items: Array<Record<string, unknown>>;
+    };
+    const care = unsafe.items[2] as Record<string, unknown>;
+    const assessment = care.assessment as Record<string, unknown>;
+    assessment.mimo_prompt = "must never reach Relay";
+    const rejected = await runtimeHistoryPost("/api/runtime/reme/day", unsafe);
+    expect(rejected.status).toBe(422);
+
+    const summary = makeRemeSummary();
+    summary.input_timeline_revision = 2;
+    const stale = await runtimeHistoryPost("/api/runtime/reme/summary", summary);
+    expect(stale.status).toBe(409);
+    await expect(stale.json()).resolves.toMatchObject({ error: "timeline_revision_mismatch" });
+  });
+
   it("stores authoritative family events and only sends them to viewer v2", async () => {
     const published = await roomStub().publishFamilyEvent(
       makeFamilyEvent("runtime-family", 1, "decision-family"),
@@ -1081,12 +1174,26 @@ async function resetRoomStorage(): Promise<void> {
       state.storage.sql.exec("DELETE FROM media_grants");
       state.storage.sql.exec("DELETE FROM commands");
       state.storage.sql.exec("DELETE FROM controller_lease");
+      state.storage.sql.exec("DELETE FROM reme_summary");
+      state.storage.sql.exec("DELETE FROM reme_day");
+      state.storage.sql.exec("DELETE FROM reme_dataset");
       state.storage.sql.exec("DELETE FROM latest_pose");
       state.storage.sql.exec("DELETE FROM latest_family_event");
       state.storage.sql.exec("DELETE FROM latest_state");
       state.storage.sql.exec("DELETE FROM producer_lease");
       state.storage.sql.exec("DELETE FROM room");
     });
+  });
+}
+
+async function runtimeHistoryPost(path: string, payload: unknown): Promise<Response> {
+  return relayFetch(path, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer test-runtime-ingest-token",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
   });
 }
 
@@ -1226,6 +1333,145 @@ function makeFamilyEvent(
       },
       action_card: null,
       media_authorization: options.authorization ?? null,
+    },
+  };
+}
+
+function makeRemeDay(): RemeTimelineDayState {
+  return {
+    schema_version: "reme-timeline-day-state/v1",
+    dataset_id: "reme-aug-2026-demo-v1",
+    mode: "mock_fixture",
+    date: "2026-08-09",
+    timezone: "Asia/Shanghai",
+    revision: 1,
+    updated_at_ms: 1786246800000,
+    status: "ready",
+    coverage: {
+      status: "complete",
+      start_at_ms: 1786204800000,
+      end_at_ms: 1786291199999,
+      observed_hours: 24,
+      missing_intervals: [],
+    },
+    counts: { total: 3, activity: 1, device: 1, care: 1 },
+    items: [
+      {
+        event_id: "evt-pose-20260809-0810",
+        kind: "activity",
+        occurred_at_ms: 1786234200000,
+        recorded_at_ms: 1786234200900,
+        room: "kitchen",
+        fact_type: "posture_activity",
+        fact: "厨房出现站立和短距离移动",
+        detail: "只描述匿名姿态变化。",
+        occurrence_count: 2,
+        related: [],
+        source: { type: "pose_observation", mode: "mock_fixture", confidence: null },
+      },
+      {
+        event_id: "evt-device-20260809-fridge-1042",
+        kind: "device",
+        occurred_at_ms: 1786243320000,
+        recorded_at_ms: 1786243320400,
+        room: "kitchen",
+        device: {
+          device_id: "demo-fridge-1",
+          device_type: "refrigerator",
+          capability: "inventory_event",
+        },
+        action: "items_removed",
+        value: { items: ["番茄", "鸡蛋"] },
+        fact: "冰箱取出番茄和鸡蛋",
+        occurrence_count: 1,
+        source: { type: "smart_home_event", mode: "mock_fixture", adapter: "demo_fixture" },
+      },
+      {
+        event_id: "care-20260809-1136",
+        kind: "care_thread",
+        thread_id: "thread-20260809-1136",
+        occurred_at_ms: 1786246560000,
+        recorded_at_ms: 1786246800000,
+        status: "delivered",
+        assessment: {
+          title: "午饭准备形成多源记录，MiMo 邀请本人确认是否分享",
+          basis: "冰箱和匿名姿态形成多源记录；菜名只采用本人确认。",
+          suggested_action: "先询问本人是否愿意分享",
+          uncertainty: "low",
+          source: "mimo",
+          baseline: {
+            version: "mock-baseline-v1",
+            comparison_period: "same_daypart",
+            sample_count: 7,
+          },
+          visual_context: { sent_to_mimo: false, type: null, sample_count: null },
+        },
+        check_in: {
+          asked_at_ms: 1786246560000,
+          prompt: "午饭做好了吗？要不要把今天的菜告诉女儿？",
+        },
+        response: {
+          received_at_ms: 1786246740000,
+          status: "received",
+          summary: "本人确认菜品并同意分享给女儿。",
+          consent_scope: "family_material_share",
+        },
+        material: {
+          material_id: "material-20260809-lunch",
+          status: "ready",
+          label: "今日午饭 · 家庭分享",
+          summary: "本人确认今天准备了两道菜，并同意与女儿分享。",
+          facts: [{
+            event_id: "evt-device-20260809-fridge-1042",
+            text: "10:42 冰箱取出番茄和鸡蛋",
+          }],
+          attachment: {
+            type: "skeleton_clip",
+            status: "metadata_only",
+            duration_seconds: 18,
+            privacy_mode: "skeleton",
+            asset_id: null,
+          },
+          generated_by: "mimo",
+        },
+        delivery: {
+          recipient_label: "女儿",
+          status: "mock_delivered",
+          delivered_at_ms: 1786246800000,
+          transport_receipt_id: null,
+        },
+        source: { mode: "mock_fixture" },
+      },
+    ],
+  };
+}
+
+function makeRemeSummary(): RemeDiarySummaryState {
+  return {
+    schema_version: "reme-diary-summary-state/v1",
+    dataset_id: "reme-aug-2026-demo-v1",
+    mode: "mock_fixture",
+    date: "2026-08-09",
+    revision: 1,
+    input_timeline_revision: 1,
+    status: "ready",
+    updated_at_ms: 1786246800000,
+    error_code: null,
+    summary: {
+      headline: "上午形成一次家庭分享",
+      summary: "结构化记录包含匿名活动、设备事实和一次主动关怀。",
+      highlights: [
+        { time: "10:42", text: "冰箱记录了有来源支持的物品取出事件" },
+        { time: "11:36", text: "本人同意把午饭信息作为演示材料分享" },
+      ],
+      care_note: "一次主动关怀已收到回应，并形成 Mock 家庭材料。",
+      uncertainty: "medium",
+      source: "mimo",
+      model: "mimo-v2.5",
+      generated_at_ms: 1786246797000,
+      input_event_count: 3,
+      latency_ms: 9080.4,
+      attempts: 1,
     },
   };
 }

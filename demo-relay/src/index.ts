@@ -11,6 +11,11 @@ import {
   isOpaqueId,
   MEDIA_SIGNAL_SCHEMA_VERSION,
   POSE_FRAME_SCHEMA_VERSION,
+  REME_DATE_INDEX_SCHEMA_VERSION,
+  REME_DAY_REVISION_TYPE,
+  REME_DEMO_DATASET_ID,
+  REME_DEMO_MODE,
+  REME_DEMO_TIMEZONE,
   ROOM_NAME,
   type ActiveMediaGrant,
   type ControlAck,
@@ -23,6 +28,10 @@ import {
   type MediaGrantScope,
   type MediaSignal,
   type PoseFrame,
+  type RemeDateIndex,
+  type RemeDayRevision,
+  type RemeDiarySummaryState,
+  type RemeTimelineDayState,
   validateControlAck,
   validateControlCommand,
   validateDemoState,
@@ -31,6 +40,8 @@ import {
   validateMediaGrantRevoke,
   validateMediaSignal,
   validatePoseFrame,
+  validateRemeDiarySummaryState,
+  validateRemeTimelineDayState,
   withMediaGrant,
 } from "./protocol";
 
@@ -43,6 +54,10 @@ export type {
   FamilyEventWire,
   MediaSignal,
   PoseFrame,
+  RemeDateIndex,
+  RemeDayRevision,
+  RemeDiarySummaryState,
+  RemeTimelineDayState,
 } from "./protocol";
 
 const MONITOR_PROTOCOL = "reme-monitor-v1";
@@ -89,6 +104,30 @@ interface LatestFamilyEventRow extends SqlRow {
   runtime_session_id: string;
   revision: number;
   event_json: string;
+  received_at_ms: number;
+}
+
+interface RemeDatasetRow extends SqlRow {
+  dataset_id: string;
+  revision: number;
+  updated_at_ms: number;
+}
+
+interface RemeDayRow extends SqlRow {
+  dataset_id: string;
+  date: string;
+  revision: number;
+  state_json: string;
+  received_at_ms: number;
+}
+
+interface RemeSummaryRow extends SqlRow {
+  dataset_id: string;
+  date: string;
+  revision: number;
+  input_timeline_revision: number;
+  status: "generating" | "ready" | "unavailable";
+  state_json: string;
   received_at_ms: number;
 }
 
@@ -351,6 +390,125 @@ export class DemoRoom extends DurableObject<Env> {
     };
   }
 
+  async publishRemeDay(
+    day: RemeTimelineDayState,
+    nowMs = Date.now(),
+  ): Promise<{ ok: boolean; error?: string; revision?: number }> {
+    if (!validateRemeTimelineDayState(day)) return { ok: false, error: "invalid_reme_day" };
+    const existing = this.remeDayRow(day.dataset_id, day.date);
+    const canonical = canonicalJson(day);
+    if (existing !== null) {
+      if (day.revision < existing.revision) return { ok: false, error: "stale_reme_day_revision" };
+      if (day.revision === existing.revision) {
+        if (canonical === existing.state_json) return { ok: true, revision: day.revision };
+        return { ok: false, error: "reme_day_revision_conflict" };
+      }
+    }
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO reme_day
+         (dataset_id, date, revision, state_json, received_at_ms)
+       VALUES (?, ?, ?, ?, ?)`,
+      day.dataset_id,
+      day.date,
+      day.revision,
+      canonical,
+      nowMs,
+    );
+    this.bumpRemeDatasetRevision(nowMs);
+    this.broadcastRemeDayRevision(day.date);
+    return { ok: true, revision: day.revision };
+  }
+
+  async publishRemeSummary(
+    summary: RemeDiarySummaryState,
+    nowMs = Date.now(),
+  ): Promise<{ ok: boolean; error?: string; revision?: number }> {
+    if (!validateRemeDiarySummaryState(summary)) {
+      return { ok: false, error: "invalid_reme_summary" };
+    }
+    const day = this.remeDayRow(summary.dataset_id, summary.date);
+    if (day === null || summary.input_timeline_revision !== day.revision) {
+      return { ok: false, error: "timeline_revision_mismatch" };
+    }
+    const existing = this.remeSummaryRow(summary.dataset_id, summary.date);
+    const canonical = canonicalJson(summary);
+    if (existing !== null) {
+      if (summary.revision < existing.revision) {
+        return { ok: false, error: "stale_reme_summary_revision" };
+      }
+      if (summary.revision === existing.revision) {
+        if (canonical === existing.state_json) return { ok: true, revision: summary.revision };
+        return { ok: false, error: "reme_summary_revision_conflict" };
+      }
+    }
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO reme_summary
+         (dataset_id, date, revision, input_timeline_revision, status, state_json, received_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      summary.dataset_id,
+      summary.date,
+      summary.revision,
+      summary.input_timeline_revision,
+      summary.status,
+      canonical,
+      nowMs,
+    );
+    this.bumpRemeDatasetRevision(nowMs);
+    this.broadcastRemeDayRevision(summary.date);
+    return { ok: true, revision: summary.revision };
+  }
+
+  async getRemeDateIndex(
+    datasetId: string,
+    from: string,
+    to: string,
+    nowMs = Date.now(),
+  ): Promise<RemeDateIndex | null> {
+    if (datasetId !== REME_DEMO_DATASET_ID) return null;
+    const dataset = this.remeDatasetRow();
+    if (dataset === null) return null;
+    const today = shanghaiDateKey(nowMs);
+    const rows = this.ctx.storage.sql.exec<RemeDayRow>(
+      `SELECT * FROM reme_day
+        WHERE dataset_id = ? AND date >= ? AND date <= ? AND date <= ?
+        ORDER BY date ASC`,
+      datasetId,
+      from,
+      to,
+      today,
+    ).toArray();
+    return {
+      schema_version: REME_DATE_INDEX_SCHEMA_VERSION,
+      dataset_id: REME_DEMO_DATASET_ID,
+      mode: REME_DEMO_MODE,
+      timezone: REME_DEMO_TIMEZONE,
+      revision: dataset.revision,
+      dates: rows.map((row) => {
+        const day = JSON.parse(row.state_json) as RemeTimelineDayState;
+        const summary = this.remeSummaryRow(datasetId, row.date);
+        return {
+          date: row.date,
+          status: day.status,
+          timeline_revision: row.revision,
+          summary_revision: summary?.revision ?? 0,
+        };
+      }),
+    };
+  }
+
+  async getRemeDay(datasetId: string, dateKey: string): Promise<RemeTimelineDayState | null> {
+    const row = this.remeDayRow(datasetId, dateKey);
+    return row === null ? null : JSON.parse(row.state_json) as RemeTimelineDayState;
+  }
+
+  async getRemeSummary(
+    datasetId: string,
+    dateKey: string,
+  ): Promise<RemeDiarySummaryState | null> {
+    const row = this.remeSummaryRow(datasetId, dateKey);
+    return row === null ? null : JSON.parse(row.state_json) as RemeDiarySummaryState;
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
@@ -478,6 +636,32 @@ export class DemoRoom extends DurableObject<Env> {
         pose_json TEXT NOT NULL,
         received_at_ms INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS reme_dataset (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        dataset_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS reme_day (
+        dataset_id TEXT NOT NULL,
+        date TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        state_json TEXT NOT NULL,
+        received_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (dataset_id, date)
+      );
+      CREATE TABLE IF NOT EXISTS reme_summary (
+        dataset_id TEXT NOT NULL,
+        date TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        input_timeline_revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        state_json TEXT NOT NULL,
+        received_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (dataset_id, date)
+      );
+      CREATE INDEX IF NOT EXISTS idx_reme_day_date
+        ON reme_day (dataset_id, date);
       CREATE TABLE IF NOT EXISTS controller_lease (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         room_session_id TEXT NOT NULL,
@@ -630,7 +814,10 @@ export class DemoRoom extends DurableObject<Env> {
       controller: this.controllerInfo(nowMs),
       server_time_ms: nowMs,
     });
-    if (attachment.familyEvents) this.sendLatestFamilyEvent(server);
+    if (attachment.familyEvents) {
+      this.sendLatestFamilyEvent(server);
+      this.sendRemeRevisionSnapshots(server);
+    }
     this.sendLatestState(server, viewerId, nowMs);
     this.sendLatestPose(server, nowMs);
     if (activeGrant !== null && this.viewerInGrantAudience(activeGrant.grant_id, viewerId)) {
@@ -1832,6 +2019,26 @@ export class DemoRoom extends DurableObject<Env> {
     }
   }
 
+  private broadcastRemeDayRevision(dateKey: string): void {
+    const value = this.remeDayRevision(dateKey);
+    if (value === null) return;
+    for (const ws of this.viewerSockets()) {
+      const attachment = readAttachment(ws);
+      if (attachment?.role === "viewer" && attachment.familyEvents) sendJson(ws, value);
+    }
+  }
+
+  private sendRemeRevisionSnapshots(ws: WebSocket): void {
+    const rows = this.ctx.storage.sql.exec<RemeDayRow>(
+      "SELECT * FROM reme_day WHERE dataset_id = ? ORDER BY date ASC",
+      REME_DEMO_DATASET_ID,
+    ).toArray();
+    for (const row of rows) {
+      const revision = this.remeDayRevision(row.date);
+      if (revision !== null) sendJson(ws, revision);
+    }
+  }
+
   private broadcastToViewers(value: unknown): void {
     for (const ws of this.viewerSockets()) sendJson(ws, value);
   }
@@ -1937,6 +2144,56 @@ export class DemoRoom extends DurableObject<Env> {
     return firstRow(this.ctx.storage.sql.exec<LatestFamilyEventRow>(
       "SELECT * FROM latest_family_event WHERE singleton = 1",
     ));
+  }
+
+  private remeDatasetRow(): RemeDatasetRow | null {
+    return firstRow(this.ctx.storage.sql.exec<RemeDatasetRow>(
+      "SELECT * FROM reme_dataset WHERE singleton = 1",
+    ));
+  }
+
+  private remeDayRow(datasetId: string, dateKey: string): RemeDayRow | null {
+    return firstRow(this.ctx.storage.sql.exec<RemeDayRow>(
+      "SELECT * FROM reme_day WHERE dataset_id = ? AND date = ?",
+      datasetId,
+      dateKey,
+    ));
+  }
+
+  private remeSummaryRow(datasetId: string, dateKey: string): RemeSummaryRow | null {
+    return firstRow(this.ctx.storage.sql.exec<RemeSummaryRow>(
+      "SELECT * FROM reme_summary WHERE dataset_id = ? AND date = ?",
+      datasetId,
+      dateKey,
+    ));
+  }
+
+  private bumpRemeDatasetRevision(nowMs: number): number {
+    const current = this.remeDatasetRow();
+    const revision = (current?.revision ?? 0) + 1;
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO reme_dataset
+         (singleton, dataset_id, revision, updated_at_ms)
+       VALUES (1, ?, ?, ?)`,
+      REME_DEMO_DATASET_ID,
+      revision,
+      nowMs,
+    );
+    return revision;
+  }
+
+  private remeDayRevision(dateKey: string): RemeDayRevision | null {
+    const day = this.remeDayRow(REME_DEMO_DATASET_ID, dateKey);
+    if (day === null) return null;
+    const summary = this.remeSummaryRow(REME_DEMO_DATASET_ID, dateKey);
+    return {
+      type: REME_DAY_REVISION_TYPE,
+      dataset_id: REME_DEMO_DATASET_ID,
+      date: dateKey,
+      timeline_revision: day.revision,
+      summary_revision: summary?.revision ?? 0,
+      summary_status: summary?.status ?? "unavailable",
+    };
   }
 
   private latestPose(): LatestPoseRow | null {
@@ -2057,26 +2314,22 @@ export class DemoRoom extends DurableObject<Env> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "POST" && url.pathname === "/api/runtime/event") {
+    const runtimePostPaths = new Set([
+      "/api/runtime/event",
+      "/api/runtime/reme/day",
+      "/api/runtime/reme/summary",
+    ]);
+    if (request.method === "POST" && runtimePostPaths.has(url.pathname)) {
       try {
-        const configuredToken = runtimeIngestToken(env);
-        if (configuredToken === null) {
+        if (runtimeIngestToken(env) === null) {
           return jsonResponse({ error: "runtime_ingest_not_configured" }, 503);
         }
-        const authorization = request.headers.get("Authorization") || "";
-        const providedToken = authorization.startsWith("Bearer ")
-          ? authorization.slice("Bearer ".length)
-          : "";
-        if (
-          !providedToken
-          || !(await timingSafeHexEqual(
-            await sha256Hex(providedToken),
-            await sha256Hex(configuredToken),
-          ))
-        ) return jsonResponse({ error: "invalid_runtime_token" }, 401);
+        if (!(await runtimeRequestAuthorized(request, env))) {
+          return jsonResponse({ error: "invalid_runtime_token" }, 401);
+        }
         const body = await request.arrayBuffer();
         if (body.byteLength === 0 || body.byteLength > MAX_JSON_BYTES) {
-          return jsonResponse({ error: "invalid_family_event_size" }, 400);
+          return jsonResponse({ error: "invalid_runtime_payload_size" }, 400);
         }
         let value: unknown;
         try {
@@ -2084,23 +2337,45 @@ export default {
         } catch {
           return jsonResponse({ error: "invalid_json" }, 400);
         }
-        if (!validateFamilyEvent(value)) {
-          return jsonResponse({ error: "invalid_family_event" }, 422);
-        }
         const room = env.DEMO_ROOM.getByName(ROOM_NAME);
-        const result = await room.publishFamilyEvent(value);
-        if (!result.ok) {
+        if (url.pathname === "/api/runtime/event") {
+          if (!validateFamilyEvent(value)) {
+            return jsonResponse({ error: "invalid_family_event" }, 422);
+          }
+          const result = await room.publishFamilyEvent(value);
+          if (!result.ok) {
+            return jsonResponse({
+              error: result.error,
+              room_session_id: result.room_session_id ?? null,
+              revision: result.revision ?? null,
+            }, result.error === "stale_family_revision" ? 409 : 422);
+          }
           return jsonResponse({
-            error: result.error,
-            room_session_id: result.room_session_id ?? null,
-            revision: result.revision ?? null,
-          }, result.error === "stale_family_revision" ? 409 : 422);
+            ok: true,
+            room_session_id: result.room_session_id,
+            revision: result.revision,
+          }, 202);
         }
-        return jsonResponse({
-          ok: true,
-          room_session_id: result.room_session_id,
-          revision: result.revision,
-        }, 202);
+        if (url.pathname === "/api/runtime/reme/day") {
+          if (!validateRemeTimelineDayState(value)) {
+            return jsonResponse({ error: "invalid_reme_day" }, 422);
+          }
+          const result = await room.publishRemeDay(value);
+          if (!result.ok) {
+            const status = result.error?.includes("revision") ? 409 : 422;
+            return jsonResponse({ error: result.error, revision: result.revision ?? null }, status);
+          }
+          return jsonResponse({ ok: true, revision: result.revision }, 202);
+        }
+        if (!validateRemeDiarySummaryState(value)) {
+          return jsonResponse({ error: "invalid_reme_summary" }, 422);
+        }
+        const result = await room.publishRemeSummary(value);
+        if (!result.ok) {
+          const status = result.error?.includes("revision") ? 409 : 422;
+          return jsonResponse({ error: result.error, revision: result.revision ?? null }, status);
+        }
+        return jsonResponse({ ok: true, revision: result.revision }, 202);
       } catch (error) {
         console.error(JSON.stringify({
           message: "runtime_event_ingest_failed",
@@ -2124,6 +2399,48 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/api/status") {
         return jsonWithCors(await room.getStatus(), 200, origin);
+      }
+      if (request.method === "GET" && url.pathname === "/api/family/reme/dates") {
+        const datasetId = url.searchParams.get("dataset_id");
+        const from = url.searchParams.get("from");
+        const to = url.searchParams.get("to");
+        if (
+          datasetId !== REME_DEMO_DATASET_ID
+          || !validRemeQueryDate(from)
+          || !validRemeQueryDate(to)
+          || from > to
+        ) return jsonWithCors({ error: "invalid_reme_query" }, 400, origin);
+        const index = await room.getRemeDateIndex(datasetId, from, to);
+        if (index === null) return jsonWithCors({ error: "reme_dataset_not_found" }, 404, origin);
+        return jsonWithCors(index, 200, origin, { "Cache-Control": "no-store" });
+      }
+      if (request.method === "GET" && url.pathname === "/api/family/reme/day") {
+        const datasetId = url.searchParams.get("dataset_id");
+        const dateKey = url.searchParams.get("date");
+        if (datasetId !== REME_DEMO_DATASET_ID || !validRemeQueryDate(dateKey)) {
+          return jsonWithCors({ error: "invalid_reme_query" }, 400, origin);
+        }
+        if (dateKey > shanghaiDateKey(Date.now())) {
+          return jsonWithCors({ error: "reme_day_not_found" }, 404, origin);
+        }
+        const day = await room.getRemeDay(datasetId, dateKey);
+        if (day === null) return jsonWithCors({ error: "reme_day_not_found" }, 404, origin);
+        return jsonWithCors(day, 200, origin, { "Cache-Control": "no-store" });
+      }
+      if (request.method === "GET" && url.pathname === "/api/family/diary-summary") {
+        const datasetId = url.searchParams.get("dataset_id");
+        const dateKey = url.searchParams.get("date");
+        if (datasetId !== REME_DEMO_DATASET_ID || !validRemeQueryDate(dateKey)) {
+          return jsonWithCors({ error: "invalid_reme_query" }, 400, origin);
+        }
+        if (dateKey > shanghaiDateKey(Date.now())) {
+          return jsonWithCors({ error: "reme_summary_not_found" }, 404, origin);
+        }
+        const summary = await room.getRemeSummary(datasetId, dateKey);
+        if (summary === null) {
+          return jsonWithCors({ error: "reme_summary_not_found" }, 404, origin);
+        }
+        return jsonWithCors(summary, 200, origin, { "Cache-Control": "no-store" });
       }
       if (request.method === "GET" && url.pathname === "/api/rtc-config") {
         try {
@@ -2428,6 +2745,36 @@ function sendJson(ws: WebSocket, value: unknown): void {
 function runtimeIngestToken(env: Env): string | null {
   const value = (env as Env & { RUNTIME_INGEST_TOKEN?: string }).RUNTIME_INGEST_TOKEN;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+async function runtimeRequestAuthorized(request: Request, env: Env): Promise<boolean> {
+  const configuredToken = runtimeIngestToken(env);
+  if (configuredToken === null) return false;
+  const authorization = request.headers.get("Authorization") || "";
+  const providedToken = authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length)
+    : "";
+  if (!providedToken) return false;
+  return timingSafeHexEqual(
+    await sha256Hex(providedToken),
+    await sha256Hex(configuredToken),
+  );
+}
+
+function shanghaiDateKey(nowMs: number): string {
+  return new Date(nowMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function validRemeQueryDate(value: string | null): value is string {
+  if (value === null || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parts = value.split("-");
+  const year = Number(parts[0]!);
+  const month = Number(parts[1]!);
+  const day = Number(parts[2]!);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
 }
 
 interface RtcEnvBindings {
