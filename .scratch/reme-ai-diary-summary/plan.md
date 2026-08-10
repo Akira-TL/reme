@@ -1,5 +1,10 @@
 # Reme AI 日记摘要实施计划
 
+> 公网职责更正（2026-08-09）：下文“前端提交给本地统一后端”仅适用于
+> 本机实验。正式 `/family` 必须只读 Backend 经 Relay 发布的摘要状态，
+> Frontend 不修改 Backend / Relay 合同，也不在 Relay 中代理 MiMo。后端需求
+> 见 `../frontend-public-mimo-handoff/backend-requirements.md`。
+
 ## 目标
 
 - 将 Reme 关怀卡中的“主动关怀判词”改为“主动关怀”。

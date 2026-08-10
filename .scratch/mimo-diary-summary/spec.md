@@ -1,5 +1,12 @@
 # MiMo 本日动态摘要（实验）
 
+> 公网接入说明（2026-08-09）：本文件中的
+> `POST http://127.0.0.1:8770/api/diary/summary` 仅是本机实验接口，
+> 不属于公网 Family 合同。`/family` 不得在访问者浏览器继续调用该地址，
+> 也不得把 MiMo 代理逻辑加入 Relay。公网所需的 Backend / Relay 合同需求
+> 见 `../frontend-public-mimo-handoff/backend-requirements.md`；合同确认前，
+> Frontend 只保留失败可见状态，不自建服务端替代方案。
+
 ## 假设
 
 把选中日期内已经形成的结构化生活事件一次性提交给真实 MiMo，可以稳定返回一份短、事实化、可校验的日记摘要；失败时前端明确显示不可用，不使用本地 Mock 文案冒充模型结果。
