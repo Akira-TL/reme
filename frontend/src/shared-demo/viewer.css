@@ -452,7 +452,55 @@ button, input { font: inherit; }
 .reme-week-days button.is-selected { color: #fff; background: var(--reme-coral); }
 .reme-week-days button > span { font-size: 10px; line-height: 1; white-space: nowrap; }
 .reme-week-days button > b { font-size: 20px; line-height: 1; }
+.reme-week-days button > small {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: #38725c;
+  background: #e7f5ee;
+  font-size: 7px;
+  font-weight: 800;
+}
+.reme-week-days button.is-hybrid > small { color: #a04a1d; background: #ffe7d8; }
+.reme-week-days button.is-selected > small { color: var(--reme-coral); background: rgb(255 255 255 / 90%); }
 .reme-week-days button > svg { position: absolute; bottom: -10px; color: var(--reme-coral); font-size: 10px; }
+
+.reme-source-boundary,
+.reme-realtime-window {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  margin-top: 11px;
+  padding: 10px 12px;
+  border: 1px solid #e4d7ed;
+  border-radius: 16px;
+  color: #65437b;
+  background: #fcf8ff;
+}
+
+.reme-source-boundary > svg,
+.reme-realtime-window > svg { justify-self: center; color: currentcolor; font-size: 21px; }
+.reme-source-boundary b,
+.reme-source-boundary span,
+.reme-realtime-window b,
+.reme-realtime-window span { display: block; }
+.reme-source-boundary b,
+.reme-realtime-window b { font-size: 11px; }
+.reme-source-boundary span,
+.reme-realtime-window span { margin-top: 2px; color: #7c7470; font-size: 9px; line-height: 1.45; }
+.reme-source-boundary strong,
+.reme-realtime-window strong { padding: 5px 8px; border-radius: 999px; color: currentcolor; background: #fff; font-size: 8px; white-space: nowrap; }
+.reme-source-boundary.is-hybrid { border-color: #f1c8af; color: #a0491d; background: #fff7f1; }
+.reme-source-boundary.is-live,
+.reme-realtime-window { border-color: #cfe5da; color: #34725a; background: #f4fbf7; }
+.reme-source-boundary.is-interrupted,
+.reme-realtime-window.is-interrupted { border-color: #efcfac; color: #965b25; background: #fff8ef; }
 
 .reme-week-days button:focus-visible,
 .reme-timeline-filter button:focus-visible,
@@ -490,6 +538,7 @@ button, input { font: inherit; }
 .reme-mimo-summary-status > svg { color: #69a46d; font-size: 8px; }
 .reme-mimo-summary-status.is-loading > svg { color: var(--reme-coral); }
 .reme-mimo-summary-status.is-unavailable > svg { color: #a59d97; }
+.reme-mimo-summary-status.is-empty > svg { color: #a59d97; }
 .reme-mimo-summary h2 { margin: 10px 0 0; font-size: 18px; line-height: 1.5; letter-spacing: -0.02em; }
 .reme-mimo-summary > p { margin: 6px 0 0; color: #6f6964; font-size: 12px; line-height: 1.55; }
 .reme-mimo-highlights {
@@ -630,7 +679,10 @@ button, input { font: inherit; }
 .reme-life-event + .reme-life-event,
 .reme-life-event + .reme-care-thread,
 .reme-care-thread + .reme-life-event,
-.reme-care-thread + .reme-care-thread { border-top: 1px solid #f2ebe6; }
+.reme-care-thread + .reme-care-thread,
+.reme-daypart-events > .timeline-event-card + .timeline-event-card,
+.reme-life-event + .timeline-event-card,
+.reme-care-thread + .timeline-event-card { border-top: 1px solid #f2ebe6; }
 
 .reme-life-event-summary {
   display: grid;
@@ -787,7 +839,7 @@ button, input { font: inherit; }
 .reme-care-material-facts li::before { position: absolute; left: 0; content: "·"; color: var(--reme-coral); font-weight: 800; }
 .reme-care-material-details > small { display: block; margin-top: 7px; padding-top: 7px; border-top: 1px solid #eee1d8; color: #887f79; font-size: 8px; line-height: 1.5; }
 
-.reme-live-session { margin-top: 20px; }
+.reme-realtime-window { margin-top: 12px; }
 
 @media (max-width: 420px) {
   .reme-week-days { gap: 2px; }

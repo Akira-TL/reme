@@ -8,6 +8,7 @@
 - 既有权威基线：`origin/feature/backend-cloud-demo-authority @ ab7fe54`
 - 页面：`https://reme.maniforld.com/family` 中间的 `reme` 标签
 - 范围更正：当前产品不增加登录、账户、household member/role 或接收人选择系统；继续沿用现有公开连接、Relay room/session 与固定演示数据范围。
+- 数据来源边界：`2026-08-10 12:00 Asia/Shanghai` 前允许明确标注的 `mock_fixture`；该时刻起只允许 Backend / Relay 真实记录，无数据时保持空白。
 
 > 本文把原《公网 MiMo 日摘要需求》扩展为整个 Reme 页的数据与服务需求。
 > 它不授权 Frontend 修改 Backend 安全状态机、`FamilyEvent`、告警、
@@ -29,7 +30,7 @@ Reme 页不是一个“日摘要组件”，而是一份持续形成的家庭记
 10. 接收对象与送达状态；
 11. 当前 Relay 会话形成的实时关怀记录。
 
-目前第 1—10 项主要来自 Frontend 固定 Mock，第 11 项只存在于当前 Relay 会话。
+目前 8 月 10 日中午前的第 1—10 项主要来自 Frontend 固定 Mock，第 11 项只存在于当前 Relay 会话；中午后的页面不得继续用 Mock 填充。
 旧 Backend / Relay 合同提供的是“当前权威安全状态”，不是可按日期查询的跨天历史。
 
 因此 Backend 需要新增一个与 `FamilyEvent` 分离的 **Reme History / Memory
@@ -55,8 +56,7 @@ Projection**。最小组成是：
 7. **MiMo Diary Summary**：按日、按 timeline revision 生成动态摘要；
 8. **Family Read API / Realtime**：提供日期索引、日快照、revision 通知与重连恢复。
 
-P0 可以让前 1—3 项读取固定 fixture；P1 才接真实来源和数据库。第 4—8 项的合同形状在
-P0、P1 应尽量一致，使 Frontend 不需要维护两套页面。
+P0 可以让前 1—3 项在截止点前读取固定 fixture，并在截止点后接当前真实来源；P1 再增加长期数据库。第 4—8 项的合同形状在 P0、P1 应尽量一致，使 Frontend 不需要维护两套页面。
 
 ## 2. 哪些能力已经属于旧合同
 
@@ -89,7 +89,7 @@ Frontend 仍需单独完成这些旧合同的接入；这和本文新增的历�
 
 | Reme UI 区块 | Backend / Relay 需要提供 | 当前状态 |
 |---|---|---|
-| 8 天日期条 | 可用日期索引、日期状态、家庭时区 | Frontend 固定 8 月 4—11 日 |
+| 8 天日期条 | 可用日期索引、日期状态、家庭时区、来源模式 | Frontend 固定 8 月 4—11 日 |
 | MiMo 本日动态摘要 | 服务端调用 MiMo、摘要状态、输入 revision | 浏览器请求本机 `127.0.0.1` |
 | 今日 24 小时与统计 | 覆盖完整性、人体/设备/关怀数量 | Frontend 从 Mock 计算 |
 | 五时段时间线 | 按日读取的稳定事件快照 | Frontend 固定 Mock |
@@ -103,23 +103,27 @@ Frontend 仍需单独完成这些旧合同的接入；这和本文新增的历�
 
 ## 4. 分阶段范围
 
-### 4.1 P0：公开比赛演示
+### 4.1 P0：公开比赛演示（历史 Mock + 截止点后实时）
 
-P0 只处理固定、显式标注的公开 Demo 数据：
+P0 展示固定历史和真实实时窗口：
 
 ```text
 dataset_id = reme-aug-2026-demo-v1
-mode = mock_fixture
 date = 2026-08-04 ... 2026-08-11
 timezone = Asia/Shanghai
+mock_fixture < 2026-08-10T12:00:00+08:00
+realtime >= 2026-08-10T12:00:00+08:00
 ```
 
-P0 可以使用版本化 JSON fixture，不要求先建立真实家庭数据库，但必须：
+P0 的截止点前数据可以使用版本化 JSON fixture，不要求先建立真实家庭数据库，但必须：
 
 - fixture 位于 Backend 所有的版本化数据源中；
 - 公网 Family 只能读取，不提交 prompt 或任意历史数据；
 - MiMo 只在 Backend 调用；
-- 所有日期、关怀、材料和送达状态明确标记 `mock_fixture`；
+- 每条日期、关怀、材料和送达状态都携带真实来源；
+- 8 月 4—9 日为全天 `mock_fixture`，8 月 10 日仅 00:00—11:59 为 `mock_fixture`；
+- 8 月 10 日 12:00 起以及 8 月 11 日只接受 Backend / Relay 实际产生的记录；
+- 截止点后没有真实数据时返回空列表或 `partial/unavailable`，不得生成补位 Mock；
 - 重启、重复加载和重试幂等；
 - 不把 Mock 数据写入当前 `FamilyEvent`。
 
@@ -181,15 +185,31 @@ GET /api/family/reme/dates?dataset_id=reme-aug-2026-demo-v1&from=2026-08-04&to=2
 {
   "schema_version": "reme-date-index/v1",
   "dataset_id": "reme-aug-2026-demo-v1",
-  "mode": "mock_fixture",
+  "mode": "hybrid",
   "timezone": "Asia/Shanghai",
+  "realtime_cutoff_at_ms": 1786334400000,
   "revision": 1,
   "dates": [
     {
       "date": "2026-08-09",
+      "source_mode": "mock_fixture",
       "status": "ready",
       "timeline_revision": 3,
       "summary_revision": 3
+    },
+    {
+      "date": "2026-08-10",
+      "source_mode": "hybrid",
+      "status": "partial",
+      "timeline_revision": 4,
+      "summary_revision": 4
+    },
+    {
+      "date": "2026-08-11",
+      "source_mode": "realtime",
+      "status": "partial",
+      "timeline_revision": 1,
+      "summary_revision": 0
     }
   ]
 }
@@ -208,6 +228,8 @@ unavailable
 - 日期按家庭时区定义，不能使用访问者浏览器本地时区；
 - 不返回未来日期；
 - revision 单调递增；
+- `source_mode` 只允许 `mock_fixture | hybrid | realtime`；
+- `realtime_cutoff_at_ms` 固定为 `1786334400000`，Frontend 不自行猜测边界；
 - 只返回当前公开演示或 Relay room/session 配置允许的数据日期。
 
 ## 7. 新合同 B：日时间线快照
@@ -224,24 +246,31 @@ GET /api/family/reme/day?dataset_id=reme-aug-2026-demo-v1&date=2026-08-09
 {
   "schema_version": "reme-timeline-day-state/v1",
   "dataset_id": "reme-aug-2026-demo-v1",
-  "mode": "mock_fixture",
-  "date": "2026-08-09",
+  "mode": "hybrid",
+  "date": "2026-08-10",
   "timezone": "Asia/Shanghai",
+  "realtime_cutoff_at_ms": 1786334400000,
   "revision": 3,
   "updated_at_ms": 1786330200000,
-  "status": "ready",
+  "status": "partial",
   "coverage": {
-    "status": "complete",
+    "status": "partial",
     "start_at_ms": 1786291200000,
     "end_at_ms": 1786377599999,
-    "observed_hours": 24,
-    "missing_intervals": []
+    "observed_hours": 12,
+    "missing_intervals": [
+      {
+        "start_at_ms": 1786334400000,
+        "end_at_ms": 1786377599999,
+        "reason": "awaiting_realtime"
+      }
+    ]
   },
   "counts": {
-    "total": 38,
-    "activity": 22,
-    "device": 13,
-    "care": 3
+    "total": 17,
+    "activity": 9,
+    "device": 7,
+    "care": 1
   },
   "items": []
 }
@@ -257,6 +286,7 @@ unavailable
 ```
 
 并给出 `missing_intervals`。不能因为 UI 设计为五个时段就声称已经观察 24 小时。
+8 月 10 日的 Mock 覆盖最多只能计为 12 小时；截止点后的覆盖必须来自真实来源。
 
 ### 7.2 统计口径
 
@@ -276,6 +306,9 @@ activity
 device
 care_thread
 ```
+
+每个 item 的 `source.mode` 必须与时间边界一致。`occurred_at_ms >= 1786334400000` 时，
+`source.mode=mock_fixture` 必须被 Backend / Relay 拒绝。
 
 Frontend 负责图标、颜色、折叠、筛选和五时段布局；Backend 不发送 CSS tone、图标名或展开状态。
 
@@ -512,7 +545,7 @@ GET /api/family/diary-summary?dataset_id=reme-aug-2026-demo-v1&date=2026-08-09
 {
   "schema_version": "reme-diary-summary-state/v1",
   "dataset_id": "reme-aug-2026-demo-v1",
-  "mode": "mock_fixture",
+  "mode": "hybrid",
   "date": "2026-08-09",
   "revision": 3,
   "input_timeline_revision": 3,
@@ -564,6 +597,8 @@ timeline_not_ready
 - 旧请求迟到时不能覆盖新 revision；
 - 相同规范化输入 hash 应缓存，避免刷新、日期切换重复计费；
 - 生成中或失败必须明确展示，不能回退固定 Mock 文案冒充 MiMo；
+- 8 月 10 日摘要可以同时吸收截止点前 Mock 与截止点后真实记录，但不得吸收截止点后的 Mock；
+- 实时窗口没有事件时允许保持 `unavailable/timeline_not_ready`，不得生成“看起来完整”的摘要；
 - P0 只做本日摘要，本周摘要以后使用独立合同。
 
 P0 建议沿用已验证的生成预算：
@@ -625,7 +660,7 @@ Cache-Control: no-store
 - 非法日期、dataset 或字段返回 400；
 - 日期不存在返回 404；
 - 数据源或投影服务不可用返回 503 或合同内 `unavailable`；
-- P0 公开读只能访问 allowlist 中的 `mock_fixture`；
+- P0 公开读只能访问 allowlist 中的 dataset，并严格执行其 `mock_fixture/hybrid/realtime` 来源边界；
 - 本合同不新增登录、账户或成员权限接口。
 
 ## 12. Backend 写入与来源适配
@@ -651,10 +686,12 @@ POST /api/runtime/reme-event
 Backend 需要：
 
 1. 加载 `reme-aug-2026-demo-v1`；
-2. 产生 8 个日期的 TimelineDayState；
-3. 生成或读取 8 个日期的 MiMo 摘要缓存；
-4. 提供案例 2 的完整 CareThread；
-5. 重复启动不冲突、不重复计费。
+2. 只加载 8 月 4 日至 8 月 10 日 11:59 的 Mock fixture；
+3. 为 8 月 10 日 12:00 后与 8 月 11 日接受真实投影，未收到时保持空白；
+4. 产生 8 个日期的 TimelineDayState，并正确标记 `mock_fixture/hybrid/realtime`；
+5. 仅为已有输入的日期生成或读取 MiMo 摘要缓存；
+6. 提供案例 2 的完整 CareThread；
+7. 重复启动不冲突、不重复计费。
 
 Frontend 可以在合同冻结后，把当前结构化 Mock 导出为独立 JSON；Backend 运行时不能导入 Frontend JS。
 
@@ -673,7 +710,7 @@ Frontend 直接调用家居设备 API。
 
 ### 13.1 P0
 
-固定公开演示可以使用只读 JSON fixture + 摘要缓存，不强制数据库。
+截止点前的固定公开演示可以使用只读 JSON fixture + 摘要缓存，不强制数据库；截止点后的实时记录可沿用当前 Relay/session 存储能力，不得回写成 fixture。
 
 ### 13.2 P1
 
@@ -701,9 +738,10 @@ Frontend 直接调用家居设备 API。
 
 ### 14.1 P0
 
-- 只提供 `metadata_only` 的匿名骨架短片元数据；
+- 截止点前只提供 `metadata_only` 的匿名骨架短片元数据；
 - 不生成、上传或伪造真实视频 URL；
 - `mock_delivered` 明确表示演示，不等于真实送达回执。
+- 截止点后没有真实附件或 receipt 时，材料/送达状态保持为空或 unavailable，不能复制历史 Mock。
 
 ### 14.2 P1
 
@@ -745,6 +783,7 @@ Backend 合同确认后，Frontend 只负责：
 - 严格解析 DateIndex、TimelineDayState、CareThread 和 DiarySummaryState；
 - 对 revision、日期、字段闭集和状态做校验；
 - 展示 loading / partial / unavailable / stale；
+- 明确展示 Mock → realtime 截止点和每条记录的来源；
 - 显示 Mock、隐私和非诊断披露；
 - 通过旧权威合同处理当前 FamilyEvent、告警、行动卡和事件期视频。
 
@@ -763,7 +802,8 @@ Frontend 不负责：
 
 - 家庭网络之外打开 `https://reme.maniforld.com/family` 可读取 8 月 4—11 日；
 - 每日日期、统计、五时段和事件都由 Backend / Relay 读取，不再从 Frontend bundle 固定生成；
-- 八日均覆盖人体/空间、设备、关怀三类，且统计与 items 一致；
+- 8 月 4—9 日为完整 Mock 展示；8 月 10 日上午为 Mock、12:00 后为实时；8 月 11 日只显示实时；
+- 实时窗口没有事件时明确留空，不宣称覆盖人体/空间、设备或关怀三类；
 - 8 月 9 日包含“做饭 → 发问 → 本人同意 → 材料 → Mock 送达女儿”完整线程；
 - 日摘要随 Timeline revision 更新；
 - 页面刷新、断线重连和日期切换不会丢失快照；
@@ -771,7 +811,7 @@ Frontend 不负责：
 
 ### 17.2 数据边界
 
-- 所有 P0 历史明确为 `mock_fixture`；
+- 截止点前的 P0 历史明确为 `mock_fixture`，截止点后不得出现任何 `mock_fixture`；
 - summary、timeline、material 不改变 alarm、action-card、Authorization 或 MediaGrant；
 - Relay 拒绝额外字段、倒退 revision、prompt、raw media 和未知来源；
 - MiMo 不可用时返回明确 unavailable，不生成固定替代摘要；
@@ -796,6 +836,7 @@ Frontend 不负责：
 11. 公网部署需要的非前端环境变量；
 12. 可供 Frontend 联调的分支、提交和测试地址；
 13. P1 是否接受“真实历史必须有数据库、来源隔离和删除策略，但不新增账户系统”的边界。
+14. 是否接受固定截止点 `1786334400000` 以及 `mock_fixture | hybrid | realtime` 三种来源模式。
 
 Frontend 收到这些回填后，再开始接口接入；不会先在 `lbx-frontend` 中实现另一套 Backend、Relay
 或数据库逻辑。

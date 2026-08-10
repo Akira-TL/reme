@@ -5,6 +5,7 @@
 - Recorded: 2026-08-10
 - Depends on: `backend-requirements.md` 中 DateIndex、TimelineDayState、CareThread、DiarySummaryState、材料附件与送达合同
 - Scope: 不增加登录、账户、household member/role 或前端接收人选择
+- Source boundary: `2026-08-10 12:00 Asia/Shanghai` 前为明确 Mock，之后只显示 Backend / Relay 实时记录
 
 ## 结论
 
@@ -17,7 +18,7 @@ Backend / Relay 完成历史时间线、MiMo 摘要、匿名材料和真实送�
 仍未完成且只等待后端合同落地后接入：
 
 1. DateIndex、TimelineDayState、CareThread、DiarySummaryState 的同源公网 client 与严格 parser；
-2. 用 Backend 日快照替换 `familyTimelineMock.js` 作为生产数据源；
+2. 用 Backend 日快照承接混合数据源：8 月 10 日 12:00 前允许 Mock，之后只允许真实记录；
 3. 把当前指向本地 `/api/diary/summary` 的摘要请求切换到 Backend 公网摘要状态接口；
 4. 接入 `reme_day_revision` 或 Backend 最终选定的等价通知并处理重连；
 5. 将 Backend CareThread 映射到现有一问一答、材料和送达 UI；
@@ -29,7 +30,7 @@ Backend / Relay 完成历史时间线、MiMo 摘要、匿名材料和真实送�
 ## P0：公开演示接口接入
 
 - 为 DateIndex、TimelineDayState、CareThread、DiarySummaryState 建立严格 schema 解析器；未知字段、倒退 revision 和错误日期 fail closed。
-- 将 Reme 页的 8 月 4—11 日数据源从 `familyTimelineMock.js` 切到 Backend / Relay；本地 fixture 只保留为明确标注的开发/故障演示模式。
+- 将 Reme 页截止点前的 fixture 迁到 Backend / Relay；截止点后的生产数据只消费实时投影，本地 fixture 不得越过边界。
 - 接入 Backend 选定的 WebSocket、SSE、ETag 或短轮询 revision 通知；切换日期、刷新和断线重连后重新取得权威快照。
 - 展示 loading、generating、partial、stale、unavailable 和 retry 状态；MiMo 不可用时不得用固定摘要冒充实时结果。
 - 保留 `metadata_only` 附件和 `mock_delivered` 的明确演示标识。

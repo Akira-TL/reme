@@ -83,11 +83,13 @@ import {
   reduceFamilyTimeline,
 } from "./familyTimeline.js";
 import {
-  FAMILY_TIMELINE_MOCK_DAYS,
+  FAMILY_TIMELINE_DISPLAY_DAYS,
+  FAMILY_TIMELINE_DISPLAY_END_DATE,
+  FAMILY_TIMELINE_MOCK_DAYPARTS,
   FAMILY_TIMELINE_MOCK_END_DATE,
-  FAMILY_TIMELINE_MOCK_EVENTS,
+  FAMILY_TIMELINE_REALTIME_CUTOFF_MS,
   getFamilyTimelineMockDay,
-  isFamilyTimelineMockDate,
+  isFamilyTimelineDisplayDate,
 } from "./familyTimelineMock.js";
 import {
   buildMimoDiarySummaryRequest,
@@ -788,9 +790,13 @@ function RemeCareThread({ event }) {
   );
 }
 
+function isRemeCareEntry(entry) {
+  return !["activity", "device"].includes(entry.kind);
+}
+
 function RemeDaypartSection({ section, filter, expanded, onToggle }) {
   const entries = filter === "care"
-    ? section.entries.filter((entry) => entry.kind === "assessment")
+    ? section.entries.filter(isRemeCareEntry)
     : filter === "device"
       ? section.entries.filter((entry) => entry.kind === "device")
       : section.entries;
@@ -825,11 +831,133 @@ function RemeDaypartSection({ section, filter, expanded, onToggle }) {
           {entries.map((entry) => (
             entry.kind === "assessment"
               ? <RemeCareThread event={entry} key={entry.id} />
-              : <RemeActivityRow entry={entry} key={entry.id} />
+              : ["activity", "device"].includes(entry.kind)
+                ? <RemeActivityRow entry={entry} key={entry.id} />
+                : <TimelineEventCard event={entry} key={entry.id} />
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+function buildRealtimeRemeDay(dateKey) {
+  const descriptor = FAMILY_TIMELINE_DISPLAY_DAYS.find((day) => day.dateKey === dateKey);
+  if (!descriptor) return null;
+  return {
+    ...descriptor,
+    source: "realtime",
+    coverageHours: 0,
+    totalCount: 0,
+    activityCount: 0,
+    deviceCount: 0,
+    careCount: 0,
+    sections: FAMILY_TIMELINE_MOCK_DAYPARTS.map((daypart) => ({
+      ...daypart,
+      count: 0,
+      activityCount: 0,
+      deviceCount: 0,
+      careCount: 0,
+      entries: [],
+    })),
+  };
+}
+
+function shanghaiDaypartId(timestampMs) {
+  const hour = new Date(timestampMs + 8 * 60 * 60 * 1000).getUTCHours();
+  if (hour < 6) return "night";
+  if (hour < 10) return "early";
+  if (hour < 12) return "morning";
+  if (hour < 18) return "afternoon";
+  return "evening";
+}
+
+function eligibleRealtimeEvents(day, liveEvents) {
+  if (day.sourceMode === "mock") return [];
+  return liveEvents.filter((event) => (
+    Number.isFinite(event.timestampMs)
+    && event.timestampMs > 0
+    && (day.sourceMode !== "hybrid" || event.timestampMs >= FAMILY_TIMELINE_REALTIME_CUTOFF_MS)
+  ));
+}
+
+function mergeRealtimeIntoRemeDay(day, realtimeEvents) {
+  const byDaypart = new Map(FAMILY_TIMELINE_MOCK_DAYPARTS.map((daypart) => [daypart.id, []]));
+  for (const event of realtimeEvents) {
+    byDaypart.get(shanghaiDaypartId(event.timestampMs))?.push(event);
+  }
+  const sections = day.sections.map((section) => {
+    const entries = [...section.entries, ...(byDaypart.get(section.id) || [])]
+      .sort((left, right) => left.timestampMs - right.timestampMs || left.id.localeCompare(right.id));
+    return {
+      ...section,
+      entries,
+      count: entries.reduce((total, entry) => total + (entry.count || 1), 0),
+      activityCount: entries.filter((entry) => entry.kind === "activity")
+        .reduce((total, entry) => total + (entry.count || 1), 0),
+      deviceCount: entries.filter((entry) => entry.kind === "device")
+        .reduce((total, entry) => total + (entry.count || 1), 0),
+      careCount: entries.filter(isRemeCareEntry).length,
+    };
+  });
+  return {
+    ...day,
+    sections,
+    realtimeCount: realtimeEvents.length,
+    totalCount: sections.reduce((total, section) => total + section.count, 0),
+    activityCount: sections.reduce((total, section) => total + section.activityCount, 0),
+    deviceCount: sections.reduce((total, section) => total + section.deviceCount, 0),
+    careCount: sections.reduce((total, section) => total + section.careCount, 0),
+  };
+}
+
+function RemeDateStrip({ selectedDateKey, onSelectDate }) {
+  return (
+    <section className="reme-week-strip" aria-label="8 天 Reme 记录日期">
+      <div className="reme-week-days">
+        {FAMILY_TIMELINE_DISPLAY_DAYS.map((day) => (
+          <button
+            type="button"
+            key={day.dateKey}
+            className={`${day.dateKey === selectedDateKey ? "is-selected" : ""} is-${day.sourceMode}`}
+            aria-pressed={day.dateKey === selectedDateKey}
+            onClick={() => onSelectDate(day.dateKey)}
+          >
+            <span>周{day.weekday}</span>
+            <b>{day.day}</b>
+            {day.sourceMode !== "mock" && <small>{day.sourceMode === "hybrid" ? "混" : "实"}</small>}
+            {day.dateKey === selectedDateKey && <FiberManualRecordRoundedIcon />}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function RemeSourceBoundary({ day, realtimeCount, interrupted }) {
+  const copy = day.sourceMode === "mock"
+    ? {
+        title: "演示历史 · 明确标注 Mock",
+        detail: "8 月 4—9 日用于完整展示 Reme 能记住什么，不冒充真实家庭历史。",
+        status: "Mock",
+      }
+    : day.sourceMode === "hybrid"
+      ? {
+          title: "今天中午是数据来源交接点",
+          detail: "8 月 10 日 12:00 前保留 Mock；12:00 后只展示 Backend / Relay 的真实记录，没有数据就留空。",
+          status: interrupted ? "实时中断" : `${realtimeCount} 条实时`,
+        }
+      : {
+          title: "实时记录 · 不再补 Mock",
+          detail: "这里仅展示 Backend / Relay 实际送达的内容；尚未发生或尚未接入的能力会保持空白。",
+          status: interrupted ? "实时中断" : `${realtimeCount} 条实时`,
+        };
+  return (
+    <aside className={`reme-source-boundary is-${day.sourceMode} ${interrupted && day.sourceMode !== "mock" ? "is-interrupted" : ""}`}>
+      <SensorsRoundedIcon />
+      <div><b>{copy.title}</b><span>{copy.detail}</span></div>
+      <strong>{copy.status}</strong>
+    </aside>
   );
 }
 
@@ -844,17 +972,20 @@ function mimoDiaryUnavailableCopy(error) {
     return "MiMo 返回内容未通过 JSON 结构校验，本次结果未采用。";
   }
   if (["mimo_unavailable", "mimo_summary_disabled"].includes(error?.code)) {
-    return "本地 MiMo 服务尚未连接，当前不显示替代摘要。";
+    return "MiMo 摘要服务尚未连接，当前不显示替代摘要。";
   }
-  return "暂时无法连接本地 MiMo 摘要接口，当前不显示替代摘要。";
+  return "暂时无法连接 MiMo 摘要接口，当前不显示替代摘要。";
 }
 
-function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
+function RemeTimeline({ day, onSelectDate, liveEvents, interrupted }) {
   const [filter, setFilter] = useState("all");
   const [expandedDayparts, setExpandedDayparts] = useState(() => new Set(["early", "morning"]));
   const { httpBase } = useMemo(() => getDecisionUrls(), []);
-  const diaryRequestJson = JSON.stringify(buildMimoDiarySummaryRequest(day, liveEvents));
+  const realtimeEvents = eligibleRealtimeEvents(day, liveEvents);
+  const displayDay = mergeRealtimeIntoRemeDay(day, realtimeEvents);
+  const diaryRequestJson = JSON.stringify(buildMimoDiarySummaryRequest(day, realtimeEvents));
   const diaryRequest = JSON.parse(diaryRequestJson);
+  const noDiaryEvents = diaryRequest.events.length === 0;
   const [daySummary, setDaySummary] = useState(() => ({
     requestKey: null,
     status: "loading",
@@ -866,6 +997,12 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
     const controller = new AbortController();
     const requestPayload = JSON.parse(diaryRequestJson);
     let active = true;
+    if (requestPayload.events.length === 0) {
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
     const timeoutId = window.setTimeout(() => {
       setDaySummary({
         requestKey: diaryRequestJson,
@@ -900,17 +1037,21 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
   }, [diaryRequestJson, httpBase]);
 
   const summaryIsCurrent = daySummary.requestKey === diaryRequestJson;
-  const summaryState = summaryIsCurrent ? daySummary.status : "loading";
+  const summaryState = noDiaryEvents ? "empty" : summaryIsCurrent ? daySummary.status : "loading";
   const liveSummary = summaryState === "live" ? daySummary.data : null;
   const summaryHeadline = liveSummary
     ? liveSummary.headline
-    : summaryState === "loading" ? "正在生成本日动态摘要…" : "本日动态摘要暂不可用";
+    : summaryState === "loading"
+      ? "正在生成本日动态摘要…"
+      : summaryState === "empty" ? "等待真实记录形成今日摘要" : "本日动态摘要暂不可用";
   const summaryCopy = liveSummary
     ? liveSummary.summary
-    : summaryState === "loading" ? "MiMo 正在读取今天的结构化生活记录。" : daySummary.message;
+    : summaryState === "loading"
+      ? "MiMo 正在读取今天的结构化生活记录。"
+      : summaryState === "empty" ? "尚未收到真实记录；这里不会用 Mock 摘要填充。" : daySummary.message;
   const summaryStatus = summaryState === "live"
     ? "MiMo 实时生成"
-    : summaryState === "loading" ? "正在生成" : "MiMo 未连接";
+    : summaryState === "loading" ? "正在生成" : summaryState === "empty" ? "等待记录" : "MiMo 未连接";
 
   const selectFilter = (nextFilter) => {
     setFilter(nextFilter);
@@ -920,7 +1061,7 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
     }
     const countKey = nextFilter === "device" ? "deviceCount" : "careCount";
     setExpandedDayparts(new Set(
-      day.sections.filter((section) => section[countKey] > 0).map((section) => section.id),
+      displayDay.sections.filter((section) => section[countKey] > 0).map((section) => section.id),
     ));
   };
   const toggleDaypart = (daypartId) => {
@@ -934,23 +1075,12 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
 
   return (
     <main className="viewer-page timeline-page reme-timeline-page">
-      <section className="reme-week-strip" aria-label="8 天 Mock 记录日期">
-        <div className="reme-week-days">
-          {FAMILY_TIMELINE_MOCK_DAYS.map((mockDay) => (
-            <button
-              type="button"
-              key={mockDay.dateKey}
-              className={mockDay.dateKey === day.dateKey ? "is-selected" : ""}
-              aria-pressed={mockDay.dateKey === day.dateKey}
-              onClick={() => onSelectDate(mockDay.dateKey)}
-            >
-              <span>周{mockDay.weekday}</span>
-              <b>{mockDay.day}</b>
-              {mockDay.dateKey === day.dateKey && <FiberManualRecordRoundedIcon />}
-            </button>
-          ))}
-        </div>
-      </section>
+      <RemeDateStrip selectedDateKey={day.dateKey} onSelectDate={onSelectDate} />
+      <RemeSourceBoundary
+        day={day}
+        realtimeCount={displayDay.realtimeCount}
+        interrupted={interrupted}
+      />
 
       <section
         className="reme-mimo-summary"
@@ -978,30 +1108,34 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
               <time dateTime={new Date(liveSummary.generated_at_ms).toISOString()}>生成于 {formatTime(liveSummary.generated_at_ms)}</time>
             ) : <span>未使用 Mock 摘要</span>}
             <span>{liveSummary
-              ? `已吸收 ${liveSummary.input_event_count} 条结构化演示记录 · ${liveSummary.model} · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty]}`
-              : `已准备 ${diaryRequest.events.length} 条结构化演示记录`}</span>
+              ? `已吸收 ${liveSummary.input_event_count} 条结构化${day.sourceMode === "mock" ? "演示" : day.sourceMode === "hybrid" ? "混合" : "实时"}记录 · ${liveSummary.model} · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty]}`
+              : day.sourceMode === "mock"
+                ? `已准备 ${diaryRequest.events.length} 条结构化演示记录`
+                : day.sourceMode === "hybrid"
+                  ? `已准备 ${diaryRequest.events.length} 条结构化记录 · 12:00 前为 Mock`
+                  : `已收到 ${diaryRequest.events.length} 条结构化实时记录`}</span>
           </div>
       </section>
 
       <section className="reme-day-summary" aria-label="今日记录统计">
         <div className="reme-day-statistics">
-          <span>今日 24 小时</span>
-          <p><b>{day.totalCount}</b> 个生活片段</p>
+          <span>{day.sourceMode === "mock" ? "24 小时演示" : day.sourceMode === "hybrid" ? "上午演示 · 午后实时" : "实时记录"}</span>
+          <p><b>{displayDay.totalCount}</b> 个生活片段</p>
         </div>
         <div className="reme-source-mix" aria-label="记录来源">
-          <span><DirectionsWalkRoundedIcon /><b>{day.activityCount}</b> 人体与空间</span>
-          <span><SensorsRoundedIcon /><b>{day.deviceCount}</b> 全屋设备</span>
-          <span><FavoriteRoundedIcon /><b>{day.careCount}</b> 主动关怀</span>
+          <span><DirectionsWalkRoundedIcon /><b>{displayDay.activityCount}</b> 人体与空间</span>
+          <span><SensorsRoundedIcon /><b>{displayDay.deviceCount}</b> 全屋设备</span>
+          <span><FavoriteRoundedIcon /><b>{displayDay.careCount}</b> 主动关怀</span>
         </div>
         <div className="reme-timeline-filter" role="group" aria-label="筛选时间线记录">
-          <button type="button" className={filter === "all" ? "is-selected" : ""} aria-pressed={filter === "all"} onClick={() => selectFilter("all")}>全部 <b>{day.totalCount}</b></button>
-          <button type="button" className={filter === "device" ? "is-selected" : ""} aria-pressed={filter === "device"} onClick={() => selectFilter("device")}>设备 <b>{day.deviceCount}</b></button>
-          <button type="button" className={filter === "care" ? "is-selected" : ""} aria-pressed={filter === "care"} onClick={() => selectFilter("care")}>关怀 <b>{day.careCount}</b></button>
+          <button type="button" className={filter === "all" ? "is-selected" : ""} aria-pressed={filter === "all"} onClick={() => selectFilter("all")}>全部 <b>{displayDay.totalCount}</b></button>
+          <button type="button" className={filter === "device" ? "is-selected" : ""} aria-pressed={filter === "device"} onClick={() => selectFilter("device")}>设备 <b>{displayDay.deviceCount}</b></button>
+          <button type="button" className={filter === "care" ? "is-selected" : ""} aria-pressed={filter === "care"} onClick={() => selectFilter("care")}>关怀 <b>{displayDay.careCount}</b></button>
         </div>
       </section>
 
       <div className="reme-dayparts">
-        {day.sections.map((section) => (
+        {displayDay.sections.map((section) => (
           <RemeDaypartSection
             key={section.id}
             section={section}
@@ -1012,12 +1146,20 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
         ))}
       </div>
 
-      {liveEvents.length > 0 && (
-        <section className="reme-live-session">
-          <div className="timeline-section-heading"><div><h2>本次会话关怀</h2><p>以下来自当前 Relay 会话，不计入上方 8 天 Mock 记录。</p></div><span>{liveEvents.length} 条</span></div>
-          <div className="timeline-event-list">
-            {liveEvents.map((event) => <TimelineEventCard event={event} key={event.id} />)}
+      {day.sourceMode !== "mock" && (
+        <section className={`reme-realtime-window ${interrupted ? "is-interrupted" : ""}`} role="status">
+          <FiberManualRecordRoundedIcon />
+          <div>
+            <b>{interrupted
+              ? "实时同步暂时中断"
+              : displayDay.realtimeCount > 0 ? "真实记录正在进入时间线" : "尚未收到真实记录"}</b>
+            <span>{interrupted
+              ? "已收到的记录只作过期展示；连接恢复后继续追加。"
+              : displayDay.realtimeCount > 0
+                ? "这些记录来自当前 Backend / Relay，不属于 Mock 历史。"
+                : "这里不会为了填满时间线而补写 Mock 数据。"}</span>
           </div>
+          <strong>{day.sourceMode === "hybrid" ? "12:00 后" : "全天"}</strong>
         </section>
       )}
     </main>
@@ -1026,16 +1168,17 @@ function RemeMockTimeline({ day, onSelectDate, liveEvents }) {
 
 function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs }) {
   const todayKey = dateKeyFromTimestamp(nowMs);
-  const selectableThrough = todayKey > FAMILY_TIMELINE_MOCK_END_DATE
+  const selectableThrough = todayKey > FAMILY_TIMELINE_DISPLAY_END_DATE
     ? todayKey
-    : FAMILY_TIMELINE_MOCK_END_DATE;
+    : FAMILY_TIMELINE_DISPLAY_END_DATE;
   const weekDays = buildWeekDays(selectedDateKey, nowMs, selectableThrough);
   const liveEvents = filterTimelineEventsByDate(timeline.events, selectedDateKey);
-  const mockEvents = filterTimelineEventsByDate(FAMILY_TIMELINE_MOCK_EVENTS, selectedDateKey);
-  const events = [...liveEvents, ...mockEvents]
+  const events = [...liveEvents]
     .sort((left, right) => right.timestampMs - left.timestampMs || left.id.localeCompare(right.id));
-  const mockDateSelected = isFamilyTimelineMockDate(selectedDateKey);
   const mockDay = getFamilyTimelineMockDay(selectedDateKey);
+  const remeDay = mockDay || (isFamilyTimelineDisplayDate(selectedDateKey)
+    ? buildRealtimeRemeDay(selectedDateKey)
+    : null);
   const interrupted = Boolean(
     relay.unavailableReason
       || !relay.monitorOnline
@@ -1046,8 +1189,16 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
     const candidate = shiftDateKey(selectedDateKey, offset * 7);
     onSelectDate(candidate > selectableThrough ? selectableThrough : candidate);
   };
-  if (mockDay) {
-    return <RemeMockTimeline key={mockDay.dateKey} day={mockDay} onSelectDate={onSelectDate} liveEvents={liveEvents} />;
+  if (remeDay) {
+    return (
+      <RemeTimeline
+        key={remeDay.dateKey}
+        day={remeDay}
+        onSelectDate={onSelectDate}
+        liveEvents={liveEvents}
+        interrupted={interrupted}
+      />
+    );
   }
   return (
     <main className="viewer-page timeline-page">
@@ -1080,17 +1231,13 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
         <div><small>reme · remember me</small><h2>记住每一次值得关心的变化</h2><p>把可靠事件变成可行动的关怀判断，并标明来源、证据边界与不确定性。</p></div>
       </section>
 
-      <aside className={`timeline-session-note ${mockDateSelected ? "is-mock" : interrupted ? "is-interrupted" : ""}`}>
-        {mockDateSelected ? <AutoAwesomeRoundedIcon /> : interrupted ? <RefreshRoundedIcon /> : <LockRoundedIcon />}
+      <aside className={`timeline-session-note ${interrupted ? "is-interrupted" : ""}`}>
+        {interrupted ? <RefreshRoundedIcon /> : <LockRoundedIcon />}
         <div>
-          <b>{mockDateSelected
-            ? "Mock 演示时间线 · 非真实家庭历史"
-            : interrupted ? "同步已中断，以下不是当前现场" : "当前关怀记录 · 仅本次会话"}</b>
-          <span>{mockDateSelected
-            ? `8 月 4 日至 11 日用于展示 reme；${interrupted ? "家中端当前离线，" : ""}每张卡片都保留 Mock 标识。`
-            : interrupted
-              ? "保留本页此前收到的记录；恢复后继续追加权威更新。"
-              : "公开演示不保存跨天家庭历史；刷新或换房间后清空。"}</span>
+          <b>{interrupted ? "同步已中断，以下不是当前现场" : "当前关怀记录 · 仅本次会话"}</b>
+          <span>{interrupted
+            ? "保留本页此前收到的记录；恢复后继续追加权威更新。"
+            : "公开演示不保存跨天家庭历史；刷新或换房间后清空。"}</span>
         </div>
         <strong>{events.length} 条</strong>
       </aside>
@@ -1417,7 +1564,7 @@ export function ViewerApp({ surface = "family" }) {
   const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => {
     const currentDateKey = dateKeyFromTimestamp(Date.now());
     if (!familySurface) return currentDateKey;
-    return isFamilyTimelineMockDate(currentDateKey)
+    return isFamilyTimelineDisplayDate(currentDateKey)
       ? currentDateKey
       : FAMILY_TIMELINE_MOCK_END_DATE;
   });
