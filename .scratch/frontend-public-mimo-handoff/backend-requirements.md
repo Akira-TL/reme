@@ -7,6 +7,7 @@
 - 当前前端分支：`origin/lbx-frontend @ 818fb693`
 - 既有权威基线：`origin/feature/backend-cloud-demo-authority @ ab7fe54`
 - 页面：`https://reme.maniforld.com/family` 中间的 `reme` 标签
+- 范围更正：当前产品不增加登录、账户、household member/role 或接收人选择系统；继续沿用现有公开连接、Relay room/session 与固定演示数据范围。
 
 > 本文把原《公网 MiMo 日摘要需求》扩展为整个 Reme 页的数据与服务需求。
 > 它不授权 Frontend 修改 Backend 安全状态机、`FamilyEvent`、告警、
@@ -39,7 +40,7 @@ Projection**。最小组成是：
 - 主动关怀线程；
 - 日摘要状态；
 - revision 与重连恢复；
-- P1 的持久数据库、身份隔离、保留和删除。
+- P1 的持久数据库、来源隔离、保留和删除。
 
 ### 1.1 后端工作包总览
 
@@ -122,20 +123,19 @@ P0 可以使用版本化 JSON fixture，不要求先建立真实家庭数据库�
 - 重启、重复加载和重试幂等；
 - 不把 Mock 数据写入当前 `FamilyEvent`。
 
-### 4.2 P1：真实家庭产品
+### 4.2 P1：真实来源与跨天记录
 
 真实跨天 Reme 必须增加：
 
-- 家庭、成员和设备身份；
-- household 级授权与数据隔离；
 - 持久数据库；
+- 来源设备标识与数据范围隔离；
 - 真实姿态/空间事件接入；
 - 真实全屋设备适配；
 - 数据保留、删除、导出和审计；
-- 真实材料附件的隐私处理与访问控制；
+- 真实材料附件的隐私处理、短期地址和撤销；
 - 真实发送任务和送达回执。
 
-P1 未完成前，匿名公网房间不得处理真实家庭历史。
+本阶段不新增登录、账户、household member/role 或前端接收人选择。接收目标由 Backend 场景配置并通过 CareThread 投影为只读标签。
 
 ### 4.3 P2：当前页面不需要
 
@@ -208,7 +208,7 @@ unavailable
 - 日期按家庭时区定义，不能使用访问者浏览器本地时区；
 - 不返回未来日期；
 - revision 单调递增；
-- P1 必须只返回当前成员有权访问的 household 日期。
+- 只返回当前公开演示或 Relay room/session 配置允许的数据日期。
 
 ## 7. 新合同 B：日时间线快照
 
@@ -604,7 +604,7 @@ ETag 或短轮询合同，但必须给出唯一正式方案。
 
 要求：
 
-- revision 在同一个 `dataset_id/household_id + date` 内单调递增；
+- revision 在同一个 `dataset_id + date` 内单调递增；
 - 同 revision 同 payload 可幂等重放；
 - 同 revision 不同 payload 必须拒绝；
 - 重连后可重新获取当前日期快照；
@@ -626,7 +626,7 @@ Cache-Control: no-store
 - 日期不存在返回 404；
 - 数据源或投影服务不可用返回 503 或合同内 `unavailable`；
 - P0 公开读只能访问 allowlist 中的 `mock_fixture`；
-- P1 必须校验登录成员和 household 权限，不能依赖 CORS 充当身份认证。
+- 本合同不新增登录、账户或成员权限接口。
 
 ## 12. Backend 写入与来源适配
 
@@ -679,7 +679,6 @@ Frontend 直接调用家居设备 API。
 
 真实跨天 Reme 必须有持久数据库。数据库产品由 Backend owner 选择；从能力上至少需要：
 
-- household / member / role；
 - source device 与 source health；
 - 规范化 event；
 - 日时间线 revision / snapshot；
@@ -691,10 +690,10 @@ Frontend 直接调用家居设备 API。
 
 要求：
 
-- household 级隔离；
+- dataset / source 范围隔离；
 - event 唯一键和幂等约束；
 - 时间索引与日期索引；
-- 可执行按家庭/日期删除；
+- 可执行按 dataset/日期删除；
 - 删除后缓存、摘要和材料引用同步失效；
 - 不把 raw video、raw audio、逐帧 skeleton 或 MiMo prompt 当作普通历史持久化。
 
@@ -714,13 +713,12 @@ Frontend 直接调用家居设备 API。
 - 明确授权与素材来源记录；
 - 加密对象存储；
 - 短期签名 URL；
-- household 鉴权；
 - TTL、撤销、删除和访问审计。
 
 这和当前事件期 `MediaGrant` 不同：MediaGrant 是实时、短期 WebRTC 权限；历史材料是持久资产，
 必须另有 ADR 和保留政策。
 
-真实“发给女儿”还需要成员身份、发送任务和 transport receipt。旧合同明确没有离线 Push，
+真实“发给女儿”还需要 Backend 预配置接收目标、发送任务和 transport receipt。旧合同明确没有离线 Push，
 因此 P0 不能把 UI 文案当成真实消息送达能力。
 
 ## 15. 禁止进入 Relay / 公网 Frontend 的数据
@@ -797,7 +795,7 @@ Frontend 不负责：
 10. P0 送达是否确认只做 `mock_delivered`；
 11. 公网部署需要的非前端环境变量；
 12. 可供 Frontend 联调的分支、提交和测试地址；
-13. P1 是否接受“真实历史必须有数据库、家庭鉴权和删除策略”的边界。
+13. P1 是否接受“真实历史必须有数据库、来源隔离和删除策略，但不新增账户系统”的边界。
 
 Frontend 收到这些回填后，再开始接口接入；不会先在 `lbx-frontend` 中实现另一套 Backend、Relay
 或数据库逻辑。
