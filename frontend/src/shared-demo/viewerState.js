@@ -21,6 +21,7 @@ export function createViewerState() {
     lastFamilyRevision: null,
     remeDayRevisions: {},
     pose: null,
+    lastDetectedPose: null,
     lastPoseSequence: null,
     mediaGrant: null,
     acks: [],
@@ -48,6 +49,7 @@ function resetRoomState(state, roomSessionId) {
     familyEventStale: false,
     lastFamilyRevision: null,
     pose: null,
+    lastDetectedPose: null,
     lastPoseSequence: null,
     mediaGrant: null,
     acks: [],
@@ -76,6 +78,7 @@ function unavailableState(state, reason) {
     state: historicalAlarmState,
     stateStale: Boolean(historicalAlarmState),
     pose: null,
+    lastDetectedPose: null,
     lastPoseSequence: null,
     mediaGrant: null,
     unavailableReason: reason,
@@ -90,16 +93,6 @@ export function failPendingAcks(acks, reason, timestampMs) {
     state_revision: null,
     reason,
   });
-}
-
-export function isPoseFresh(pose, localNowMs = Date.now(), maxAgeMs = 5_000) {
-  if (!pose
-    || !Number.isFinite(pose.receivedAtMs)
-    || !Number.isFinite(localNowMs)
-    || !Number.isFinite(maxAgeMs)
-    || maxAgeMs < 0) return false;
-  const ageMs = Math.max(0, localNowMs - pose.receivedAtMs);
-  return ageMs <= maxAgeMs;
 }
 
 function sameMediaGrant(left, right) {
@@ -273,6 +266,7 @@ export function reduceViewerState(state, action) {
       stateStale: false,
       lastStateRevision: value.state_revision,
       pose: runtimeChanged ? null : state.pose,
+      lastDetectedPose: runtimeChanged ? null : state.lastDetectedPose,
       lastPoseSequence: runtimeChanged ? null : state.lastPoseSequence,
       mediaGrant: sameMediaGrant(state.mediaGrant, projectedGrant)
         ? state.mediaGrant
@@ -323,12 +317,11 @@ export function reduceViewerState(state, action) {
       || value.runtime_session_id !== state.state.runtime_session_id
       || (Number.isSafeInteger(state.lastPoseSequence)
         && value.frame_sequence <= state.lastPoseSequence)) return state;
-    const holdLastDetected = value.person_detected === false
-      && state.pose?.person_detected === true
-      && isPoseFresh(state.pose, receivedAtMs);
+    const receivedPose = { ...value, receivedAtMs };
     return {
       ...state,
-      pose: holdLastDetected ? state.pose : { ...value, receivedAtMs },
+      pose: receivedPose,
+      lastDetectedPose: value.person_detected ? receivedPose : state.lastDetectedPose,
       lastPoseSequence: value.frame_sequence,
     };
   }

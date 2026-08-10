@@ -367,6 +367,7 @@ function HomePage({
   relay,
   snapshot,
   pose,
+  lastDetectedPose,
   media,
   activeGrant,
   highPrivacyEnabled,
@@ -383,6 +384,8 @@ function HomePage({
       <SkeletonStage
         sceneId={sceneId}
         pose={pose}
+        lastDetectedPose={lastDetectedPose}
+        runtimeSessionId={snapshot?.runtime_session_id || null}
         videoRef={media.videoRef}
         mediaStatus={media.status}
         revealVideo={Boolean(activeGrant && !highPrivacyEnabled)}
@@ -1764,6 +1767,7 @@ export function ViewerApp({ surface = "family" }) {
             relay={relay}
             snapshot={snapshot}
             pose={relay.pose}
+            lastDetectedPose={relay.lastDetectedPose}
             media={media}
             activeGrant={activeGrant}
             highPrivacyEnabled={highPrivacyEnabled}

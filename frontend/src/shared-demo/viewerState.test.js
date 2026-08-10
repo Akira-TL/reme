@@ -5,7 +5,6 @@ import {
   createViewerState,
   failPendingAcks,
   hasPendingCommand,
-  isPoseFresh,
   ownsControllerLease,
   reduceViewerState,
   selectActiveMediaGrant,
@@ -428,13 +427,9 @@ test("server clock offset and local pose receive time isolate device clock skew"
     timestamp_ms: 2_100,
   }, 10_100);
   assert.equal(state.pose.receivedAtMs, 10_100);
-  assert.equal(isPoseFresh(state.pose, 10_050), true);
-  assert.equal(isPoseFresh(state.pose, 15_100), true);
-  assert.equal(isPoseFresh(state.pose, 15_101), false);
-  assert.equal(isPoseFresh({ ...state.pose, timestamp_ms: 999_999 }, 15_101), false);
 });
 
-test("one short MoveNet miss holds the last detected pose without accepting stale sequence", () => {
+test("transport state preserves an explicit MoveNet miss without accepting stale sequence", () => {
   let state = message(createViewerState(), "viewer_ready", {
     type: "viewer_ready",
     room_name: "shared-live-demo",
@@ -464,7 +459,10 @@ test("one short MoveNet miss holds the last detected pose without accepting stal
     person_detected: false,
     keypoints: [],
   }, 3_020);
-  assert.equal(state.pose, detected);
+  assert.equal(state.pose.person_detected, false);
+  assert.equal(state.pose.frame_sequence, 11);
+  assert.equal(state.pose.receivedAtMs, 3_020);
+  assert.equal(state.lastDetectedPose, detected);
   assert.equal(state.lastPoseSequence, 11);
 
   const duplicate = message(state, "pose_frame", {

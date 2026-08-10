@@ -3,16 +3,9 @@ import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import VideocamOffRoundedIcon from "@mui/icons-material/VideocamOffRounded";
 import { useEffect, useRef } from "react";
 import {
-  interpolatePoseFrame,
-  POSE_DISPLAY_INTERPOLATION_MS,
-} from "./poseDisplaySmoothing.js";
-import { isPoseFresh } from "./viewerState.js";
-
-const EDGES = Object.freeze([
-  [0, 1], [0, 2], [1, 3], [2, 4],
-  [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
-  [5, 11], [6, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
-]);
+  advancePosePresentation,
+} from "../runtime/viewer/posePresentation.js";
+import { createPoseCanvasRuntime } from "../runtime/viewer/poseCanvasRuntime.js";
 
 const SCENE_IMAGES = Object.freeze({
   living: "/scenes/living-room.jpg",
@@ -21,45 +14,11 @@ const SCENE_IMAGES = Object.freeze({
   fall: "/scenes/living-room.jpg",
 });
 
-function drawPose(canvas, frame) {
-  const bounds = canvas.getBoundingClientRect();
-  const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  const width = Math.max(1, Math.round(bounds.width * ratio));
-  const height = Math.max(1, Math.round(bounds.height * ratio));
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-  const context = canvas.getContext("2d");
-  context.clearRect(0, 0, width, height);
-  if (!frame?.person_detected) return;
-  const points = frame.keypoints;
-  context.lineCap = "round";
-  context.lineJoin = "round";
-  context.strokeStyle = "#ff5a00";
-  context.lineWidth = Math.max(3, width * 0.007);
-  for (const [start, end] of EDGES) {
-    if (points[start]?.score < 0.2 || points[end]?.score < 0.2) continue;
-    context.beginPath();
-    context.moveTo(points[start].x * width, points[start].y * height);
-    context.lineTo(points[end].x * width, points[end].y * height);
-    context.stroke();
-  }
-  for (const point of points) {
-    if (point.score < 0.2) continue;
-    context.beginPath();
-    context.arc(point.x * width, point.y * height, Math.max(4, width * 0.012), 0, Math.PI * 2);
-    context.fillStyle = "#ffffff";
-    context.fill();
-    context.lineWidth = Math.max(2, width * 0.004);
-    context.strokeStyle = "#ff5a00";
-    context.stroke();
-  }
-}
-
 export function SkeletonStage({
   sceneId,
   pose,
+  lastDetectedPose,
+  runtimeSessionId,
   videoRef,
   mediaStatus,
   revealVideo,
@@ -71,49 +30,34 @@ export function SkeletonStage({
   onRetryPlayback,
 }) {
   const canvasRef = useRef(null);
-  const renderedPoseRef = useRef(null);
-  const frameFresh = isPoseFresh(pose, localNowMs);
-  const visiblePose = frameFresh ? pose : null;
+  const canvasRuntimeRef = useRef(null);
+  const presentation = advancePosePresentation({
+    previous: {
+      runtimeSessionId: lastDetectedPose?.runtime_session_id || runtimeSessionId,
+      lastGoodPose: lastDetectedPose,
+    },
+    pose,
+    runtimeSessionId,
+    localNowMs,
+    authorityAvailable: relayConnected,
+  });
+  const visiblePose = presentation.visiblePose;
+  const frameFresh = Boolean(visiblePose);
   const videoLive = revealVideo && mediaStatus === "live";
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || videoLive) return undefined;
-    const observer = new ResizeObserver(() => drawPose(canvas, renderedPoseRef.current));
-    observer.observe(canvas);
-    return () => observer.disconnect();
+    const runtime = createPoseCanvasRuntime({ canvas });
+    canvasRuntimeRef.current = runtime;
+    return () => {
+      if (canvasRuntimeRef.current === runtime) canvasRuntimeRef.current = null;
+      runtime.dispose();
+    };
   }, [videoLive]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || videoLive) return undefined;
-    if (!visiblePose) {
-      renderedPoseRef.current = null;
-      drawPose(canvas, null);
-      return undefined;
-    }
-
-    const previous = renderedPoseRef.current;
-    if (!previous) {
-      renderedPoseRef.current = visiblePose;
-      drawPose(canvas, visiblePose);
-      return undefined;
-    }
-
-    const startedAt = performance.now();
-    let animationFrame = 0;
-    const animate = (now) => {
-      const progress = Math.min(
-        Math.max((now - startedAt) / POSE_DISPLAY_INTERPOLATION_MS, 0),
-        1,
-      );
-      const rendered = interpolatePoseFrame(previous, visiblePose, progress);
-      renderedPoseRef.current = rendered;
-      drawPose(canvas, rendered);
-      if (progress < 1) animationFrame = requestAnimationFrame(animate);
-    };
-    animationFrame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(animationFrame);
+    if (!videoLive) canvasRuntimeRef.current?.render(visiblePose);
   }, [videoLive, visiblePose]);
 
   const modeCopy = (() => {
@@ -123,6 +67,7 @@ export function SkeletonStage({
     if (grant && mediaStatus === "failed") return "原画连接失败 · 已回退匿名骨架";
     if (grant) return "事件授权已生效 · 原画连接中";
     if (!frameFresh) return "等待当前运行时的可靠骨架";
+    if (presentation.mode === "held") return "骨架短时保持 · 非新的识别结果";
     return pose.landmark_quality === "degraded" ? "骨架质量较低 · 未补造画面" : "本地处理 · 仅同步匿名骨架";
   })();
 
@@ -131,6 +76,7 @@ export function SkeletonStage({
       {SCENE_IMAGES[sceneId] && <img className="viewer-stage-environment" src={SCENE_IMAGES[sceneId]} alt="" />}
       <video
         ref={videoRef}
+        data-testid="authorized-event-video"
         className={`viewer-stage-video ${videoLive ? "is-visible" : ""}`}
         autoPlay
         playsInline
@@ -138,7 +84,7 @@ export function SkeletonStage({
         aria-label="事件期临时授权现场画面"
         onClick={mediaStatus === "failed" ? onRetryPlayback : undefined}
       />
-      {!videoLive && <canvas ref={canvasRef} className="viewer-stage-pose" aria-label="实时匿名骨架" />}
+      {!videoLive && <canvas ref={canvasRef} data-testid="family-pose-canvas" className="viewer-stage-pose" aria-label="实时匿名骨架" />}
       {sceneId === "bathroom" && <div className="viewer-privacy-veil" aria-hidden="true" />}
       <div className={`stage-connection-pill ${relayConnected ? "is-connected" : "is-waiting"}`}>
         <span /> {relayConnected ? "LIVE · 已连接" : "WAITING · 等待连接"}
