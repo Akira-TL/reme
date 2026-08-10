@@ -996,6 +996,16 @@ export class DemoRoom extends DurableObject<Env> {
       attachment.tokenHash,
       attachment.socketId,
     );
+    // The authoritative state is a current Monitor snapshot, not an event that
+    // must be republished every TTL. A valid producer heartbeat proves the same
+    // Monitor still owns the room, so keep an unchanged snapshot fresh instead
+    // of expiring it and clearing the pose stream every 30 seconds.
+    this.ctx.storage.sql.exec(
+      `UPDATE latest_state SET received_at_ms = ?
+        WHERE singleton = 1 AND room_session_id = ?`,
+      nowMs,
+      attachment.roomSessionId,
+    );
     sendJson(ws, {
       type: "monitor_heartbeat_ack",
       room_session_id: attachment.roomSessionId,

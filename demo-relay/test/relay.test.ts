@@ -760,6 +760,25 @@ describe("public dual-device relay", () => {
 
     now.mockReturnValue(baseTime + 30_001);
     expect(await runDurableObjectAlarm(roomStub())).toBe(true);
+    await expect(roomStub().getStatus(baseTime + 30_001)).resolves.toMatchObject({
+      monitor_online: true,
+      active_media_grant: { status: "active" },
+    });
+
+    // Heartbeat keeps an unchanged authoritative state fresh. Force only the
+    // stored state timestamp backwards to retain coverage for the independent
+    // stale-state fail-closed path while the producer lease remains alive.
+    await runInDurableObject(roomStub(), async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE latest_state SET received_at_ms = ? WHERE singleton = 1",
+        baseTime,
+      );
+      state.storage.sql.exec(
+        "UPDATE producer_lease SET expires_at_ms = ? WHERE singleton = 1",
+        baseTime + 70_000,
+      );
+    });
+    expect(await runDurableObjectAlarm(roomStub())).toBe(true);
     await expect(nextWhere(viewer, (value) => typeOf(value) === "media_grant"
       && field(objectField(value, "grant"), "status") === "revoked")).resolves.toMatchObject({
         reason: "state_stale",
