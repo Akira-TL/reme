@@ -20,10 +20,15 @@ cp .dev.vars.example .dev.vars
 npm run dev -- --ip 127.0.0.1 --port 8787
 ```
 
-The checked-in origin allowlist includes the current public demo origins and
+The checked-in origin allowlist includes the single public product origin
+`https://reme.maniforld.com`, the canonical Vercel deployment origin, and
 the standard Vite development and preview ports `5173`, `4173`, and `4174` on
 `localhost` and `127.0.0.1`. Add an explicit LAN origin before opening the
 frontend from a phone; do not replace the allowlist with `*`.
+
+The user-facing routes are `/home`, `/family`, and `/debug` on that one product
+origin. `https://relay.reme.maniforld.com` is a transport-only HTTP/WebSocket
+endpoint, not a separate product page or user-facing hostname.
 
 The unified launcher creates a random `BACKEND_PUBLISH_TOKEN` and injects it
 into both backend and Relay. Manual Wrangler development uses the ignored

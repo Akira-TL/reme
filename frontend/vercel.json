@@ -1,5 +1,45 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/home",
+      "permanent": false
+    },
+    {
+      "source": "/viewer",
+      "destination": "/family",
+      "permanent": true
+    },
+    {
+      "source": "/viewer.html",
+      "destination": "/family",
+      "permanent": true
+    },
+    {
+      "source": "/typical-demo",
+      "destination": "/debug",
+      "permanent": true
+    },
+    {
+      "source": "/typical-demo.html",
+      "destination": "/debug",
+      "permanent": true
+    },
+    {
+      "source": "/monitor",
+      "destination": "/home",
+      "permanent": true
+    },
+    {
+      "source": "/monitor.html",
+      "destination": "/home",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
       "source": "/home",
@@ -12,6 +52,51 @@
     {
       "source": "/debug",
       "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; base-uri 'none'; connect-src 'self' https://relay.reme.maniforld.com wss://relay.reme.maniforld.com http://127.0.0.1:8770 ws://127.0.0.1:8770 http://localhost:8770 ws://localhost:8770; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(self), microphone=(self), geolocation=()"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        }
+      ]
+    },
+    {
+      "source": "/weights/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/litert/wasm/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=3600, must-revalidate"
+        }
+      ]
     }
   ]
 }
