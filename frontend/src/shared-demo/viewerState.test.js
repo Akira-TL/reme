@@ -428,7 +428,51 @@ test("server clock offset and local pose receive time isolate device clock skew"
     timestamp_ms: 2_100,
   }, 10_100);
   assert.equal(state.pose.receivedAtMs, 10_100);
-  assert.equal(isPoseFresh(state.pose, 12_500), true);
-  assert.equal(isPoseFresh(state.pose, 12_601), false);
-  assert.equal(isPoseFresh({ ...state.pose, timestamp_ms: 999_999 }, 12_601), false);
+  assert.equal(isPoseFresh(state.pose, 15_100), true);
+  assert.equal(isPoseFresh(state.pose, 15_101), false);
+  assert.equal(isPoseFresh({ ...state.pose, timestamp_ms: 999_999 }, 15_101), false);
+});
+
+test("one short MoveNet miss holds the last detected pose without accepting stale sequence", () => {
+  let state = message(createViewerState(), "viewer_ready", {
+    type: "viewer_ready",
+    room_name: "shared-live-demo",
+    viewer_id: "viewer-1",
+    room_session_id: "room-1",
+    monitor_online: true,
+    viewer_count: 1,
+    max_viewers: 5,
+    controller: null,
+    server_time_ms: 1_000,
+  }, 1_000);
+  state = message(state, "demo_state", snapshot(), 1_010);
+  state = message(state, "pose_frame", {
+    room_session_id: "room-1",
+    runtime_session_id: "runtime-1",
+    frame_sequence: 10,
+    timestamp_ms: 1_020,
+    person_detected: true,
+    keypoints: [{ name: "nose", x: 0.5, y: 0.5, score: 0.9 }],
+  }, 1_020);
+  const detected = state.pose;
+  state = message(state, "pose_frame", {
+    room_session_id: "room-1",
+    runtime_session_id: "runtime-1",
+    frame_sequence: 11,
+    timestamp_ms: 3_020,
+    person_detected: false,
+    keypoints: [],
+  }, 3_020);
+  assert.equal(state.pose, detected);
+  assert.equal(state.lastPoseSequence, 11);
+
+  const duplicate = message(state, "pose_frame", {
+    room_session_id: "room-1",
+    runtime_session_id: "runtime-1",
+    frame_sequence: 11,
+    timestamp_ms: 3_030,
+    person_detected: true,
+    keypoints: [{ name: "nose", x: 0.6, y: 0.6, score: 0.9 }],
+  }, 3_030);
+  assert.equal(duplicate, state);
 });

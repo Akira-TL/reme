@@ -144,9 +144,11 @@ class MoveNetEstimator:
         if self._crop_region is None:
             self._crop_region = initial_crop_region(frame_height, frame_width)
 
+        full_crop = initial_crop_region(frame_height, frame_width)
+        active_crop = self._crop_region
         input_tensor = _prepare_cropped_input(
             frame,
-            self._crop_region,
+            active_crop,
             self._target_height,
             self._target_width,
             self._input_detail,
@@ -161,17 +163,49 @@ class MoveNetEstimator:
         keypoint_array = _decode_cropped_keypoints(
             raw_output,
             self._output_detail,
-            self._crop_region,
+            active_crop,
             self._np,
         )
-        self._crop_region = determine_next_crop_region(
-            keypoint_array,
-            frame_height,
-            frame_width,
-            self.score_threshold,
-        )
-
         person_detected = _torso_detected(keypoint_array, self.score_threshold)
+        used_full_fallback = False
+        if not person_detected and active_crop != full_crop:
+            # Tracking crops can briefly lose a fast-moving/falling person. The
+            # Lightning model is cheap enough to retry the same frame against
+            # the full padded image instead of emitting a false "no person"
+            # pulse that clears the Family skeleton and weakens transition data.
+            fallback_tensor = _prepare_cropped_input(
+                frame,
+                full_crop,
+                self._target_height,
+                self._target_width,
+                self._input_detail,
+                self._cv2,
+                self._np,
+            )
+            self._interpreter.set_tensor(self._input_detail["index"], fallback_tensor)
+            started = time.perf_counter()
+            self._interpreter.invoke()
+            inference_ms += (time.perf_counter() - started) * 1000.0
+            fallback_output = self._interpreter.get_tensor(self._output_detail["index"])
+            keypoint_array = _decode_cropped_keypoints(
+                fallback_output,
+                self._output_detail,
+                full_crop,
+                self._np,
+            )
+            person_detected = _torso_detected(keypoint_array, self.score_threshold)
+            used_full_fallback = True
+
+        self._crop_region = (
+            full_crop
+            if used_full_fallback or not person_detected
+            else determine_next_crop_region(
+                keypoint_array,
+                frame_height,
+                frame_width,
+                self.score_threshold,
+            )
+        )
         quality = _derive_quality(
             keypoint_array,
             person_detected=person_detected,

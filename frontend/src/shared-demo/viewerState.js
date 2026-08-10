@@ -21,6 +21,7 @@ export function createViewerState() {
     lastFamilyRevision: null,
     remeDayRevisions: {},
     pose: null,
+    lastPoseSequence: null,
     mediaGrant: null,
     acks: [],
     unavailableReason: "not_published",
@@ -47,6 +48,7 @@ function resetRoomState(state, roomSessionId) {
     familyEventStale: false,
     lastFamilyRevision: null,
     pose: null,
+    lastPoseSequence: null,
     mediaGrant: null,
     acks: [],
     unavailableReason: roomSessionId ? "not_published" : "monitor_offline",
@@ -74,6 +76,7 @@ function unavailableState(state, reason) {
     state: historicalAlarmState,
     stateStale: Boolean(historicalAlarmState),
     pose: null,
+    lastPoseSequence: null,
     mediaGrant: null,
     unavailableReason: reason,
   };
@@ -89,7 +92,7 @@ export function failPendingAcks(acks, reason, timestampMs) {
   });
 }
 
-export function isPoseFresh(pose, localNowMs = Date.now(), maxAgeMs = 2_500) {
+export function isPoseFresh(pose, localNowMs = Date.now(), maxAgeMs = 5_000) {
   if (!pose
     || !Number.isFinite(pose.receivedAtMs)
     || !Number.isFinite(localNowMs)
@@ -270,6 +273,7 @@ export function reduceViewerState(state, action) {
       stateStale: false,
       lastStateRevision: value.state_revision,
       pose: runtimeChanged ? null : state.pose,
+      lastPoseSequence: runtimeChanged ? null : state.lastPoseSequence,
       mediaGrant: sameMediaGrant(state.mediaGrant, projectedGrant)
         ? state.mediaGrant
         : projectedGrant,
@@ -317,8 +321,16 @@ export function reduceViewerState(state, action) {
       || !state.state
       || state.unavailableReason
       || value.runtime_session_id !== state.state.runtime_session_id
-      || (state.pose && value.frame_sequence <= state.pose.frame_sequence)) return state;
-    return { ...state, pose: { ...value, receivedAtMs } };
+      || (Number.isSafeInteger(state.lastPoseSequence)
+        && value.frame_sequence <= state.lastPoseSequence)) return state;
+    const holdLastDetected = value.person_detected === false
+      && state.pose?.person_detected === true
+      && isPoseFresh(state.pose, receivedAtMs);
+    return {
+      ...state,
+      pose: holdLastDetected ? state.pose : { ...value, receivedAtMs },
+      lastPoseSequence: value.frame_sequence,
+    };
   }
   if (kind === "media_grant") {
     if (!sameRoom(state, value.room_session_id) || state.unavailableReason) return state;

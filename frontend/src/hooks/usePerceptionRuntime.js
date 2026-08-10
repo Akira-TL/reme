@@ -19,6 +19,8 @@ import {
 import { sendBoundedCameraFrame } from "./cameraInputBuffer.js";
 
 const CAMERA_FPS = 10;
+const CAMERA_INPUT_WIDTH = 384;
+const CAMERA_JPEG_QUALITY = 0.65;
 let pendingRuntimeStop = Promise.resolve();
 
 function makeSessionId() {
@@ -162,7 +164,7 @@ export function usePerceptionRuntime({
       if (disposed || encoding || !inputSocket || inputSocket.readyState !== WebSocket.OPEN) return;
       if (videoElement.readyState < 2 || !videoElement.videoWidth || !videoElement.videoHeight) return;
       encoding = true;
-      const width = Math.min(640, videoElement.videoWidth);
+      const width = Math.min(CAMERA_INPUT_WIDTH, videoElement.videoWidth);
       const height = Math.round(width * videoElement.videoHeight / videoElement.videoWidth);
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
@@ -194,7 +196,7 @@ export function usePerceptionRuntime({
         setRuntime((current) => current.inputBackpressure
           ? { ...current, inputBackpressure: false }
           : current);
-      }, "image/jpeg", 0.72);
+      }, "image/jpeg", CAMERA_JPEG_QUALITY);
     }
 
     async function start() {
