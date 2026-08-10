@@ -317,7 +317,48 @@ def assert_port_available(host: str, port: int) -> None:
             raise LocalDemoError(f"{host}:{port} is already in use")
 
 
-def build_child_commands(config: LocalDemoConfig) -> dict[str, list[str]]:
+def _node_major(binary: str) -> int | None:
+    try:
+        completed = subprocess.run(  # noqa: S603 - probing a resolved local runtime only
+            [binary, "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    match = re.fullmatch(r"v?(\d+)(?:\.\d+){1,2}", completed.stdout.strip())
+    return None if match is None else int(match.group(1))
+
+
+def resolve_relay_node() -> str:
+    """Pick a Wrangler-local runtime that avoids the Node 26 ProxyController crash."""
+
+    candidates = [
+        os.environ.get("REME_RELAY_NODE"),
+        "/usr/bin/node",
+        "/usr/local/bin/node",
+        shutil.which("node"),
+    ]
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        major = _node_major(candidate)
+        if major is not None and 22 <= major <= 24:
+            return candidate
+    raise LocalDemoError(
+        "local Relay requires Node 22-24; set REME_RELAY_NODE to a compatible node binary"
+    )
+
+
+def build_child_commands(
+    config: LocalDemoConfig,
+    *,
+    relay_node: str = "node",
+) -> dict[str, list[str]]:
     """Return the unified backend, public Relay, and frontend commands."""
 
     return {
@@ -346,10 +387,10 @@ def build_child_commands(config: LocalDemoConfig) -> dict[str, list[str]]:
             "--strictPort",
         ],
         "RELAY": [
-            "npm",
-            "run",
+            relay_node,
+            "node_modules/wrangler/bin/wrangler.js",
             "dev",
-            "--",
+            "--local",
             *([] if config.host == "127.0.0.1" else ["--ip", config.host]),
             "--port",
             str(config.relay_port),
@@ -605,7 +646,8 @@ def run_local_demo(
 
     stop_requested = shutdown_event or threading.Event()
     env = build_child_env(config)
-    commands = build_child_commands(config)
+    relay_node = resolve_relay_node()
+    commands = build_child_commands(config, relay_node=relay_node)
     processes: list[ManagedProcess] = []
     try:
         ensure_frontend_dependencies(config, env)

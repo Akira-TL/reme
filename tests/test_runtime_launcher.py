@@ -68,12 +68,18 @@ def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> N
         browser_input_mode="jpeg",
     )
 
-    commands = build_child_commands(config)
+    commands = build_child_commands(config, relay_node="/usr/bin/node")
 
     assert commands["BACKEND"][1:3] == ["-m", "reme.runtime.server"]
     assert commands["BACKEND"][-2:] == ["--browser-input-mode", "jpeg"]
     assert "--a-events-url" not in commands["BACKEND"]
     assert commands["FRONTEND"][-3:] == ["--port", "14174", "--strictPort"]
+    assert commands["RELAY"][:4] == [
+        "/usr/bin/node",
+        "node_modules/wrangler/bin/wrangler.js",
+        "dev",
+        "--local",
+    ]
     assert "--ip" not in commands["RELAY"]
     assert commands["RELAY"][-6:] == [
         "--port",
@@ -341,6 +347,7 @@ def test_shutdown_event_stops_all_started_services(
     monkeypatch.setattr(local_demo_module, "ensure_frontend_dependencies", lambda *_args: None)
     monkeypatch.setattr(local_demo_module, "ensure_relay_dependencies", lambda *_args: None)
     monkeypatch.setattr(local_demo_module, "preload_demo_history", lambda *_args: None)
+    monkeypatch.setattr(local_demo_module, "resolve_relay_node", lambda: "/usr/bin/node")
 
     def fake_start(label: str, *_args: object, **_kwargs: object) -> object:
         started.append(label)
