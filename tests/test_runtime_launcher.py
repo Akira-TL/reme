@@ -74,9 +74,8 @@ def test_build_child_commands_uses_unified_backend_and_vite(tmp_path: Path) -> N
     assert commands["BACKEND"][-2:] == ["--browser-input-mode", "jpeg"]
     assert "--a-events-url" not in commands["BACKEND"]
     assert commands["FRONTEND"][-3:] == ["--port", "14174", "--strictPort"]
-    assert commands["RELAY"][-8:] == [
-        "--ip",
-        "127.0.0.1",
+    assert "--ip" not in commands["RELAY"]
+    assert commands["RELAY"][-6:] == [
         "--port",
         "18787",
         "--var",
@@ -102,6 +101,9 @@ def test_wildcard_bind_uses_explicit_public_host_for_phone_urls(tmp_path: Path) 
     assert config.acceptance_url == "http://192.168.1.42:4174/"
     assert config.backend_http_url == "http://192.168.1.42:8770"
     assert "http://192.168.1.42:4174" in config.allowed_origins
+    relay_command = build_child_commands(config)["RELAY"]
+    ip_index = relay_command.index("--ip")
+    assert relay_command[ip_index : ip_index + 2] == ["--ip", "0.0.0.0"]
 
 
 def test_public_host_requires_wildcard_bind(tmp_path: Path) -> None:
