@@ -14,7 +14,7 @@ import {
 import { synchronizeCommandCursor } from "./viewerCommandCursor.js";
 
 const HEARTBEAT_MS = 10_000;
-const COMMAND_TTL_MS = 8_000;
+const COMMAND_TTL_MS = 30_000;
 const LOCAL_CONFIRMATION_TTL_MS = 60_000;
 const MAX_RETRY_MS = 8_000;
 const MAX_SIGNAL_BUFFER = 64;

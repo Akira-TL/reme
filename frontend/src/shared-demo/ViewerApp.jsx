@@ -1448,7 +1448,7 @@ export function ViewerApp({ surface = "family" }) {
     revisionHint: relay.remeDayRevisions?.[selectedTimelineDate] || null,
     enabled: familySurface && activeTab === "timeline",
   });
-  const [highPrivacyEnabled, setHighPrivacyEnabled] = useStoredBoolean("reme.viewer.highPrivacy", true);
+  const [highPrivacyEnabled, setHighPrivacyEnabled] = useStoredBoolean("reme.viewer.highPrivacy.v2", false);
   const [notificationsEnabled, setNotificationsEnabled] = useStoredBoolean("reme.viewer.notifications", true);
 
   useEffect(() => {
