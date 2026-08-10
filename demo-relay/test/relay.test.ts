@@ -1116,6 +1116,36 @@ describe("public dual-device relay", () => {
     await nextType(monitor, "pose_accepted");
   });
 
+  it("keeps a new Monitor state when FamilyEvent catches up to that runtime session", async () => {
+    await expect(roomStub().publishFamilyEvent(
+      makeFamilyEvent("runtime-before-reload", 1, "decision-before-reload"),
+    )).resolves.toMatchObject({ ok: true, revision: 1 });
+
+    const claim = await claimMonitor();
+    const monitor = await connectMonitor(claim);
+    await nextType(monitor, "monitor_ready");
+    const state = makeState(claim, 1, { runtimeSession: "runtime-after-reload" });
+    monitor.send(JSON.stringify(state));
+    await expect(nextType(monitor, "state_accepted")).resolves.toMatchObject({ state_revision: 1 });
+
+    await expect(roomStub().publishFamilyEvent(
+      makeFamilyEvent("runtime-after-reload", 1, "decision-after-reload"),
+    )).resolves.toMatchObject({ ok: true, revision: 1 });
+
+    const pose = makePose(claim, state.runtime_session_id, 1);
+    monitor.send(JSON.stringify(pose));
+    await expect(nextType(monitor, "pose_accepted")).resolves.toMatchObject({ frame_sequence: 1 });
+
+    const viewer = await connectViewerV2();
+    await nextType(viewer, "viewer_ready");
+    await expect(nextType(viewer, "family_event")).resolves.toMatchObject({
+      runtime_session_id: state.runtime_session_id,
+      revision: 1,
+    });
+    await expect(nextSchema(viewer, "reme-demo-state/v1")).resolves.toEqual(state);
+    await expect(nextSchema(viewer, "reme-pose-frame-17/v1")).resolves.toEqual(pose);
+  });
+
   it("stores authoritative family events and only sends them to viewer v2", async () => {
     const published = await roomStub().publishFamilyEvent(
       makeFamilyEvent("runtime-family", 1, "decision-family"),

@@ -268,6 +268,26 @@ test("state 与 17 点 pose 各自只有一个 in-flight 和一个 latest slot",
   assert.equal(queue.snapshot().runtimeSessionId, "runtime-2");
 });
 
+test("Relay 拒绝一帧 pose 后下一帧仍可继续发布", () => {
+  const sent = [];
+  const queue = createLatestPublicationQueue((value) => sent.push(value));
+  queue.reset("room-1", "runtime-1");
+
+  assert.equal(queue.offerState(demoState(1)), true);
+  queue.acceptState(1);
+  assert.equal(queue.offerPose(pose(1)), true);
+  assert.equal(sent.at(-1).frame_sequence, 1);
+  assert.equal(queue.snapshot().poseInFlight, 1);
+
+  queue.rejectPose();
+  assert.equal(queue.snapshot().latestPoseSequence, null);
+  assert.equal(queue.snapshot().poseInFlight, null);
+
+  assert.equal(queue.offerPose(pose(2)), true);
+  assert.equal(sent.at(-1).frame_sequence, 2);
+  assert.equal(queue.snapshot().poseInFlight, 2);
+});
+
 test("新 runtime session 可从较小 revision 重新发布", () => {
   const sent = [];
   const queue = createLatestPublicationQueue((value) => sent.push(value));

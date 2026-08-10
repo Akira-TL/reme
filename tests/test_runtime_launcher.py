@@ -106,6 +106,13 @@ def test_wildcard_bind_uses_explicit_public_host_for_phone_urls(tmp_path: Path) 
     assert config.probe_host == "127.0.0.1"
     assert config.acceptance_url == "http://192.168.1.42:4174/"
     assert config.backend_http_url == "http://192.168.1.42:8770"
+    env = build_child_env(config, {})
+    assert env["VITE_REME_PERCEPTION_HTTP_URL"] == (
+        "http://192.168.1.42:4174/_reme/runtime"
+    )
+    assert env["VITE_REME_PERCEPTION_INPUT_WS_URL"] == (
+        "ws://192.168.1.42:8770/ws/camera-input"
+    )
     assert "http://192.168.1.42:4174" in config.allowed_origins
     relay_command = build_child_commands(config)["RELAY"]
     ip_index = relay_command.index("--ip")

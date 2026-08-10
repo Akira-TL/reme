@@ -17,6 +17,8 @@ import {
   stopRuntime,
 } from "../services/perceptionClient";
 import { sendBoundedCameraFrame } from "./cameraInputBuffer.js";
+import { createCameraCapturePacer } from "./cameraCapturePacer.js";
+import { createCameraFrameEncoder } from "./cameraFrameEncoder.js";
 
 const CAMERA_FPS = 10;
 const CAMERA_INPUT_WIDTH = 384;
@@ -60,6 +62,8 @@ export function usePerceptionRuntime({
   const inputSocketRef = useRef(null);
   const sessionRef = useRef(null);
   const sceneRef = useRef(sceneId);
+  const sourceGenerationRef = useRef(sourceGeneration);
+  const captureRefreshRef = useRef(null);
   const frameIndexRef = useRef(0);
   const acceptedInputsRef = useRef([]);
   const retry = useCallback(() => {
@@ -89,6 +93,11 @@ export function usePerceptionRuntime({
   }, []);
 
   useEffect(() => {
+    sourceGenerationRef.current = sourceGeneration;
+    captureRefreshRef.current?.();
+  }, [sourceGeneration]);
+
+  useEffect(() => {
     const previousSceneId = sceneRef.current;
     sceneRef.current = sceneId;
     if (previousSceneId === sceneId) return;
@@ -112,7 +121,7 @@ export function usePerceptionRuntime({
     let disposed = false;
     let eventsSocket = null;
     let inputSocket = null;
-    let captureTimer = 0;
+    let captureController = null;
     let pollTimer = 0;
     let encoding = false;
     sessionRef.current = sessionId;
@@ -160,6 +169,31 @@ export function usePerceptionRuntime({
       )));
     }
 
+    function submitJpeg(blob, timestampMs = performance.now()) {
+      if (!blob || disposed || !inputSocket || inputSocket.readyState !== WebSocket.OPEN) return;
+      const frameIndex = frameIndexRef.current;
+      const result = sendBoundedCameraFrame(inputSocket, createFrameMeta(
+        sessionId,
+        sceneRef.current,
+        frameIndex,
+        Number.isFinite(timestampMs) ? timestampMs : performance.now(),
+      ), blob);
+      if (!result.sent) {
+        if (result.reason === "backpressure") {
+          setRuntime((current) => ({
+            ...current,
+            droppedInputFrames: (current.droppedInputFrames || 0) + 1,
+            inputBackpressure: true,
+          }));
+        }
+        return;
+      }
+      frameIndexRef.current += 1;
+      setRuntime((current) => current.inputBackpressure
+        ? { ...current, inputBackpressure: false }
+        : current);
+    }
+
     function captureFrame() {
       if (disposed || encoding || !inputSocket || inputSocket.readyState !== WebSocket.OPEN) return;
       if (videoElement.readyState < 2 || !videoElement.videoWidth || !videoElement.videoHeight) return;
@@ -174,30 +208,44 @@ export function usePerceptionRuntime({
       context.drawImage(videoElement, 0, 0, width, height);
       canvas.toBlob((blob) => {
         encoding = false;
-        if (!blob || disposed || inputSocket.readyState !== WebSocket.OPEN) return;
-        const frameIndex = frameIndexRef.current;
-        const result = sendBoundedCameraFrame(inputSocket, createFrameMeta(
-          sessionId,
-          sceneRef.current,
-          frameIndex,
-          performance.now(),
-        ), blob);
-        if (!result.sent) {
-          if (result.reason === "backpressure") {
-            setRuntime((current) => ({
-              ...current,
-              droppedInputFrames: (current.droppedInputFrames || 0) + 1,
-              inputBackpressure: true,
-            }));
-          }
-          return;
-        }
-        frameIndexRef.current += 1;
-        setRuntime((current) => current.inputBackpressure
-          ? { ...current, inputBackpressure: false }
-          : current);
+        submitJpeg(blob, performance.now());
       }, "image/jpeg", CAMERA_JPEG_QUALITY);
     }
+
+    function replaceCaptureController(next) {
+      if (captureController === next) return;
+      captureController?.stop();
+      captureController = next;
+      if (next) {
+        setRuntime((current) => ({ ...current, captureTransport: next.mode }));
+      }
+    }
+
+    function startFallbackCapture() {
+      replaceCaptureController(createCameraCapturePacer(captureFrame, 1000 / CAMERA_FPS));
+    }
+
+    function refreshCaptureController() {
+      if (disposed || !inputSocket || inputSocket.readyState !== WebSocket.OPEN) return;
+      let encoder = null;
+      encoder = createCameraFrameEncoder({
+        videoElement,
+        onFrame: submitJpeg,
+        width: CAMERA_INPUT_WIDTH,
+        quality: CAMERA_JPEG_QUALITY,
+        fps: CAMERA_FPS,
+        onError: () => {
+          if (!disposed && captureController === encoder) startFallbackCapture();
+        },
+      });
+      if (encoder) replaceCaptureController(encoder);
+      else if (!captureController) startFallbackCapture();
+    }
+
+    const handleVideoReady = () => refreshCaptureController();
+    videoElement.addEventListener("loadeddata", handleVideoReady);
+    videoElement.addEventListener("playing", handleVideoReady);
+    captureRefreshRef.current = refreshCaptureController;
 
     async function start() {
       try {
@@ -254,7 +302,7 @@ export function usePerceptionRuntime({
                   landmarks,
                   receivedAt,
                   payload: event.payload,
-                  sourceGeneration,
+                  sourceGeneration: sourceGenerationRef.current,
                 });
               }
               setRuntime((current) => ({
@@ -285,7 +333,7 @@ export function usePerceptionRuntime({
           inputSocket.binaryType = "arraybuffer";
           inputSocketRef.current = inputSocket;
           sendScene("activate");
-          captureTimer = window.setInterval(captureFrame, 1000 / CAMERA_FPS);
+          refreshCaptureController();
         } catch {
           setRuntime({
             state: "input_unavailable",
@@ -313,7 +361,11 @@ export function usePerceptionRuntime({
     return () => {
       disposed = true;
       abortController.abort();
-      window.clearInterval(captureTimer);
+      captureController?.stop();
+      captureController = null;
+      captureRefreshRef.current = null;
+      videoElement.removeEventListener("loadeddata", handleVideoReady);
+      videoElement.removeEventListener("playing", handleVideoReady);
       window.clearInterval(pollTimer);
       inputSocket?.close();
       eventsSocket?.close();
@@ -321,7 +373,7 @@ export function usePerceptionRuntime({
       acceptedInputsRef.current = [];
       pendingRuntimeStop = stopRuntime(urls.httpBase, sessionId).catch(() => {});
     };
-  }, [enabled, retryGeneration, sourceGeneration, videoElement]);
+  }, [enabled, retryGeneration, videoElement]);
 
   return {
     runtime,

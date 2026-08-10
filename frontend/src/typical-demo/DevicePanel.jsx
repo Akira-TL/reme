@@ -50,7 +50,7 @@ export function DevicePanel({
 
       <SceneViewport
         sceneId={scene.id}
-        backgroundImage={homeSurface ? null : scene.backgroundImage}
+        backgroundImage={homeIdle ? null : scene.backgroundImage}
         aspectRatio={camera.aspectRatio}
         canvasRef={canvasRef}
         cameraReady={camera.cameraReady}

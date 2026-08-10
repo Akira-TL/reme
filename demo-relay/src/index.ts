@@ -354,8 +354,11 @@ export class DemoRoom extends DurableObject<Env> {
     if (current !== null && current.runtime_session_id !== event.runtime_session_id) {
       this.failPendingCommands(nowMs, "runtime_session_replaced");
       this.revokeActiveGrants(nowMs, "runtime_session_replaced", "revoked");
-      this.ctx.storage.sql.exec("DELETE FROM latest_state");
-      this.ctx.storage.sql.exec("DELETE FROM latest_pose");
+      const latestState = this.latestState();
+      if (latestState !== null && latestState.runtime_session_id !== event.runtime_session_id) {
+        this.ctx.storage.sql.exec("DELETE FROM latest_state");
+        this.ctx.storage.sql.exec("DELETE FROM latest_pose");
+      }
     }
     const activeGrant = this.activeGrantRow(nowMs);
     const authorization = event.care.media_authorization;

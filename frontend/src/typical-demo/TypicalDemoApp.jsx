@@ -238,8 +238,9 @@ export function TypicalDemoApp({ surface = "debug" }) {
     source: sourceDescriptor,
   } = media;
 
-  useEffect(() => {
-    setVideoElement(videoRef.current);
+  const bindCaptureVideo = useCallback((node) => {
+    videoRef.current = node;
+    setVideoElement(node);
   }, [videoRef]);
 
   const cameraState = useMemo(() => ({
@@ -410,11 +411,10 @@ export function TypicalDemoApp({ surface = "debug" }) {
       sourceWidth,
       sourceHeight,
       landmarks: live.landmarkFrame?.landmarks || [],
-      landmarkQuality: liveRuntime?.landmarkQuality || "unavailable",
+      landmarkQuality: live.landmarkFrame?.payload?.landmark_quality || "unavailable",
     });
   }, [
     live.landmarkFrame,
-    liveRuntime?.landmarkQuality,
     liveRuntime?.sessionId,
     media.sourceGeneration,
     videoElement,
@@ -424,14 +424,25 @@ export function TypicalDemoApp({ surface = "debug" }) {
     relayUrl,
     enabled: demoStarted,
     stateEnvelope,
-    poseFrame,
     onCommand: handleRemoteCommand,
     onMediaGrant: setGrantMessage,
     onMediaSignal: mediaSignalDispatcher.dispatch,
   });
   const sendMonitorAck = monitor.sendControlAck;
   const requestMonitorGrant = monitor.requestMediaGrant;
+  const publishMonitorPose = monitor.publishPose;
   const controllerLeaseId = monitor.controller?.lease_id || null;
+
+  useEffect(() => {
+    if (!monitor.connected || !monitor.roomSessionId) return;
+    const value = poseFrame(monitor.roomSessionId);
+    if (value) publishMonitorPose(value);
+  }, [
+    monitor.connected,
+    monitor.roomSessionId,
+    poseFrame,
+    publishMonitorPose,
+  ]);
 
   useEffect(() => {
     controlGenerationRef.current += 1;
@@ -955,7 +966,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
       className={`typical-demo is-${normalizedSurface}-surface scene-tone-${scene.tone} ${!debugInterface && !demoStarted ? "is-home-idle" : ""}`}
       data-app-role={normalizedSurface}
     >
-      <video ref={videoRef} className="capture-video" autoPlay muted playsInline aria-hidden="true" />
+      <video ref={bindCaptureVideo} className="capture-video" autoPlay muted playsInline aria-hidden="true" />
 
       <header className="demo-topbar">
         <div className="brand-lockup">
@@ -1105,7 +1116,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
             onReset={resetAcceptance}
           />
 
-          <RuntimeDebugPanel camera={cameraState} live={live} scene={scene} />
+          <RuntimeDebugPanel camera={cameraState} live={live} monitor={monitor} scene={scene} />
 
           <footer className="demo-footer">
             <Button size="small" variant="text" startIcon={<RestartAltRoundedIcon />} onClick={resetAcceptance}>

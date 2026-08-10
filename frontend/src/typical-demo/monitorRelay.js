@@ -679,6 +679,10 @@ export function createLatestPublicationQueue(send, canSend = () => true) {
       if (poseInFlight !== null && sequence >= poseInFlight) poseInFlight = null;
       drain();
     },
+    rejectPose() {
+      latestPose = null;
+      poseInFlight = null;
+    },
     drain,
     snapshot() {
       return {
@@ -709,6 +713,9 @@ function initialSnapshot(relayUrl) {
     error: relayUrl ? null : "Relay URL 未配置",
     lastProtocolError: null,
     acceptedStateRevision: -1,
+    latestPoseSequence: null,
+    poseInFlight: null,
+    acceptedPoseSequence: -1,
     serverTimeOffsetMs: 0,
   });
 }
@@ -993,6 +1000,12 @@ export function createMonitorRelayClient({
         && value.room_session_id === claim?.room_session_id
         && isNonNegativeInteger(value.frame_sequence)) {
         publications.acceptPose(value.frame_sequence);
+        const publication = publications.snapshot();
+        update({
+          latestPoseSequence: publication.latestPoseSequence,
+          poseInFlight: publication.poseInFlight,
+          acceptedPoseSequence: publication.acceptedPoseSequence,
+        });
       }
       return;
     }
@@ -1020,7 +1033,23 @@ export function createMonitorRelayClient({
     }
     if (value.type === "protocol_error" && exactKeys(value, ["type", "code"])
       && isBoundedString(value.code, 240)) {
-      update({ lastProtocolError: value.code });
+      if ([
+        "state_required_before_pose",
+        "state_stale",
+        "invalid_pose_frame",
+        "frame_sequence_conflict",
+        "non_increasing_frame_sequence",
+      ].includes(value.code)) {
+        publications.rejectPose();
+        const publication = publications.snapshot();
+        update({
+          latestPoseSequence: publication.latestPoseSequence,
+          poseInFlight: publication.poseInFlight,
+          acceptedPoseSequence: publication.acceptedPoseSequence,
+        });
+      } else {
+        update({ lastProtocolError: value.code });
+      }
       emitEvent(value);
       return;
     }
@@ -1154,7 +1183,15 @@ export function createMonitorRelayClient({
   }
 
   function publishPose(value) {
-    return claim ? publications.offerPose({ ...value, timestamp_ms: relayNow() }) : false;
+    if (!claim) return false;
+    const offered = publications.offerPose({ ...value, timestamp_ms: relayNow() });
+    const publication = publications.snapshot();
+    update({
+      latestPoseSequence: publication.latestPoseSequence,
+      poseInFlight: publication.poseInFlight,
+      acceptedPoseSequence: publication.acceptedPoseSequence,
+    });
+    return offered;
   }
 
   function requestMediaGrant({ runtimeSessionId, eventId, scope, expiresInMs }) {

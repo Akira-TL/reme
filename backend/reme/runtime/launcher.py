@@ -155,6 +155,8 @@ class LocalDemoConfig:
 
     @property
     def browser_runtime_input_ws_url(self) -> str:
+        if not self.tls_enabled:
+            return f"{self.backend_ws_url}/ws/camera-input"
         return (
             f"{self.browser_ws_scheme}://{self.client_host}:{self.frontend_port}"
             f"{RUNTIME_PROXY_PATH}/ws/camera-input"

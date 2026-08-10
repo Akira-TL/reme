@@ -2,6 +2,10 @@ import LockRoundedIcon from "@mui/icons-material/LockRounded";
 import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import VideocamOffRoundedIcon from "@mui/icons-material/VideocamOffRounded";
 import { useEffect, useRef } from "react";
+import {
+  interpolatePoseFrame,
+  POSE_DISPLAY_INTERPOLATION_MS,
+} from "./poseDisplaySmoothing.js";
 import { isPoseFresh } from "./viewerState.js";
 
 const EDGES = Object.freeze([
@@ -67,18 +71,50 @@ export function SkeletonStage({
   onRetryPlayback,
 }) {
   const canvasRef = useRef(null);
+  const renderedPoseRef = useRef(null);
   const frameFresh = isPoseFresh(pose, localNowMs);
   const visiblePose = frameFresh ? pose : null;
   const videoLive = revealVideo && mediaStatus === "live";
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return undefined;
-    drawPose(canvas, visiblePose);
-    const observer = new ResizeObserver(() => drawPose(canvas, visiblePose));
+    if (!canvas || videoLive) return undefined;
+    const observer = new ResizeObserver(() => drawPose(canvas, renderedPoseRef.current));
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [visiblePose]);
+  }, [videoLive]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || videoLive) return undefined;
+    if (!visiblePose) {
+      renderedPoseRef.current = null;
+      drawPose(canvas, null);
+      return undefined;
+    }
+
+    const previous = renderedPoseRef.current;
+    if (!previous) {
+      renderedPoseRef.current = visiblePose;
+      drawPose(canvas, visiblePose);
+      return undefined;
+    }
+
+    const startedAt = performance.now();
+    let animationFrame = 0;
+    const animate = (now) => {
+      const progress = Math.min(
+        Math.max((now - startedAt) / POSE_DISPLAY_INTERPOLATION_MS, 0),
+        1,
+      );
+      const rendered = interpolatePoseFrame(previous, visiblePose, progress);
+      renderedPoseRef.current = rendered;
+      drawPose(canvas, rendered);
+      if (progress < 1) animationFrame = requestAnimationFrame(animate);
+    };
+    animationFrame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animationFrame);
+  }, [videoLive, visiblePose]);
 
   const modeCopy = (() => {
     if (sceneId === "bathroom") return "浴室硬隐私 · 仅同步匿名骨架";

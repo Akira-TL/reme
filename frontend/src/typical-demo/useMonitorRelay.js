@@ -14,7 +14,6 @@ export function useMonitorRelay({
   relayUrl,
   enabled = false,
   stateEnvelope = null,
-  poseFrame = null,
   onCommand = null,
   onMediaGrant = null,
   onMediaSignal = null,
@@ -65,20 +64,6 @@ export function useMonitorRelay({
       : stateEnvelope;
     if (value) client.publishState(value);
   }, [client, snapshot.connectionGeneration, snapshot.roomSessionId, snapshot.status, stateEnvelope]);
-
-  useEffect(() => {
-    if (snapshot.status !== "connected" || !snapshot.roomSessionId || !poseFrame) return;
-    const value = typeof poseFrame === "function"
-      ? poseFrame(snapshot.roomSessionId)
-      : poseFrame;
-    if (value) client.publishPose(value);
-  }, [
-    client,
-    poseFrame,
-    snapshot.connectionGeneration,
-    snapshot.roomSessionId,
-    snapshot.status,
-  ]);
 
   const startDemo = useCallback(() => client.start(), [client]);
   const stopDemo = useCallback(() => client.stop(), [client]);

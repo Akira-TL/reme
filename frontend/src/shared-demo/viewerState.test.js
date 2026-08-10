@@ -428,6 +428,7 @@ test("server clock offset and local pose receive time isolate device clock skew"
     timestamp_ms: 2_100,
   }, 10_100);
   assert.equal(state.pose.receivedAtMs, 10_100);
+  assert.equal(isPoseFresh(state.pose, 10_050), true);
   assert.equal(isPoseFresh(state.pose, 15_100), true);
   assert.equal(isPoseFresh(state.pose, 15_101), false);
   assert.equal(isPoseFresh({ ...state.pose, timestamp_ms: 999_999 }, 15_101), false);

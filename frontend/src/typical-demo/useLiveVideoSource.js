@@ -18,7 +18,7 @@ import {
   SOURCE_KINDS,
 } from "./videoSource";
 
-const BACKEND_FRAME_TTL_MS = 1600;
+const BACKEND_FRAME_TTL_MS = 5_000;
 const DEFAULT_RENDER_WIDTH = 960;
 const DEFAULT_RENDER_HEIGHT = 540;
 const MAX_RENDER_EDGE = 1280;

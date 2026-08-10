@@ -46,7 +46,7 @@ function DebugValue({ label, value, wide = false }) {
   );
 }
 
-export function RuntimeDebugPanel({ camera, live, scene }) {
+export function RuntimeDebugPanel({ camera, live, monitor, scene }) {
   const [open, setOpen] = useState(
     () => new URLSearchParams(window.location.search).get("debug") === "1",
   );
@@ -81,6 +81,14 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
       runtime,
       posture: posture || null,
       transition: transition || null,
+    },
+    relay: {
+      status: monitor?.status || "unconfigured",
+      room_session_id: monitor?.roomSessionId || null,
+      accepted_state_revision: monitor?.acceptedStateRevision ?? -1,
+      latest_pose_sequence: monitor?.latestPoseSequence ?? null,
+      pose_in_flight: monitor?.poseInFlight ?? null,
+      accepted_pose_sequence: monitor?.acceptedPoseSequence ?? -1,
     },
     b: {
       connection: decisionRuntime.connection,
@@ -152,6 +160,10 @@ export function RuntimeDebugPanel({ camera, live, scene }) {
                 value={runtime.personDetected === true ? "yes" : runtime.personDetected === false ? "no" : "—"}
               />
               <DebugValue label="A 关键点质量" value={runtime.landmarkQuality || "—"} />
+              <DebugValue label="Relay state ACK" value={monitor?.acceptedStateRevision ?? "—"} />
+              <DebugValue label="Relay pose offered" value={monitor?.latestPoseSequence ?? "—"} />
+              <DebugValue label="Relay pose in-flight" value={monitor?.poseInFlight ?? "—"} />
+              <DebugValue label="Relay pose ACK" value={monitor?.acceptedPoseSequence ?? "—"} />
               <DebugValue label="姿态分类" value={posture ? describePosture(posture.posture) : "等待事件"} />
               <DebugValue label="分类来源" value={posture?.classification_source || "—"} />
               <DebugValue label="姿态置信度" value={percent(posture?.posture_confidence)} />

@@ -98,8 +98,8 @@ export function isPoseFresh(pose, localNowMs = Date.now(), maxAgeMs = 5_000) {
     || !Number.isFinite(localNowMs)
     || !Number.isFinite(maxAgeMs)
     || maxAgeMs < 0) return false;
-  const ageMs = localNowMs - pose.receivedAtMs;
-  return ageMs >= 0 && ageMs <= maxAgeMs;
+  const ageMs = Math.max(0, localNowMs - pose.receivedAtMs);
+  return ageMs <= maxAgeMs;
 }
 
 function sameMediaGrant(left, right) {
