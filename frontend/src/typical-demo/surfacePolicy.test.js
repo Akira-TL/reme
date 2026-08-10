@@ -14,9 +14,10 @@ test("home starts from the quiet living context while debug keeps the fall accep
 });
 
 test("home accepts only family acknowledgement commands", () => {
+  assert.equal(allowsRemoteCommand("home", "acknowledge_alarm"), true);
   assert.equal(allowsRemoteCommand("home", "confirm_alarm"), true);
   assert.equal(allowsRemoteCommand("home", "confirm_action_card"), true);
-  assert.equal(allowsRemoteCommand("home", "confirm_family_notification"), true);
+  assert.equal(allowsRemoteCommand("home", "confirm_family_notification"), false);
   for (const command of [
     "select_scene",
     "select_source",
@@ -55,13 +56,11 @@ test("home registers family acknowledgements while debug keeps engineering actio
     runDemoScenario() {},
     confirmAlarm() {},
     confirmActionCard() {},
-    confirmFamilyNotification() {},
   };
 
   assert.deepEqual(Object.keys(remoteActionsForSurface("home", actions)), [
     "confirmAlarm",
     "confirmActionCard",
-    "confirmFamilyNotification",
   ]);
   assert.deepEqual(Object.keys(remoteActionsForSurface("debug", actions)), Object.keys(actions));
 });

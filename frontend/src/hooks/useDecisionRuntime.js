@@ -638,7 +638,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     }
 
     async function playDecisionVoice(payload, { force = false, autoReply = true } = {}) {
-      if (payload?.family_delivery === "alarm" && payload?.alarm) return false;
+      if (payload?.alarm) return false;
       if (!payload?.elder_message) return false;
       if (!force && spokenDecisionIds.has(payload.decision_id)) return false;
       const playbackGeneration = sceneGeneration;
@@ -768,36 +768,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         });
         if (!disposed) {
           const next = pluckDecision(result);
-          if (next) {
-            ingestDecision(next);
-            if (
-              response === "consent_granted"
-              && target.scene_id === "kitchen"
-              && next.scene_id === "kitchen"
-              && next.family_delivery === "notification"
-              && next.action === "notify_family"
-              && next.family_notification
-              && next.action_card === null
-              && next.alarm === null
-            ) {
-              const issuedAtMs = Date.now();
-              const issuedAtMonotonicMs = performance.now();
-              setMediaAuthorization({
-                sceneId: "kitchen",
-                requestDecisionId: target.decision_id,
-                decisionId: next.decision_id,
-                issuedAtMs,
-                expiresAtMs: issuedAtMs + 60_000,
-                issuedAtMonotonicMs,
-                expiresAtMonotonicMs: issuedAtMonotonicMs + 60_000,
-              });
-            } else if (
-              target.scene_id === "kitchen"
-              && response === "consent_denied"
-            ) {
-              setMediaAuthorization(null);
-            }
-          }
+          if (next) ingestDecision(next);
         }
         return true;
       } catch {
@@ -826,7 +797,20 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
 
       latestDecision = payload;
       setReason("");
-      if (payload.scene_id === "kitchen" && payload.state === "consent_required") {
+      const authorization = payload.media_authorization;
+      if (authorization?.status === "active") {
+        const remainingMs = Math.max(0, authorization.expires_at_ms - Date.now());
+        const monotonicNowMs = performance.now();
+        setMediaAuthorization({
+          sceneId: authorization.scene_id,
+          requestDecisionId: authorization.decision_id,
+          decisionId: authorization.decision_id,
+          issuedAtMs: authorization.issued_at_ms,
+          expiresAtMs: authorization.expires_at_ms,
+          issuedAtMonotonicMs: monotonicNowMs,
+          expiresAtMonotonicMs: monotonicNowMs + remainingMs,
+        });
+      } else {
         setMediaAuthorization(null);
       }
       setDecision(payload);
@@ -839,7 +823,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
       // 每条新 CareDecision 完整替换上一条告警指令。
       clearAlarmState();
 
-      const authoritativeAlarm = payload.family_delivery === "alarm" ? payload.alarm : null;
+      const authoritativeAlarm = payload.alarm;
       if (!authoritativeAlarm && !suppressVoice && voiceTurnDecisionId === null) {
         void playDecisionVoice(payload);
       }
@@ -1064,13 +1048,13 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         if (expectedDecisionId && target.decision_id !== expectedDecisionId) {
           return Promise.resolve({ ok: false, code: "stale_decision" });
         }
-        if (target.family_delivery !== "alarm" || !target.alarm) {
+        if (!target.alarm) {
           return Promise.resolve({ ok: false, code: "alarm_not_current" });
         }
         markResponded(target.decision_id);
-        return submitFor(target, "alarm_confirmed", "family_input").then((ok) => ({
+        return submitFor(target, "alarm_acknowledged", "family_input").then((ok) => ({
           ok,
-          code: ok ? "alarm_confirmed" : "response_failed",
+          code: ok ? "alarm_acknowledged" : "response_failed",
           decisionId: target.decision_id,
         }));
       },
@@ -1081,8 +1065,7 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
           return Promise.resolve({ ok: false, code: "stale_decision" });
         }
         if (
-          target.family_delivery !== "action_card"
-          || target.alarm
+          target.alarm
           || target.action_card?.status !== "pending"
         ) {
           return Promise.resolve({ ok: false, code: "action_card_not_current" });
@@ -1091,28 +1074,6 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
         return submitFor(target, "card_confirmed", "family_input").then((ok) => ({
           ok,
           code: ok ? "action_card_confirmed" : "response_failed",
-          decisionId: target.decision_id,
-        }));
-      },
-      confirmFamilyNotification(expectedDecisionId = null) {
-        const target = latestDecision;
-        if (!target?.decision_id) return Promise.resolve({ ok: false, code: "decision_unavailable" });
-        if (expectedDecisionId && target.decision_id !== expectedDecisionId) {
-          return Promise.resolve({ ok: false, code: "stale_decision" });
-        }
-        if (
-          target.family_delivery !== "notification"
-          || target.alarm
-          || target.action_card
-          || !target.family_notification
-          || !["family_notification_required", "urgent_attention"].includes(target.state)
-        ) {
-          return Promise.resolve({ ok: false, code: "family_notification_not_current" });
-        }
-        markResponded(target.decision_id);
-        return submitFor(target, "family_notification_confirmed", "family_input").then((ok) => ({
-          ok,
-          code: ok ? "family_notification_confirmed" : "response_failed",
           decisionId: target.decision_id,
         }));
       },
@@ -1240,11 +1201,6 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     return apiRef.current.confirmActionCard?.(expectedDecisionId)
       || Promise.resolve({ ok: false, code: "decision_unavailable" });
   }, []);
-  const confirmFamilyNotification = useCallback((decisionId = null) => {
-    const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
-    return apiRef.current.confirmFamilyNotification?.(expectedDecisionId)
-      || Promise.resolve({ ok: false, code: "decision_unavailable" });
-  }, []);
   const replayVoice = useCallback((decisionId = null) => {
     const expectedDecisionId = typeof decisionId === "string" ? decisionId : null;
     return apiRef.current.replayVoice?.(expectedDecisionId)
@@ -1276,7 +1232,6 @@ export function useDecisionRuntime({ sessionId, sceneId, videoElement, enabled =
     switchScene,
     confirmAlarm,
     confirmActionCard,
-    confirmFamilyNotification,
     replayVoice,
     startVoiceReply,
     resetSceneState,

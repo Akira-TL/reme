@@ -121,24 +121,24 @@ test("普通行动卡确认调用独立动作而不是告警确认", async () =>
   assert.deepEqual(result, { phase: "applied", code: "action_card_confirmed" });
 });
 
-test("普通家属通知确认调用独立动作", async () => {
-  let notificationCalled = false;
+test("告警确认使用 acknowledge_alarm 并回传合同响应语义", async () => {
+  let alarmCalled = false;
   const result = await executeMonitorCommand(
-    envelope("confirm_family_notification", { decision_id: "decision-1" }),
+    envelope("acknowledge_alarm", { decision_id: "decision-1" }),
     {
       context,
       now: 2_000,
       actions: {
-        confirmFamilyNotification(decisionId) {
+        confirmAlarm(decisionId) {
           assert.equal(decisionId, "decision-1");
-          notificationCalled = true;
+          alarmCalled = true;
           return { ok: true };
         },
       },
     },
   );
-  assert.equal(notificationCalled, true);
-  assert.deepEqual(result, { phase: "applied", code: "family_notification_confirmed" });
+  assert.equal(alarmCalled, true);
+  assert.deepEqual(result, { phase: "applied", code: "alarm_acknowledged" });
 });
 
 test("本机拒绝确认不会触发任何采集动作", async () => {

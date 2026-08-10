@@ -35,24 +35,15 @@ function ready(state, room = "room-1") {
 
 function familyCare(scene, overrides = {}) {
   return {
-    schema_version: "reme-care-decision/v1-experiment",
-    scene_id: scene,
     decision_id: `decision-${scene}`,
-    timestamp_ms: 1_000,
     state: "observe",
     risk_level: 1,
-    privacy_mode: "skeleton_only",
+    privacy_mode: "blurred",
     family_notification: null,
     action: "observe",
-    family_delivery: "none",
-    reason_summary: "后端面向家属投影的权威状态。",
-    uncertainty: "low",
-    fallback_used: false,
-    source: "rule",
-    demo_mode: "live",
     action_card: null,
-    visual_context: null,
     alarm: null,
+    media_authorization: null,
     ...overrides,
   };
 }
@@ -63,11 +54,9 @@ function mediaAuthorization(scene, overrides = {}) {
     schema_version: "reme-media-authorization/v1",
     authorization_id: `authorization-${scene}`,
     decision_id: decisionId,
-    event_id: decisionId,
-    runtime_session_id: "runtime-1",
+    event_id: `transition-${scene}`,
     scene_id: scene,
     scope: scene === "fall" ? "fall_emergency" : "kitchen_moment",
-    audience: "public_demo_viewers",
     status: "active",
     issued_at_ms: 1_000,
     expires_at_ms: 5_000,
@@ -75,41 +64,44 @@ function mediaAuthorization(scene, overrides = {}) {
   };
 }
 
-function familyEvent(scene, { revision = 0, care = {}, authorization } = {}) {
+function familyEvent(scene, { revision = 1, care = {}, authorization } = {}) {
   const authorizedCare = authorization === undefined
     ? scene === "kitchen"
       ? {
           state: "resolved",
           risk_level: 0,
           action: "notify_family",
-          family_delivery: "notification",
           family_notification: "已确认厨房时刻，可查看短时画面。",
         }
       : {
           state: "urgent_attention",
           risk_level: 4,
           action: "show_urgent_attention",
-          family_delivery: "alarm",
           family_notification: "请立即关注",
           alarm: { channels: ["flash"], trigger: "visual_confirm" },
         }
     : {};
   return {
+    type: "family_event",
     schema_version: "reme-family-event/v1",
     room_session_id: "room-1",
     runtime_session_id: "runtime-1",
     revision,
-    timestamp_ms: 1_000 + revision,
-    care: familyCare(scene, { ...authorizedCare, ...care }),
-    authorization: authorization === undefined
-      ? mediaAuthorization(scene)
-      : authorization,
+    decision_timestamp_ms: 1_000 + revision,
+    published_at_ms: 1_100 + revision,
+    care: familyCare(scene, {
+      ...authorizedCare,
+      ...care,
+      media_authorization: authorization === undefined
+        ? mediaAuthorization(scene)
+        : authorization,
+    }),
   };
 }
 
 function snapshot({ scene = "kitchen", revision = 1, runtime = "runtime-1" } = {}) {
   return {
-    schema_version: "reme-demo-state/v4",
+    schema_version: "reme-demo-state/v1",
     room_session_id: "room-1",
     runtime_session_id: runtime,
     state_revision: revision,
@@ -127,8 +119,10 @@ function snapshot({ scene = "kitchen", revision = 1, runtime = "runtime-1" } = {
       runtime: { status: "ready", capability: "live", detail: null },
       care: {
         phase: "idle",
+        decision_id: null,
         consent: "none",
-        decision: null,
+        alarm_authoritative: false,
+        message: null,
       },
       media_grant: null,
     },
@@ -172,7 +166,7 @@ test("controller ownership requires matching unexpired viewer lease", () => {
   assert.equal(ownsControllerLease(state, 5000), false);
 });
 
-test("authorized video fails closed for bathroom and high privacy", () => {
+test("authorized video fails closed for local privacy, contract privacy and bathroom", () => {
   let state = ready(createViewerState());
   state = message(state, "demo_state", snapshot());
   state = message(state, "family_event", familyEvent("kitchen", {
@@ -188,7 +182,7 @@ test("authorized video fails closed for bathroom and high privacy", () => {
     room_session_id: "room-1",
     grant: {
       grant_id: "grant-1",
-      event_id: "authorization-kitchen",
+      event_id: "decision-kitchen",
       scope: "kitchen_moment",
       expires_at_ms: 5000,
       status: "active",
@@ -199,8 +193,32 @@ test("authorized video fails closed for bathroom and high privacy", () => {
   assert.equal(selectActiveMediaGrant(state, 4000)?.grant_id, "grant-1");
   assert.equal(canRevealAuthorizedVideo(state, true, 4000), false);
   assert.equal(canRevealAuthorizedVideo(state, false, 4000), true);
+  state = message(state, "family_event", familyEvent("kitchen", {
+    revision: 2,
+    care: { privacy_mode: "skeleton_only" },
+  }));
+  assert.equal(selectActiveMediaGrant(state, 4000), null);
+  state = message(state, "family_event", familyEvent("kitchen", {
+    revision: 3,
+    care: { privacy_mode: "hidden" },
+  }));
+  assert.equal(selectActiveMediaGrant(state, 4000), null);
   state = { ...state, state: snapshot({ scene: "bathroom", revision: 2 }) };
   assert.equal(selectActiveMediaGrant(state, 4000), null);
+});
+
+test("reconnect accepts the Relay latest FamilyEvent snapshot at the same revision", () => {
+  let state = ready(createViewerState());
+  const latest = familyEvent("fall", { revision: 7 });
+  state = message(state, "family_event", latest);
+  const first = state.familyEvent;
+  state = reduceViewerState(state, { type: "disconnected", timestampMs: 2_000 });
+  assert.equal(state.familyEventStale, true);
+  state = ready(state);
+  state = message(state, "family_event", structuredClone(latest), 2_100);
+  assert.equal(state.familyEventStale, false);
+  assert.notEqual(state.familyEvent, first);
+  assert.equal(state.familyEvent.revision, 7);
 });
 
 test("keepalive state revisions preserve the active grant identity", () => {
@@ -245,7 +263,7 @@ test("fall media stays closed until the backend publishes an active authorizatio
     room_session_id: "room-1",
     grant: {
       grant_id: "grant-fall",
-      event_id: "authorization-fall",
+      event_id: "decision-fall",
       scope: "fall_emergency",
       expires_at_ms: 5000,
       status: "active",
@@ -255,12 +273,11 @@ test("fall media stays closed until the backend publishes an active authorizatio
   });
   assert.equal(selectActiveMediaGrant(state, 4000), null);
   state = message(state, "family_event", familyEvent("fall", {
-    revision: 1,
+    revision: 2,
     care: {
       state: "urgent_attention",
       risk_level: 4,
       action: "show_urgent_attention",
-      family_delivery: "alarm",
       family_notification: "请立即关注",
       alarm: { channels: ["flash"], trigger: "visual_confirm" },
     },
@@ -327,7 +344,7 @@ test("an unavailable alarm snapshot is retained only as stale history", () => {
   assert.equal(state.state, emergency);
   assert.equal(state.stateStale, true);
   assert.equal(state.unavailableReason, "not_published");
-  assert.equal(state.familyEvent.care.family_delivery, "alarm");
+  assert.notEqual(state.familyEvent.care.alarm, null);
   assert.equal(state.familyEvent.care.alarm.trigger, "visual_confirm");
   assert.equal(selectActiveMediaGrant(state, 4_000), null);
 });

@@ -12,11 +12,11 @@ test("CareDecision delivery maps to presentation phase only", () => {
   assert.equal(mapCareDecisionToPhase({ state: "consent_required", family_delivery: "none" }), "checking");
   assert.equal(mapCareDecisionToPhase({
     state: "family_notification_required",
-    family_delivery: "notification",
+    family_notification: "请联系本人。",
   }), "attention");
   assert.equal(mapCareDecisionToPhase({
     state: "urgent_attention",
-    family_delivery: "alarm",
+    alarm: { channels: ["ring"], trigger: "visual_confirm" },
   }), "emergency");
   assert.equal(mapCareDecisionToPhase({ state: "resolved", family_delivery: "none" }), "resolved");
   assert.equal(mapCareDecisionToPhase({ state: "observe", family_delivery: "none" }), "idle");

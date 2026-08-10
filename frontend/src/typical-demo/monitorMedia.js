@@ -39,9 +39,21 @@ export function hasTurnServer(rtcConfiguration = {}) {
 }
 
 export function describeMediaConnectivity(rtcConfiguration = {}) {
+  if (rtcConfiguration.mode === "unavailable") {
+    return Object.freeze({ mode: "unavailable", detail: "RTC 配置不可用，事件原画保持关闭" });
+  }
+  if (rtcConfiguration.mode === "turn_configured") {
+    return Object.freeze({ mode: "turn_configured", detail: "已配置 TURN 中继" });
+  }
+  if (rtcConfiguration.mode === "stun_only") {
+    return Object.freeze({ mode: "stun_only", detail: "已配置 STUN；部分受限网络可能无法直连" });
+  }
+  if (rtcConfiguration.mode === "local_network_only") {
+    return Object.freeze({ mode: "local_network_only", detail: "未配置公网 ICE，仅保证局域网连通" });
+  }
   return hasTurnServer(rtcConfiguration)
     ? Object.freeze({ mode: "turn_configured", detail: "已配置 TURN 中继" })
-    : Object.freeze({ mode: "local_network_only", detail: "未配置 TURN，仅保证局域网连通" });
+    : Object.freeze({ mode: "local_network_only", detail: "未配置公网 ICE，仅保证局域网连通" });
 }
 
 function activeTracks(stream) {

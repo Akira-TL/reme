@@ -66,6 +66,13 @@ import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { getDecisionUrls, requestMimoDiarySummary } from "../services/decisionClient.js";
 import { relayAvailabilityCopy } from "./config.js";
 import {
+  familyCareMessage,
+  familyCarePresentationKind,
+  familyMediaAuthorization,
+  isFamilyAlarm,
+  isPendingFamilyActionCard,
+} from "./familyAuthority.js";
+import {
   isFamilyConfirmationTimedOut,
   resolveFamilyConfirmationError,
   selectFamilyAcknowledgementCommand,
@@ -160,9 +167,9 @@ const COMMAND_COPY = Object.freeze({
   reset_demo: "重置演示",
   start_conversation: "发起问询",
   submit_response: "提交本人回应",
+  acknowledge_alarm: "确认告警",
   confirm_alarm: "确认告警",
   confirm_action_card: "确认行动卡",
-  confirm_family_notification: "确认家属通知",
   replay_voice: "重播语音",
   unknown: "远程命令",
 });
@@ -223,7 +230,7 @@ function useStoredBoolean(key, fallback) {
   return [value, setValue];
 }
 
-function ConnectionBanner({ relay, grant, nowMs, familySurface = false }) {
+function ConnectionBanner({ relay, grant, nowMs, familySurface = false, rtcError = null }) {
   const remaining = grant ? secondsRemaining(grant.expires_at_ms, nowMs) : 0;
   return (
     <aside className={`public-room-banner ${grant ? "is-live" : ""}`}>
@@ -250,6 +257,8 @@ function ConnectionBanner({ relay, grant, nowMs, familySurface = false }) {
               : `原画开放 ${remaining}s · 全部 Viewer 可见`
             : relay.unavailableReason
               ? "当前权威状态不可用"
+              : rtcError
+                ? "RTC 配置不可用 · 原画保持关闭"
               : "日常仅同步骨架与必要状态"}
         </span>
       </div>
@@ -259,17 +268,14 @@ function ConnectionBanner({ relay, grant, nowMs, familySurface = false }) {
 
 function StatusCard({ snapshot, relay, decision, familySurface = false }) {
   const truth = deriveFamilyTruth(snapshot, relay);
-  const sceneId = truth.sceneId || decision?.scene_id || null;
-  const careMessage = decision?.family_notification
-    || decision?.elder_message
-    || decision?.reason_summary
-    || null;
+  const sceneId = truth.sceneId;
+  const careMessage = familyCareMessage(decision);
+  const presentationKind = familyCarePresentationKind(decision);
   const runtime = snapshot?.state.runtime;
   const capture = snapshot?.state.capture;
   const status = (() => {
     if (relay.unavailableReason
-      && decision?.family_delivery === "alarm"
-      && decision?.alarm) return {
+      && presentationKind === "alarm") return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
       title: "紧急告警仍待处理 · 现场传输不可用",
@@ -289,7 +295,7 @@ function StatusCard({ snapshot, relay, decision, familySurface = false }) {
         ? "连接恢复前不展示旧骨架、旧原画或旧处理结果。"
         : "连接恢复前不展示旧骨架、旧原画或旧控制结果。",
     };
-    if (decision?.family_delivery === "alarm" && decision?.alarm) return {
+    if (presentationKind === "alarm") return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
       title: "紧急告警：请立即关注",
@@ -297,13 +303,13 @@ function StatusCard({ snapshot, relay, decision, familySurface = false }) {
         ? "安全规则已升级，家属端不能取消或降低本次告警。"
         : "权威安全规则已升级，本次状态不能由远程命令降低。"),
     };
-    if (decision?.family_delivery === "action_card") return {
+    if (presentationKind === "action_card") return {
       tone: "warning",
       Icon: TipsAndUpdatesRoundedIcon,
       title: "家属行动卡待处理",
       body: careMessage || "本人已同意把具体生活需要同步给家属；这不是安全告警。",
     };
-    if (decision?.family_delivery === "notification") return {
+    if (presentationKind === "notification") return {
       tone: "warning",
       Icon: HealthAndSafetyRoundedIcon,
       title: "家属收到普通关怀通知",
@@ -376,7 +382,8 @@ function HomePage({
   familyAcknowledgementControl = null,
   decision = null,
 }) {
-  const sceneId = deriveFamilyTruth(snapshot, relay).sceneId || decision?.scene_id || null;
+  const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
+  const mediaAuthorization = familyMediaAuthorization(relay.familyEvent);
   return (
     <main className="viewer-page viewer-home-page">
       <SkeletonStage
@@ -406,8 +413,8 @@ function HomePage({
       <StatusCard snapshot={snapshot} relay={relay} decision={decision} familySurface={familySurface} />
       {familyAcknowledgementControl}
       {sceneId === "kitchen"
-        && relay.familyEvent?.authorization?.status === "active"
-        && relay.familyEvent.authorization.scope === "kitchen_moment" && (
+        && mediaAuthorization?.status === "active"
+        && mediaAuthorization.scope === "kitchen_moment" && (
         <article className="care-moment-card">
           <span><RestaurantRoundedIcon /></span>
           <div><small>本人已授权</small><b>外婆分享了厨房里的生活片段</b><p>授权只属于当前事件；过期或切换场景后自动关闭。</p></div>
@@ -438,7 +445,7 @@ function FamilyActionCard({
   onConfirm,
 }) {
   const card = decision?.action_card;
-  if (decision?.family_delivery !== "action_card" || !card) return null;
+  if (familyCarePresentationKind(decision) !== "action_card" || !card) return null;
   const canConfirm = card.status === "pending";
   const label = applied
     ? "已确认收到行动卡"
@@ -453,6 +460,7 @@ function FamilyActionCard({
       <div>
         <small>非紧急家庭待办 · {card.status === "pending" ? "待确认" : "已更新"}</small>
         <b>{card.event}</b>
+        {card.elder_quote && <p>本人原话：{card.elder_quote}</p>}
         <p>关怀判断：{card.system_judgment}</p>
         <p>建议动作：{card.suggested_action} · {card.time_window}</p>
         {canConfirm && (
@@ -465,43 +473,6 @@ function FamilyActionCard({
             {label}
           </Button>
         )}
-        {error && <p className="family-confirm-error" role="alert">{error}</p>}
-      </div>
-    </article>
-  );
-}
-
-function FamilyNotificationCard({
-  decision,
-  pending,
-  applied,
-  blocked,
-  error,
-  onConfirm,
-}) {
-  if (selectFamilyAcknowledgementCommand(decision) !== "confirm_family_notification") return null;
-  const label = applied
-    ? "已确认收到通知"
-    : pending
-      ? "正在提交确认…"
-      : blocked
-        ? "其他访问端正在处理"
-        : "确认收到并开始联系";
-  return (
-    <article className="care-moment-card family-acknowledgement-card">
-      <span><NotificationsActiveRoundedIcon /></span>
-      <div>
-        <small>家属通知 · 待确认</small>
-        <b>{decision.family_notification}</b>
-        <p>这是通知回执，不会被当作告警或行动卡确认。</p>
-        <Button
-          size="small"
-          variant="contained"
-          disabled={pending || applied || blocked}
-          onClick={() => onConfirm(decision.decision_id, "confirm_family_notification")}
-        >
-          {label}
-        </Button>
         {error && <p className="family-confirm-error" role="alert">{error}</p>}
       </div>
     </article>
@@ -535,6 +506,7 @@ const TIMELINE_SOURCE_COPY = Object.freeze({
   mock: { short: "演示", detail: "演示脚本（非实时模型）" },
   record: { short: "回放", detail: "已记录的关怀决策回放" },
   degraded: { short: "降级", detail: "本地降级策略" },
+  backend: { short: "Backend", detail: "Backend 权威家庭状态" },
 });
 
 const TIMELINE_UNCERTAINTY_COPY = Object.freeze({
@@ -1264,12 +1236,8 @@ function ControlDrawer({ open, onClose, relay, snapshot, decision, nowMs, onIssu
   const pending = hasPendingCommand(relay);
   const disabled = !relay.ownsControl || !snapshot || pending;
   const decisionId = decision?.decision_id;
-  const alarmActive = decision?.family_delivery === "alarm" && Boolean(decision?.alarm);
-  const actionCardPending = decision?.family_delivery === "action_card"
-    && decision?.action_card?.status === "pending";
-  const familyNotificationPending = selectFamilyAcknowledgementCommand(
-    decision,
-  ) === "confirm_family_notification";
+  const alarmActive = isFamilyAlarm(decision);
+  const actionCardPending = isPendingFamilyActionCard(decision);
   const leaseSeconds = relay.ownsControl ? secondsRemaining(relay.lease?.expires_at_ms, nowMs) : 0;
   return (
     <Drawer
@@ -1333,9 +1301,8 @@ function ControlDrawer({ open, onClose, relay, snapshot, decision, nowMs, onIssu
           <CommandButton icon={EmergencyRoundedIcon} disabled={disabled || !decisionId} tone="danger" onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "need_help" })}>本人需要帮助</CommandButton>
           <CommandButton icon={VideocamRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_granted" })}>同意分享</CommandButton>
           <CommandButton icon={LockRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_denied" })}>拒绝分享</CommandButton>
-          <CommandButton icon={ShieldRoundedIcon} disabled={disabled || !decisionId || !alarmActive} onClick={() => onIssue({ name: "confirm_alarm", decision_id: decisionId })}>确认告警</CommandButton>
+          <CommandButton icon={ShieldRoundedIcon} disabled={disabled || !decisionId || !alarmActive} onClick={() => onIssue({ name: "acknowledge_alarm", decision_id: decisionId })}>确认告警</CommandButton>
           <CommandButton icon={TipsAndUpdatesRoundedIcon} disabled={disabled || !decisionId || !actionCardPending} onClick={() => onIssue({ name: "confirm_action_card", decision_id: decisionId })}>确认行动卡</CommandButton>
-          <CommandButton icon={NotificationsActiveRoundedIcon} disabled={disabled || !decisionId || !familyNotificationPending} onClick={() => onIssue({ name: "confirm_family_notification", decision_id: decisionId })}>确认家属通知</CommandButton>
           <CommandButton icon={VolumeUpRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "replay_voice", decision_id: decisionId })}>重播语音</CommandButton>
         </div>
       </section>
@@ -1372,10 +1339,8 @@ function EmergencyDialog({
   soundBlocked,
   onRetrySound,
 }) {
-  if (decision?.family_delivery !== "alarm" || !decision?.alarm) return null;
-  const message = decision.family_notification
-    || decision.elder_message
-    || decision.reason_summary
+  if (!isFamilyAlarm(decision)) return null;
+  const message = familyCareMessage(decision)
     || "权威规则已升级并通知家属，请尽快确认。";
   const familyConfirmLabel = familyConfirmApplied
     ? "已确认收到告警"
@@ -1413,7 +1378,7 @@ function EmergencyDialog({
             color="error"
             startIcon={<ShieldRoundedIcon />}
             disabled={!decision.decision_id || familyConfirmPending || familyConfirmApplied || controllerBlocked}
-            onClick={() => onFamilyConfirm(decision.decision_id, "confirm_alarm")}
+            onClick={() => onFamilyConfirm(decision.decision_id, "acknowledge_alarm")}
           >
             {familyConfirmLabel}
           </Button>
@@ -1426,7 +1391,7 @@ function EmergencyDialog({
         </>
       ) : (
         <>
-          <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={!ownsControl || !decision.decision_id} onClick={() => onIssue({ name: "confirm_alarm", decision_id: decision.decision_id })}>确认已收到告警</Button>
+          <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={!ownsControl || !decision.decision_id} onClick={() => onIssue({ name: "acknowledge_alarm", decision_id: decision.decision_id })}>确认已收到告警</Button>
           <Button variant="outlined" startIcon={<VolumeUpRoundedIcon />} disabled={!ownsControl || !decision.decision_id} onClick={() => onIssue({ name: "replay_voice", decision_id: decision.decision_id })}>重播现场问询</Button>
         </>
       )}
@@ -1477,7 +1442,7 @@ export function ViewerApp({ surface = "family" }) {
   }, []);
 
   const snapshot = relay.state;
-  const careDecision = relay.familyEvent?.care || null;
+  const careDecision = relay.familyEventStale ? null : relay.familyEvent?.care || null;
   useEffect(() => {
     dispatchTimeline({
       type: "observe",
@@ -1489,11 +1454,12 @@ export function ViewerApp({ surface = "family" }) {
   }, [relay.acks, relay.familyEvent, relay.roomSessionId, snapshot]);
   const relayNowMs = nowMs + (relay.serverTimeOffsetMs || 0);
   const sceneId = deriveFamilyTruth(snapshot, relay).sceneId
-    || careDecision?.scene_id
     || (familySurface ? null : "living");
   const activeGrant = useMemo(
-    () => selectActiveMediaGrant(relay, relayNowMs),
-    [relay, relayNowMs],
+    () => rtc.configuration.mode === "unavailable"
+      ? null
+      : selectActiveMediaGrant(relay, relayNowMs),
+    [relay, relayNowMs, rtc.configuration.mode],
   );
   const media = useViewerMedia({
     grant: activeGrant,
@@ -1506,9 +1472,7 @@ export function ViewerApp({ surface = "family" }) {
     sendMediaSignal: relay.sendMediaSignal,
     rtcConfiguration: rtc.configuration,
   });
-  const currentAlarm = careDecision?.family_delivery === "alarm"
-    ? careDecision.alarm
-    : null;
+  const currentAlarm = isFamilyAlarm(careDecision) ? careDecision.alarm : null;
   const emergency = Boolean(currentAlarm);
   const decisionId = careDecision?.decision_id || null;
   const familyAcknowledgementCommand = selectFamilyAcknowledgementCommand(careDecision);
@@ -1754,7 +1718,13 @@ export function ViewerApp({ surface = "family" }) {
       data-app-role={familySurface ? "family" : "viewer-demo"}
     >
       <div className="alert-flash-layer" aria-hidden="true" />
-      <ConnectionBanner relay={relay} grant={activeGrant} nowMs={relayNowMs} familySurface={familySurface} />
+      <ConnectionBanner
+        relay={relay}
+        grant={activeGrant}
+        nowMs={relayNowMs}
+        familySurface={familySurface}
+        rtcError={rtc.error}
+      />
       <div className="viewer-shell">
         <header className="viewer-header">
           <div><h1>{pageHeader.title}</h1><p>{pageHeader.subtitle}</p></div>
@@ -1793,20 +1763,6 @@ export function ViewerApp({ surface = "family" }) {
                   applied={familyConfirmApplied}
                   blocked={familyControllerBlocked}
                   error={familyAcknowledgementCommand === "confirm_action_card"
-                    ? resolveFamilyConfirmationError({
-                        failure: familyConfirmFailure,
-                        decisionId,
-                        ackError: familyConfirmAckError,
-                      })
-                    : ""}
-                  onConfirm={requestFamilyConfirmation}
-                />
-                <FamilyNotificationCard
-                  decision={careDecision}
-                  pending={familyConfirmPending}
-                  applied={familyConfirmApplied}
-                  blocked={familyControllerBlocked}
-                  error={familyAcknowledgementCommand === "confirm_family_notification"
                     ? resolveFamilyConfirmationError({
                         failure: familyConfirmFailure,
                         decisionId,

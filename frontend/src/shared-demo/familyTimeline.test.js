@@ -6,94 +6,17 @@ import {
   reduceFamilyTimeline,
 } from "./familyTimeline.js";
 
-function careAssessment(overrides = {}) {
-  return {
-    verdict: "午间活动比近期基线少，建议先问候确认。",
-    basis: "持续静坐触发轻量关怀事件",
-    uncertainty: "medium",
-    source: "mimo",
-    action: "ask_elder",
-    suggested_action: "已发起轻量问候，等待本人回应",
-    status: "awaiting_response",
-    visual_context: {
-      sent_to_mimo: false,
-      type: null,
-      sample_count: null,
-    },
-    ...overrides,
-  };
-}
-
-function careDecision({
-  scene,
-  care,
-  decisionId,
-  careMessage,
-  assessment,
-  alarm,
-  delivery = "none",
-  timestampMs,
-}) {
-  if (!decisionId) return null;
-  const state = care === "checking"
-    ? "check_in_required"
-    : ["notification", "action_card", "alarm"].includes(delivery)
-      ? "family_notification_required"
-      : care === "resolved"
-        ? "resolved"
-        : "observe";
-  const action = delivery === "alarm"
-    ? "show_urgent_attention"
-    : ["notification", "action_card"].includes(delivery)
-      ? "notify_family"
-      : assessment?.action || (care === "checking" ? "ask_elder" : "observe");
-  return {
-    schema_version: "reme-care-decision/v1-experiment",
-    scene_id: scene,
-    decision_id: decisionId,
-    timestamp_ms: timestampMs,
-    state,
-    risk_level: delivery === "alarm" ? 3 : delivery === "action_card" ? 2 : 1,
-    privacy_mode: "skeleton_only",
-    family_notification: delivery === "none"
-      ? null
-      : careMessage || assessment?.verdict || "请家人查看最新关怀信息。",
-    action,
-    family_delivery: delivery,
-    reason_summary: assessment?.verdict || assessment?.basis || careMessage || "当前关怀状态已更新。",
-    uncertainty: assessment?.uncertainty || "unknown",
-    fallback_used: false,
-    source: assessment?.source || "rule",
-    demo_mode: "live",
-    action_card: delivery === "action_card" ? {
-      event: assessment.verdict,
-      system_judgment: assessment.basis,
-      suggested_action: assessment.suggested_action,
-      time_window: "当前",
-      status: "pending",
-    } : null,
-    visual_context: assessment ? {
-      ...assessment.visual_context,
-      start_ms: null,
-      end_ms: null,
-    } : null,
-    alarm: delivery === "alarm" ? alarm : null,
-  };
-}
-
 function snapshot({
   room = "room-1",
   revision = 1,
   timestampMs = 1_000 + revision,
   scene = "living",
   capture = "idle",
-  captureError = null,
   runtime = "degraded",
-  runtimeDetail = null,
   grant = null,
 } = {}) {
   return {
-    schema_version: "reme-demo-state/v4",
+    schema_version: "reme-demo-state/v1",
     room_session_id: room,
     runtime_session_id: "runtime-1",
     state_revision: revision,
@@ -103,78 +26,80 @@ function snapshot({
       source_generation: 0,
       capture: {
         status: capture,
-        source_id: null,
-        source_kind: null,
-        remote_video: "unavailable",
-        error: captureError,
+        source_id: capture === "active" ? "camera-user" : null,
+        source_kind: capture === "active" ? "camera" : null,
+        remote_video: capture === "active" ? "available" : "unavailable",
+        error: null,
       },
       runtime: {
         status: runtime,
         capability: runtime === "ready" ? "live" : "unavailable",
-        detail: runtimeDetail,
+        detail: null,
       },
       care: {
         phase: "idle",
+        decision_id: null,
         consent: "none",
-        decision: null,
+        alarm_authoritative: false,
+        message: null,
       },
       media_grant: grant,
     },
   };
 }
 
+function mediaAuthorization({
+  decisionId,
+  scene = "kitchen",
+  timestampMs = 1_000,
+} = {}) {
+  return {
+    schema_version: "reme-media-authorization/v1",
+    authorization_id: `authorization-${decisionId}`,
+    decision_id: decisionId,
+    scene_id: scene,
+    scope: scene === "fall" ? "fall_emergency" : "kitchen_moment",
+    status: "active",
+    issued_at_ms: timestampMs,
+    expires_at_ms: timestampMs + (scene === "fall" ? 30_000 : 60_000),
+    event_id: `transition-${decisionId}`,
+  };
+}
+
 function familyEvent({
   room = "room-1",
   runtimeSessionId = "runtime-1",
-  revision = 0,
+  revision = 1,
   timestampMs = 1_000 + revision,
-  scene = "living",
-  care = "idle",
-  decisionId = null,
-  careMessage = null,
-  assessment = null,
+  decisionId = `decision-${revision}`,
+  state = "observe",
+  action = "observe",
+  riskLevel = 1,
+  familyNotification = null,
+  privacyMode = "skeleton_only",
   alarm = null,
-  kitchenAuthorized = false,
-  delivery = alarm ? "alarm" : kitchenAuthorized ? "notification" : "none",
+  actionCard = null,
+  authorization = null,
 } = {}) {
-  const decision = careDecision({
-    scene,
-    care,
-    decisionId,
-    careMessage,
-    assessment,
-    alarm,
-    delivery,
-    timestampMs,
-  });
-  if (kitchenAuthorized && decision) {
-    decision.state = "resolved";
-    decision.risk_level = 0;
-    decision.action = "notify_family";
-    decision.family_delivery = "notification";
-    decision.family_notification = "本人同意分享当前厨房片段。";
-    decision.action_card = null;
-  }
   return {
+    type: "family_event",
     schema_version: "reme-family-event/v1",
     room_session_id: room,
     runtime_session_id: runtimeSessionId,
     revision,
-    timestamp_ms: timestampMs,
-    care: decision,
-    authorization: kitchenAuthorized ? {
-      schema_version: "reme-media-authorization/v1",
-      authorization_id: `authorization-${decisionId}`,
+    decision_timestamp_ms: timestampMs - 100,
+    published_at_ms: timestampMs,
+    care: {
       decision_id: decisionId,
-      event_id: decisionId,
-      runtime_session_id: runtimeSessionId,
-      scene_id: "kitchen",
-      scope: "kitchen_moment",
-      audience: "public_demo_viewers",
-      status: "active",
-      issued_at_ms: timestampMs,
-      expires_at_ms: timestampMs + 60_000,
-    } : null,
+      state,
+      action,
+      risk_level: riskLevel,
+      family_notification: familyNotification,
+      privacy_mode: privacyMode,
+      alarm,
+      action_card: actionCard,
+      media_authorization: authorization,
+    },
   };
 }
 
@@ -190,109 +115,91 @@ function observe(state, currentSnapshot, acks = [], currentFamilyEvent = null) {
   });
 }
 
-test("an initial snapshot without a reliable care assessment stays out of the main timeline", () => {
-  const state = observe(createFamilyTimelineState(), snapshot());
-
-  assert.equal(state.lastStateRevision, 1);
-  assert.equal(state.events.length, 0);
-  assert.equal(state.lastSnapshot.sceneId, "living");
-});
-
-test("an authoritative assessment becomes a family-facing care judgment", () => {
-  const currentSnapshot = snapshot();
-  const state = observe(createFamilyTimelineState(), currentSnapshot, [], familyEvent({
-    care: "checking",
-    decisionId: "decision-1",
-    assessment: careAssessment({
-      visual_context: {
-        sent_to_mimo: true,
-        type: "keyframes",
-        sample_count: 2,
-      },
-    }),
+test("DemoState presentation changes stay out of the care timeline", () => {
+  let state = observe(createFamilyTimelineState(), snapshot());
+  state = observe(state, snapshot({ revision: 2, scene: "kitchen" }));
+  state = observe(state, snapshot({
+    revision: 3,
+    scene: "kitchen",
+    capture: "active",
+    runtime: "ready",
   }));
 
-  assert.equal(state.events.length, 1);
-  assert.equal(state.events[0].kind, "judgment");
-  assert.equal(state.events[0].label, "MiMo 关怀判断");
-  assert.equal(state.events[0].statusLabel, "等待回应");
-  assert.match(state.events[0].title, /建议先问候/);
-  assert.equal(state.events[0].suggestedAction, "已发起轻量问候，等待本人回应");
-  assert.deepEqual(state.events[0].visualContext, {
-    sentToMimo: true,
-    type: "keyframes",
-    sampleCount: 2,
-  });
-  assert.equal(state.events[0].captureLabel, "采集未开始");
-  assert.equal(state.events[0].runtimeLabel, "本地运行时降级");
+  assert.equal(state.lastStateRevision, 3);
+  assert.equal(state.events.length, 0);
+  assert.equal(state.lastSnapshot.sceneId, "kitchen");
 });
 
-test("judgment, action card and alarm remain three distinct timeline products", () => {
-  const currentSnapshot = snapshot({ revision: 1 });
+test("FamilyEvent care is shown as Backend authority without invented MiMo provenance", () => {
+  const state = observe(
+    createFamilyTimelineState(),
+    snapshot(),
+    [],
+    familyEvent({
+      state: "family_notification_required",
+      action: "notify_family",
+      riskLevel: 2,
+      familyNotification: "午间活动比近期少，建议先问候确认。",
+    }),
+  );
+
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].kind, "notification");
+  assert.equal(state.events[0].label, "家属通知");
+  assert.equal(state.events[0].assessmentSource, "backend");
+  assert.equal(state.events[0].captureLabel, "采集未开始");
+  assert.equal(state.events[0].runtimeLabel, "本地运行时降级");
+  assert.equal(state.events[0].timestampMs, 1_001);
+});
+
+test("action card and alarm remain separate FamilyEvent products", () => {
+  const currentSnapshot = snapshot();
   let state = observe(createFamilyTimelineState(), currentSnapshot, [], familyEvent({
     revision: 1,
-    decisionId: "decision-judgment",
-    assessment: careAssessment(),
+    state: "family_notification_required",
+    action: "notify_family",
+    riskLevel: 2,
+    familyNotification: "今天需要家属协助。",
+    actionCard: {
+      event: "牙齿不舒服",
+      system_judgment: "本人表达了具体生活困难",
+      suggested_action: "今天联系本人并协助预约",
+      time_window: "今天",
+      status: "pending",
+    },
   }));
   state = observe(state, currentSnapshot, [], familyEvent({
     revision: 2,
     timestampMs: 2_000,
-    care: "attention",
-    decisionId: "decision-card",
-    delivery: "action_card",
-    assessment: careAssessment({ verdict: "牙齿不舒服，需要家属协助" }),
-  }));
-  state = observe(state, currentSnapshot, [], familyEvent({
-    revision: 3,
-    timestampMs: 3_000,
-    scene: "fall",
-    care: "emergency",
-    decisionId: "decision-alarm",
-    careMessage: "检测到确定性安全风险，请立即联系本人。",
-    delivery: "alarm",
+    state: "urgent_attention",
+    action: "show_urgent_attention",
+    riskLevel: 4,
+    familyNotification: "检测到确定性安全风险，请立即联系本人。",
     alarm: { channels: ["ring", "flash"], trigger: "visual_confirm" },
   }));
 
-  assert.deepEqual(state.events.map((event) => event.kind), [
-    "alarm",
-    "action_card",
-    "judgment",
-  ]);
-  assert.equal(state.events[0].label, "安全告警");
+  assert.deepEqual(state.events.map((event) => event.kind), ["alarm", "action_card"]);
   assert.equal(state.events[0].tone, "danger");
-  assert.equal(state.events[1].label, "家属行动卡");
-  assert.equal(state.events[1].actionCard.event, "牙齿不舒服，需要家属协助");
-  assert.equal(state.events[2].label, "MiMo 关怀判断");
+  assert.equal(state.events[1].actionCard.event, "牙齿不舒服");
 });
 
-test("keepalives and system-only changes do not become household judgments", () => {
-  let state = observe(createFamilyTimelineState(), snapshot({ revision: 1 }));
-  state = observe(state, snapshot({ revision: 2, scene: "kitchen" }));
-  state = observe(state, snapshot({ revision: 3, capture: "active" }));
-  state = observe(state, snapshot({ revision: 4, runtime: "ready" }));
-  state = observe(state, snapshot({ revision: 3, care: "emergency" }));
-
-  assert.equal(state.lastStateRevision, 4);
-  assert.equal(state.events.length, 0);
-});
-
-test("a changed CareDecision creates a new judgment while a replay does not", () => {
+test("FamilyEvent replay does not duplicate a presentation", () => {
   const currentSnapshot = snapshot();
-  let state = observe(createFamilyTimelineState(), currentSnapshot, [], familyEvent({
+  const firstEvent = familyEvent({
     revision: 1,
-    decisionId: "decision-1",
-    assessment: careAssessment({ status: "observing", action: "observe" }),
-  }));
-  state = observe(state, currentSnapshot, [], familyEvent({
-    revision: 2,
-    decisionId: "decision-1",
-    assessment: careAssessment({ status: "observing", action: "observe" }),
-  }));
+    state: "family_notification_required",
+    action: "notify_family",
+    familyNotification: "请联系本人。",
+  });
+  let state = observe(createFamilyTimelineState(), currentSnapshot, [], firstEvent);
+  state = observe(state, currentSnapshot, [], { ...firstEvent, revision: 2, published_at_ms: 2_000 });
   state = observe(state, currentSnapshot, [], familyEvent({
     revision: 3,
-    care: "checking",
-    decisionId: "decision-2",
-    assessment: careAssessment(),
+    timestampMs: 3_000,
+    decisionId: "decision-new",
+    state: "family_notification_required",
+    action: "notify_family",
+    familyNotification: "新的关怀通知。",
   }));
 
   assert.equal(state.events.length, 2);
@@ -300,7 +207,8 @@ test("a changed CareDecision creates a new judgment while a replay does not", ()
   assert.equal(state.events[1].stateRevision, 1);
 });
 
-test("assessment, authorization and privacy results keep care-first priority", () => {
+test("authorization and Relay grant are recorded without becoming business authority", () => {
+  const authorization = mediaAuthorization({ decisionId: "decision-kitchen", timestampMs: 2_000 });
   const currentSnapshot = snapshot({
     revision: 2,
     timestampMs: 2_000,
@@ -309,7 +217,7 @@ test("assessment, authorization and privacy results keep care-first priority", (
     runtime: "ready",
     grant: {
       grant_id: "grant-1",
-      event_id: "authorization-decision-1",
+      event_id: "decision-kitchen",
       scope: "kitchen_moment",
       expires_at_ms: 4_000,
       status: "active",
@@ -318,47 +226,42 @@ test("assessment, authorization and privacy results keep care-first priority", (
   const state = observe(createFamilyTimelineState(), currentSnapshot, [], familyEvent({
     revision: 1,
     timestampMs: 2_000,
-    scene: "kitchen",
-    care: "checking",
-    decisionId: "decision-1",
-    assessment: careAssessment(),
-    kitchenAuthorized: true,
+    decisionId: "decision-kitchen",
+    state: "resolved",
+    action: "notify_family",
+    riskLevel: 0,
+    familyNotification: "本人同意分享当前厨房片段。",
+    privacyMode: "blurred",
+    authorization,
   }));
 
-  assert.deepEqual(
-    state.events.map((event) => event.kind),
-    ["notification", "consent", "media"],
-  );
-  assert.equal(state.events.some((event) => event.kind === "scene"), false);
-  assert.equal(state.events.some((event) => event.kind === "capture"), false);
-  assert.equal(state.events.some((event) => event.kind === "runtime"), false);
+  assert.deepEqual(state.events.map((event) => event.kind), [
+    "notification",
+    "consent",
+    "media",
+  ]);
 });
 
-test("Family derives a sourced assessment from the current FamilyEvent", () => {
-  let state = observe(createFamilyTimelineState(), snapshot({ revision: 1 }));
-  state = observe(state, snapshot({ revision: 2 }), [], familyEvent({
-    revision: 2,
-    care: "checking",
-    decisionId: "decision-fallback",
-    careMessage: "奶奶，您还好吗？",
+test("a status without family copy remains a neutral care progress item", () => {
+  const state = observe(createFamilyTimelineState(), snapshot(), [], familyEvent({
+    state: "check_in_required",
+    action: "ask_elder",
   }));
 
-  assert.equal(state.events[0].kind, "judgment");
-  assert.equal(state.events[0].label, "安全规则判断");
+  assert.equal(state.events[0].kind, "care");
+  assert.equal(state.events[0].label, "关怀进展");
   assert.doesNotMatch(state.events[0].title, /MiMo/);
-  assert.equal(state.events[0].assessmentSource, "rule");
 });
 
 test("room-session changes discard the previous room timeline", () => {
-  let state = observe(createFamilyTimelineState(), snapshot({ room: "room-1" }), [], familyEvent({
-    room: "room-1",
-    decisionId: "decision-1",
-    assessment: careAssessment(),
+  let state = observe(createFamilyTimelineState(), snapshot(), [], familyEvent({
+    familyNotification: "请关注。",
   }));
   state = reduceFamilyTimeline(state, {
     type: "observe",
     roomSessionId: "room-2",
     snapshot: null,
+    familyEvent: null,
     acks: [],
   });
 
@@ -367,31 +270,17 @@ test("room-session changes discard the previous room timeline", () => {
   assert.equal(state.lastStateRevision, null);
 });
 
-test("an applied family alarm acknowledgement is recorded exactly once", () => {
+test("only acknowledge_alarm and confirm_action_card create acknowledgement entries", () => {
   let state = observe(createFamilyTimelineState(), snapshot());
-  const ack = {
-    command_id: "command-1",
-    command_name: "confirm_alarm",
-    phase: "applied",
-    timestamp_ms: 3_000,
-    state_revision: 2,
-    reason: null,
-  };
-  state = observe(state, null, [ack]);
-  state = observe(state, null, [ack]);
-  state = observe(state, null, [{ ...ack, command_id: "command-2", phase: "failed" }]);
-
-  assert.equal(
-    state.events.filter((event) => event.kind === "acknowledgement").length,
-    1,
-  );
-  assert.equal(state.events[0].title, "家属已经确认收到告警");
-  assert.equal(state.events[0].source, "command_ack");
-});
-
-test("action-card and plain-notification acknowledgements are recorded distinctly", () => {
-  let state = observe(createFamilyTimelineState(), snapshot());
-  state = observe(state, null, [
+  const acks = [
+    {
+      command_id: "command-alarm",
+      command_name: "acknowledge_alarm",
+      phase: "applied",
+      timestamp_ms: 3_000,
+      state_revision: 2,
+      reason: null,
+    },
     {
       command_id: "command-card",
       command_name: "confirm_action_card",
@@ -408,29 +297,25 @@ test("action-card and plain-notification acknowledgements are recorded distinctl
       state_revision: 4,
       reason: null,
     },
-  ]);
+  ];
+  state = observe(state, null, acks);
+  state = observe(state, null, acks);
 
-  const titles = state.events
-    .filter((event) => event.kind === "acknowledgement")
-    .map((event) => event.title);
-  assert.deepEqual(titles, [
-    "家属已经确认收到通知",
-    "家属已经确认收到行动卡",
-  ]);
+  assert.deepEqual(
+    state.events.map((event) => event.title),
+    ["家属已经确认收到行动卡", "家属已经确认收到告警"],
+  );
 });
 
-test("the in-memory timeline remains bounded to its newest judgments", () => {
+test("the in-memory timeline remains bounded to its newest FamilyEvents", () => {
   let state = observe(createFamilyTimelineState(), snapshot({ revision: 1 }));
   for (let revision = 2; revision <= 20; revision += 1) {
-    state = observe(state, snapshot({
+    state = observe(state, null, [], familyEvent({
       revision,
       timestampMs: revision * 1_000,
-    }), [], familyEvent({
-      revision,
-      timestampMs: revision * 1_000,
-      care: "checking",
-      decisionId: `decision-${revision}`,
-      assessment: careAssessment({ verdict: `第 ${revision} 次关怀判断` }),
+      state: "family_notification_required",
+      action: "notify_family",
+      familyNotification: `第 ${revision} 次关怀通知`,
     }));
   }
 

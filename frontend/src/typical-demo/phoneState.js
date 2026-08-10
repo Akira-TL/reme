@@ -9,11 +9,10 @@ export function isActiveFallDanger(phase) {
 }
 
 export function shouldShowEmergencySheet(decision) {
-  return decision?.family_delivery === "alarm" && Boolean(decision?.alarm);
+  return Boolean(decision?.alarm);
 }
 
 export function shouldAutoOpenFamilyVideo(sceneId, decision) {
   return sceneId === "fall"
-    && decision?.family_delivery === "alarm"
     && Boolean(decision?.alarm);
 }

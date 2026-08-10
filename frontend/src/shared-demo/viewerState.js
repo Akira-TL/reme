@@ -1,3 +1,5 @@
+import { familyMediaAuthorization, isFamilyAlarm } from "./familyAuthority.js";
+
 const TERMINAL_ACK_PHASES = new Set(["applied", "rejected", "failed"]);
 const MAX_ACKS = 12;
 
@@ -15,6 +17,7 @@ export function createViewerState() {
     stateStale: false,
     lastStateRevision: null,
     familyEvent: null,
+    familyEventStale: false,
     lastFamilyRevision: null,
     pose: null,
     mediaGrant: null,
@@ -40,6 +43,7 @@ function resetRoomState(state, roomSessionId) {
     stateStale: false,
     lastStateRevision: null,
     familyEvent: null,
+    familyEventStale: false,
     lastFamilyRevision: null,
     pose: null,
     mediaGrant: null,
@@ -57,8 +61,7 @@ function mergeAck(acks, nextAck) {
 }
 
 function hasAlarmFamilyEvent(event) {
-  const decision = event?.care;
-  return Boolean(decision?.family_delivery === "alarm" && decision?.alarm);
+  return isFamilyAlarm(event?.care);
 }
 
 function unavailableState(state, reason) {
@@ -120,6 +123,7 @@ export function reduceViewerState(state, action) {
       ...next,
       connection: "disconnected",
       monitorOnline: false,
+      familyEventStale: Boolean(state.familyEvent),
       controller: null,
       lease: null,
       acks: failPendingAcks(state.acks, "relay_disconnected", timestampMs),
@@ -135,6 +139,7 @@ export function reduceViewerState(state, action) {
       ...next,
       connection: "disconnected",
       latestProtocolError: action.reason || "invalid_server_message",
+      familyEventStale: Boolean(state.familyEvent),
       controller: null,
       lease: null,
       acks: failPendingAcks(state.acks, reason, timestampMs),
@@ -276,14 +281,18 @@ export function reduceViewerState(state, action) {
       && state.familyEvent.runtime_session_id !== value.runtime_session_id;
     if (!runtimeChanged
       && Number.isSafeInteger(state.lastFamilyRevision)
-      && value.revision <= state.lastFamilyRevision) return state;
-    const authorization = value.authorization;
+      && (
+        value.revision < state.lastFamilyRevision
+        || (value.revision === state.lastFamilyRevision && !state.familyEventStale)
+      )) return state;
+    const authorization = familyMediaAuthorization(value);
     const keepGrant = authorization?.status === "active"
-      && state.mediaGrant?.event_id === authorization.authorization_id
+      && state.mediaGrant?.event_id === authorization.decision_id
       && state.mediaGrant?.scope === authorization.scope;
     return {
       ...state,
       familyEvent: value,
+      familyEventStale: false,
       lastFamilyRevision: value.revision,
       mediaGrant: keepGrant ? state.mediaGrant : null,
     };
@@ -344,7 +353,7 @@ export function selectActiveMediaGrant(
   const grant = state.mediaGrant;
   const snapshot = state.state;
   const familyEvent = state.familyEvent;
-  const authorization = familyEvent?.authorization;
+  const authorization = familyMediaAuthorization(familyEvent);
   const decision = familyEvent?.care;
   if (state.unavailableReason
     || state.stateStale
@@ -358,25 +367,18 @@ export function selectActiveMediaGrant(
     || snapshot.state.capture.status !== "active"
     || snapshot.state.capture.remote_video !== "available"
     || !familyEvent
+    || state.familyEventStale
     || familyEvent.room_session_id !== state.roomSessionId
     || familyEvent.runtime_session_id !== snapshot.runtime_session_id
     || authorization?.status !== "active"
     || authorization.expires_at_ms <= nowMs
-    || authorization.authorization_id !== grant.event_id
+    || authorization.decision_id !== grant.event_id
     || authorization.scope !== grant.scope
     || authorization.scene_id !== snapshot.state.scene_id
     || authorization.decision_id !== decision?.decision_id
-    || authorization.event_id !== decision?.decision_id
-    || decision.privacy_mode === "hidden") return null;
-  if (grant.scope === "kitchen_moment") {
-    return decision.scene_id === "kitchen"
-      && decision.family_delivery === "notification"
-      ? grant
-      : null;
-  }
+    || !["visible", "blurred"].includes(decision?.privacy_mode)) return null;
+  if (grant.scope === "kitchen_moment") return grant;
   if (grant.scope !== "fall_emergency"
-    || decision.scene_id !== "fall"
-    || decision.family_delivery !== "alarm"
     || decision.alarm === null) return null;
   return grant;
 }

@@ -34,8 +34,10 @@ function demoState(revision, runtimeSessionId = "runtime-1") {
       runtime: { status: "offline", capability: "unavailable", detail: null },
       care: {
         phase: "idle",
+        decision_id: null,
         consent: "none",
-        decision: null,
+        alarm_authoritative: false,
+        message: null,
       },
       media_grant: null,
     },
@@ -79,8 +81,11 @@ test("Monitor accepts only presentation state and rejects browser care", () => {
   const browserCare = structuredClone(state);
   browserCare.state.care = {
     phase: "emergency",
+    decision_id: "browser-invented",
     consent: "granted",
     decision: { decision_id: "browser-invented" },
+    alarm_authoritative: true,
+    message: "浏览器伪造",
   };
   assert.equal(validateDemoStateEnvelope(browserCare), false);
 });

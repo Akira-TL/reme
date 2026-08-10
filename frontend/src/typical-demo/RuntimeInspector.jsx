@@ -117,7 +117,7 @@ export function RuntimeInspector({ scene, camera, live, fallPhase }) {
           我没事，回应安全询问
         </Button>
       )}
-      {decision?.family_delivery === "alarm" && decision?.alarm && (
+      {decision?.alarm && (
         <Button variant="contained" color="error" fullWidth onClick={live.confirmAlarm}>
           确认家属已收到告警
         </Button>

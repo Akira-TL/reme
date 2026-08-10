@@ -14,9 +14,9 @@ test("Home executes every authoritative privacy mode and fails closed", () => {
   assert.equal(homePrivacyViewMode("bathroom", { privacy_mode: "visible" }), "skeleton");
 });
 
-test("event grants can override routine privacy but not hard vetoes", () => {
+test("event grants obey authoritative privacy hard vetoes", () => {
   assert.equal(privacyAllowsEventVideo("kitchen", { privacy_mode: "blurred" }), true);
-  assert.equal(privacyAllowsEventVideo("fall", { privacy_mode: "skeleton_only" }), true);
+  assert.equal(privacyAllowsEventVideo("fall", { privacy_mode: "skeleton_only" }), false);
   assert.equal(privacyAllowsEventVideo("fall", { privacy_mode: "hidden" }), false);
   assert.equal(privacyAllowsEventVideo("bathroom", { privacy_mode: "visible" }), false);
 });

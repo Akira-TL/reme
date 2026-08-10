@@ -162,12 +162,13 @@ export async function executeMonitorCommand(envelope, options) {
         "response_failed",
         execution,
       );
+    case "acknowledge_alarm":
     case "confirm_alarm":
       return runAction(
         currentActions.confirmAlarm,
         [command.decision_id],
-        "alarm_confirmed",
-        "alarm_confirmation_failed",
+        "alarm_acknowledged",
+        "alarm_acknowledgement_failed",
         execution,
       );
     case "confirm_action_card":
@@ -176,14 +177,6 @@ export async function executeMonitorCommand(envelope, options) {
         [command.decision_id],
         "action_card_confirmed",
         "action_card_confirmation_failed",
-        execution,
-      );
-    case "confirm_family_notification":
-      return runAction(
-        currentActions.confirmFamilyNotification,
-        [command.decision_id],
-        "family_notification_confirmed",
-        "family_notification_confirmation_failed",
         execution,
       );
     case "replay_voice":

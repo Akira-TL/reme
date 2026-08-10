@@ -1,7 +1,7 @@
 const HOME_REMOTE_COMMANDS = new Set([
+  "acknowledge_alarm",
   "confirm_alarm",
   "confirm_action_card",
-  "confirm_family_notification",
 ]);
 
 export function normalizeSurface(surface) {
@@ -26,6 +26,5 @@ export function remoteActionsForSurface(surface, actions) {
   return {
     confirmAlarm: actions.confirmAlarm,
     confirmActionCard: actions.confirmActionCard,
-    confirmFamilyNotification: actions.confirmFamilyNotification,
   };
 }

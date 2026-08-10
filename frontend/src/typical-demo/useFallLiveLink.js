@@ -43,12 +43,14 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
     return () => window.clearTimeout(timer);
   }, [decision.mediaAuthorization?.expiresAtMonotonicMs]);
 
-  const kitchenConsentActive = Boolean(
-    decision.mediaAuthorization?.sceneId === "kitchen"
-      && current?.scene_id === "kitchen"
+  const eventAuthorizationActive = Boolean(
+    decision.mediaAuthorization
+      && current
+      && decision.mediaAuthorization.sceneId === current.scene_id
       && current.decision_id === decision.mediaAuthorization.decisionId
       && decision.mediaAuthorization.expiresAtMonotonicMs > authorizationClockMs,
   );
+  const kitchenConsentActive = current?.scene_id === "kitchen" && eventAuthorizationActive;
 
   const active = Boolean(
     enabled
@@ -74,7 +76,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
 
   const fallState = useMemo(() => {
     if (!enabled) return null;
-    const trigger = current?.family_delivery === "alarm" && current?.alarm
+    const trigger = current?.alarm
       ? TRIGGER_LABELS[current.alarm.trigger] || ""
       : "";
     const decisionMessage = current?.family_notification
@@ -94,7 +96,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
         };
       case "attention":
         return {
-          status: current?.family_delivery === "action_card"
+          status: current?.action_card
             ? "家属行动卡已送达"
             : "家属关怀信息已送达",
           message: decisionMessage || "这是一条普通关怀信息，不是安全告警。",
@@ -132,10 +134,12 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
     return decision.confirmAlarm(decisionId);
   }, [decision]);
 
-  const familyVideoAllowed = Boolean(active && (
-    (sceneId === "kitchen" && kitchenConsentActive)
-    || (sceneId === "fall" && current?.family_delivery === "alarm" && current?.alarm)
-  ));
+  const familyVideoAllowed = Boolean(
+    active
+      && sceneId !== "bathroom"
+      && ["visible", "blurred"].includes(current?.privacy_mode)
+      && eventAuthorizationActive,
+  );
   const emergencyNote = sceneId === "bathroom"
     ? "浴室永不开放原画"
     : familyVideoAllowed

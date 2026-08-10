@@ -6,26 +6,22 @@ import {
   selectFamilyAcknowledgementCommand,
 } from "./familyConfirmation.js";
 
-test("告警、行动卡和普通家属通知使用互不混淆的确认命令", () => {
+test("告警与行动卡使用合同定义的两个确认命令", () => {
   assert.equal(selectFamilyAcknowledgementCommand({
-    family_delivery: "alarm",
-    alarm: { trigger: "elder_need_help" },
+    alarm: { trigger: "elder_report" },
     action_card: null,
-  }), "confirm_alarm");
+  }), "acknowledge_alarm");
   assert.equal(selectFamilyAcknowledgementCommand({
-    family_delivery: "action_card",
     alarm: null,
     action_card: { status: "pending" },
   }), "confirm_action_card");
   assert.equal(selectFamilyAcknowledgementCommand({
-    family_delivery: "notification",
     alarm: null,
     action_card: null,
     family_notification: "请尽快联系确认。",
     state: "family_notification_required",
-  }), "confirm_family_notification");
+  }), null);
   assert.equal(selectFamilyAcknowledgementCommand({
-    family_delivery: "none",
     alarm: null,
     action_card: null,
     family_notification: "已处理。",

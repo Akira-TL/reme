@@ -1,4 +1,7 @@
-export const CARE_DECISION_SCHEMA = "reme-care-decision/v1-experiment";
+import { isMediaAuthorization } from "./protocol.js";
+
+export const CARE_DECISION_SCHEMA = "reme-care-decision/v0-experiment";
+const LEGACY_CARE_DECISION_SCHEMA = "reme-care-decision/v1-experiment";
 
 const SCENE_IDS = new Set(["living", "kitchen", "bathroom", "fall"]);
 const DECISION_STATES = new Set([
@@ -59,6 +62,33 @@ const DECISION_KEYS = [
   "response_timeout_ms",
   "response_deadline_ms",
   "action_card",
+  "visual_context",
+  "alarm",
+  "voice_asset",
+  "confirm_channels",
+];
+const BACKEND_DECISION_KEYS = [
+  "schema_version",
+  "scene_id",
+  "decision_id",
+  "timestamp_ms",
+  "state",
+  "risk_level",
+  "privacy_mode",
+  "need_dialogue",
+  "dialogue_goal",
+  "elder_message",
+  "family_notification",
+  "action",
+  "reason_summary",
+  "uncertainty",
+  "fallback_used",
+  "source",
+  "demo_mode",
+  "consent_required",
+  "response_timeout_ms",
+  "action_card",
+  "media_authorization",
   "visual_context",
   "alarm",
   "voice_asset",
@@ -233,10 +263,13 @@ function isFamilyDeliveryConsistent(value) {
 }
 
 export function isCareDecision(value) {
-  if (!hasExactKeys(value, DECISION_KEYS)) return false;
+  const backendContract = hasExactKeys(value, BACKEND_DECISION_KEYS)
+    && value.schema_version === CARE_DECISION_SCHEMA;
+  const legacyContract = hasExactKeys(value, DECISION_KEYS)
+    && value.schema_version === LEGACY_CARE_DECISION_SCHEMA;
+  if (!backendContract && !legacyContract) return false;
   if (containsEncodedMedia(value)) return false;
-  if (value.schema_version !== CARE_DECISION_SCHEMA
-    || !SCENE_IDS.has(value.scene_id)
+  if (!SCENE_IDS.has(value.scene_id)
     || !isOpaqueId(value.decision_id)
     || !isTimestamp(value.timestamp_ms)
     || !DECISION_STATES.has(value.state)
@@ -249,7 +282,6 @@ export function isCareDecision(value) {
     || !isText(value.elder_message, { nullable: true })
     || !isText(value.family_notification, { nullable: true })
     || !DECISION_ACTIONS.has(value.action)
-    || !FAMILY_DELIVERIES.has(value.family_delivery)
     || !isText(value.reason_summary)
     || !UNCERTAINTIES.has(value.uncertainty)
     || typeof value.fallback_used !== "boolean"
@@ -269,12 +301,17 @@ export function isCareDecision(value) {
     && (!Number.isSafeInteger(value.response_timeout_ms) || value.response_timeout_ms <= 0)) {
     return false;
   }
-  if (value.response_deadline_ms !== null) {
+  if (legacyContract && value.response_deadline_ms !== null) {
     if (!isTimestamp(value.response_deadline_ms) || value.response_timeout_ms === null) {
       return false;
     }
   }
   if (value.action_card !== null && !isActionCard(value.action_card)) return false;
+  if (backendContract && value.media_authorization !== null) {
+    if (!isMediaAuthorization(value.media_authorization, value.decision_id)
+      || value.media_authorization.scene_id !== value.scene_id
+      || ["hidden", "skeleton_only"].includes(value.privacy_mode)) return false;
+  }
   if (value.visual_context !== null && !isVisualContext(value.visual_context)) return false;
   if (value.alarm !== null) {
     if (!isAlarm(value.alarm)
@@ -287,12 +324,15 @@ export function isCareDecision(value) {
     if (!isUniqueClosedList(value.confirm_channels, CONFIRM_CHANNELS)
       || value.action !== "ask_elder") return false;
   }
-  return isFamilyDeliveryConsistent(value);
+  return backendContract || (
+    FAMILY_DELIVERIES.has(value.family_delivery)
+    && isFamilyDeliveryConsistent(value)
+  );
 }
 
 export function isFamilyCare(value) {
   if (!hasExactKeys(value, FAMILY_CARE_KEYS) || containsEncodedMedia(value)) return false;
-  if (value.schema_version !== CARE_DECISION_SCHEMA
+  if (value.schema_version !== LEGACY_CARE_DECISION_SCHEMA
     || !SCENE_IDS.has(value.scene_id)
     || !isOpaqueId(value.decision_id)
     || !isTimestamp(value.timestamp_ms)
@@ -327,28 +367,8 @@ function freezeNullableRecord(value) {
 
 export function projectCareDecision(value) {
   if (!isCareDecision(value)) return null;
-  return Object.freeze({
-    schema_version: value.schema_version,
-    scene_id: value.scene_id,
-    decision_id: value.decision_id,
-    timestamp_ms: value.timestamp_ms,
-    state: value.state,
-    risk_level: value.risk_level,
-    privacy_mode: value.privacy_mode,
-    need_dialogue: value.need_dialogue,
-    dialogue_goal: value.dialogue_goal,
-    elder_message: value.elder_message,
-    family_notification: value.family_notification,
-    action: value.action,
-    family_delivery: value.family_delivery,
-    reason_summary: value.reason_summary,
-    uncertainty: value.uncertainty,
-    fallback_used: value.fallback_used,
-    source: value.source,
-    demo_mode: value.demo_mode,
-    consent_required: value.consent_required,
-    response_timeout_ms: value.response_timeout_ms,
-    response_deadline_ms: value.response_deadline_ms,
+  const projected = {
+    ...value,
     action_card: freezeNullableRecord(value.action_card),
     visual_context: freezeNullableRecord(value.visual_context),
     alarm: value.alarm === null
@@ -357,19 +377,24 @@ export function projectCareDecision(value) {
           channels: Object.freeze([...value.alarm.channels]),
           trigger: value.alarm.trigger,
         }),
-    voice_asset: value.voice_asset,
     confirm_channels: value.confirm_channels === null
       ? null
       : Object.freeze([...value.confirm_channels]),
-  });
+  };
+  if (Object.hasOwn(value, "media_authorization")) {
+    projected.media_authorization = freezeNullableRecord(value.media_authorization);
+  }
+  return Object.freeze(projected);
 }
 
 export function mapCareDecisionToPhase(decision) {
   if (!decision) return "idle";
   if (["check_in_required", "consent_required"].includes(decision.state)) return "checking";
   if (decision.state === "resolved") return "resolved";
-  if (decision.family_delivery === "alarm") return "emergency";
-  if (["notification", "action_card"].includes(decision.family_delivery)) return "attention";
+  if (decision.alarm || decision.family_delivery === "alarm") return "emergency";
+  if (decision.action_card
+    || decision.family_notification
+    || ["notification", "action_card"].includes(decision.family_delivery)) return "attention";
   return "idle";
 }
 
@@ -382,8 +407,7 @@ export function careDecisionMessage(decision) {
 
 export function hasCurrentAlarm(decision) {
   return Boolean(
-    decision?.family_delivery === "alarm"
-      && decision?.alarm
+    decision?.alarm
       && isCareDecision(decision),
   );
 }

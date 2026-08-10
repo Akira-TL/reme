@@ -66,7 +66,13 @@ export function projectCareAssessment(decision) {
   const action = ASSESSMENT_ACTIONS.has(decision.action) ? decision.action : null;
   const familyDelivery = FAMILY_DELIVERIES.has(decision.family_delivery)
     ? decision.family_delivery
-    : null;
+    : decision.alarm
+      ? "alarm"
+      : decision.action_card
+        ? "action_card"
+        : decision.family_notification
+          ? "notification"
+          : "none";
   const status = STATUS_BY_STATE[decision.state] || null;
   const visualContext = projectVisualContext(decision.visual_context);
   if (!basis || !source || !action || !familyDelivery || !status || !visualContext) return null;

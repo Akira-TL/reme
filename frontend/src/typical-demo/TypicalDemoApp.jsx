@@ -66,7 +66,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
   const [pendingCommands, setPendingCommands] = useState([]);
   const [confirmingCommands, setConfirmingCommands] = useState([]);
   const [grantMessage, setGrantMessage] = useState(null);
-  const [familyEvent, setFamilyEvent] = useState(null);
   const [grantClockMs, setGrantClockMs] = useState(() => Date.now());
   const [authorizationClockMs, setAuthorizationClockMs] = useState(() => Date.now());
   const [mediaSignalDispatcher] = useState(() => createBoundedMediaSignalDispatcher());
@@ -158,13 +157,11 @@ export function TypicalDemoApp({ surface = "debug" }) {
     () => projectCareDecision(currentDecision),
     [currentDecision],
   );
-  const alarmActive = projectedDecision?.family_delivery === "alarm"
-    && Boolean(projectedDecision?.alarm);
+  const alarmActive = Boolean(projectedDecision?.alarm);
   const kitchenShareDecision = useMemo(
     () => [live.decision?.decision, ...(live.decision?.history || [])]
       .find((item) => (
         item?.scene_id === "kitchen"
-        && item.family_delivery === "notification"
         && item.action === "notify_family"
         && item.family_notification
         && item.action_card === null
@@ -178,13 +175,17 @@ export function TypicalDemoApp({ surface = "debug" }) {
     && grantMessage.grant.expires_at_ms > grantClockMs
     ? grantMessage.grant
     : null;
+  const backendAuthorization = projectedDecision?.media_authorization || null;
   const familyGrantActive = Boolean(
     activeGrant
       && sceneId !== "bathroom"
-      && familyEvent?.authorization?.status === "active"
-      && familyEvent.authorization.authorization_id === activeGrant.event_id
-      && familyEvent.authorization.scope === activeGrant.scope
-      && familyEvent.authorization.scene_id === sceneId,
+      && rtc.configuration.mode !== "unavailable"
+      && ["visible", "blurred"].includes(projectedDecision?.privacy_mode)
+      && backendAuthorization?.status === "active"
+      && backendAuthorization.decision_id === projectedDecision?.decision_id
+      && backendAuthorization.decision_id === activeGrant.event_id
+      && backendAuthorization.scope === activeGrant.scope
+      && backendAuthorization.scene_id === sceneId,
   );
   const deviceViewMode = homePrivacyViewMode(sceneId, projectedDecision);
   const autoFamilyViewOpen = shouldAutoOpenFamilyVideo(sceneId, projectedDecision);
@@ -286,12 +287,15 @@ export function TypicalDemoApp({ surface = "debug" }) {
   const mediaAuthorityEligibility = useMemo(() => mediaGrantEligibility({
     sceneId,
     runtimeSessionId: liveRuntime?.sessionId || null,
-    authorization: familyEvent?.authorization || null,
+    authorization: backendAuthorization,
+    authorizationRuntimeSessionId: liveRuntime?.sessionId || null,
+    privacyMode: projectedDecision?.privacy_mode || "hidden",
     now: authorizationClockMs,
   }), [
     authorizationClockMs,
-    familyEvent?.authorization,
+    backendAuthorization,
     liveRuntime?.sessionId,
+    projectedDecision?.privacy_mode,
     sceneId,
   ]);
   const mediaAuthorityKey = mediaAuthorityEligibility.allowed
@@ -300,7 +304,8 @@ export function TypicalDemoApp({ surface = "debug" }) {
   const mediaAuthorityActive = Boolean(
     mediaAuthorityKey
       && liveActive
-      && live.connection === "open",
+      && live.connection === "open"
+      && rtc.configuration.mode !== "unavailable",
   );
   const relayRuntime = useMemo(() => {
     if (!demoStarted) return liveRuntime;
@@ -327,6 +332,12 @@ export function TypicalDemoApp({ surface = "debug" }) {
     relayRuntime?.state || null,
     relayRuntime?.inputMode || null,
     relayRuntime?.reason || null,
+    currentDecision?.decision_id || null,
+    currentDecision?.state || null,
+    currentDecision?.action || null,
+    currentDecision?.family_notification || null,
+    currentDecision?.privacy_mode || null,
+    currentDecision?.alarm?.trigger || null,
   ]);
 
   useEffect(() => {
@@ -359,6 +370,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
         error: media.sourceError?.message || null,
       },
       runtime: relayRuntime,
+      decision: currentDecision,
     });
     return createDemoStateEnvelope({
       roomSessionId,
@@ -369,6 +381,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     });
   }, [
     liveRuntime,
+    currentDecision,
     media.ready,
     media.sourceError?.message,
     media.sourceGeneration,
@@ -415,7 +428,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
     stateEnvelope,
     poseFrame,
     onCommand: handleRemoteCommand,
-    onFamilyEvent: setFamilyEvent,
     onMediaGrant: setGrantMessage,
     onMediaSignal: mediaSignalDispatcher.dispatch,
   });
@@ -529,9 +541,12 @@ export function TypicalDemoApp({ surface = "debug" }) {
       claiming: "正在取得 producer 租约",
       connecting: "正在连接 Relay",
       reconnecting: "Relay 重连中",
-      connected: mediaProducer.connectivity === "local_network_only"
-        ? "Relay 在线 · 原画仅局域网"
-        : "Relay 与 TURN 在线",
+      connected: ({
+        local_network_only: "Relay 在线 · 原画仅局域网",
+        stun_only: "Relay 在线 · STUN 直连",
+        turn_configured: "Relay 与 TURN 在线",
+        unavailable: "RTC 配置不可用 · 原画关闭",
+      })[mediaProducer.connectivity] || "Relay 在线 · RTC 配置待确认",
       busy: "producer 已被其他 Monitor 占用",
       error: monitor.error || "Relay 连接失败",
     })[monitor.status] || (demoStarted ? "等待本地 Relay" : "尚未加入房间"),
@@ -662,7 +677,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
       submitResponse: submitRemoteResponse,
       confirmAlarm: live.confirmAlarm,
       confirmActionCard: live.confirmActionCard,
-      confirmFamilyNotification: live.confirmFamilyNotification,
       replayVoice: live.replayVoice,
     });
   }, [
@@ -670,7 +684,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
     debugInterface,
     live.confirmAlarm,
     live.confirmActionCard,
-    live.confirmFamilyNotification,
     live.replayVoice,
     media.availableSources,
     media.stop,
@@ -796,6 +809,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
       || !runtimeSessionId
       || !eligibility.allowed
       || !media.ready
+      || rtc.configuration.mode === "unavailable"
       || sourceDescriptor?.remote_video !== "available"
       || stateFingerprintRef.current !== stateFingerprint
     ) return;
@@ -836,6 +850,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
     monitor.roomSessionId,
     requestMonitorGrant,
     relayNow,
+    rtc.configuration.mode,
     sceneId,
     sourceDescriptor?.remote_video,
     stateRevision,

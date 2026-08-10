@@ -12,5 +12,5 @@ export function homePrivacyViewMode(sceneId, decision) {
 
 export function privacyAllowsEventVideo(sceneId, decision) {
   return sceneId !== "bathroom"
-    && decision?.privacy_mode !== "hidden";
+    && ["visible", "blurred"].includes(decision?.privacy_mode);
 }

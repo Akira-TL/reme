@@ -1,8 +1,6 @@
-import { isFamilyEvent } from "../shared-demo/protocol.js";
-
 const MONITOR_PROTOCOL = "reme-monitor-v1";
 const TOKEN_PROTOCOL_PREFIX = "reme-token-";
-const DEMO_STATE_SCHEMA = "reme-demo-state/v4";
+const DEMO_STATE_SCHEMA = "reme-demo-state/v1";
 const POSE_FRAME_SCHEMA = "reme-pose-frame-17/v1";
 const CONTROL_COMMAND_SCHEMA = "reme-control-command/v1";
 const MEDIA_SIGNAL_SCHEMA = "reme-media-signal/v1";
@@ -265,10 +263,21 @@ function validateRuntime(value) {
 }
 
 function validateCare(value) {
-  return exactKeys(value, ["phase", "consent", "decision"])
-    && value.phase === "idle"
-    && value.consent === "none"
-    && value.decision === null;
+  if (!exactKeys(value, [
+    "phase",
+    "decision_id",
+    "consent",
+    "alarm_authoritative",
+    "message",
+  ])) return false;
+  if (!["idle", "checking", "emergency", "resolved"].includes(value.phase)
+    || (value.decision_id !== null && !isId(value.decision_id))
+    || !["none", "pending", "granted", "denied"].includes(value.consent)
+    || typeof value.alarm_authoritative !== "boolean"
+    || (value.message !== null && !isBoundedString(value.message, 240))) return false;
+  return value.phase === "emergency"
+    ? value.alarm_authoritative && value.decision_id !== null
+    : !value.alarm_authoritative;
 }
 
 export function validateDemoStateEnvelope(value, roomSessionId = value?.room_session_id) {
@@ -431,9 +440,9 @@ function validateCommandBody(value) {
       && ["safe", "need_help", "consent_granted", "consent_denied"].includes(value.response);
   }
   if ([
+    "acknowledge_alarm",
     "confirm_alarm",
     "confirm_action_card",
-    "confirm_family_notification",
     "replay_voice",
   ].includes(value.name)) {
     return exactKeys(value, ["name", "decision_id"]) && isId(value.decision_id);
@@ -721,7 +730,6 @@ export function createMonitorRelayClient({
   timerApi = defaultTimerApi(),
   now = () => Date.now(),
   onCommand = null,
-  onFamilyEvent = null,
   onMediaGrant = null,
   onMediaSignal = null,
   onEvent = null,
@@ -736,7 +744,7 @@ export function createMonitorRelayClient({
   let controlGeneration = 0;
   let controlRevocationPending = false;
   let commandChain = Promise.resolve();
-  let callbacks = { onCommand, onFamilyEvent, onMediaGrant, onMediaSignal, onEvent };
+  let callbacks = { onCommand, onMediaGrant, onMediaSignal, onEvent };
   const listeners = new Set();
   const handledCommands = new Map();
   const appliedAcks = new Map();
@@ -1004,10 +1012,6 @@ export function createMonitorRelayClient({
       if (value.room_session_id === claim?.room_session_id) callbacks.onMediaGrant?.(value);
       return;
     }
-    if (isFamilyEvent(value)) {
-      if (value.room_session_id === claim?.room_session_id) callbacks.onFamilyEvent?.(value);
-      return;
-    }
     if (validateForwardedMediaSignal(value)) {
       if (value.room_session_id === claim?.room_session_id && value.target_id === "monitor") {
         callbacks.onMediaSignal?.(value);
@@ -1208,7 +1212,6 @@ export function createMonitorRelayClient({
     setCallbacks(next = {}) {
       callbacks = {
         onCommand: next.onCommand ?? null,
-        onFamilyEvent: next.onFamilyEvent ?? null,
         onMediaGrant: next.onMediaGrant ?? null,
         onMediaSignal: next.onMediaSignal ?? null,
         onEvent: next.onEvent ?? null,

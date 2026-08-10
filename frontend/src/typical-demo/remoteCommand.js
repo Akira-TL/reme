@@ -77,9 +77,9 @@ export function parseControlCommand(value) {
       return exactKeys(command, ["name", "decision_id", "response"])
         && validId(command.decision_id)
         && RESPONSES.has(command.response) ? value : null;
+    case "acknowledge_alarm":
     case "confirm_alarm":
     case "confirm_action_card":
-    case "confirm_family_notification":
     case "replay_voice":
       return exactKeys(command, ["name", "decision_id"]) && validId(command.decision_id)
         ? value : null;
@@ -116,9 +116,9 @@ export function classifyControlCommand(commandEnvelope, context, now = Date.now(
 
   if ([
     "submit_response",
+    "acknowledge_alarm",
     "confirm_alarm",
     "confirm_action_card",
-    "confirm_family_notification",
     "replay_voice",
   ].includes(command.name)) {
     if (!context.decisionId || command.decision_id !== context.decisionId) {
@@ -181,6 +181,7 @@ export function buildDemoState({
   source,
   capture,
   runtime,
+  decision = null,
   timestampMs = Date.now(),
 }) {
   const captureStatus = capture?.status === "ready" || capture?.active
@@ -199,8 +200,23 @@ export function buildDemoState({
         : runtime?.state === "error"
           ? "error"
           : "offline";
+  const alarmAuthoritative = Boolean(decision?.alarm);
+  const carePhase = alarmAuthoritative
+    ? "emergency"
+    : ["check_in_required", "consent_required"].includes(decision?.state)
+      ? "checking"
+      : decision?.state === "resolved"
+        ? "resolved"
+        : "idle";
+  const careConsent = decision?.state === "consent_required"
+    ? "pending"
+    : decision?.state === "resolved"
+      && decision?.action === "notify_family"
+      && sceneId === "kitchen"
+      ? "granted"
+      : "none";
   return {
-    schema_version: "reme-demo-state/v4",
+    schema_version: "reme-demo-state/v1",
     room_session_id: roomSessionId,
     runtime_session_id: runtimeSessionId,
     state_revision: stateRevision,
@@ -223,9 +239,11 @@ export function buildDemoState({
         detail: runtime?.reason || null,
       },
       care: {
-        phase: "idle",
-        consent: "none",
-        decision: null,
+        phase: carePhase,
+        decision_id: decision?.decision_id || null,
+        consent: careConsent,
+        alarm_authoritative: alarmAuthoritative,
+        message: decision?.family_notification || null,
       },
       media_grant: null,
     },
@@ -236,14 +254,19 @@ export function mediaGrantEligibility({
   sceneId,
   runtimeSessionId,
   authorization = null,
+  authorizationRuntimeSessionId = null,
+  privacyMode = "hidden",
   now = Date.now(),
 }) {
   if (sceneId === "bathroom") return { allowed: false, code: "bathroom_video_forbidden" };
+  if (!["visible", "blurred"].includes(privacyMode)) {
+    return { allowed: false, code: "privacy_mode_forbids_video" };
+  }
   if (!authorization || authorization.status !== "active") {
     return { allowed: false, code: "backend_authorization_required" };
   }
   if (authorization.scene_id !== sceneId
-    || authorization.runtime_session_id !== runtimeSessionId) {
+    || authorizationRuntimeSessionId !== runtimeSessionId) {
     return { allowed: false, code: "stale_backend_authorization" };
   }
   const remainingMs = authorization.expires_at_ms - now;
@@ -257,7 +280,7 @@ export function mediaGrantEligibility({
   return {
     allowed: true,
     scope: authorization.scope,
-    eventId: authorization.authorization_id,
+    eventId: authorization.decision_id,
     durationMs: Math.min(
       authorization.scope === "kitchen_moment" ? 60_000 : 30_000,
       Math.floor(remainingMs),

@@ -106,7 +106,14 @@ export function deriveHomeCarePrompt(
   const decisionState = cleanText(decision?.state);
   const decisionId = cleanText(decision?.decision_id) || null;
   const elderMessage = cleanText(decision?.elder_message);
-  const familyDelivery = cleanText(decision?.family_delivery) || "none";
+  const familyDelivery = cleanText(decision?.family_delivery)
+    || (decision?.alarm
+      ? "alarm"
+      : decision?.action_card
+        ? "action_card"
+        : decision?.family_notification
+          ? "notification"
+          : "none");
   const deliveryCopy = familyDelivery === "action_card"
     && ["confirmed", "done"].includes(decision?.action_card?.status)
     ? {

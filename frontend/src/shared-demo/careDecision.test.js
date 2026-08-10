@@ -46,6 +46,15 @@ function validDecision(overrides = {}) {
   };
 }
 
+function backendDecision(overrides = {}) {
+  const target = structuredClone(validDecision(overrides));
+  delete target.family_delivery;
+  delete target.response_deadline_ms;
+  target.schema_version = "reme-care-decision/v0-experiment";
+  target.media_authorization = null;
+  return target;
+}
+
 test("CareDecision projection preserves the exact authoritative snapshot", () => {
   const decision = validDecision();
   const projected = projectCareDecision(decision);
@@ -55,6 +64,15 @@ test("CareDecision projection preserves the exact authoritative snapshot", () =>
   assert.notEqual(projected.alarm, decision.alarm);
   assert.equal(Object.isFrozen(projected), true);
   assert.equal(Object.isFrozen(projected.alarm.channels), true);
+});
+
+test("target Backend CareDecision stays exact and does not regain removed fields", () => {
+  const decision = backendDecision();
+  const projected = projectCareDecision(decision);
+  assert.equal(isCareDecision(projected), true);
+  assert.deepEqual(projected, decision);
+  assert.equal(Object.hasOwn(projected, "family_delivery"), false);
+  assert.equal(Object.hasOwn(projected, "response_deadline_ms"), false);
 });
 
 test("CareDecision rejects invented fields and invalid alarm semantics", () => {

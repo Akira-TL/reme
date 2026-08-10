@@ -3,8 +3,8 @@ import { fetchRtcConfiguration } from "./rtcConfig.js";
 
 const FALLBACK = Object.freeze({
   iceServers: Object.freeze([]),
-  expiresAtMs: 0,
-  capability: "unavailable",
+  credentialExpiresAtMs: null,
+  mode: "unavailable",
 });
 
 export function useRtcConfiguration() {
@@ -22,7 +22,9 @@ export function useRtcConfiguration() {
         const configuration = await fetchRtcConfiguration();
         if (!active) return;
         setState({ configuration, error: null });
-        const refreshInMs = Math.max(5_000, configuration.expiresAtMs - Date.now() - 60_000);
+        const refreshInMs = Number.isFinite(configuration.credentialExpiresAtMs)
+          ? Math.max(5_000, configuration.credentialExpiresAtMs - Date.now() - 60_000)
+          : 300_000;
         refreshTimer = window.setTimeout(load, refreshInMs);
       } catch (error) {
         if (!active) return;

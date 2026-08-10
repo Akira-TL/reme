@@ -1,4 +1,9 @@
-import { projectCareAssessment } from "./careAssessment.js";
+import {
+  familyCareMessage,
+  familyCarePresentationKind,
+  familyMediaAuthorization,
+  isFamilyAlarm,
+} from "./familyAuthority.js";
 
 export const FAMILY_TIMELINE_LIMIT = 12;
 
@@ -34,6 +39,7 @@ const ASSESSMENT_SOURCE_LABELS = Object.freeze({
   mock: "演示判断",
   record: "回放判断",
   degraded: "降级判断",
+  backend: "Backend 权威状态",
 });
 
 const ASSESSMENT_STATUS = Object.freeze({
@@ -128,6 +134,55 @@ function eventRevision(value) {
   return Number.isSafeInteger(value.state_revision) ? value.state_revision : value.revision;
 }
 
+function eventTimestamp(value) {
+  return Number.isFinite(value.published_at_ms) ? value.published_at_ms : value.timestamp_ms;
+}
+
+function projectFamilyEventAssessment(decision) {
+  const presentationKind = familyCarePresentationKind(decision);
+  if (presentationKind === "none") return null;
+  const actionCard = decision.action_card === null
+    ? null
+    : Object.freeze({ ...decision.action_card });
+  const alarm = decision.alarm === null
+    ? null
+    : Object.freeze({
+        channels: Object.freeze([...decision.alarm.channels]),
+        trigger: decision.alarm.trigger,
+      });
+  const verdict = actionCard?.event || decision.family_notification;
+  const basis = actionCard?.system_judgment || decision.family_notification;
+  if (!verdict || !basis) return null;
+  const status = {
+    normal: "observing",
+    observe: "observing",
+    check_in_required: "awaiting_response",
+    consent_required: "awaiting_response",
+    family_notification_required: "family_notified",
+    urgent_attention: "family_notified",
+    resolved: "resolved",
+    degraded: "degraded",
+  }[decision.state];
+  if (!status) return null;
+  return Object.freeze({
+    presentation_kind: presentationKind,
+    verdict,
+    basis,
+    uncertainty: "unknown",
+    source: "backend",
+    action: decision.action,
+    suggested_action: actionCard?.suggested_action || null,
+    status,
+    action_card: actionCard,
+    alarm,
+    visual_context: Object.freeze({
+      sent_to_mimo: false,
+      type: null,
+      sample_count: null,
+    }),
+  });
+}
+
 function cloneAssessment(value) {
   if (!value) return null;
   return Object.freeze({
@@ -176,27 +231,29 @@ function projectSnapshot(snapshot) {
 function projectFamilyEvent(event, snapshot) {
   const decision = event.care;
   const state = snapshot?.state;
+  const presentationKind = familyCarePresentationKind(decision);
   const carePhase = ["check_in_required", "consent_required"].includes(decision?.state)
     ? "checking"
     : decision?.state === "resolved"
       ? "resolved"
-      : decision?.family_delivery === "alarm"
+      : presentationKind === "alarm"
       ? "emergency"
-      : ["notification", "action_card"].includes(decision?.family_delivery)
+      : ["notification", "action_card"].includes(presentationKind)
         ? "attention"
         : "idle";
-  const kitchenAuthorized = event.authorization?.status === "active"
-    && event.authorization.scope === "kitchen_moment";
+  const authorization = familyMediaAuthorization(event);
+  const kitchenAuthorized = authorization?.status === "active"
+    && authorization.scope === "kitchen_moment";
   return Object.freeze({
-    sceneId: decision?.scene_id || state?.scene_id || null,
+    sceneId: authorization?.scene_id || state?.scene_id || null,
     captureStatus: state?.capture?.status || null,
     runtimeStatus: state?.runtime?.status || null,
     carePhase,
     careDecisionId: decision?.decision_id || null,
     careConsent: kitchenAuthorized ? "granted" : "none",
-    careMessage: decision?.family_notification || decision?.reason_summary || null,
-    careAssessment: cloneAssessment(projectCareAssessment(decision)),
-    alarmActive: decision?.family_delivery === "alarm" && Boolean(decision?.alarm),
+    careMessage: familyCareMessage(decision),
+    careAssessment: cloneAssessment(projectFamilyEventAssessment(decision)),
+    alarmActive: isFamilyAlarm(decision),
     mediaGrantId: null,
     mediaGrantScope: null,
   });
@@ -243,7 +300,7 @@ function assessmentEvent(snapshot, previous, current) {
     label: presentationLabel,
     title: assessment.verdict,
     detail: assessment.basis,
-    timestampMs: snapshot.timestamp_ms,
+    timestampMs: eventTimestamp(snapshot),
     tone: authoritativeEmergency ? "danger" : status.tone,
     statusLabel,
     suggestedAction: assessment.suggestedAction,
@@ -304,7 +361,7 @@ function fallbackCareEvent(snapshot, previous, current) {
     id: `state:${snapshot.room_session_id}:${eventRevision(snapshot)}:care`,
     kind: "care",
     label: "关怀进展",
-    timestampMs: snapshot.timestamp_ms,
+    timestampMs: eventTimestamp(snapshot),
     ...copy,
     ...snapshotMetadata(snapshot, current),
   });
@@ -347,7 +404,7 @@ function consentEvent(snapshot, previous, current) {
     id: `state:${snapshot.room_session_id}:${eventRevision(snapshot)}:consent`,
     kind: "consent",
     label: "关怀授权",
-    timestampMs: snapshot.timestamp_ms,
+    timestampMs: eventTimestamp(snapshot),
     ...copy,
     ...snapshotMetadata(snapshot, current),
   });
@@ -377,7 +434,7 @@ function mediaEvent(snapshot, previous, current) {
     detail: current.mediaGrantScope === "fall_emergency"
       ? "确定性安全事件授权窗口已经开启，并会按时自动关闭。"
       : "本人授权的生活片段窗口已经开启，并会按时自动关闭。",
-    timestampMs: snapshot.timestamp_ms,
+    timestampMs: eventTimestamp(snapshot),
     tone: "warning",
     statusLabel: "限时授权中",
     progress: "到期自动关闭",
@@ -399,13 +456,13 @@ const ACKNOWLEDGEMENT_COPY = Object.freeze({
     title: "家属已经确认收到告警",
     statusLabel: "告警已确认",
   },
+  acknowledge_alarm: {
+    title: "家属已经确认收到告警",
+    statusLabel: "告警已确认",
+  },
   confirm_action_card: {
     title: "家属已经确认收到行动卡",
     statusLabel: "行动卡已确认",
-  },
-  confirm_family_notification: {
-    title: "家属已经确认收到通知",
-    statusLabel: "通知已确认",
   },
 });
 

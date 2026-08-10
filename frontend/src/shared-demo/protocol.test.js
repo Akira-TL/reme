@@ -11,7 +11,7 @@ import {
 
 function validState() {
   return {
-    schema_version: "reme-demo-state/v4",
+    schema_version: "reme-demo-state/v1",
     room_session_id: "room-1",
     runtime_session_id: "runtime-1",
     state_revision: 4,
@@ -29,15 +29,17 @@ function validState() {
       runtime: { status: "ready", capability: "live", detail: null },
       care: {
         phase: "idle",
+        decision_id: null,
         consent: "none",
-        decision: null,
+        alarm_authoritative: false,
+        message: null,
       },
       media_grant: null,
     },
   };
 }
 
-test("state parser accepts exact v4 shape and rejects extra keys", () => {
+test("state parser accepts the exact Relay v1 presentation shape", () => {
   const state = validState();
   assert.equal(isDemoState(state), true);
   assert.equal(parseViewerMessage(JSON.stringify(state))?.kind, "demo_state");
@@ -48,121 +50,89 @@ test("state parser accepts exact v4 shape and rejects extra keys", () => {
   }), false);
 });
 
-test("v4 rejects browser-authored care even when it resembles a CareDecision", () => {
+test("DemoState rejects browser-authored CareDecision fields", () => {
   const state = validState();
-  state.state.care.decision = {
-    schema_version: "reme-care-decision/v1-experiment",
-    scene_id: "living",
-    decision_id: "decision-1",
-    timestamp_ms: 1_000,
-    state: "observe",
-    risk_level: 1,
-    privacy_mode: "skeleton_only",
-    need_dialogue: false,
-    dialogue_goal: null,
-    elder_message: null,
-    family_notification: null,
-    action: "observe",
-    family_delivery: "none",
-    reason_summary: "姿态与房间内活动节奏综合判断。",
-    uncertainty: "medium",
-    source: "mimo",
-    fallback_used: false,
-    demo_mode: "live",
-    consent_required: false,
-    response_timeout_ms: null,
-    response_deadline_ms: null,
-    action_card: null,
-    visual_context: {
-      sent_to_mimo: true,
-      type: "keyframes",
-      start_ms: 900,
-      end_ms: 1_000,
-      sample_count: 3,
-    },
-    alarm: null,
-    voice_asset: null,
-    confirm_channels: null,
-  };
-  state.state.care.phase = "idle";
+  state.state.care.decision = { decision_id: "browser-invented" };
   assert.equal(isDemoState(state), false);
 
-  const forgedConsent = validState();
-  forgedConsent.state.care.consent = "granted";
-  assert.equal(isDemoState(forgedConsent), false);
+  const incoherentEmergency = validState();
+  incoherentEmergency.state.care.phase = "emergency";
+  incoherentEmergency.state.care.decision_id = "decision-1";
+  assert.equal(isDemoState(incoherentEmergency), false);
 });
 
 test("FamilyEvent is exact, revisioned, and binds active authorization", () => {
   const care = {
-    schema_version: "reme-care-decision/v1-experiment",
-    scene_id: "kitchen",
     decision_id: "decision-kitchen",
-    timestamp_ms: 1_000,
     state: "resolved",
     risk_level: 0,
-    privacy_mode: "skeleton_only",
+    privacy_mode: "blurred",
     family_notification: "本人同意分享当前厨房片段。",
     action: "notify_family",
-    family_delivery: "notification",
-    reason_summary: "本人已明确同意本次事件级分享。",
-    uncertainty: "low",
-    fallback_used: false,
-    source: "rule",
-    demo_mode: "live",
     action_card: null,
-    visual_context: null,
     alarm: null,
-  };
-  const authorization = {
-    schema_version: "reme-media-authorization/v1",
-    authorization_id: "authorization-kitchen",
-    decision_id: "decision-kitchen",
-    event_id: "decision-kitchen",
-    runtime_session_id: "runtime-1",
-    scene_id: "kitchen",
-    scope: "kitchen_moment",
-    audience: "public_demo_viewers",
-    status: "active",
-    issued_at_ms: 1_000,
-    expires_at_ms: 61_000,
+    media_authorization: {
+      schema_version: "reme-media-authorization/v1",
+      authorization_id: "authorization-kitchen",
+      decision_id: "decision-kitchen",
+      event_id: "transition-kitchen",
+      scene_id: "kitchen",
+      scope: "kitchen_moment",
+      status: "active",
+      issued_at_ms: 1_000,
+      expires_at_ms: 61_000,
+    },
   };
   const event = {
+    type: "family_event",
     schema_version: "reme-family-event/v1",
     room_session_id: "room-1",
     runtime_session_id: "runtime-1",
     revision: 2,
-    timestamp_ms: 1_000,
+    decision_timestamp_ms: 1_000,
+    published_at_ms: 1_200,
     care,
-    authorization,
   };
   assert.equal(parseViewerMessage(JSON.stringify(event))?.kind, "family_event");
   assert.equal(parseViewerMessage(JSON.stringify({ ...event, revision: 2.5 })), null);
   assert.equal(parseViewerMessage(JSON.stringify({
     ...event,
-    authorization: { ...authorization, decision_id: "decision-other" },
+    care: {
+      ...care,
+      media_authorization: {
+        ...care.media_authorization,
+        decision_id: "decision-other",
+      },
+    },
   })), null);
   assert.equal(parseViewerMessage(JSON.stringify({
     ...event,
-    authorization: { ...authorization, expires_at_ms: 61_001 },
+    care: {
+      ...care,
+      media_authorization: {
+        ...care.media_authorization,
+        expires_at_ms: 61_001,
+      },
+    },
   })), null);
+  assert.equal(parseViewerMessage(JSON.stringify({ ...event, authorization: null })), null);
   assert.equal(parseViewerMessage(JSON.stringify({
     ...event,
-    authorization: null,
     care: {
       ...care,
       state: "family_notification_required",
       risk_level: 2,
-      family_delivery: "action_card",
+      media_authorization: null,
       action_card: {
         event: "待处理事项",
-        elder_quote: "公开房间不得透传本人原话",
+        elder_quote: "后端显式允许时可展示本人原话",
         system_judgment: "需要家属协助",
         suggested_action: "联系本人",
         time_window: "今天",
         status: "pending",
       },
     },
-  })), null);
+  }))?.kind, "family_event");
 });
 
 test("viewer ready and presence reject out-of-contract audience sizes", () => {
@@ -212,23 +182,28 @@ test("control command factory accepts only the strict command union", () => {
   const command = createControlCommand({
     roomSessionId: "room-1",
     commandId: "cmd-1",
-    commandSequence: 0,
+    commandSequence: 1,
     issuedAtMs: 1000,
     expiresAtMs: 9000,
     expectedStateRevision: 4,
     command: { name: "select_scene", scene_id: "kitchen" },
   });
   assert.equal(isControlCommand(command), true);
-  const notificationAck = createControlCommand({
+  const alarmAck = createControlCommand({
     roomSessionId: "room-1",
     commandId: "cmd-notification",
-    commandSequence: 1,
+    commandSequence: 2,
     issuedAtMs: 1000,
     expiresAtMs: 9000,
     expectedStateRevision: 4,
-    command: { name: "confirm_family_notification", decision_id: "decision-1" },
+    command: { name: "acknowledge_alarm", decision_id: "decision-1" },
   });
-  assert.equal(isControlCommand(notificationAck), true);
+  assert.equal(isControlCommand(alarmAck), true);
+  assert.throws(() => createControlCommand({
+    ...alarmAck,
+    command_id: "cmd-notification",
+    command: { name: "confirm_family_notification", decision_id: "decision-1" },
+  }), /invalid control command/);
   assert.throws(() => createControlCommand({
     ...command,
     roomSessionId: "room-1",

@@ -36,11 +36,9 @@ function mediaAuthorization(overrides = {}) {
     schema_version: "reme-media-authorization/v1",
     authorization_id: "authorization-1",
     decision_id: "decision-1",
-    event_id: "decision-1",
-    runtime_session_id: "runtime-9",
+    event_id: "transition-1",
     scene_id: "kitchen",
     scope: "kitchen_moment",
-    audience: "public_demo_viewers",
     status: "active",
     issued_at_ms: 1_000,
     expires_at_ms: 61_000,
@@ -55,7 +53,10 @@ test("控制命令使用 exact-shape 且拒绝未知命令", () => {
   assert.ok(parseControlCommand(command("confirm_action_card", {
     decision_id: "decision-1",
   })));
-  assert.ok(parseControlCommand(command("confirm_family_notification", {
+  assert.equal(parseControlCommand(command("confirm_family_notification", {
+    decision_id: "decision-1",
+  })), null);
+  assert.ok(parseControlCommand(command("acknowledge_alarm", {
     decision_id: "decision-1",
   })));
 });
@@ -107,42 +108,63 @@ test("浏览器仅按后端显式授权申请媒体 grant", () => {
   assert.equal(mediaGrantEligibility({
     sceneId: "bathroom",
     runtimeSessionId: "runtime-9",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "visible",
     authorization: mediaAuthorization(),
   }).code, "bathroom_video_forbidden");
+  assert.equal(mediaGrantEligibility({
+    sceneId: "kitchen",
+    runtimeSessionId: "runtime-9",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "skeleton_only",
+    authorization: mediaAuthorization(),
+  }).code, "privacy_mode_forbids_video");
 
   const kitchen = mediaGrantEligibility({
     sceneId: "kitchen",
     runtimeSessionId: "runtime-9",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "blurred",
     authorization: mediaAuthorization(),
     now: 1_000,
   });
   assert.equal(kitchen.durationMs, 60_000);
-  assert.equal(kitchen.eventId, "authorization-1");
+  assert.equal(kitchen.eventId, "decision-1");
 
   assert.equal(mediaGrantEligibility({
     sceneId: "kitchen",
     runtimeSessionId: "runtime-9",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "visible",
   }).code, "backend_authorization_required");
   assert.equal(mediaGrantEligibility({
     sceneId: "kitchen",
     runtimeSessionId: "runtime-9",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "visible",
     authorization: mediaAuthorization({ expires_at_ms: 1_500 }),
     now: 1_000,
   }).code, "backend_authorization_expired");
   assert.equal(mediaGrantEligibility({
     sceneId: "kitchen",
     runtimeSessionId: "runtime-9",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "visible",
     authorization: mediaAuthorization({ expires_at_ms: 31_000 }),
     now: 11_000,
   }).durationMs, 20_000);
   assert.equal(mediaGrantEligibility({
     sceneId: "fall",
     runtimeSessionId: "runtime-9",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "visible",
     authorization: mediaAuthorization(),
   }).code, "stale_backend_authorization");
   assert.equal(mediaGrantEligibility({
     sceneId: "fall",
     runtimeSessionId: "runtime-9",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "visible",
     authorization: mediaAuthorization({
       authorization_id: "authorization-fall",
       scene_id: "fall",
@@ -154,6 +176,8 @@ test("浏览器仅按后端显式授权申请媒体 grant", () => {
   assert.equal(mediaGrantEligibility({
     sceneId: "fall",
     runtimeSessionId: "runtime-9",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "visible",
     authorization: mediaAuthorization({
       scene_id: "fall",
       scope: "fall_emergency",
@@ -164,6 +188,8 @@ test("浏览器仅按后端显式授权申请媒体 grant", () => {
   assert.equal(mediaGrantEligibility({
     sceneId: "fall",
     runtimeSessionId: "other-runtime",
+    authorizationRuntimeSessionId: "runtime-9",
+    privacyMode: "visible",
     authorization: mediaAuthorization({ scene_id: "fall", scope: "fall_emergency" }),
     now: 1_000,
   }).code, "stale_backend_authorization");
@@ -179,9 +205,12 @@ test("权威状态显式区分 room session 与 runtime session", () => {
     source: { id: "front-camera", kind: "camera", label: "前置", remote_video: "available" },
     capture: { active: true },
     runtime: { state: "running", inputMode: "jpeg", personDetected: true, skeletonSource: "a_backend" },
-    care: {
-      phase: "checking",
-      decision: { state: "urgent_attention" },
+    decision: {
+      decision_id: "decision-1",
+      state: "check_in_required",
+      action: "ask_elder",
+      family_notification: null,
+      alarm: null,
     },
   });
   assert.equal(state.room_session_id, "room-1");
@@ -190,10 +219,11 @@ test("权威状态显式区分 room session 与 runtime session", () => {
   assert.equal(state.state.source_generation, 3);
   assert.equal(state.state.runtime.status, "ready");
   assert.equal(state.state.runtime.capability, "live");
-  assert.equal(state.schema_version, "reme-demo-state/v4");
-  assert.equal(state.state.care.decision, null);
-  assert.equal(state.state.care.phase, "idle");
+  assert.equal(state.schema_version, "reme-demo-state/v1");
+  assert.equal(state.state.care.decision_id, "decision-1");
+  assert.equal(state.state.care.phase, "checking");
   assert.equal(state.state.care.consent, "none");
+  assert.equal(state.state.care.alarm_authoritative, false);
 });
 
 test("本地 candidate 与调用方 phase 不能伪造 Relay 关怀状态", () => {
@@ -208,21 +238,23 @@ test("本地 candidate 与调用方 phase 不能伪造 Relay 关怀状态", () =
   };
   const candidate = buildDemoState({
     ...base,
-    care: { phase: "candidate", consent: "none", decision: null },
+    decision: null,
   });
   assert.equal(candidate.state.care.phase, "idle");
-  assert.equal(candidate.state.care.decision, null);
+  assert.equal(candidate.state.care.decision_id, null);
 
   const checking = buildDemoState({
     ...base,
-    care: {
-      phase: "emergency",
-      consent: "none",
-      decision: { state: "urgent_attention", alarm: { channels: ["ring"] } },
+    decision: {
+      decision_id: "decision-2",
+      state: "urgent_attention",
+      family_notification: "请立即关注",
+      alarm: { channels: ["ring"], trigger: "visual_confirm" },
     },
   });
-  assert.equal(checking.state.care.phase, "idle");
-  assert.equal(checking.state.care.decision, null);
+  assert.equal(checking.state.care.phase, "emergency");
+  assert.equal(checking.state.care.decision_id, "decision-2");
+  assert.equal(checking.state.care.alarm_authoritative, true);
 });
 
 test("ACK 明确区分等待本机确认和终态", () => {

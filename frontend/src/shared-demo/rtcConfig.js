@@ -1,5 +1,4 @@
 import { relayHttpBase, resolveRelayEndpointUrl } from "./config.js";
-import { RTC_CONFIG_SCHEMA } from "./protocol.js";
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -24,7 +23,8 @@ function isIceServer(value) {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value).sort();
   if (!["urls", "credential,urls,username"].includes(keys.join(","))) return false;
-  const urls = Array.isArray(value.urls) ? value.urls : [value.urls];
+  if (!Array.isArray(value.urls)) return false;
+  const urls = value.urls;
   if (urls.length < 1 || urls.length > 16 || !urls.every(isIceUrl)) return false;
   if (keys.length === 3) {
     return typeof value.username === "string"
@@ -37,22 +37,29 @@ function isIceServer(value) {
 
 export function isRtcConfigurationWire(value) {
   return exactKeys(value, [
-    "schema_version",
     "iceServers",
-    "expires_at_ms",
-    "capability",
+    "mode",
+    "credential_expires_at_ms",
   ])
-    && value.schema_version === RTC_CONFIG_SCHEMA
     && Array.isArray(value.iceServers)
     && value.iceServers.length <= 8
     && value.iceServers.every(isIceServer)
-    && Number.isFinite(value.expires_at_ms)
-    && value.expires_at_ms > 0
-    && ["turn", "stun_only"].includes(value.capability)
-    && (value.capability !== "turn" || value.iceServers.some((server) => {
-      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-      return urls.some((url) => /^turns?:/i.test(url));
-    }));
+    && ["local_network_only", "stun_only", "turn_configured"].includes(value.mode)
+    && (value.credential_expires_at_ms === null
+      || (Number.isFinite(value.credential_expires_at_ms)
+        && value.credential_expires_at_ms > 0))
+    && (() => {
+      const urls = value.iceServers.flatMap((server) => server.urls);
+      const hasStun = urls.some((url) => /^stuns?:/i.test(url));
+      const hasTurn = urls.some((url) => /^turns?:/i.test(url));
+      if (value.mode === "local_network_only") {
+        return value.iceServers.length === 0 && value.credential_expires_at_ms === null;
+      }
+      if (value.mode === "stun_only") {
+        return hasStun && !hasTurn && value.credential_expires_at_ms === null;
+      }
+      return hasTurn && Number.isFinite(value.credential_expires_at_ms);
+    })();
 }
 
 export async function fetchRtcConfiguration({
@@ -69,12 +76,11 @@ export async function fetchRtcConfiguration({
   const value = await response.json();
   if (!isRtcConfigurationWire(value)) throw new Error("RTC 配置不符合精确协议");
   return Object.freeze({
-    schemaVersion: value.schema_version,
     iceServers: Object.freeze(value.iceServers.map((server) => Object.freeze({
       ...server,
-      ...(Array.isArray(server.urls) ? { urls: Object.freeze([...server.urls]) } : {}),
+      urls: Object.freeze([...server.urls]),
     }))),
-    expiresAtMs: value.expires_at_ms,
-    capability: value.capability,
+    credentialExpiresAtMs: value.credential_expires_at_ms,
+    mode: value.mode,
   });
 }
