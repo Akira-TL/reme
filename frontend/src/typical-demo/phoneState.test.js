@@ -2,43 +2,41 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   isActiveFallDanger,
-  isFallSafetyDecision,
+  mapCareDecisionToPhase,
   shouldAutoOpenFamilyVideo,
-  shouldCloseFamilyVideo,
   shouldShowEmergencySheet,
-  shouldStopAlarmForDecision,
-  shouldStopAlarmForResponse,
 } from "./phoneState.js";
 
-test("安全确认后手机退出危险与自动视频状态", () => {
-  assert.equal(isActiveFallDanger("emergency"), true);
-  assert.equal(isActiveFallDanger("resolved"), false);
-  assert.equal(shouldShowEmergencySheet("emergency"), true);
-  assert.equal(shouldShowEmergencySheet("resolved"), false);
-  assert.equal(shouldCloseFamilyVideo("resolved"), true);
+test("CareDecision delivery maps to presentation phase only", () => {
+  assert.equal(mapCareDecisionToPhase({ state: "check_in_required", family_delivery: "none" }), "checking");
+  assert.equal(mapCareDecisionToPhase({ state: "consent_required", family_delivery: "none" }), "checking");
+  assert.equal(mapCareDecisionToPhase({
+    state: "family_notification_required",
+    family_notification: "请联系本人。",
+  }), "attention");
+  assert.equal(mapCareDecisionToPhase({
+    state: "urgent_attention",
+    alarm: { channels: ["ring"], trigger: "visual_confirm" },
+  }), "emergency");
+  assert.equal(mapCareDecisionToPhase({ state: "resolved", family_delivery: "none" }), "resolved");
+  assert.equal(mapCareDecisionToPhase({ state: "observe", family_delivery: "none" }), "idle");
+  assert.equal(isActiveFallDanger("candidate"), true);
 });
 
-test("跌倒询问与普通关怀询问保持可区分", () => {
-  assert.equal(isFallSafetyDecision({ dialogue_goal: "confirm_safety" }), true);
-  assert.equal(isFallSafetyDecision({ confirm_channels: ["frame", "voice"] }), true);
-  assert.equal(isFallSafetyDecision({ alarm: { trigger: "visual_confirm" } }), true);
-  assert.equal(isFallSafetyDecision({ state: "check_in_required", dialogue_goal: "understand_need" }), false);
-});
-
-test("只有跌倒场景的权威紧急阶段会自动临时开放家属现场画面", () => {
-  assert.equal(shouldAutoOpenFamilyVideo("fall", "emergency"), true);
-  assert.equal(shouldAutoOpenFamilyVideo("living", "emergency"), false);
-  assert.equal(shouldAutoOpenFamilyVideo("kitchen", "emergency"), false);
-  assert.equal(shouldAutoOpenFamilyVideo("bathroom", "emergency"), false);
-  assert.equal(shouldAutoOpenFamilyVideo("fall", "checking"), false);
-  assert.equal(shouldAutoOpenFamilyVideo("fall", "resolved"), false);
-});
-
-test("安全回应和已化解决策都停止本地警报", () => {
-  assert.equal(shouldStopAlarmForResponse("safe"), true);
-  assert.equal(shouldStopAlarmForResponse("alarm_acknowledged"), true);
-  assert.equal(shouldStopAlarmForResponse("card_confirmed"), false);
-  assert.equal(shouldStopAlarmForResponse("need_help"), false);
-  assert.equal(shouldStopAlarmForDecision({ state: "resolved" }), true);
-  assert.equal(shouldStopAlarmForDecision({ state: "urgent_attention" }), false);
+test("alarm sheet and fall video depend on the current alarm, not phase", () => {
+  const statusOnly = {
+    state: "family_notification_required",
+    family_delivery: "notification",
+    alarm: null,
+  };
+  const alarmDecision = {
+    state: "urgent_attention",
+    family_delivery: "alarm",
+    alarm: { channels: ["flash"], trigger: "visual_confirm" },
+  };
+  assert.equal(shouldShowEmergencySheet(statusOnly), false);
+  assert.equal(shouldShowEmergencySheet(alarmDecision), true);
+  assert.equal(shouldAutoOpenFamilyVideo("fall", alarmDecision), true);
+  assert.equal(shouldAutoOpenFamilyVideo("living", alarmDecision), false);
+  assert.equal(shouldAutoOpenFamilyVideo("fall", statusOnly), false);
 });

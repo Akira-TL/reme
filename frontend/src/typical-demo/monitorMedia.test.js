@@ -157,6 +157,11 @@ function fakeTimers() {
 test("缺 TURN 时明确标为局域网能力，STUN 不能冒充 TURN", () => {
   assert.equal(hasTurnServer({ iceServers: [{ urls: "stun:stun.example" }] }), false);
   assert.equal(describeMediaConnectivity({}).mode, "local_network_only");
+  assert.equal(describeMediaConnectivity({ mode: "unavailable" }).mode, "unavailable");
+  assert.equal(describeMediaConnectivity({
+    mode: "stun_only",
+    iceServers: [{ urls: ["stun:stun.example"] }],
+  }).mode, "stun_only");
   assert.equal(hasTurnServer({ iceServers: [{ urls: ["stun:x", "turns:turn.example"] }] }), true);
   assert.equal(describeMediaConnectivity({
     iceServers: [{ urls: "turn:turn.example" }],

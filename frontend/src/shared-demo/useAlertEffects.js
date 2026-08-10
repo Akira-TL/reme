@@ -36,13 +36,43 @@ async function playAlarm(contextRef, activeNodesRef) {
   }
 }
 
-export function useAlertEffects({ enabled, emergency, decisionId }) {
+function stopNodes(activeNodesRef) {
+  for (const oscillator of activeNodesRef.current) {
+    try {
+      oscillator.stop();
+    } catch {
+      // A scheduled oscillator may already have stopped.
+    }
+  }
+  activeNodesRef.current.clear();
+}
+
+export function alertChannelPlan(alarm) {
+  const channels = Array.isArray(alarm?.channels) ? new Set(alarm.channels) : new Set();
+  const vibrate = channels.has("vibrate");
+  const ring = channels.has("ring");
+  const flash = channels.has("flash");
+  return Object.freeze({
+    vibrate,
+    ring,
+    flash,
+    key: [vibrate ? "v" : "", ring ? "r" : "", flash ? "f" : ""]
+      .filter(Boolean)
+      .join(""),
+  });
+}
+
+export function useAlertEffects({ enabled, alarm, decisionId }) {
   const contextRef = useRef(null);
   const notifiedRef = useRef(null);
   const flashTimerRef = useRef(0);
   const activeNodesRef = useRef(new Set());
   const [flashActive, setFlashActive] = useState(false);
   const [soundBlocked, setSoundBlocked] = useState(false);
+  const channels = alertChannelPlan(alarm);
+  const alarmKey = enabled && decisionId && channels.key
+    ? `${decisionId}:${alarm?.trigger || "unknown"}:${channels.key}`
+    : null;
 
   useEffect(() => {
     const unlock = () => {
@@ -58,59 +88,53 @@ export function useAlertEffects({ enabled, emergency, decisionId }) {
   }, []);
 
   useEffect(() => {
-    if (!enabled) {
-      window.clearTimeout(flashTimerRef.current);
-      navigator.vibrate?.(0);
+    window.clearTimeout(flashTimerRef.current);
+    navigator.vibrate?.(0);
+    stopNodes(activeNodesRef);
+
+    if (!alarmKey) {
       notifiedRef.current = null;
-      for (const oscillator of activeNodesRef.current) {
-        try {
-          oscillator.stop();
-        } catch {
-          // A scheduled oscillator may already have stopped.
-        }
-      }
-      activeNodesRef.current.clear();
       const resetTimer = window.setTimeout(() => {
         setFlashActive(false);
         setSoundBlocked(false);
       }, 0);
       return () => window.clearTimeout(resetTimer);
     }
-    if (!emergency || !decisionId) return;
-    const key = `${decisionId}:emergency`;
-    if (notifiedRef.current === key) return;
-    notifiedRef.current = key;
-    navigator.vibrate?.([220, 100, 220, 100, 320]);
-    window.setTimeout(() => setFlashActive(true), 0);
-    window.clearTimeout(flashTimerRef.current);
-    flashTimerRef.current = window.setTimeout(() => setFlashActive(false), 2400);
-    void playAlarm(contextRef, activeNodesRef).then((played) => setSoundBlocked(!played));
-    return undefined;
-  }, [decisionId, emergency, enabled]);
+    if (notifiedRef.current === alarmKey) return undefined;
+    notifiedRef.current = alarmKey;
+
+    if (channels.vibrate) navigator.vibrate?.([220, 100, 220, 100, 320]);
+    const stateTimer = window.setTimeout(() => {
+      setFlashActive(channels.flash);
+      if (!channels.ring) setSoundBlocked(false);
+    }, 0);
+    if (channels.flash) {
+      flashTimerRef.current = window.setTimeout(() => setFlashActive(false), 2400);
+    }
+    if (channels.ring) {
+      void playAlarm(contextRef, activeNodesRef)
+        .then((played) => setSoundBlocked(!played));
+    }
+    return () => window.clearTimeout(stateTimer);
+  }, [alarmKey, channels.flash, channels.ring, channels.vibrate]);
 
   useEffect(() => () => {
     window.clearTimeout(flashTimerRef.current);
     navigator.vibrate?.(0);
-    for (const oscillator of activeNodesRef.current) {
-      try {
-        oscillator.stop();
-      } catch {
-        // Continue stopping the remaining alert nodes.
-      }
-    }
-    activeNodesRef.current.clear();
+    stopNodes(activeNodesRef);
     void contextRef.current?.close?.();
   }, []);
 
   const retrySound = useCallback(async () => {
+    if (!alarmKey || !channels.ring) return false;
     const played = await playAlarm(contextRef, activeNodesRef);
     setSoundBlocked(!played);
     return played;
-  }, []);
+  }, [alarmKey, channels.ring]);
 
   return {
-    flashActive: enabled && flashActive,
+    flashActive: Boolean(alarmKey && channels.flash && flashActive),
     retrySound,
-    soundBlocked: enabled && soundBlocked,
+    soundBlocked: Boolean(alarmKey && channels.ring && soundBlocked),
   };
 }

@@ -39,7 +39,7 @@ function validState() {
   };
 }
 
-test("state parser accepts exact v1 shape and rejects extra keys", () => {
+test("state parser accepts the exact Relay v1 presentation shape", () => {
   const state = validState();
   assert.equal(isDemoState(state), true);
   assert.equal(parseViewerMessage(JSON.stringify(state))?.kind, "demo_state");
@@ -48,6 +48,91 @@ test("state parser accepts exact v1 shape and rejects extra keys", () => {
     ...state,
     state: { ...state.state, care: { ...state.state.care, made_up: true } },
   }), false);
+});
+
+test("DemoState rejects browser-authored CareDecision fields", () => {
+  const state = validState();
+  state.state.care.decision = { decision_id: "browser-invented" };
+  assert.equal(isDemoState(state), false);
+
+  const incoherentEmergency = validState();
+  incoherentEmergency.state.care.phase = "emergency";
+  incoherentEmergency.state.care.decision_id = "decision-1";
+  assert.equal(isDemoState(incoherentEmergency), false);
+});
+
+test("FamilyEvent is exact, revisioned, and binds active authorization", () => {
+  const care = {
+    decision_id: "decision-kitchen",
+    state: "resolved",
+    risk_level: 0,
+    privacy_mode: "blurred",
+    family_notification: "本人同意分享当前厨房片段。",
+    action: "notify_family",
+    action_card: null,
+    alarm: null,
+    media_authorization: {
+      schema_version: "reme-media-authorization/v1",
+      authorization_id: "authorization-kitchen",
+      decision_id: "decision-kitchen",
+      event_id: "transition-kitchen",
+      scene_id: "kitchen",
+      scope: "kitchen_moment",
+      status: "active",
+      issued_at_ms: 1_000,
+      expires_at_ms: 61_000,
+    },
+  };
+  const event = {
+    type: "family_event",
+    schema_version: "reme-family-event/v1",
+    room_session_id: "room-1",
+    runtime_session_id: "runtime-1",
+    revision: 2,
+    decision_timestamp_ms: 1_000,
+    published_at_ms: 1_200,
+    care,
+  };
+  assert.equal(parseViewerMessage(JSON.stringify(event))?.kind, "family_event");
+  assert.equal(parseViewerMessage(JSON.stringify({ ...event, revision: 2.5 })), null);
+  assert.equal(parseViewerMessage(JSON.stringify({
+    ...event,
+    care: {
+      ...care,
+      media_authorization: {
+        ...care.media_authorization,
+        decision_id: "decision-other",
+      },
+    },
+  })), null);
+  assert.equal(parseViewerMessage(JSON.stringify({
+    ...event,
+    care: {
+      ...care,
+      media_authorization: {
+        ...care.media_authorization,
+        expires_at_ms: 61_001,
+      },
+    },
+  })), null);
+  assert.equal(parseViewerMessage(JSON.stringify({ ...event, authorization: null })), null);
+  assert.equal(parseViewerMessage(JSON.stringify({
+    ...event,
+    care: {
+      ...care,
+      state: "family_notification_required",
+      risk_level: 2,
+      media_authorization: null,
+      action_card: {
+        event: "待处理事项",
+        elder_quote: "后端显式允许时可展示本人原话",
+        system_judgment: "需要家属协助",
+        suggested_action: "联系本人",
+        time_window: "今天",
+        status: "pending",
+      },
+    },
+  }))?.kind, "family_event");
 });
 
 test("viewer ready and presence reject out-of-contract audience sizes", () => {
@@ -97,22 +182,28 @@ test("control command factory accepts only the strict command union", () => {
   const command = createControlCommand({
     roomSessionId: "room-1",
     commandId: "cmd-1",
-    commandSequence: 0,
+    commandSequence: 1,
     issuedAtMs: 1000,
     expiresAtMs: 9000,
     expectedStateRevision: 4,
     command: { name: "select_scene", scene_id: "kitchen" },
   });
   assert.equal(isControlCommand(command), true);
-  assert.equal(isControlCommand(createControlCommand({
+  const alarmAck = createControlCommand({
     roomSessionId: "room-1",
-    commandId: "cmd-ack",
-    commandSequence: 1,
+    commandId: "cmd-notification",
+    commandSequence: 2,
     issuedAtMs: 1000,
     expiresAtMs: 9000,
     expectedStateRevision: 4,
     command: { name: "acknowledge_alarm", decision_id: "decision-1" },
-  })), true);
+  });
+  assert.equal(isControlCommand(alarmAck), true);
+  assert.throws(() => createControlCommand({
+    ...alarmAck,
+    command_id: "cmd-notification",
+    command: { name: "confirm_family_notification", decision_id: "decision-1" },
+  }), /invalid control command/);
   assert.throws(() => createControlCommand({
     ...command,
     roomSessionId: "room-1",

@@ -21,6 +21,8 @@ const VOICE_STAGE_LABELS = {
   failed: "语音对话暂时没有完成",
 };
 
+const SCRIPTED_CONCERN_TEXT = "牙疼，饭咬不动。";
+
 export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
   const decision = live.decision?.decision;
   const mimoRequest = live.decision?.mimoRequest || {};
@@ -125,9 +127,11 @@ export function AcceptanceControls({ scene, live, onTriggerFall, onReset }) {
                   variant="outlined"
                   startIcon={<MedicalServicesRoundedIcon />}
                   disabled={!waitingResponse}
-                  onClick={live.respondNeedHelp}
+                  onClick={fall
+                    ? live.respondNeedHelp
+                    : () => live.respondNeedHelpWithText(SCRIPTED_CONCERN_TEXT)}
                 >
-                  我需要帮助
+                  {fall ? "我需要帮助" : "演示：牙齿不舒服"}
                 </Button>
               </>
             )}

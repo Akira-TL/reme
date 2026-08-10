@@ -8,8 +8,8 @@ const RESPONSE_SOURCE_RULES = {
   unclear: "user_input",
   consent_granted: "user_input",
   consent_denied: "user_input",
-  none: "timeout",
   card_confirmed: "family_input",
+  alarm_acknowledged: "family_input",
 };
 
 export function getDecisionUrls() {
@@ -77,6 +77,14 @@ export function startDemoConversation(httpBase, { sceneId, scenario, timestampMs
       scenario,
       timestamp_ms: timestampMs,
     }),
+  });
+}
+
+export function requestMimoDiarySummary(httpBase, payload, signal) {
+  return request(httpBase, "/api/diary/summary", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    signal,
   });
 }
 

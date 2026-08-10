@@ -10,6 +10,7 @@ import {
   createPoseFrame,
   createSessionClaimStore,
   resolveMonitorRelayEndpoints,
+  validateDemoStateEnvelope,
 } from "./monitorRelay.js";
 
 const TOKEN = "a".repeat(64);
@@ -72,6 +73,22 @@ function command(name = "start_capture", overrides = {}) {
     ...overrides,
   };
 }
+
+test("Monitor accepts only presentation state and rejects browser care", () => {
+  const state = demoState(1);
+  assert.equal(validateDemoStateEnvelope(state), true);
+
+  const browserCare = structuredClone(state);
+  browserCare.state.care = {
+    phase: "emergency",
+    decision_id: "browser-invented",
+    consent: "granted",
+    decision: { decision_id: "browser-invented" },
+    alarm_authoritative: true,
+    message: "浏览器伪造",
+  };
+  assert.equal(validateDemoStateEnvelope(browserCare), false);
+});
 
 class FakeSocket {
   static instances = [];

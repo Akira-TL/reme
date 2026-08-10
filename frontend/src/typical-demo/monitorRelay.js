@@ -29,8 +29,6 @@ const CAPTURE_STATES = new Set([
 const REMOTE_VIDEO_STATES = new Set(["available", "local_only", "unavailable"]);
 const RUNTIME_STATES = new Set(["offline", "connecting", "ready", "degraded", "error"]);
 const RUNTIME_CAPABILITIES = new Set(["live", "scripted", "unavailable"]);
-const CARE_PHASES = new Set(["idle", "checking", "emergency", "resolved"]);
-const CONSENT_STATES = new Set(["none", "pending", "granted", "denied"]);
 const KEYPOINT_NAMES = [
   "nose",
   "left_eye",
@@ -272,10 +270,11 @@ function validateCare(value) {
     "alarm_authoritative",
     "message",
   ])) return false;
-  if (!CARE_PHASES.has(value.phase) || !CONSENT_STATES.has(value.consent)) return false;
-  if (value.decision_id !== null && !isId(value.decision_id)) return false;
-  if (typeof value.alarm_authoritative !== "boolean") return false;
-  if (value.message !== null && !isBoundedString(value.message, 240)) return false;
+  if (!["idle", "checking", "emergency", "resolved"].includes(value.phase)
+    || (value.decision_id !== null && !isId(value.decision_id))
+    || !["none", "pending", "granted", "denied"].includes(value.consent)
+    || typeof value.alarm_authoritative !== "boolean"
+    || (value.message !== null && !isBoundedString(value.message, 240))) return false;
   return value.phase === "emergency"
     ? value.alarm_authoritative && value.decision_id !== null
     : !value.alarm_authoritative;
@@ -440,7 +439,12 @@ function validateCommandBody(value) {
       && isId(value.decision_id)
       && ["safe", "need_help", "consent_granted", "consent_denied"].includes(value.response);
   }
-  if (value.name === "acknowledge_alarm" || value.name === "confirm_alarm" || value.name === "replay_voice") {
+  if ([
+    "acknowledge_alarm",
+    "confirm_alarm",
+    "confirm_action_card",
+    "replay_voice",
+  ].includes(value.name)) {
     return exactKeys(value, ["name", "decision_id"]) && isId(value.decision_id);
   }
   return false;

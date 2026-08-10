@@ -7,6 +7,7 @@ import { preview } from "vite";
 const frontendRoot = fileURLToPath(new URL("../", import.meta.url));
 const distRoot = new URL("../dist/", import.meta.url);
 const manifest = JSON.parse(await readFile(new URL(".vite/manifest.json", distRoot), "utf8"));
+const vercelConfig = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
 
 const routeKeys = Object.freeze({
   home: "src/apps/home/HomeApp.jsx",
@@ -67,6 +68,33 @@ test("product HTML does not preload a role surface before pathname resolution", 
     assert.equal(html.includes(routeFile), false, routeFile);
   }
   assert.ok(frontendRoot.endsWith("/frontend/"));
+});
+
+test("Vercel exposes one product origin with the three canonical paths", () => {
+  assert.equal(vercelConfig.framework, "vite");
+  assert.equal(vercelConfig.outputDirectory, "dist");
+  assert.deepEqual(
+    vercelConfig.rewrites.map(({ source, destination }) => ({ source, destination })),
+    [
+      { source: "/home", destination: "/index.html" },
+      { source: "/family", destination: "/index.html" },
+      { source: "/debug", destination: "/index.html" },
+    ],
+  );
+  const redirects = new Map(vercelConfig.redirects.map(({ source, destination }) => [source, destination]));
+  assert.equal(redirects.get("/"), "/home");
+  assert.equal(redirects.get("/viewer"), "/family");
+  assert.equal(redirects.get("/viewer.html"), "/family");
+  assert.equal(redirects.get("/typical-demo"), "/debug");
+  assert.equal(redirects.get("/typical-demo.html"), "/debug");
+  assert.equal(redirects.get("/monitor"), "/home");
+  assert.equal(redirects.get("/monitor.html"), "/home");
+
+  const securityHeaders = vercelConfig.headers.find(({ source }) => source === "/(.*)")?.headers || [];
+  const csp = securityHeaders.find(({ key }) => key === "Content-Security-Policy")?.value || "";
+  assert.match(csp, /https:\/\/relay\.reme\.maniforld\.com/);
+  assert.match(csp, /http:\/\/127\.0\.0\.1:8770/);
+  assert.equal(csp.includes("monitor.reme.maniforld.com"), false);
 });
 
 test("production preview serves all three pathname entries through the SPA fallback", async (context) => {

@@ -1,23 +1,35 @@
 import AlarmRoundedIcon from "@mui/icons-material/AlarmRounded";
+import AcUnitRoundedIcon from "@mui/icons-material/AcUnitRounded";
 import ArrowForwardIosRoundedIcon from "@mui/icons-material/ArrowForwardIosRounded";
+import AutoAwesomeRoundedIcon from "@mui/icons-material/AutoAwesomeRounded";
+import BedRoundedIcon from "@mui/icons-material/BedRounded";
 import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import CameraFrontRoundedIcon from "@mui/icons-material/CameraFrontRounded";
 import CameraRearRoundedIcon from "@mui/icons-material/CameraRearRounded";
+import ChairRoundedIcon from "@mui/icons-material/ChairRounded";
+import ChatBubbleOutlineRoundedIcon from "@mui/icons-material/ChatBubbleOutlineRounded";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import ChevronLeftRoundedIcon from "@mui/icons-material/ChevronLeftRounded";
 import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
+import CleaningServicesRoundedIcon from "@mui/icons-material/CleaningServicesRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import DashboardRoundedIcon from "@mui/icons-material/DashboardRounded";
+import DirectionsWalkRoundedIcon from "@mui/icons-material/DirectionsWalkRounded";
+import DoorFrontRoundedIcon from "@mui/icons-material/DoorFrontRounded";
 import EmergencyRoundedIcon from "@mui/icons-material/EmergencyRounded";
 import EventBusyRoundedIcon from "@mui/icons-material/EventBusyRounded";
 import ExpandMoreRoundedIcon from "@mui/icons-material/ExpandMoreRounded";
 import FavoriteRoundedIcon from "@mui/icons-material/FavoriteRounded";
+import FiberManualRecordRoundedIcon from "@mui/icons-material/FiberManualRecordRounded";
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import GroupsRoundedIcon from "@mui/icons-material/GroupsRounded";
 import HealthAndSafetyRoundedIcon from "@mui/icons-material/HealthAndSafetyRounded";
 import HomeRoundedIcon from "@mui/icons-material/HomeRounded";
 import LockRoundedIcon from "@mui/icons-material/LockRounded";
+import LightbulbRoundedIcon from "@mui/icons-material/LightbulbRounded";
+import LocalLaundryServiceRoundedIcon from "@mui/icons-material/LocalLaundryServiceRounded";
 import MicRoundedIcon from "@mui/icons-material/MicRounded";
+import NightsStayRoundedIcon from "@mui/icons-material/NightsStayRounded";
 import NotificationsActiveRoundedIcon from "@mui/icons-material/NotificationsActiveRounded";
 import PauseCircleRoundedIcon from "@mui/icons-material/PauseCircleRounded";
 import PlayCircleRoundedIcon from "@mui/icons-material/PlayCircleRounded";
@@ -28,9 +40,18 @@ import ScreenShareRoundedIcon from "@mui/icons-material/ScreenShareRounded";
 import SensorsRoundedIcon from "@mui/icons-material/SensorsRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import ShieldRoundedIcon from "@mui/icons-material/ShieldRounded";
+import ShowerRoundedIcon from "@mui/icons-material/ShowerRounded";
+import SpeakerRoundedIcon from "@mui/icons-material/SpeakerRounded";
+import SoupKitchenRoundedIcon from "@mui/icons-material/SoupKitchenRounded";
+import SubdirectoryArrowRightRoundedIcon from "@mui/icons-material/SubdirectoryArrowRightRounded";
 import TuneRoundedIcon from "@mui/icons-material/TuneRounded";
+import TipsAndUpdatesRoundedIcon from "@mui/icons-material/TipsAndUpdatesRounded";
 import VideocamRoundedIcon from "@mui/icons-material/VideocamRounded";
 import VolumeUpRoundedIcon from "@mui/icons-material/VolumeUpRounded";
+import WbSunnyRoundedIcon from "@mui/icons-material/WbSunnyRounded";
+import WbTwilightRoundedIcon from "@mui/icons-material/WbTwilightRounded";
+import WindowRoundedIcon from "@mui/icons-material/WindowRounded";
+import KitchenRoundedIcon from "@mui/icons-material/KitchenRounded";
 import {
   BottomNavigation,
   BottomNavigationAction,
@@ -44,14 +65,28 @@ import {
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { relayAvailabilityCopy } from "./config.js";
 import {
+  familyCareMessage,
+  familyCarePresentationKind,
+  familyMediaAuthorization,
+  isFamilyAlarm,
+  isPendingFamilyActionCard,
+} from "./familyAuthority.js";
+import {
   isFamilyConfirmationTimedOut,
   resolveFamilyConfirmationError,
+  selectFamilyAcknowledgementCommand,
 } from "./familyConfirmation.js";
 import { deriveFamilyTruth } from "./familyPresentation.js";
 import {
   createFamilyTimelineState,
   reduceFamilyTimeline,
 } from "./familyTimeline.js";
+import {
+  FAMILY_TIMELINE_DISPLAY_END_DATE,
+  FAMILY_TIMELINE_MOCK_END_DATE,
+  isFamilyTimelineDisplayDate,
+} from "./familyTimelineMock.js";
+import { useRemeHistory } from "./remeHistory.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
   buildWeekDays,
@@ -59,10 +94,12 @@ import {
   filterTimelineEventsByDate,
   shiftDateKey,
   timelineDateHeading,
+  timelineDateLongHeading,
 } from "./timelineDates.js";
 import { useAlertEffects } from "./useAlertEffects.js";
 import { useViewerMedia } from "./useViewerMedia.js";
 import { useViewerRelay } from "./useViewerRelay.js";
+import { useRtcConfiguration } from "./useRtcConfiguration.js";
 import {
   hasPendingCommand,
   selectActiveMediaGrant,
@@ -125,7 +162,8 @@ const COMMAND_COPY = Object.freeze({
   start_conversation: "发起问询",
   submit_response: "提交本人回应",
   acknowledge_alarm: "确认告警",
-  confirm_alarm: "确认告警（兼容）",
+  confirm_alarm: "确认告警",
+  confirm_action_card: "确认行动卡",
   replay_voice: "重播语音",
   unknown: "远程命令",
 });
@@ -186,7 +224,7 @@ function useStoredBoolean(key, fallback) {
   return [value, setValue];
 }
 
-function ConnectionBanner({ relay, grant, nowMs, familySurface = false }) {
+function ConnectionBanner({ relay, grant, nowMs, familySurface = false, rtcError = null }) {
   const remaining = grant ? secondsRemaining(grant.expires_at_ms, nowMs) : 0;
   return (
     <aside className={`public-room-banner ${grant ? "is-live" : ""}`}>
@@ -213,6 +251,8 @@ function ConnectionBanner({ relay, grant, nowMs, familySurface = false }) {
               : `原画开放 ${remaining}s · 全部 Viewer 可见`
             : relay.unavailableReason
               ? "当前权威状态不可用"
+              : rtcError
+                ? "RTC 配置不可用 · 原画保持关闭"
               : "日常仅同步骨架与必要状态"}
         </span>
       </div>
@@ -220,18 +260,20 @@ function ConnectionBanner({ relay, grant, nowMs, familySurface = false }) {
   );
 }
 
-function StatusCard({ snapshot, relay, familySurface = false }) {
+function StatusCard({ snapshot, relay, decision, familySurface = false }) {
   const truth = deriveFamilyTruth(snapshot, relay);
   const sceneId = truth.sceneId;
-  const care = snapshot?.state.care;
+  const careMessage = familyCareMessage(decision);
+  const presentationKind = familyCarePresentationKind(decision);
   const runtime = snapshot?.state.runtime;
   const capture = snapshot?.state.capture;
   const status = (() => {
-    if (relay.unavailableReason && care?.phase === "emergency") return {
+    if (relay.unavailableReason
+      && presentationKind === "alarm") return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
-      title: "上次紧急告警 · 当前状态已过期",
-      body: `${care.message || "曾收到权威紧急告警"}；${unavailableCopy(relay, familySurface)}。请勿把它当作当前现场状态。`,
+      title: "紧急告警仍待处理 · 现场传输不可用",
+      body: `${careMessage || "后端已发布权威紧急告警"}；${unavailableCopy(relay, familySurface)}。告警不会因浏览器离线而被取消。`,
     };
     if (relay.unavailableReason) return {
       tone: "offline",
@@ -247,19 +289,31 @@ function StatusCard({ snapshot, relay, familySurface = false }) {
         ? "连接恢复前不展示旧骨架、旧原画或旧处理结果。"
         : "连接恢复前不展示旧骨架、旧原画或旧控制结果。",
     };
-    if (care?.phase === "emergency") return {
+    if (presentationKind === "alarm") return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
       title: "紧急告警：请立即关注",
-      body: care.message || (familySurface
+      body: careMessage || (familySurface
         ? "安全规则已升级，家属端不能取消或降低本次告警。"
         : "权威安全规则已升级，本次状态不能由远程命令降低。"),
     };
-    if (care?.phase === "checking") return {
+    if (presentationKind === "action_card") return {
+      tone: "warning",
+      Icon: TipsAndUpdatesRoundedIcon,
+      title: "家属行动卡待处理",
+      body: careMessage || "本人已同意把具体生活需要同步给家属；这不是安全告警。",
+    };
+    if (presentationKind === "notification") return {
+      tone: "warning",
+      Icon: HealthAndSafetyRoundedIcon,
+      title: "家属收到普通关怀通知",
+      body: careMessage || "这条通知不附带行动卡或安全告警。",
+    };
+    if (["check_in_required", "consent_required"].includes(decision?.state)) return {
       tone: "warning",
       Icon: AlarmRoundedIcon,
       title: "正在先询问本人",
-      body: care.message || "问询阶段保持骨架显示，等待本人回应。",
+      body: careMessage || "问询阶段保持骨架显示，等待本人回应。",
     };
     if (sceneId === "bathroom") return {
       tone: "privacy",
@@ -319,8 +373,11 @@ function HomePage({
   localNowMs,
   relayNowMs,
   familySurface = false,
+  familyAcknowledgementControl = null,
+  decision = null,
 }) {
   const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
+  const mediaAuthorization = familyMediaAuthorization(relay.familyEvent);
   return (
     <main className="viewer-page viewer-home-page">
       <SkeletonStage
@@ -347,28 +404,121 @@ function HomePage({
           </div>
         </div>
       )}
-      <StatusCard snapshot={snapshot} relay={relay} familySurface={familySurface} />
-      {sceneId === "kitchen" && snapshot?.state.care.consent === "granted" && (
+      <StatusCard snapshot={snapshot} relay={relay} decision={decision} familySurface={familySurface} />
+      {familyAcknowledgementControl}
+      {sceneId === "kitchen"
+        && mediaAuthorization?.status === "active"
+        && mediaAuthorization.scope === "kitchen_moment" && (
         <article className="care-moment-card">
           <span><RestaurantRoundedIcon /></span>
           <div><small>本人已授权</small><b>外婆分享了厨房里的生活片段</b><p>授权只属于当前事件；过期或切换场景后自动关闭。</p></div>
           <CheckCircleRoundedIcon className="care-moment-check" />
         </article>
       )}
+      {familySurface && (
+        <div className="family-home-dashboard">
+          <DashboardContent
+            relay={relay}
+            snapshot={snapshot}
+            activeGrant={activeGrant}
+            nowMs={relayNowMs}
+            familySurface
+          />
+        </div>
+      )}
     </main>
   );
 }
 
+function FamilyActionCard({
+  decision,
+  pending,
+  applied,
+  blocked,
+  error,
+  onConfirm,
+}) {
+  const card = decision?.action_card;
+  if (familyCarePresentationKind(decision) !== "action_card" || !card) return null;
+  const canConfirm = card.status === "pending";
+  const label = applied
+    ? "已确认收到行动卡"
+    : pending
+      ? "正在提交确认…"
+      : blocked
+        ? "其他访问端正在处理"
+        : "确认收到并开始处理";
+  return (
+    <article className="care-moment-card family-action-card">
+      <span><TipsAndUpdatesRoundedIcon /></span>
+      <div>
+        <small>非紧急家庭待办 · {card.status === "pending" ? "待确认" : "已更新"}</small>
+        <b>{card.event}</b>
+        {card.elder_quote && <p>本人原话：{card.elder_quote}</p>}
+        <p>关怀判断：{card.system_judgment}</p>
+        <p>建议动作：{card.suggested_action} · {card.time_window}</p>
+        {canConfirm && (
+          <Button
+            size="small"
+            variant="contained"
+            disabled={pending || applied || blocked}
+            onClick={() => onConfirm(decision.decision_id, "confirm_action_card")}
+          >
+            {label}
+          </Button>
+        )}
+        {error && <p className="family-confirm-error" role="alert">{error}</p>}
+      </div>
+    </article>
+  );
+}
+
 const TIMELINE_ICONS = Object.freeze({
-  sync: SensorsRoundedIcon,
+  assessment: AutoAwesomeRoundedIcon,
+  judgment: AutoAwesomeRoundedIcon,
+  notification: NotificationsActiveRoundedIcon,
+  action_card: TipsAndUpdatesRoundedIcon,
+  alarm: EmergencyRoundedIcon,
   care: HealthAndSafetyRoundedIcon,
   media: VideocamRoundedIcon,
   consent: PrivacyTipRoundedIcon,
-  scene: HomeRoundedIcon,
-  capture: CameraFrontRoundedIcon,
-  runtime: HealthAndSafetyRoundedIcon,
   acknowledgement: CheckCircleRoundedIcon,
 });
+
+const TIMELINE_ALARM_TRIGGER_COPY = Object.freeze({
+  elder_report: "本人明确求助",
+  voice_intent: "语音确认求助",
+  visual_confirm: "危险画面确认",
+  check_in_timeout: "安全询问无回应",
+  unclear_response: "无法确认本人状态",
+  family_unresponsive: "家属未确认",
+});
+
+const TIMELINE_SOURCE_COPY = Object.freeze({
+  rule: { short: "安全规则", detail: "确定性安全规则" },
+  mimo: { short: "MiMo", detail: "MiMo 综合关怀判断" },
+  mock: { short: "演示", detail: "演示脚本（非实时模型）" },
+  record: { short: "回放", detail: "已记录的关怀决策回放" },
+  degraded: { short: "降级", detail: "本地降级策略" },
+  backend: { short: "Backend", detail: "Backend 权威家庭状态" },
+});
+
+const TIMELINE_UNCERTAINTY_COPY = Object.freeze({
+  low: "低",
+  medium: "中",
+  high: "高",
+  unknown: "未知",
+});
+
+function visualContextCopy(visualContext) {
+  if (!visualContext?.sentToMimo) return "未向 MiMo 发送视觉上下文";
+  if (visualContext.type === "keyframes") {
+    return Number.isSafeInteger(visualContext.sampleCount)
+      ? `已使用 ${visualContext.sampleCount} 张最小关键帧`
+      : "已使用最小关键帧";
+  }
+  return "已使用最小事件短片";
+}
 
 function TimelineEventCard({ event }) {
   const [expanded, setExpanded] = useState(false);
@@ -377,19 +527,62 @@ function TimelineEventCard({ event }) {
     ? new Date(event.timestampMs).toISOString()
     : undefined;
   const details = [
+    ...(event.assessmentSource
+      ? [{
+        label: "判断来源",
+        value: TIMELINE_SOURCE_COPY[event.assessmentSource]?.detail || event.assessmentSource,
+      }]
+      : []),
+    ...(event.uncertainty
+      ? [{
+        label: "判断不确定性",
+        value: TIMELINE_UNCERTAINTY_COPY[event.uncertainty] || "未知",
+      }]
+      : []),
+    ...(event.visualContext
+      ? [{ label: "视觉上下文", value: visualContextCopy(event.visualContext) }]
+      : []),
     {
       label: "数据来源",
-      value: event.source === "command_ack" ? "Relay 命令回执" : "Relay 权威快照",
+      value: event.source === "command_ack"
+        ? "Relay 命令回执"
+        : event.source === "mock_fixture"
+          ? "固定 Mock 演示数据（非真实家庭历史）"
+          : "Relay 权威快照",
     },
     ...(Number.isSafeInteger(event.stateRevision)
       ? [{ label: "状态版本", value: `revision ${event.stateRevision}` }]
       : []),
-    ...(event.sceneId
-      ? [{ label: "演示场景", value: SCENE_COPY[event.sceneId]?.label || event.sceneId }]
+    ...(event.sceneLabel
+      ? [{ label: "家中端上下文", value: event.sceneLabel }]
+      : []),
+    ...(event.captureLabel
+      ? [{ label: "采集状态", value: event.captureLabel }]
+      : []),
+    ...(event.runtimeLabel
+      ? [{ label: "本地能力", value: event.runtimeLabel }]
+      : []),
+    ...(event.actionCard
+      ? [
+          { label: "系统判断", value: event.actionCard.system_judgment },
+          { label: "处理时效", value: event.actionCard.time_window },
+        ]
+      : []),
+    ...(event.alarm
+      ? [
+          {
+            label: "告警触发",
+            value: TIMELINE_ALARM_TRIGGER_COPY[event.alarm.trigger] || event.alarm.trigger,
+          },
+          { label: "告警通道", value: event.alarm.channels.join("、") },
+        ]
       : []),
   ];
+  const sourceChip = event.assessmentSource
+    ? TIMELINE_SOURCE_COPY[event.assessmentSource]?.short || event.assessmentSource
+    : null;
   return (
-    <article className={`timeline-event-card is-${event.tone}`}>
+    <article className={`timeline-event-card kind-${event.kind} is-${event.tone} ${event.source === "mock_fixture" ? "is-mock" : ""}`}>
       <button
         className="timeline-event-summary"
         type="button"
@@ -397,8 +590,33 @@ function TimelineEventCard({ event }) {
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="timeline-event-marker"><EventIcon /></span>
-        <span className="timeline-event-time"><time dateTime={dateTime}>{formatTime(event.timestampMs)}</time><small>{event.label}</small></span>
-        <span className="timeline-event-copy"><b>{event.title}</b><span>{event.detail}</span></span>
+        <span className="timeline-event-content">
+          <span className="timeline-event-meta">
+            <span className="timeline-event-time"><time dateTime={dateTime}>{formatTime(event.timestampMs)}</time><small>{event.label}</small></span>
+            {event.statusLabel && <strong>{event.statusLabel}</strong>}
+          </span>
+          <span className="timeline-event-copy">
+            <b>{event.title}</b>
+            {event.detail && event.detail !== event.title && <span><em>判断依据</em>{event.detail}</span>}
+          </span>
+          {(sourceChip || event.uncertainty || event.visualContext?.sentToMimo) && (
+            <span className="timeline-event-chips" aria-label="判断标签">
+              {sourceChip && <small>{sourceChip}</small>}
+              {event.uncertainty && <small>不确定性 {TIMELINE_UNCERTAINTY_COPY[event.uncertainty] || "未知"}</small>}
+              {event.visualContext?.sentToMimo && <small>{event.visualContext.type === "clip" ? "最小短片" : "最小关键帧"}</small>}
+            </span>
+          )}
+          {(event.suggestedAction || event.progress) && (
+            <span className="timeline-event-actions">
+              {event.suggestedAction && (
+                <span><TipsAndUpdatesRoundedIcon /><small>建议动作</small><b>{event.suggestedAction}</b></span>
+              )}
+              {event.progress && (
+                <span><CheckCircleRoundedIcon /><small>处理进展</small><b>{event.progress}</b></span>
+              )}
+            </span>
+          )}
+        </span>
         <ExpandMoreRoundedIcon className={expanded ? "is-expanded" : ""} />
       </button>
       {expanded && (
@@ -406,26 +624,444 @@ function TimelineEventCard({ event }) {
           {details.map((detail) => (
             <div key={detail.label}><span>{detail.label}</span><b>{detail.value}</b></div>
           ))}
-          <p>只记录本次公开演示会话中的结构化状态，不包含原始画面、音频或骨架正文。</p>
+          <p>{event.kind === "alarm"
+            ? "这是确定性安全规则发布的告警；MiMo 不能降低、取消或延迟它。"
+            : event.kind === "action_card"
+              ? "这是本人明确表达并授权告知家人后生成的非紧急待办，不是医疗诊断或安全告警。"
+              : "关怀判词只解释本次结构化结论，不等于医疗诊断，也不会自动变成行动卡或告警。"}</p>
         </div>
       )}
     </article>
   );
 }
 
-function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs }) {
-  const weekDays = buildWeekDays(selectedDateKey, nowMs);
+const REME_ACTIVITY_ICONS = Object.freeze({
+  aircon: AcUnitRoundedIcon,
+  bed: BedRoundedIcon,
+  cleaning: CleaningServicesRoundedIcon,
+  door: DoorFrontRoundedIcon,
+  fridge: KitchenRoundedIcon,
+  walk: DirectionsWalkRoundedIcon,
+  kitchen: SoupKitchenRoundedIcon,
+  laundry: LocalLaundryServiceRoundedIcon,
+  light: LightbulbRoundedIcon,
+  night: NightsStayRoundedIcon,
+  seat: ChairRoundedIcon,
+  shower: ShowerRoundedIcon,
+  speaker: SpeakerRoundedIcon,
+  window: WindowRoundedIcon,
+});
+
+function RemeActivityRow({ entry }) {
+  const [expanded, setExpanded] = useState(false);
+  const ActivityIcon = REME_ACTIVITY_ICONS[entry.icon] || DirectionsWalkRoundedIcon;
+  const dateTime = new Date(entry.timestampMs).toISOString();
+  return (
+    <article className={`reme-life-event ${entry.kind === "device" ? "is-device" : "is-activity"}`}>
+      <button
+        type="button"
+        className="reme-life-event-summary"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="reme-life-event-icon"><ActivityIcon /></span>
+        <time dateTime={dateTime}>{formatTime(entry.timestampMs)}</time>
+        <span className="reme-life-event-title">{entry.title}</span>
+        <ArrowForwardIosRoundedIcon className={expanded ? "is-expanded" : ""} />
+      </button>
+      {expanded && (
+        <div className="reme-life-event-detail">
+          <b>{entry.label} · 非真实家庭历史</b>
+          <p>{entry.detail} {entry.kind === "device"
+            ? "设备名称与状态均为固定演示数据。"
+            : "不包含原始画面、音频或可识别人物影像。"}</p>
+          {entry.related.length > 0 && (
+            <ul>
+              {entry.related.map((related) => (
+                <li key={`${entry.id}:${related.timestampMs}`}>
+                  <time dateTime={new Date(related.timestampMs).toISOString()}>{formatTime(related.timestampMs)}</time>
+                  <span>{related.title}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function RemeCareThread({ event }) {
+  const [expanded, setExpanded] = useState(false);
+  const [materialExpanded, setMaterialExpanded] = useState(false);
+  const response = event.linkedResponse;
+  const material = event.familyMaterial;
+  const dateTime = new Date(event.timestampMs).toISOString();
+  const responseDateTime = response ? new Date(response.timestampMs).toISOString() : null;
+  const materialDateTime = material ? new Date(material.deliveredAtMs).toISOString() : null;
+  return (
+    <article className={`reme-care-thread is-${event.tone} ${response ? "has-response" : ""}`}>
+      <button
+        type="button"
+        className="reme-care-card"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="reme-care-icon"><FavoriteRoundedIcon /></span>
+        <span className="reme-care-copy">
+          <span className="reme-care-meta"><time dateTime={dateTime}>{formatTime(event.timestampMs)}</time><b>主动关怀</b></span>
+          <strong>{event.title}</strong>
+          {event.checkIn && (
+            <span className="reme-care-question-copy">
+              <VolumeUpRoundedIcon />
+              <span><small>MiMo 发问</small><b>“{event.checkIn.prompt}”</b></span>
+            </span>
+          )}
+          <small className="reme-care-basis">依据：{event.detail} · 不确定性{TIMELINE_UNCERTAINTY_COPY[event.uncertainty] || "未知"}</small>
+        </span>
+        <span className="reme-care-status">{event.statusLabel}</span>
+      </button>
+      {expanded && (
+        <div className="reme-care-details">
+          <div><span>判断来源</span><b>{TIMELINE_SOURCE_COPY[event.assessmentSource]?.detail || "演示脚本"}</b></div>
+          <div><span>建议动作</span><b>{event.suggestedAction}</b></div>
+          <div><span>处理进展</span><b>{event.progress}</b></div>
+          <p>关怀判断不等于医疗诊断；本卡只展示固定 Mock 结构化结论，不包含原始画面或完整对话。</p>
+        </div>
+      )}
+      {response && (
+        <button
+          type="button"
+          className="reme-care-response"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <SubdirectoryArrowRightRoundedIcon className="reme-care-connector" />
+          <span><ChatBubbleOutlineRoundedIcon /></span>
+          <time dateTime={responseDateTime}>{formatTime(response.timestampMs)}</time>
+          <b>{response.title}</b>
+          <ArrowForwardIosRoundedIcon className={expanded ? "is-expanded" : ""} />
+        </button>
+      )}
+      {material && (
+        <>
+          <button
+            type="button"
+            className="reme-care-material"
+            aria-expanded={materialExpanded}
+            onClick={() => setMaterialExpanded((value) => !value)}
+          >
+            <span className="reme-care-material-icon"><AutoAwesomeRoundedIcon /></span>
+            <span className="reme-care-material-copy"><small>MiMo 已整理</small><b>{material.label}</b></span>
+            <span className="reme-care-material-meta">
+              <small><VideocamRoundedIcon />{material.attachment.durationSeconds} 秒</small>
+              <em>{material.deliveryStatus}</em>
+            </span>
+            <ArrowForwardIosRoundedIcon className={materialExpanded ? "is-expanded" : ""} />
+          </button>
+          {materialExpanded && (
+            <div className="reme-care-material-details">
+              <p>{material.summary}</p>
+              <div><span>问候对话</span><b>1 问 1 答</b></div>
+              <div><span>姿态依据</span><b>{material.evidence}</b></div>
+              <div><span>随附片段</span><b>{material.attachment.label} · {material.attachment.durationSeconds} 秒 · Mock</b></div>
+              <div><span>整理来源</span><b>{material.modelLabel}</b></div>
+              <div><span>送达对象</span><b>{material.recipient}</b></div>
+              <div><span>家属送达</span><b><time dateTime={materialDateTime}>{formatTime(material.deliveredAtMs)}</time> · {material.deliveryStatus}</b></div>
+              {material.facts.length > 0 && (
+                <ol className="reme-care-material-facts" aria-label="全屋设备事实">
+                  {material.facts.map((fact) => <li key={fact}>{fact}</li>)}
+                </ol>
+              )}
+              <small>演示材料只保留结构化摘要和匿名骨架短片元数据，不代表真实视频已上传或形成跨会话家庭档案。</small>
+            </div>
+          )}
+        </>
+      )}
+    </article>
+  );
+}
+
+function isRemeCareEntry(entry) {
+  return !["activity", "device"].includes(entry.kind);
+}
+
+function RemeDaypartSection({ section, filter, expanded, onToggle }) {
+  const entries = filter === "care"
+    ? section.entries.filter(isRemeCareEntry)
+    : filter === "device"
+      ? section.entries.filter((entry) => entry.kind === "device")
+      : section.entries;
+  if (entries.length === 0) return null;
+  const DaypartIcon = section.icon === "moon"
+    ? NightsStayRoundedIcon
+    : section.icon === "sunset" ? WbTwilightRoundedIcon : WbSunnyRoundedIcon;
+  const filteredCount = filter === "care"
+    ? `${section.careCount} 次关怀`
+    : filter === "device" ? `${section.deviceCount} 条设备` : `${section.count} 条`;
+  const contentId = `reme-daypart-${section.id}`;
+  return (
+    <section className={`reme-daypart ${expanded ? "is-expanded" : "is-collapsed"}`}>
+      <button
+        type="button"
+        className="reme-daypart-heading"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        onClick={onToggle}
+      >
+        <span className="reme-daypart-icon"><DaypartIcon /></span>
+        <span className="reme-daypart-name">{section.label}</span>
+        <span className="reme-daypart-range">{section.range}</span>
+        <span className="reme-daypart-count">· {filteredCount}</span>
+        {!expanded && section.careCount > 0 && filter === "all" && (
+          <span className="reme-daypart-care-count">含 {section.careCount} 次关怀</span>
+        )}
+        <ExpandMoreRoundedIcon className={expanded ? "is-expanded" : ""} />
+      </button>
+      {expanded && (
+        <div className="reme-daypart-events" id={contentId}>
+          {entries.map((entry) => (
+            entry.kind === "assessment"
+              ? <RemeCareThread event={entry} key={entry.id} />
+              : ["activity", "device"].includes(entry.kind)
+                ? <RemeActivityRow entry={entry} key={entry.id} />
+                : <TimelineEventCard event={entry} key={entry.id} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RemeDateStrip({ selectedDateKey, onSelectDate, days }) {
+  return (
+    <section className="reme-week-strip" aria-label="Reme 记录日期">
+      <div className="reme-week-days">
+        {days.map((day) => (
+          <button
+            type="button"
+            key={day.dateKey}
+            className={`${day.dateKey === selectedDateKey ? "is-selected" : ""} is-${day.sourceMode}`}
+            aria-pressed={day.dateKey === selectedDateKey}
+            onClick={() => onSelectDate(day.dateKey)}
+          >
+            <span>周{day.weekday}</span>
+            <b>{day.day}</b>
+            <small>Mock</small>
+            {day.dateKey === selectedDateKey && <FiberManualRecordRoundedIcon />}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function RemeSourceBoundary({ day }) {
+  const coverage = day.coverageStatus === "complete"
+    ? `${day.coverageHours} 小时覆盖`
+    : day.coverageStatus === "partial"
+      ? `${day.coverageHours} 小时 · 部分覆盖`
+      : "数据不可用";
+  return (
+    <aside className="reme-source-boundary is-mock">
+      <SensorsRoundedIcon />
+      <div>
+        <b>Backend 演示历史 · 明确标注 Mock</b>
+        <span>时间线来自 Relay 的 Backend-owned fixture，不从前端 bundle 生成，也不冒充真实家庭历史。</span>
+      </div>
+      <strong>{coverage}</strong>
+    </aside>
+  );
+}
+
+const MIMO_DIARY_UNCERTAINTY_COPY = Object.freeze({
+  low: "低不确定性",
+  medium: "中等不确定性",
+  high: "高不确定性",
+});
+
+function mimoDiaryUnavailableCopy(summaryState) {
+  if (summaryState?.error_code === "mimo_invalid_output") {
+    return "MiMo 返回内容未通过 Backend JSON 结构校验，本次结果未采用。";
+  }
+  if (summaryState?.error_code === "mimo_not_configured") {
+    return "Backend 尚未配置 MiMo，本日摘要明确标记为不可用。";
+  }
+  if (summaryState?.error_code === "mimo_timeout") {
+    return "MiMo 本日摘要生成超时，当前不显示固定替代摘要。";
+  }
+  if (summaryState?.error_code === "timeline_not_ready") {
+    return "本日时间线尚未准备完成，暂不生成摘要。";
+  }
+  return "Backend 当前没有可用的 MiMo 本日摘要；页面不会回退到前端固定文案。";
+}
+
+function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
+  const [filter, setFilter] = useState("all");
+  const [expandedDayparts, setExpandedDayparts] = useState(() => new Set(["early", "morning"]));
+  const displayDay = day;
+  const summaryStateName = summary
+    ? "live"
+    : summaryState?.status === "generating" ? "loading" : "unavailable";
+  const liveSummary = summary;
+  const summaryHeadline = liveSummary
+    ? liveSummary.headline
+    : summaryStateName === "loading" ? "正在生成本日动态摘要…" : "本日动态摘要暂不可用";
+  const summaryCopy = liveSummary
+    ? liveSummary.summary
+    : summaryStateName === "loading"
+      ? "Backend 正在使用结构化时间线生成 MiMo 摘要。"
+      : mimoDiaryUnavailableCopy(summaryState);
+  const summaryStatus = summaryStateName === "live"
+    ? "Backend MiMo"
+    : summaryStateName === "loading" ? "正在生成" : "摘要不可用";
+
+  const selectFilter = (nextFilter) => {
+    setFilter(nextFilter);
+    if (nextFilter === "all") {
+      setExpandedDayparts(new Set(["early", "morning"]));
+      return;
+    }
+    const countKey = nextFilter === "device" ? "deviceCount" : "careCount";
+    setExpandedDayparts(new Set(
+      displayDay.sections.filter((section) => section[countKey] > 0).map((section) => section.id),
+    ));
+  };
+  const toggleDaypart = (daypartId) => {
+    setExpandedDayparts((current) => {
+      const next = new Set(current);
+      if (next.has(daypartId)) next.delete(daypartId);
+      else next.add(daypartId);
+      return next;
+    });
+  };
+
+  return (
+    <main className="viewer-page timeline-page reme-timeline-page">
+      <RemeDateStrip selectedDateKey={day.dateKey} onSelectDate={onSelectDate} days={dates} />
+      <RemeSourceBoundary day={day} />
+
+      <section
+        className="reme-mimo-summary"
+        aria-labelledby="reme-day-summary-title"
+        aria-live="polite"
+        aria-atomic="true"
+        data-summary-schema={liveSummary?.schema_version || "pending"}
+      >
+          <div className="reme-mimo-summary-heading">
+            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>MiMo 本日动态摘要</b></span>
+            <span className={`reme-mimo-summary-status is-${summaryStateName}`}><FiberManualRecordRoundedIcon />{summaryStatus}</span>
+          </div>
+          <h2 id="reme-day-summary-title">{summaryHeadline}</h2>
+          <p>{summaryCopy}</p>
+          {liveSummary?.highlights.length > 0 && (
+            <ol className="reme-mimo-highlights" aria-label="MiMo 提取的重点片段">
+              {liveSummary.highlights.map((item) => (
+                <li key={`${item.time}:${item.text}`}><time>{item.time}</time><span>{item.text}</span></li>
+              ))}
+            </ol>
+          )}
+          {liveSummary?.care_note && <p className="reme-mimo-care-note">关怀进展 · {liveSummary.care_note}</p>}
+          <div className="reme-mimo-summary-footer">
+            {liveSummary ? (
+              <time dateTime={new Date(liveSummary.generated_at_ms).toISOString()}>生成于 {formatTime(liveSummary.generated_at_ms)}</time>
+            ) : <span>未使用 Mock 摘要</span>}
+            <span>{liveSummary
+              ? `已吸收 ${liveSummary.input_event_count} 条 Backend 结构化演示记录 · ${liveSummary.model} · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty] || "不确定性未知"}`
+              : `Backend 时间线 revision ${day.revision} · ${day.totalCount} 条稳定统计记录`}</span>
+          </div>
+      </section>
+
+      <section className="reme-day-summary" aria-label="今日记录统计">
+        <div className="reme-day-statistics">
+          <span>{day.coverageStatus === "complete" ? "24 小时演示覆盖" : "部分演示覆盖"}</span>
+          <p><b>{displayDay.totalCount}</b> 个生活片段</p>
+        </div>
+        <div className="reme-source-mix" aria-label="记录来源">
+          <span><DirectionsWalkRoundedIcon /><b>{displayDay.activityCount}</b> 人体与空间</span>
+          <span><SensorsRoundedIcon /><b>{displayDay.deviceCount}</b> 全屋设备</span>
+          <span><FavoriteRoundedIcon /><b>{displayDay.careCount}</b> 主动关怀</span>
+        </div>
+        <div className="reme-timeline-filter" role="group" aria-label="筛选时间线记录">
+          <button type="button" className={filter === "all" ? "is-selected" : ""} aria-pressed={filter === "all"} onClick={() => selectFilter("all")}>全部 <b>{displayDay.totalCount}</b></button>
+          <button type="button" className={filter === "device" ? "is-selected" : ""} aria-pressed={filter === "device"} onClick={() => selectFilter("device")}>设备 <b>{displayDay.deviceCount}</b></button>
+          <button type="button" className={filter === "care" ? "is-selected" : ""} aria-pressed={filter === "care"} onClick={() => selectFilter("care")}>关怀 <b>{displayDay.careCount}</b></button>
+        </div>
+      </section>
+
+      <div className="reme-dayparts">
+        {displayDay.sections.map((section) => (
+          <RemeDaypartSection
+            key={section.id}
+            section={section}
+            filter={filter}
+            expanded={expandedDayparts.has(section.id)}
+            onToggle={() => toggleDaypart(section.id)}
+          />
+        ))}
+      </div>
+
+    </main>
+  );
+}
+
+function TimelinePage({
+  timeline,
+  relay,
+  selectedDateKey,
+  onSelectDate,
+  nowMs,
+  remeHistory,
+  familySurface,
+}) {
   const todayKey = dateKeyFromTimestamp(nowMs);
-  const events = filterTimelineEventsByDate(timeline.events, selectedDateKey);
+  const selectableThrough = todayKey > FAMILY_TIMELINE_DISPLAY_END_DATE
+    ? todayKey
+    : FAMILY_TIMELINE_DISPLAY_END_DATE;
+  const weekDays = buildWeekDays(selectedDateKey, nowMs, selectableThrough);
   const interrupted = Boolean(
     relay.unavailableReason
       || !relay.monitorOnline
       || relay.connection !== "connected",
   );
-  const canGoForward = shiftDateKey(selectedDateKey, 7) <= todayKey;
+  const backendRemeDate = remeHistory.dates.some((day) => day.dateKey === selectedDateKey);
+  if (familySurface && backendRemeDate && remeHistory.day?.dateKey === selectedDateKey) {
+    return (
+      <RemeTimeline
+        key={`${remeHistory.day.dateKey}:${remeHistory.day.revision}`}
+        day={remeHistory.day}
+        onSelectDate={onSelectDate}
+        dates={remeHistory.dates}
+        summaryState={remeHistory.summaryState}
+        summary={remeHistory.summary}
+      />
+    );
+  }
+  if (familySurface && (backendRemeDate || isFamilyTimelineDisplayDate(selectedDateKey))) {
+    return (
+      <main className="viewer-page timeline-page reme-timeline-page">
+        <RemeDateStrip
+          selectedDateKey={selectedDateKey}
+          onSelectDate={onSelectDate}
+          days={remeHistory.dates}
+        />
+        <section className="timeline-empty-state" role={remeHistory.error ? "alert" : "status"}>
+          <span>{remeHistory.error ? <EventBusyRoundedIcon /> : <RefreshRoundedIcon />}</span>
+          <h2>{remeHistory.error ? "Reme 历史暂不可用" : "正在读取 Backend 历史"}</h2>
+          <p>{remeHistory.error
+            ? "页面不会回退到 Frontend 固定 Mock；请检查 Relay History API 与 fixture loader。"
+            : "正在从 Relay 获取日期索引、日时间线与 MiMo 摘要状态。"}</p>
+        </section>
+      </main>
+    );
+  }
+  const liveEvents = filterTimelineEventsByDate(timeline.events, selectedDateKey);
+  const events = [...liveEvents]
+    .sort((left, right) => right.timestampMs - left.timestampMs || left.id.localeCompare(right.id));
+  const canGoForward = shiftDateKey(selectedDateKey, 7) <= selectableThrough;
   const changeWeek = (offset) => {
     const candidate = shiftDateKey(selectedDateKey, offset * 7);
-    onSelectDate(candidate > todayKey ? todayKey : candidate);
+    onSelectDate(candidate > selectableThrough ? selectableThrough : candidate);
   };
   return (
     <main className="viewer-page timeline-page">
@@ -453,10 +1089,15 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
         </div>
       </section>
 
+      <section className="timeline-care-intro" aria-label="主动关怀说明">
+        <span><AutoAwesomeRoundedIcon /></span>
+        <div><small>reme · remember me</small><h2>记住每一次值得关心的变化</h2><p>把可靠事件变成可行动的关怀判断，并标明来源、证据边界与不确定性。</p></div>
+      </section>
+
       <aside className={`timeline-session-note ${interrupted ? "is-interrupted" : ""}`}>
         {interrupted ? <RefreshRoundedIcon /> : <LockRoundedIcon />}
         <div>
-          <b>{interrupted ? "同步已中断，以下不是当前现场" : "仅显示当前房间会话"}</b>
+          <b>{interrupted ? "同步已中断，以下不是当前现场" : "当前关怀记录 · 仅本次会话"}</b>
           <span>{interrupted
             ? "保留本页此前收到的记录；恢复后继续追加权威更新。"
             : "公开演示不保存跨天家庭历史；刷新或换房间后清空。"}</span>
@@ -466,7 +1107,7 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
 
       {events.length > 0 ? (
         <section className="timeline-event-section">
-          <div className="timeline-section-heading"><div><h2>{timelineDateHeading(selectedDateKey, nowMs)}</h2><p>点击条目可查看来源与状态版本</p></div><span>最新在前</span></div>
+          <div className="timeline-section-heading"><div><h2>主动关怀记录</h2><p>{timelineDateHeading(selectedDateKey, nowMs)} · 点击查看判断来源、不确定性与隐私边界</p></div><span>最新在前</span></div>
           <div className="timeline-event-list">
             {events.map((event) => <TimelineEventCard event={event} key={event.id} />)}
           </div>
@@ -475,12 +1116,12 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
         <section className="timeline-empty-state" role="status">
           <span><EventBusyRoundedIcon /></span>
           <h2>{selectedDateKey === todayKey
-            ? interrupted ? "正在连接家中端" : "等待本次会话事件"
+            ? interrupted ? "家中端暂未连接" : "等待可靠的关怀判断"
             : "这一天没有可用记录"}</h2>
           <p>{selectedDateKey === todayKey
             ? interrupted
-              ? "收到第一个权威状态后，时间线会从这里开始。"
-              : "Monitor 发布新的权威状态后，关键变化会出现在这里。"
+              ? "恢复同步后，新的关怀判断会继续出现在这里。"
+              : "发现可靠事件后，MiMo 或确定性安全规则才会生成一条有来源的判断。"
             : "跨天历史服务尚未接入，因此不会用演示文案填充真实时间线。"}</p>
         </section>
       )}
@@ -488,12 +1129,12 @@ function TimelinePage({ timeline, relay, selectedDateKey, onSelectDate, nowMs })
   );
 }
 
-function DashboardPage({ relay, snapshot, activeGrant, nowMs, familySurface = false }) {
+function DashboardContent({ relay, snapshot, activeGrant, nowMs, familySurface = false }) {
   const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
   const scene = sceneId ? SCENE_COPY[sceneId] : null;
   const SceneIcon = scene?.Icon || SensorsRoundedIcon;
   return (
-    <main className="viewer-page dashboard-page">
+    <>
       <section className="dashboard-summary">
         <h2>本次同步摘要</h2>
         <div className="summary-metrics">
@@ -524,8 +1165,12 @@ function DashboardPage({ relay, snapshot, activeGrant, nowMs, familySurface = fa
           <div><span className={snapshot?.state.runtime.status === "ready" ? "truth-dot is-ok" : "truth-dot"} /><p><b>{familySurface ? "本地感知" : "本地运行时"}</b><small>{snapshot?.state.runtime.detail || RUNTIME_COPY[snapshot?.state.runtime.status] || "未发布"}</small></p></div>
         </div>
       </section>
-    </main>
+    </>
   );
+}
+
+function DashboardPage(props) {
+  return <main className="viewer-page dashboard-page"><DashboardContent {...props} /></main>;
 }
 
 function SettingsRow({ icon: Icon, title, detail, action, muted = false }) {
@@ -596,11 +1241,13 @@ function CommandButton({ icon: Icon, children, onClick, disabled, tone = "defaul
   return <Button className={`command-button is-${tone}`} startIcon={<Icon />} onClick={onClick} disabled={disabled}>{children}</Button>;
 }
 
-function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueError }) {
+function ControlDrawer({ open, onClose, relay, snapshot, decision, nowMs, onIssue, issueError }) {
   const desktop = useMediaQuery("(min-width: 900px)");
   const pending = hasPendingCommand(relay);
   const disabled = !relay.ownsControl || !snapshot || pending;
-  const decisionId = snapshot?.state.care.decision_id;
+  const decisionId = decision?.decision_id;
+  const alarmActive = isFamilyAlarm(decision);
+  const actionCardPending = isPendingFamilyActionCard(decision);
   const leaseSeconds = relay.ownsControl ? secondsRemaining(relay.lease?.expires_at_ms, nowMs) : 0;
   return (
     <Drawer
@@ -664,7 +1311,8 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
           <CommandButton icon={EmergencyRoundedIcon} disabled={disabled || !decisionId} tone="danger" onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "need_help" })}>本人需要帮助</CommandButton>
           <CommandButton icon={VideocamRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_granted" })}>同意分享</CommandButton>
           <CommandButton icon={LockRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "submit_response", decision_id: decisionId, response: "consent_denied" })}>拒绝分享</CommandButton>
-          <CommandButton icon={ShieldRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "acknowledge_alarm", decision_id: decisionId })}>确认告警</CommandButton>
+          <CommandButton icon={ShieldRoundedIcon} disabled={disabled || !decisionId || !alarmActive} onClick={() => onIssue({ name: "acknowledge_alarm", decision_id: decisionId })}>确认告警</CommandButton>
+          <CommandButton icon={TipsAndUpdatesRoundedIcon} disabled={disabled || !decisionId || !actionCardPending} onClick={() => onIssue({ name: "confirm_action_card", decision_id: decisionId })}>确认行动卡</CommandButton>
           <CommandButton icon={VolumeUpRoundedIcon} disabled={disabled || !decisionId} onClick={() => onIssue({ name: "replay_voice", decision_id: decisionId })}>重播语音</CommandButton>
         </div>
       </section>
@@ -687,7 +1335,7 @@ function ControlDrawer({ open, onClose, relay, snapshot, nowMs, onIssue, issueEr
 function EmergencyDialog({
   open,
   onClose,
-  care,
+  decision,
   activeGrant,
   nowMs,
   ownsControl,
@@ -700,9 +1348,10 @@ function EmergencyDialog({
   familySurface = false,
   soundBlocked,
   onRetrySound,
-  stale,
 }) {
-  if (!care) return null;
+  if (!isFamilyAlarm(decision)) return null;
+  const message = familyCareMessage(decision)
+    || "权威规则已升级并通知家属，请尽快确认。";
   const familyConfirmLabel = familyConfirmApplied
     ? "已确认收到告警"
     : familyConfirmPending
@@ -722,10 +1371,9 @@ function EmergencyDialog({
     >
       <IconButton className="emergency-close" onClick={onClose} aria-label="收起紧急提醒"><CloseRoundedIcon /></IconButton>
       <span className="emergency-dialog-mark"><EmergencyRoundedIcon /></span>
-      <small>{stale ? "历史紧急告警 · 当前状态不可用" : "紧急风险提醒"}</small>
-      <h2 id="reme-emergency-title">{stale ? "上次检测到需要关注的安全事件" : "检测到需要关注的安全事件"}</h2>
-      <p id="reme-emergency-message">{care.message || "权威规则已升级并通知家属，请尽快确认。"}</p>
-      {stale && <p role="status">该告警被安全锁存，但已不是当前现场状态；请等待新的权威快照。</p>}
+      <small>紧急风险提醒</small>
+      <h2 id="reme-emergency-title">检测到需要关注的安全事件</h2>
+      <p id="reme-emergency-message">{message}</p>
       <div className="emergency-dialog-context">
         <AlarmRoundedIcon />
         <div>
@@ -739,8 +1387,8 @@ function EmergencyDialog({
             variant="contained"
             color="error"
             startIcon={<ShieldRoundedIcon />}
-            disabled={stale || !care.decision_id || familyConfirmPending || familyConfirmApplied || controllerBlocked}
-            onClick={() => onFamilyConfirm(care.decision_id)}
+            disabled={!decision.decision_id || familyConfirmPending || familyConfirmApplied || controllerBlocked}
+            onClick={() => onFamilyConfirm(decision.decision_id, "acknowledge_alarm")}
           >
             {familyConfirmLabel}
           </Button>
@@ -753,8 +1401,8 @@ function EmergencyDialog({
         </>
       ) : (
         <>
-          <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={stale || !ownsControl || !care.decision_id} onClick={() => onIssue({ name: "acknowledge_alarm", decision_id: care.decision_id })}>确认已收到告警</Button>
-          <Button variant="outlined" startIcon={<VolumeUpRoundedIcon />} disabled={stale || !ownsControl || !care.decision_id} onClick={() => onIssue({ name: "replay_voice", decision_id: care.decision_id })}>重播现场问询</Button>
+          <Button variant="contained" color="error" startIcon={<ShieldRoundedIcon />} disabled={!ownsControl || !decision.decision_id} onClick={() => onIssue({ name: "acknowledge_alarm", decision_id: decision.decision_id })}>确认已收到告警</Button>
+          <Button variant="outlined" startIcon={<VolumeUpRoundedIcon />} disabled={!ownsControl || !decision.decision_id} onClick={() => onIssue({ name: "replay_voice", decision_id: decision.decision_id })}>重播现场问询</Button>
         </>
       )}
       {soundBlocked && <Button variant="text" onClick={onRetrySound}>点击启用本页告警声音</Button>}
@@ -766,6 +1414,7 @@ function EmergencyDialog({
 export function ViewerApp({ surface = "family" }) {
   const familySurface = surface === "family";
   const relay = useViewerRelay();
+  const rtc = useRtcConfiguration();
   const {
     claimControl,
     controller,
@@ -775,7 +1424,13 @@ export function ViewerApp({ surface = "family" }) {
     viewerId,
   } = relay;
   const [activeTab, setActiveTab] = useState("home");
-  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => dateKeyFromTimestamp(Date.now()));
+  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => {
+    const currentDateKey = dateKeyFromTimestamp(Date.now());
+    if (!familySurface) return currentDateKey;
+    return isFamilyTimelineDisplayDate(currentDateKey)
+      ? currentDateKey
+      : FAMILY_TIMELINE_MOCK_END_DATE;
+  });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [issueError, setIssueError] = useState("");
   const [familyConfirmFailure, setFamilyConfirmFailure] = useState(null);
@@ -788,6 +1443,11 @@ export function ViewerApp({ surface = "family" }) {
     createFamilyTimelineState,
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const remeHistory = useRemeHistory({
+    selectedDateKey: selectedTimelineDate,
+    revisionHint: relay.remeDayRevisions?.[selectedTimelineDate] || null,
+    enabled: familySurface && activeTab === "timeline",
+  });
   const [highPrivacyEnabled, setHighPrivacyEnabled] = useStoredBoolean("reme.viewer.highPrivacy", true);
   const [notificationsEnabled, setNotificationsEnabled] = useStoredBoolean("reme.viewer.notifications", true);
 
@@ -796,21 +1456,26 @@ export function ViewerApp({ surface = "family" }) {
     return () => window.clearInterval(timer);
   }, []);
 
+
   const snapshot = relay.state;
+  const careDecision = relay.familyEventStale ? null : relay.familyEvent?.care || null;
   useEffect(() => {
     dispatchTimeline({
       type: "observe",
       roomSessionId: relay.roomSessionId,
       snapshot,
+      familyEvent: relay.familyEvent,
       acks: relay.acks,
     });
-  }, [relay.acks, relay.roomSessionId, snapshot]);
+  }, [relay.acks, relay.familyEvent, relay.roomSessionId, snapshot]);
   const relayNowMs = nowMs + (relay.serverTimeOffsetMs || 0);
   const sceneId = deriveFamilyTruth(snapshot, relay).sceneId
     || (familySurface ? null : "living");
   const activeGrant = useMemo(
-    () => selectActiveMediaGrant(relay, relayNowMs),
-    [relay, relayNowMs],
+    () => rtc.configuration.mode === "unavailable"
+      ? null
+      : selectActiveMediaGrant(relay, relayNowMs),
+    [relay, relayNowMs, rtc.configuration.mode],
   );
   const media = useViewerMedia({
     grant: activeGrant,
@@ -821,20 +1486,24 @@ export function ViewerApp({ surface = "family" }) {
     viewerId: relay.viewerId,
     subscribeMediaSignals: relay.subscribeMediaSignals,
     sendMediaSignal: relay.sendMediaSignal,
+    rtcConfiguration: rtc.configuration,
   });
-  const emergency = snapshot?.state.care.phase === "emergency";
-  const emergencyStale = Boolean(emergency && (relay.stateStale || relay.unavailableReason));
-  const decisionId = snapshot?.state.care.decision_id;
+  const currentAlarm = isFamilyAlarm(careDecision) ? careDecision.alarm : null;
+  const emergency = Boolean(currentAlarm);
+  const decisionId = careDecision?.decision_id || null;
+  const familyAcknowledgementCommand = selectFamilyAcknowledgementCommand(careDecision);
   const alertEffects = useAlertEffects({
     enabled: notificationsEnabled,
-    emergency,
+    alarm: currentAlarm,
     decisionId,
   });
 
   const currentSentFamilyConfirmation = sentFamilyConfirmation?.decisionId === decisionId
+    && sentFamilyConfirmation?.commandName === familyAcknowledgementCommand
     ? sentFamilyConfirmation
     : null;
   const currentPendingFamilyConfirmation = pendingFamilyConfirmation?.decisionId === decisionId
+    && pendingFamilyConfirmation?.commandName === familyAcknowledgementCommand
     ? pendingFamilyConfirmation
     : null;
   const familyConfirmAck = currentSentFamilyConfirmation
@@ -855,7 +1524,7 @@ export function ViewerApp({ surface = "family" }) {
     currentSentFamilyConfirmation && familyConfirmAck?.phase === "applied",
   );
   const familyConfirmAckError = ["rejected", "failed"].includes(familyConfirmAck?.phase)
-    ? familyConfirmAck.reason || "告警确认未能提交，请重试"
+    ? familyConfirmAck.reason || "处理确认未能提交，请重试"
     : "";
   const familyControllerBlocked = Boolean(
     controller
@@ -863,22 +1532,23 @@ export function ViewerApp({ surface = "family" }) {
       && !ownsControl,
   );
 
-  const sendFamilyConfirmation = useCallback((targetDecisionId) => {
+  const sendFamilyConfirmation = useCallback((targetDecisionId, commandName) => {
     const result = sendCommand({
-      name: "acknowledge_alarm",
+      name: commandName,
       decision_id: targetDecisionId,
     });
     if (result.ok) {
       setFamilyConfirmFailure(null);
       setSentFamilyConfirmation({
         decisionId: targetDecisionId,
+        commandName,
         commandId: result.commandId,
         sentAtMs: Date.now(),
       });
     } else {
       setFamilyConfirmFailure({
         decisionId: targetDecisionId,
-        message: result.reason || "告警确认未能提交，请重试",
+        message: result.reason || "处理确认未能提交，请重试",
       });
     }
     return result;
@@ -910,22 +1580,24 @@ export function ViewerApp({ surface = "family" }) {
     if (!familySurface || !pendingFamilyConfirmation) return undefined;
     let settlePending = null;
     if (
-      !emergency
-      || emergencyStale
+      relay.stateStale
+      || relay.unavailableReason
       || pendingFamilyConfirmation.decisionId !== decisionId
+      || pendingFamilyConfirmation.commandName !== familyAcknowledgementCommand
     ) {
       settlePending = () => {
         setPendingFamilyConfirmation(null);
         setFamilyConfirmFailure({
           decisionId,
-          message: "当前告警状态已变化，请按最新状态处理",
+          message: "当前待处理状态已变化，请按最新状态处理",
         });
       };
     } else if (ownsControl) {
       const targetDecisionId = pendingFamilyConfirmation.decisionId;
+      const commandName = pendingFamilyConfirmation.commandName;
       settlePending = () => {
         setPendingFamilyConfirmation(null);
-        const result = sendFamilyConfirmation(targetDecisionId);
+        const result = sendFamilyConfirmation(targetDecisionId, commandName);
         if (!result.ok) releaseControl();
       };
     } else if (familyControllerBlocked) {
@@ -933,7 +1605,7 @@ export function ViewerApp({ surface = "family" }) {
         setPendingFamilyConfirmation(null);
         setFamilyConfirmFailure({
           decisionId: pendingFamilyConfirmation.decisionId,
-          message: "其他访问端正在处理这次告警，请稍后查看最新状态",
+          message: "其他访问端正在处理，请稍后查看最新状态",
         });
       };
     } else if (nowMs - pendingFamilyConfirmation.requestedAtMs > 5_000) {
@@ -950,13 +1622,14 @@ export function ViewerApp({ surface = "family" }) {
     return () => window.clearTimeout(timer);
   }, [
     decisionId,
-    emergency,
-    emergencyStale,
+    familyAcknowledgementCommand,
     familyControllerBlocked,
     familySurface,
     nowMs,
     ownsControl,
     pendingFamilyConfirmation,
+    relay.stateStale,
+    relay.unavailableReason,
     releaseControl,
     sendFamilyConfirmation,
   ]);
@@ -988,24 +1661,29 @@ export function ViewerApp({ surface = "family" }) {
     releaseControl,
   ]);
 
-  const requestFamilyConfirmation = (targetDecisionId) => {
+  const requestFamilyConfirmation = (targetDecisionId, commandName) => {
     setFamilyConfirmFailure(null);
     setSentFamilyConfirmation(null);
-    if (!targetDecisionId || emergencyStale || !emergency) {
+    if (
+      !targetDecisionId
+      || relay.stateStale
+      || relay.unavailableReason
+      || commandName !== familyAcknowledgementCommand
+    ) {
       setFamilyConfirmFailure({
         decisionId: targetDecisionId || decisionId,
-        message: "当前没有可确认的紧急告警",
+        message: "当前没有可确认的待处理事项",
       });
       return;
     }
     if (ownsControl) {
-      sendFamilyConfirmation(targetDecisionId);
+      sendFamilyConfirmation(targetDecisionId, commandName);
       return;
     }
     if (controller) {
       setFamilyConfirmFailure({
         decisionId: targetDecisionId,
-        message: "其他访问端正在处理这次告警，请稍后查看最新状态",
+        message: "其他访问端正在处理，请稍后查看最新状态",
       });
       return;
     }
@@ -1018,6 +1696,7 @@ export function ViewerApp({ surface = "family" }) {
     }
     setPendingFamilyConfirmation({
       decisionId: targetDecisionId,
+      commandName,
       requestedAtMs: nowMs,
     });
   };
@@ -1031,14 +1710,16 @@ export function ViewerApp({ surface = "family" }) {
 
   const pageHeader = (() => {
     if (activeTab === "home") return {
-      title: "外婆家",
+      title: familySurface ? "家" : "外婆家",
       subtitle: relay.unavailableReason
         ? `${familySurface ? "家属端" : "Viewer"} · 当前状态不可用，等待恢复`
         : `${SCENE_COPY[sceneId]?.label || "家庭关怀"} · ${relay.connection === "connected" ? (familySurface ? "家属端已连接" : "Relay 已连接") : "正在重连"}`,
     };
     if (activeTab === "timeline") return {
-      title: "时间线",
-      subtitle: `外婆 · ${timelineDateHeading(selectedTimelineDate, nowMs)}`,
+      title: familySurface ? "reme" : "主动关怀",
+      subtitle: familySurface
+        ? `remember me · ${timelineDateLongHeading(selectedTimelineDate)}`
+        : `外婆 · ${timelineDateHeading(selectedTimelineDate, nowMs)} · MiMo 关怀时间线`,
     };
     if (activeTab === "dashboard") return {
       title: "关怀看板",
@@ -1049,11 +1730,17 @@ export function ViewerApp({ surface = "family" }) {
 
   return (
     <div
-      className={`viewer-app ${familySurface ? "is-family-surface" : "is-demo-surface"} ${alertEffects.flashActive ? "is-flashing" : ""}`}
+      className={`viewer-app ${familySurface ? "is-family-surface" : "is-demo-surface"} ${activeTab === "timeline" ? "is-timeline-tab" : ""} ${alertEffects.flashActive ? "is-flashing" : ""}`}
       data-app-role={familySurface ? "family" : "viewer-demo"}
     >
       <div className="alert-flash-layer" aria-hidden="true" />
-      <ConnectionBanner relay={relay} grant={activeGrant} nowMs={relayNowMs} familySurface={familySurface} />
+      <ConnectionBanner
+        relay={relay}
+        grant={activeGrant}
+        nowMs={relayNowMs}
+        familySurface={familySurface}
+        rtcError={rtc.error}
+      />
       <div className="viewer-shell">
         <header className="viewer-header">
           <div><h1>{pageHeader.title}</h1><p>{pageHeader.subtitle}</p></div>
@@ -1065,14 +1752,45 @@ export function ViewerApp({ surface = "family" }) {
           )}
         </header>
 
-        {relay.unavailableReason && (
-          <aside className={`viewer-state-unavailable ${emergencyStale ? "is-emergency" : ""}`} role="alert">
+        {relay.unavailableReason && activeTab !== "timeline" && (
+          <aside className="viewer-state-unavailable" role="alert">
             <HealthAndSafetyRoundedIcon />
-            <div><b>{emergencyStale ? "历史紧急告警已锁存，当前状态不可用" : "当前状态不可用"}</b><span>{unavailableCopy(relay, familySurface)}</span></div>
+            <div><b>现场传输状态不可用</b><span>{unavailableCopy(relay, familySurface)}；后端已发布的关怀事件仍单独保留。</span></div>
           </aside>
         )}
 
-        {activeTab === "home" && <HomePage relay={relay} snapshot={snapshot} pose={relay.pose} media={media} activeGrant={activeGrant} highPrivacyEnabled={highPrivacyEnabled} localNowMs={nowMs} relayNowMs={relayNowMs} familySurface={familySurface} />}
+        {activeTab === "home" && (
+          <HomePage
+            relay={relay}
+            snapshot={snapshot}
+            pose={relay.pose}
+            media={media}
+            activeGrant={activeGrant}
+            highPrivacyEnabled={highPrivacyEnabled}
+            localNowMs={nowMs}
+            relayNowMs={relayNowMs}
+            familySurface={familySurface}
+            decision={careDecision}
+            familyAcknowledgementControl={familySurface ? (
+              <>
+                <FamilyActionCard
+                  decision={careDecision}
+                  pending={familyConfirmPending}
+                  applied={familyConfirmApplied}
+                  blocked={familyControllerBlocked}
+                  error={familyAcknowledgementCommand === "confirm_action_card"
+                    ? resolveFamilyConfirmationError({
+                        failure: familyConfirmFailure,
+                        decisionId,
+                        ackError: familyConfirmAckError,
+                      })
+                    : ""}
+                  onConfirm={requestFamilyConfirmation}
+                />
+              </>
+            ) : null}
+          />
+        )}
         {activeTab === "timeline" && (
           <TimelinePage
             timeline={timeline}
@@ -1080,6 +1798,8 @@ export function ViewerApp({ surface = "family" }) {
             selectedDateKey={selectedTimelineDate}
             onSelectDate={setSelectedTimelineDate}
             nowMs={nowMs}
+            remeHistory={remeHistory}
+            familySurface={familySurface}
           />
         )}
         {activeTab === "dashboard" && <DashboardPage relay={relay} snapshot={snapshot} activeGrant={activeGrant} nowMs={relayNowMs} familySurface={familySurface} />}
@@ -1095,10 +1815,16 @@ export function ViewerApp({ surface = "family" }) {
         )}
 
         <BottomNavigation className="viewer-bottom-nav" showLabels value={activeTab} onChange={(_, value) => setActiveTab(value)}>
-          <BottomNavigationAction label="首页" value="home" icon={<HomeRoundedIcon />} />
-          <BottomNavigationAction label="时间线" value="timeline" icon={<CalendarMonthRoundedIcon />} />
-          <BottomNavigationAction label="看板" value="dashboard" icon={<FavoriteRoundedIcon />} />
-          <BottomNavigationAction label="设置" value="settings" icon={<SettingsRoundedIcon />} />
+          {familySurface ? [
+            <BottomNavigationAction key="home" label="家" value="home" icon={<HomeRoundedIcon />} />,
+            <BottomNavigationAction key="timeline" label="reme" value="timeline" icon={<FavoriteRoundedIcon />} />,
+            <BottomNavigationAction key="settings" label="设置" value="settings" icon={<SettingsRoundedIcon />} />,
+          ] : [
+            <BottomNavigationAction key="home" label="首页" value="home" icon={<HomeRoundedIcon />} />,
+            <BottomNavigationAction key="timeline" label="时间线" value="timeline" icon={<CalendarMonthRoundedIcon />} />,
+            <BottomNavigationAction key="dashboard" label="看板" value="dashboard" icon={<FavoriteRoundedIcon />} />,
+            <BottomNavigationAction key="settings" label="设置" value="settings" icon={<SettingsRoundedIcon />} />,
+          ]}
         </BottomNavigation>
       </div>
 
@@ -1108,11 +1834,11 @@ export function ViewerApp({ surface = "family" }) {
         </button>
       )}
 
-      {!familySurface && <ControlDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} relay={relay} snapshot={snapshot} nowMs={relayNowMs} onIssue={issueCommand} issueError={issueError} />}
+      {!familySurface && <ControlDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} relay={relay} snapshot={snapshot} decision={careDecision} nowMs={relayNowMs} onIssue={issueCommand} issueError={issueError} />}
       <EmergencyDialog
         open={Boolean(emergency && decisionId !== dismissedEmergency)}
         onClose={() => setDismissedEmergency(decisionId)}
-        care={snapshot?.state.care}
+        decision={careDecision}
         activeGrant={activeGrant}
         nowMs={relayNowMs}
         ownsControl={relay.ownsControl}
@@ -1129,7 +1855,6 @@ export function ViewerApp({ surface = "family" }) {
         familySurface={familySurface}
         soundBlocked={alertEffects.soundBlocked}
         onRetrySound={alertEffects.retrySound}
-        stale={emergencyStale}
       />
     </div>
   );

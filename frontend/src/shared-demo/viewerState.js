@@ -1,3 +1,5 @@
+import { familyMediaAuthorization, isFamilyAlarm } from "./familyAuthority.js";
+
 const TERMINAL_ACK_PHASES = new Set(["applied", "rejected", "failed"]);
 const MAX_ACKS = 12;
 
@@ -14,6 +16,10 @@ export function createViewerState() {
     state: null,
     stateStale: false,
     lastStateRevision: null,
+    familyEvent: null,
+    familyEventStale: false,
+    lastFamilyRevision: null,
+    remeDayRevisions: {},
     pose: null,
     mediaGrant: null,
     acks: [],
@@ -37,6 +43,9 @@ function resetRoomState(state, roomSessionId) {
     state: null,
     stateStale: false,
     lastStateRevision: null,
+    familyEvent: null,
+    familyEventStale: false,
+    lastFamilyRevision: null,
     pose: null,
     mediaGrant: null,
     acks: [],
@@ -52,19 +61,18 @@ function mergeAck(acks, nextAck) {
   return next.slice(0, MAX_ACKS);
 }
 
-function isAuthoritativeEmergency(snapshot) {
-  return snapshot?.state?.care?.phase === "emergency"
-    && snapshot.state.care.alarm_authoritative === true;
+function hasAlarmFamilyEvent(event) {
+  return isFamilyAlarm(event?.care);
 }
 
 function unavailableState(state, reason) {
-  const latchedEmergency = isAuthoritativeEmergency(state.state)
+  const historicalAlarmState = hasAlarmFamilyEvent(state.familyEvent)
     ? state.state
     : null;
   return {
     ...state,
-    state: latchedEmergency,
-    stateStale: Boolean(latchedEmergency),
+    state: historicalAlarmState,
+    stateStale: Boolean(historicalAlarmState),
     pose: null,
     mediaGrant: null,
     unavailableReason: reason,
@@ -116,6 +124,7 @@ export function reduceViewerState(state, action) {
       ...next,
       connection: "disconnected",
       monitorOnline: false,
+      familyEventStale: Boolean(state.familyEvent),
       controller: null,
       lease: null,
       acks: failPendingAcks(state.acks, "relay_disconnected", timestampMs),
@@ -131,6 +140,7 @@ export function reduceViewerState(state, action) {
       ...next,
       connection: "disconnected",
       latestProtocolError: action.reason || "invalid_server_message",
+      familyEventStale: Boolean(state.familyEvent),
       controller: null,
       lease: null,
       acks: failPendingAcks(state.acks, reason, timestampMs),
@@ -266,6 +276,42 @@ export function reduceViewerState(state, action) {
       unavailableReason: null,
     };
   }
+  if (kind === "reme_day_revision") {
+    const current = state.remeDayRevisions[value.date];
+    if (current
+      && (value.timeline_revision < current.timeline_revision
+        || (value.timeline_revision === current.timeline_revision
+          && value.summary_revision < current.summary_revision))) return state;
+    return {
+      ...state,
+      remeDayRevisions: {
+        ...state.remeDayRevisions,
+        [value.date]: value,
+      },
+    };
+  }
+  if (kind === "family_event") {
+    if (!sameRoom(state, value.room_session_id)) return state;
+    const runtimeChanged = state.familyEvent
+      && state.familyEvent.runtime_session_id !== value.runtime_session_id;
+    if (!runtimeChanged
+      && Number.isSafeInteger(state.lastFamilyRevision)
+      && (
+        value.revision < state.lastFamilyRevision
+        || (value.revision === state.lastFamilyRevision && !state.familyEventStale)
+      )) return state;
+    const authorization = familyMediaAuthorization(value);
+    const keepGrant = authorization?.status === "active"
+      && state.mediaGrant?.event_id === authorization.decision_id
+      && state.mediaGrant?.scope === authorization.scope;
+    return {
+      ...state,
+      familyEvent: value,
+      familyEventStale: false,
+      lastFamilyRevision: value.revision,
+      mediaGrant: keepGrant ? state.mediaGrant : null,
+    };
+  }
   if (kind === "pose_frame") {
     if (!sameRoom(state, value.room_session_id)
       || !state.state
@@ -321,6 +367,9 @@ export function selectActiveMediaGrant(
 ) {
   const grant = state.mediaGrant;
   const snapshot = state.state;
+  const familyEvent = state.familyEvent;
+  const authorization = familyMediaAuthorization(familyEvent);
+  const decision = familyEvent?.care;
   if (state.unavailableReason
     || state.stateStale
     || !grant
@@ -329,19 +378,24 @@ export function selectActiveMediaGrant(
     || !snapshot
     || snapshot.room_session_id !== state.roomSessionId
     || snapshot.state.scene_id === "bathroom"
+    || snapshot.state.runtime.status !== "ready"
     || snapshot.state.capture.status !== "active"
-    || snapshot.state.capture.remote_video !== "available") return null;
-  if (grant.scope === "kitchen_moment") {
-    return snapshot.state.scene_id === "kitchen"
-      && snapshot.state.care.consent === "granted"
-      ? grant
-      : null;
-  }
-  return grant.scope === "fall_emergency"
-    && snapshot.state.care.phase === "emergency"
-    && snapshot.state.care.alarm_authoritative
-    ? grant
-    : null;
+    || snapshot.state.capture.remote_video !== "available"
+    || !familyEvent
+    || state.familyEventStale
+    || familyEvent.room_session_id !== state.roomSessionId
+    || familyEvent.runtime_session_id !== snapshot.runtime_session_id
+    || authorization?.status !== "active"
+    || authorization.expires_at_ms <= nowMs
+    || authorization.decision_id !== grant.event_id
+    || authorization.scope !== grant.scope
+    || authorization.scene_id !== snapshot.state.scene_id
+    || authorization.decision_id !== decision?.decision_id
+    || !["visible", "blurred"].includes(decision?.privacy_mode)) return null;
+  if (grant.scope === "kitchen_moment") return grant;
+  if (grant.scope !== "fall_emergency"
+    || decision.alarm === null) return null;
+  return grant;
 }
 
 export function canRevealAuthorizedVideo(

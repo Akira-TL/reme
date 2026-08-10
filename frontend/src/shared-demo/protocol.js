@@ -1,8 +1,11 @@
-export const VIEWER_PROTOCOL = "reme-viewer-v1";
+export const VIEWER_PROTOCOL = "reme-viewer-v2";
 export const DEMO_STATE_SCHEMA = "reme-demo-state/v1";
 export const CONTROL_COMMAND_SCHEMA = "reme-control-command/v1";
 export const POSE_FRAME_SCHEMA = "reme-pose-frame-17/v1";
 export const MEDIA_SIGNAL_SCHEMA = "reme-media-signal/v1";
+export const FAMILY_EVENT_SCHEMA = "reme-family-event/v1";
+export const MEDIA_AUTHORIZATION_SCHEMA = "reme-media-authorization/v1";
+export const REME_DAY_REVISION_TYPE = "reme_day_revision";
 
 export const SCENE_IDS = Object.freeze(["living", "kitchen", "bathroom", "fall"]);
 export const SOURCE_IDS = Object.freeze([
@@ -39,6 +42,27 @@ const KEYPOINT_NAMES = Object.freeze([
   "right_ankle",
 ]);
 
+const FORBIDDEN_RAW_MEDIA_KEYS = new Set([
+  "audio",
+  "base64",
+  "binary",
+  "blob",
+  "clip",
+  "clip_data",
+  "data_url",
+  "frame_data",
+  "image",
+  "image_data",
+  "image_url",
+  "jpeg",
+  "media_bytes",
+  "payload_bytes",
+  "raw_frame",
+  "raw_video",
+  "video",
+  "video_bytes",
+]);
+
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -60,7 +84,21 @@ function isOpaqueId(value, { nullable = false } = {}) {
 }
 
 function isNullableString(value, maxLength = 240) {
-  return value === null || (typeof value === "string" && value.length <= maxLength);
+  return value === null
+    || (typeof value === "string" && value.length > 0 && value.length <= maxLength);
+}
+
+function isBoundedString(value, maxLength) {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength;
+}
+
+function containsForbiddenRawMedia(value) {
+  if (typeof value === "string") return /^data:(?:image|video|audio)\//i.test(value);
+  if (Array.isArray(value)) return value.some(containsForbiddenRawMedia);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, child]) => (
+    FORBIDDEN_RAW_MEDIA_KEYS.has(key.toLowerCase()) || containsForbiddenRawMedia(child)
+  ));
 }
 
 function isTimestamp(value) {
@@ -105,6 +143,133 @@ function isMediaGrant(value, { allowInactive = false } = {}) {
       : value.status === "active");
 }
 
+export function isMediaAuthorization(value, decisionId) {
+  if (!hasExactKeys(value, [
+    "schema_version",
+    "authorization_id",
+    "decision_id",
+    "event_id",
+    "scene_id",
+    "scope",
+    "status",
+    "issued_at_ms",
+    "expires_at_ms",
+  ])) return false;
+  if (value.schema_version !== MEDIA_AUTHORIZATION_SCHEMA
+    || !isOpaqueId(value.authorization_id)
+    || !isOpaqueId(value.decision_id)
+    || value.decision_id !== decisionId
+    || (value.event_id !== null && !isOpaqueId(value.event_id))
+    || !isOpaqueId(value.scene_id)
+    || !["kitchen_moment", "fall_emergency"].includes(value.scope)
+    || value.status !== "active"
+    || !isTimestamp(value.issued_at_ms)
+    || !isTimestamp(value.expires_at_ms)
+    || value.expires_at_ms <= value.issued_at_ms) return false;
+  const maximumTtlMs = value.scope === "kitchen_moment" ? 60_000 : 30_000;
+  return value.expires_at_ms - value.issued_at_ms <= maximumTtlMs;
+}
+
+function isFamilyAlarm(value) {
+  if (value === null) return true;
+  if (!hasExactKeys(value, ["channels", "trigger"])
+    || !Array.isArray(value.channels)
+    || value.channels.length === 0
+    || !value.channels.every((channel) => ["vibrate", "ring", "flash"].includes(channel))
+    || new Set(value.channels).size !== value.channels.length) return false;
+  return [
+    "elder_report",
+    "voice_intent",
+    "visual_confirm",
+    "check_in_timeout",
+    "unclear_response",
+    "family_unresponsive",
+  ].includes(value.trigger);
+}
+
+function isFamilyActionCard(value) {
+  if (value === null) return true;
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  const baseKeys = ["event", "status", "suggested_action", "system_judgment", "time_window"].sort();
+  const quotedKeys = [...baseKeys, "elder_quote"].sort();
+  if (!(
+    (keys.length === baseKeys.length && keys.every((key, index) => key === baseKeys[index]))
+    || (keys.length === quotedKeys.length && keys.every((key, index) => key === quotedKeys[index]))
+  )) return false;
+  return isBoundedString(value.event, 500)
+    && isBoundedString(value.system_judgment, 500)
+    && isBoundedString(value.suggested_action, 500)
+    && isBoundedString(value.time_window, 240)
+    && ["pending", "confirmed", "done"].includes(value.status)
+    && (value.elder_quote === undefined || isBoundedString(value.elder_quote, 500));
+}
+
+export function isFamilyCareProjection(value) {
+  if (!hasExactKeys(value, [
+    "action",
+    "action_card",
+    "alarm",
+    "decision_id",
+    "family_notification",
+    "media_authorization",
+    "privacy_mode",
+    "risk_level",
+    "state",
+  ])) return false;
+  return isOpaqueId(value.decision_id)
+    && [
+      "normal",
+      "observe",
+      "check_in_required",
+      "consent_required",
+      "family_notification_required",
+      "urgent_attention",
+      "resolved",
+      "degraded",
+    ].includes(value.state)
+    && [
+      "none",
+      "observe",
+      "ask_elder",
+      "notify_family",
+      "show_urgent_attention",
+      "mark_resolved",
+    ].includes(value.action)
+    && Number.isSafeInteger(value.risk_level)
+    && value.risk_level >= 0
+    && value.risk_level <= 4
+    && (value.family_notification === null || isBoundedString(value.family_notification, 500))
+    && ["visible", "blurred", "skeleton_only", "hidden"].includes(value.privacy_mode)
+    && isFamilyAlarm(value.alarm)
+    && isFamilyActionCard(value.action_card)
+    && (value.media_authorization === null
+      || isMediaAuthorization(value.media_authorization, value.decision_id));
+}
+
+export function isFamilyEvent(value) {
+  if (!hasExactKeys(value, [
+    "type",
+    "schema_version",
+    "room_session_id",
+    "runtime_session_id",
+    "revision",
+    "decision_timestamp_ms",
+    "published_at_ms",
+    "care",
+  ])) return false;
+  return value.type === "family_event"
+    && value.schema_version === FAMILY_EVENT_SCHEMA
+    && isOpaqueId(value.room_session_id)
+    && isOpaqueId(value.runtime_session_id)
+    && isRevision(value.revision)
+    && value.revision > 0
+    && isTimestamp(value.decision_timestamp_ms)
+    && isTimestamp(value.published_at_ms)
+    && isFamilyCareProjection(value.care)
+    && !containsForbiddenRawMedia(value);
+}
+
 function isCaptureState(value) {
   if (!hasExactKeys(value, [
     "status",
@@ -113,12 +278,14 @@ function isCaptureState(value) {
     "remote_video",
     "error",
   ])) return false;
-  return ["idle", "awaiting_local_confirmation", "starting", "active", "stopping", "error"]
+  const valid = ["idle", "awaiting_local_confirmation", "starting", "active", "stopping", "error"]
     .includes(value.status)
     && isOpaqueId(value.source_id, { nullable: true })
     && (value.source_kind === null || ["camera", "display", "file"].includes(value.source_kind))
     && ["available", "local_only", "unavailable"].includes(value.remote_video)
     && isNullableString(value.error);
+  return valid && (value.status !== "active"
+    || (value.source_id !== null && value.source_kind !== null));
 }
 
 function isRuntimeState(value) {
@@ -129,18 +296,21 @@ function isRuntimeState(value) {
 }
 
 function isCareState(value) {
-  return hasExactKeys(value, [
+  if (!hasExactKeys(value, [
     "phase",
     "decision_id",
     "consent",
     "alarm_authoritative",
     "message",
-  ])
-    && ["idle", "checking", "emergency", "resolved"].includes(value.phase)
-    && isOpaqueId(value.decision_id, { nullable: true })
-    && ["none", "pending", "granted", "denied"].includes(value.consent)
-    && typeof value.alarm_authoritative === "boolean"
-    && isNullableString(value.message);
+  ])) return false;
+  if (!["idle", "checking", "emergency", "resolved"].includes(value.phase)
+    || !isOpaqueId(value.decision_id, { nullable: true })
+    || !["none", "pending", "granted", "denied"].includes(value.consent)
+    || typeof value.alarm_authoritative !== "boolean"
+    || !isNullableString(value.message)) return false;
+  return value.phase === "emergency"
+    ? value.alarm_authoritative && value.decision_id !== null
+    : !value.alarm_authoritative;
 }
 
 export function isDemoState(value) {
@@ -170,7 +340,8 @@ export function isDemoState(value) {
     && isCaptureState(value.state.capture)
     && isRuntimeState(value.state.runtime)
     && isCareState(value.state.care)
-    && (value.state.media_grant === null || isMediaGrant(value.state.media_grant));
+    && (value.state.media_grant === null || isMediaGrant(value.state.media_grant))
+    && !containsForbiddenRawMedia(value);
 }
 
 export function isPoseFrame(value) {
@@ -277,6 +448,23 @@ export function createMediaSignal({
 
 function parseTypedMessage(value) {
   if (!isRecord(value) || typeof value.type !== "string") return null;
+  if (value.type === REME_DAY_REVISION_TYPE) {
+    return hasExactKeys(value, [
+      "type",
+      "dataset_id",
+      "date",
+      "timeline_revision",
+      "summary_revision",
+      "summary_status",
+    ])
+      && value.dataset_id === "reme-aug-2026-demo-v1"
+      && /^\d{4}-\d{2}-\d{2}$/.test(value.date)
+      && isRevision(value.timeline_revision)
+      && isRevision(value.summary_revision)
+      && ["generating", "ready", "unavailable"].includes(value.summary_status)
+      ? { kind: value.type, value }
+      : null;
+  }
   if (value.type === "viewer_ready") {
     return hasExactKeys(value, [
       "type", "room_name", "viewer_id", "room_session_id", "monitor_online",
@@ -375,6 +563,7 @@ export function parseViewerMessage(raw) {
   if (typeof raw !== "string" || raw.length > 16_384) return null;
   try {
     const value = JSON.parse(raw);
+    if (isFamilyEvent(value)) return { kind: "family_event", value };
     if (isDemoState(value)) return { kind: "demo_state", value };
     if (isPoseFrame(value)) return { kind: "pose_frame", value };
     if (isForwardedMediaSignal(value)) return { kind: "media_signal", value };
@@ -408,7 +597,12 @@ function isCommandPayload(value) {
       && isOpaqueId(value.decision_id)
       && ["safe", "need_help", "consent_granted", "consent_denied"].includes(value.response);
   }
-  if (["acknowledge_alarm", "confirm_alarm", "replay_voice"].includes(value.name)) {
+  if ([
+    "acknowledge_alarm",
+    "confirm_alarm",
+    "confirm_action_card",
+    "replay_voice",
+  ].includes(value.name)) {
     return hasExactKeys(value, ["name", "decision_id"])
       && isOpaqueId(value.decision_id);
   }
@@ -430,11 +624,13 @@ export function isControlCommand(value) {
     && isOpaqueId(value.room_session_id)
     && isOpaqueId(value.command_id)
     && isRevision(value.command_sequence)
+    && value.command_sequence > 0
     && isTimestamp(value.issued_at_ms)
     && isTimestamp(value.expires_at_ms)
     && value.expires_at_ms > value.issued_at_ms
     && isRevision(value.expected_state_revision)
-    && isCommandPayload(value.command);
+    && isCommandPayload(value.command)
+    && !containsForbiddenRawMedia(value);
 }
 
 export function createControlCommand({

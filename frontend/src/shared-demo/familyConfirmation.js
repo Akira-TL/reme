@@ -1,3 +1,5 @@
+import { isFamilyAlarm, isPendingFamilyActionCard } from "./familyAuthority.js";
+
 export function resolveFamilyConfirmationError({
   failure,
   decisionId,
@@ -10,6 +12,12 @@ export function resolveFamilyConfirmationError({
 }
 
 const TERMINAL_PHASES = new Set(["applied", "rejected", "failed"]);
+
+export function selectFamilyAcknowledgementCommand(decision) {
+  if (isFamilyAlarm(decision)) return "acknowledge_alarm";
+  if (isPendingFamilyActionCard(decision)) return "confirm_action_card";
+  return null;
+}
 
 export function isFamilyConfirmationTimedOut({
   sent,

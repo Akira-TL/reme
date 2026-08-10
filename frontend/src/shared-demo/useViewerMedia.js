@@ -3,6 +3,7 @@ import { createMediaSignal } from "./protocol.js";
 
 export const VIEWER_NEGOTIATION_TIMEOUT_MS = 7_000;
 export const VIEWER_DISCONNECT_GRACE_MS = 2_000;
+const LOCAL_RTC_CONFIGURATION = Object.freeze({ iceServers: Object.freeze([]) });
 
 export function hasLiveVideoTrack(stream) {
   const tracks = typeof stream?.getVideoTracks === "function"
@@ -103,6 +104,7 @@ export function useViewerMedia({
   viewerId,
   subscribeMediaSignals,
   sendMediaSignal,
+  rtcConfiguration = LOCAL_RTC_CONFIGURATION,
 }) {
   const [status, setStatus] = useState(grant ? "authorized" : "idle");
   const [error, setError] = useState(null);
@@ -203,7 +205,7 @@ export function useViewerMedia({
 
     function createPeer() {
       if (peerRef.current) return peerRef.current;
-      const peer = new RTCPeerConnection({ iceServers: [] });
+      const peer = new RTCPeerConnection({ iceServers: rtcConfiguration.iceServers || [] });
       peerRef.current = peer;
       peer.onicecandidate = (event) => {
         if (!event.candidate || generation !== generationRef.current) return;
@@ -318,7 +320,7 @@ export function useViewerMedia({
       unsubscribe();
       stopTransport();
     };
-  }, [authorityKey, grant, markLive, roomSessionId, sendMediaSignal, stopTransport, subscribeMediaSignals, viewerId]);
+  }, [authorityKey, grant, markLive, roomSessionId, rtcConfiguration, sendMediaSignal, stopTransport, subscribeMediaSignals, viewerId]);
 
   useEffect(() => {
     const video = videoRef.current;

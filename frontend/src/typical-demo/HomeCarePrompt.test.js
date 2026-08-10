@@ -7,7 +7,11 @@ import { runnerImport } from "vite";
 
 const frontendRoot = fileURLToPath(new URL("../../", import.meta.url));
 const componentPath = fileURLToPath(new URL("./HomeCarePrompt.jsx", import.meta.url));
-const { module: { HomeCarePrompt, deriveHomeCarePrompt } } = await runnerImport(componentPath, {
+const { module: {
+  HomeCarePrompt,
+  deriveHomeCarePrompt,
+  responseCountdownSeconds,
+} } = await runnerImport(componentPath, {
   root: frontendRoot,
   logLevel: "silent",
 });
@@ -154,7 +158,7 @@ test("真实同意询问只启用分享回答且离线时不继续冒充当前�
   assert.equal(prompt.source, "");
 });
 
-test("离线时只锁存权威安全提醒并明确标出连接不可用", () => {
+test("离线时不把上一条安全提醒继续冒充当前权威状态", () => {
   const prompt = deriveHomeCarePrompt(FALL_SCENE, liveWith({
     scene_id: "fall",
     decision_id: "decision-alert-1",
@@ -163,12 +167,55 @@ test("离线时只锁存权威安全提醒并明确标出连接不可用", () =>
     source: "rule",
   }, { active: false }), true);
 
-  assert.equal(prompt.title, "安全提醒仍保持");
-  assert.equal(prompt.message, "家人已经收到提醒，请先不要起身。");
-  assert.equal(prompt.progress, "当前连接不可用；已发出的安全提醒不会自动取消。");
-  assert.equal(prompt.progressTone, "error");
+  assert.equal(prompt.title, "关怀能力暂不可用");
+  assert.equal(prompt.message, "当前没有可靠的实时关怀结果，请检查本机媒体源和运行时连接。");
+  assert.equal(prompt.progress, "");
   assert.equal(prompt.responseKind, null);
   assert.equal(prompt.canRespond, false);
+});
+
+test("普通通知、行动卡和告警使用不同且不过度承诺的老人端文案", () => {
+  const notification = deriveHomeCarePrompt(FALL_SCENE, liveWith({
+    scene_id: "fall",
+    decision_id: "decision-notification",
+    state: "family_notification_required",
+    family_delivery: "notification",
+    elder_message: null,
+    source: "rule",
+  }));
+  const card = deriveHomeCarePrompt(FALL_SCENE, liveWith({
+    scene_id: "fall",
+    decision_id: "decision-card",
+    state: "family_notification_required",
+    family_delivery: "action_card",
+    elder_message: null,
+    source: "rule",
+  }));
+  const alarm = deriveHomeCarePrompt(FALL_SCENE, liveWith({
+    scene_id: "fall",
+    decision_id: "decision-alarm",
+    state: "urgent_attention",
+    family_delivery: "alarm",
+    elder_message: null,
+    source: "rule",
+  }));
+  const confirmedCard = deriveHomeCarePrompt(FALL_SCENE, liveWith({
+    scene_id: "fall",
+    decision_id: "decision-card-confirmed",
+    state: "resolved",
+    family_delivery: "action_card",
+    action_card: { status: "confirmed" },
+    elder_message: null,
+    source: "rule",
+  }));
+
+  assert.equal(notification.title, "已经通知家人");
+  assert.match(notification.message, /不是安全告警/);
+  assert.equal(card.title, "家庭行动卡已送达");
+  assert.match(card.message, /等待家人确认处理/);
+  assert.equal(alarm.title, "安全告警已发送");
+  assert.doesNotMatch(alarm.message, /正在赶来/);
+  assert.equal(confirmedCard.title, "家庭行动卡已确认");
 });
 
 test("跌倒确认窗口明确显示单帧送 MiMo 的成功或失败状态", () => {
@@ -204,7 +251,7 @@ test("跌倒确认窗口明确显示单帧送 MiMo 的成功或失败状态", ()
 
   assert.equal(sent.visualContext, "本次已提交 1 帧用于 MiMo 跌倒确认；确认结果将异步返回。");
   assert.equal(sent.visualContextTone, "complete");
-  assert.equal(failed.visualContext, "本次视觉确认未发送成功；规则倒计时仍继续。");
+  assert.equal(failed.visualContext, "本次视觉确认未发送成功；等待后端发布下一条权威状态。");
   assert.equal(failed.visualContextTone, "error");
 });
 
@@ -279,4 +326,31 @@ test("语音进度只来自真实 stage、transcript 或错误", () => {
   assert.equal(heard.progressTone, "complete");
   assert.equal(failed.progress, "语音暂时不可用：未允许麦克风");
   assert.equal(failed.progressTone, "error");
+});
+
+test("回应倒计时只呈现当前 decision 的后端时限", () => {
+  const decision = {
+    scene_id: "fall",
+    decision_id: "decision-deadline-1",
+    state: "check_in_required",
+    consent_required: false,
+    elder_message: "您还好吗？",
+  };
+  const prompt = deriveHomeCarePrompt(FALL_SCENE, liveWith(decision, {
+    decision: {
+      decision,
+      deadline: { decisionId: "decision-deadline-1", expiresAt: 9_000 },
+    },
+  }));
+  assert.equal(prompt.responseDeadlineMs, 9_000);
+  assert.equal(responseCountdownSeconds(prompt.responseDeadlineMs, 5_001), 4);
+  assert.equal(responseCountdownSeconds(prompt.responseDeadlineMs, 9_001), 0);
+
+  const staleDeadline = deriveHomeCarePrompt(FALL_SCENE, liveWith(decision, {
+    decision: {
+      decision,
+      deadline: { decisionId: "decision-old", expiresAt: 9_000 },
+    },
+  }));
+  assert.equal(staleDeadline.responseDeadlineMs, null);
 });
