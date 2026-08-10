@@ -4,6 +4,7 @@ import {
   isFamilyConfirmationTimedOut,
   resolveFamilyConfirmationError,
   selectFamilyAcknowledgementCommand,
+  shouldRetainFamilyConfirmationLease,
 } from "./familyConfirmation.js";
 
 test("告警与行动卡使用合同定义的两个确认命令", () => {
@@ -58,4 +59,26 @@ test("告警确认等待超时但终态 ACK 不会误判超时", () => {
   assert.equal(isFamilyConfirmationTimedOut({ sent, ack: null, nowMs: 10_999 }), false);
   assert.equal(isFamilyConfirmationTimedOut({ sent, ack: null, nowMs: 11_000 }), true);
   assert.equal(isFamilyConfirmationTimedOut({ sent, ack: { phase: "applied" }, nowMs: 20_000 }), false);
+});
+
+test("权威 decision 先更新时仍保留控制租约直到终态 ACK", () => {
+  const sent = { commandId: "c-1", sentAtMs: 1_000 };
+  assert.equal(shouldRetainFamilyConfirmationLease({
+    pending: null,
+    sent,
+    ack: { command_id: "c-1", phase: "received" },
+    nowMs: 1_100,
+  }), true);
+  assert.equal(shouldRetainFamilyConfirmationLease({
+    pending: null,
+    sent,
+    ack: { command_id: "c-1", phase: "applied" },
+    nowMs: 1_200,
+  }), false);
+  assert.equal(shouldRetainFamilyConfirmationLease({
+    pending: null,
+    sent,
+    ack: { command_id: "c-1", phase: "received" },
+    nowMs: 11_000,
+  }), false);
 });

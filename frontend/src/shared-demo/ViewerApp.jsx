@@ -75,6 +75,7 @@ import {
   isFamilyConfirmationTimedOut,
   resolveFamilyConfirmationError,
   selectFamilyAcknowledgementCommand,
+  shouldRetainFamilyConfirmationLease,
 } from "./familyConfirmation.js";
 import { deriveFamilyTruth } from "./familyPresentation.js";
 import {
@@ -1509,12 +1510,22 @@ export function ViewerApp({ surface = "family" }) {
     && pendingFamilyConfirmation?.commandName === familyAcknowledgementCommand
     ? pendingFamilyConfirmation
     : null;
-  const familyConfirmAck = currentSentFamilyConfirmation
+  const sentFamilyConfirmAck = sentFamilyConfirmation
     ? relay.acks.find((ack) => ack.command_id === sentFamilyConfirmation.commandId) || null
     : null;
-  const familyConfirmTimedOut = isFamilyConfirmationTimedOut({
-    sent: currentSentFamilyConfirmation,
-    ack: familyConfirmAck,
+  const familyConfirmAck = currentSentFamilyConfirmation ? sentFamilyConfirmAck : null;
+  const sentFamilyConfirmTimedOut = isFamilyConfirmationTimedOut({
+    sent: sentFamilyConfirmation,
+    ack: sentFamilyConfirmAck,
+    nowMs,
+  });
+  const familyConfirmTimedOut = Boolean(
+    currentSentFamilyConfirmation && sentFamilyConfirmTimedOut,
+  );
+  const retainFamilyConfirmationLease = shouldRetainFamilyConfirmationLease({
+    pending: pendingFamilyConfirmation,
+    sent: sentFamilyConfirmation,
+    ack: sentFamilyConfirmAck,
     nowMs,
   });
   const familyConfirmPending = Boolean(
@@ -1558,8 +1569,8 @@ export function ViewerApp({ surface = "family" }) {
   }, [sendCommand]);
 
   useEffect(() => {
-    if (!familySurface || !currentSentFamilyConfirmation || !familyConfirmTimedOut) return undefined;
-    const timedOutConfirmation = currentSentFamilyConfirmation;
+    if (!familySurface || !sentFamilyConfirmation || !sentFamilyConfirmTimedOut) return undefined;
+    const timedOutConfirmation = sentFamilyConfirmation;
     const timer = window.setTimeout(() => {
       setSentFamilyConfirmation((current) => (
         current?.commandId === timedOutConfirmation.commandId ? null : current
@@ -1568,15 +1579,12 @@ export function ViewerApp({ surface = "family" }) {
         decisionId: timedOutConfirmation.decisionId,
         message: "未收到处理回执，已释放处理权限，请重试",
       });
-      if (ownsControl) releaseControl();
     }, 0);
     return () => window.clearTimeout(timer);
   }, [
-    currentSentFamilyConfirmation,
-    familyConfirmTimedOut,
     familySurface,
-    ownsControl,
-    releaseControl,
+    sentFamilyConfirmation,
+    sentFamilyConfirmTimedOut,
   ]);
 
   useEffect(() => {
@@ -1600,8 +1608,7 @@ export function ViewerApp({ surface = "family" }) {
       const commandName = pendingFamilyConfirmation.commandName;
       settlePending = () => {
         setPendingFamilyConfirmation(null);
-        const result = sendFamilyConfirmation(targetDecisionId, commandName);
-        if (!result.ok) releaseControl();
+        sendFamilyConfirmation(targetDecisionId, commandName);
       };
     } else if (familyControllerBlocked) {
       settlePending = () => {
@@ -1633,35 +1640,20 @@ export function ViewerApp({ surface = "family" }) {
     pendingFamilyConfirmation,
     relay.stateStale,
     relay.unavailableReason,
-    releaseControl,
     sendFamilyConfirmation,
-  ]);
-
-  useEffect(() => {
-    if (!familySurface || !sentFamilyConfirmation || !ownsControl) return;
-    if (!["applied", "rejected", "failed"].includes(familyConfirmAck?.phase)) return;
-    releaseControl();
-  }, [
-    familyConfirmAck?.phase,
-    familySurface,
-    ownsControl,
-    releaseControl,
-    sentFamilyConfirmation,
   ]);
 
   useEffect(() => {
     if (
       familySurface
       && ownsControl
-      && !currentPendingFamilyConfirmation
-      && !currentSentFamilyConfirmation
+      && !retainFamilyConfirmationLease
     ) releaseControl();
   }, [
-    currentPendingFamilyConfirmation,
-    currentSentFamilyConfirmation,
     familySurface,
     ownsControl,
     releaseControl,
+    retainFamilyConfirmationLease,
   ]);
 
   const requestFamilyConfirmation = (targetDecisionId, commandName) => {

@@ -29,3 +29,15 @@ export function isFamilyConfirmationTimedOut({
   if (!Number.isFinite(sent.sentAtMs) || !Number.isFinite(nowMs)) return false;
   return nowMs - sent.sentAtMs >= timeoutMs;
 }
+
+export function shouldRetainFamilyConfirmationLease({
+  pending,
+  sent,
+  ack,
+  nowMs,
+  timeoutMs = 10_000,
+}) {
+  if (pending) return true;
+  if (!sent || TERMINAL_PHASES.has(ack?.phase)) return false;
+  return !isFamilyConfirmationTimedOut({ sent, ack, nowMs, timeoutMs });
+}
