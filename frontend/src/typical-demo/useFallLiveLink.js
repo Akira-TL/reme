@@ -3,6 +3,7 @@ import { useDecisionRuntime } from "../hooks/useDecisionRuntime";
 import { usePerceptionRuntime } from "../hooks/usePerceptionRuntime";
 import { mapCareDecisionToPhase } from "./phoneState";
 import { FALL_PHASES } from "./scenes";
+import { exposeDecisionRuntimeActions } from "./decisionRuntimeActions.js";
 
 // 单机真实链路：A 在全部场景持续产出骨架/姿态/转变，B 按同一会话做决策。
 // 深夜跌倒场景额外把 CareDecision 映射回演示壳的 fallPhase 词表。
@@ -145,6 +146,7 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
     : familyVideoAllowed
       ? "本次事件已临时授权原画；授权到期会自动关闭"
       : "日常只同步骨架；厨房需本人同意，跌倒需权威升级";
+  const decisionRuntimeActions = exposeDecisionRuntimeActions(decision);
 
   return {
     active,
@@ -165,14 +167,8 @@ export function useFallLiveLink({ enabled, videoElement, sceneId, sourceGenerati
     respondSafe,
     respondNeedHelp,
     respondNeedHelpWithText,
-    respondConsentGranted: decision.respondConsentGranted,
-    respondConsentDenied: decision.respondConsentDenied,
-    startDemoConversation: decision.startDemoConversation,
-    switchScene: decision.switchScene,
+    ...decisionRuntimeActions,
     confirmAlarm,
-    resetSceneState: decision.resetSceneState,
-    replayVoice: decision.replayVoice,
-    startVoiceReply: decision.startVoiceReply,
     voice: decision.voice,
     decision: { ...decision, decision: current },
   };

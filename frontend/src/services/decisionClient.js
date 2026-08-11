@@ -2,15 +2,15 @@ const DEFAULT_HTTP_URL = "http://127.0.0.1:8770";
 
 export const RESPONSE_SCHEMA = "reme-interaction-response/v0-experiment";
 
-const RESPONSE_SOURCE_RULES = {
-  safe: "user_input",
-  need_help: "user_input",
-  unclear: "user_input",
-  consent_granted: "user_input",
-  consent_denied: "user_input",
-  card_confirmed: "family_input",
-  alarm_acknowledged: "family_input",
-};
+const RESPONSE_SOURCE_RULES = Object.freeze({
+  safe: new Set(["user_input", "script"]),
+  need_help: new Set(["user_input", "script"]),
+  unclear: new Set(["user_input", "script"]),
+  consent_granted: new Set(["user_input", "script"]),
+  consent_denied: new Set(["user_input", "script"]),
+  card_confirmed: new Set(["family_input"]),
+  alarm_acknowledged: new Set(["family_input"]),
+});
 
 export function getDecisionUrls() {
   const httpBase = (import.meta.env.VITE_REME_DECISION_HTTP_URL || DEFAULT_HTTP_URL).replace(/\/$/, "");
@@ -115,10 +115,12 @@ export function submitVoiceDialogue(httpBase, {
 
 export function submitResponse(httpBase, response) {
   const payload = { schema_version: RESPONSE_SCHEMA, ...response };
-  const expectedSource = RESPONSE_SOURCE_RULES[payload.response];
-  if (!expectedSource) throw new Error(`无效回应类型: ${payload.response}`);
-  if (payload.source !== expectedSource) {
-    throw new Error(`回应 ${payload.response} 只允许来源 ${expectedSource}，收到 ${payload.source}`);
+  const allowedSources = RESPONSE_SOURCE_RULES[payload.response];
+  if (!allowedSources) throw new Error(`无效回应类型: ${payload.response}`);
+  if (!allowedSources.has(payload.source)) {
+    throw new Error(
+      `回应 ${payload.response} 只允许来源 ${[...allowedSources].join("/")}，收到 ${payload.source}`,
+    );
   }
   if (!payload.scene_id || !payload.decision_id) throw new Error("回应缺少 scene_id 或 decision_id");
   if (!Number.isFinite(payload.timestamp_ms)) throw new Error("回应缺少数值 timestamp_ms");

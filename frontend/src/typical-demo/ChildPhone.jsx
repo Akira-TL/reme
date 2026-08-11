@@ -25,8 +25,8 @@ import {
   Switch,
 } from "@mui/material";
 import { useState } from "react";
+import { resolveChildPhoneCarePresentation } from "./childPhonePresentation.js";
 import { isActiveFallDanger } from "./phoneState";
-import { FALL_PHASES } from "./scenes";
 import { SceneViewport } from "./SceneViewport";
 
 function PhoneStatusIcon({ sceneId, danger, resolved }) {
@@ -118,18 +118,13 @@ export function ChildPhone({
     || (isActiveFallDanger(fallPhase) && fallPhase !== "emergency");
   const emergency = alarmActive;
   const resolved = fallPhase === "resolved";
-  const hasFallState = fallPhase !== "idle";
-  const fallState = fallStateOverride || FALL_PHASES[fallPhase];
-  const title = hasFallState
-    ? fallState.status
-    : scene.id === "kitchen"
-      ? kitchenShared ? "收到奶奶分享" : "外婆家一切正常"
-      : scene.phoneTitle;
-  const body = hasFallState
-    ? fallState.message
-    : scene.id === "kitchen"
-      ? kitchenShared ? kitchenNotification : "暂无新的家庭动态"
-      : scene.phoneBody;
+  const { body, careState: fallState, title } = resolveChildPhoneCarePresentation({
+    scene,
+    fallPhase,
+    fallStateOverride,
+    kitchenShared,
+    kitchenNotification,
+  });
   const liveVideoVisible = familyVideoAllowed && (familyViewOpen || autoFamilyViewOpen);
 
   const visibleTab = emergency ? "home" : activeTab;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  bindViewerVideoTrackEnded,
   canViewerMediaBecomeLive,
   classifyViewerConnectionState,
   createNegotiationWatchdog,
@@ -10,6 +11,25 @@ import {
   VIEWER_DISCONNECT_GRACE_MS,
   VIEWER_NEGOTIATION_TIMEOUT_MS,
 } from "./useViewerMedia.js";
+
+test("Viewer removes the remote track listener on cleanup and fails closed on ended", () => {
+  const listeners = new Map();
+  const track = {
+    addEventListener(name, listener, options) {
+      listeners.set(name, { listener, options });
+    },
+    removeEventListener(name, listener) {
+      if (listeners.get(name)?.listener === listener) listeners.delete(name);
+    },
+  };
+  let ended = 0;
+  const cleanup = bindViewerVideoTrackEnded(track, () => { ended += 1; });
+  assert.deepEqual(listeners.get("ended")?.options, { once: true });
+  listeners.get("ended").listener();
+  assert.equal(ended, 1);
+  cleanup();
+  assert.equal(listeners.has("ended"), false);
+});
 
 class FakeViewerPeer {
   constructor() {

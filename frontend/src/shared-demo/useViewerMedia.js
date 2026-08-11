@@ -26,6 +26,14 @@ export function classifyViewerConnectionState(connectionState) {
   return "waiting";
 }
 
+export function bindViewerVideoTrackEnded(track, onEnded) {
+  if (typeof track?.addEventListener !== "function"
+    || typeof track?.removeEventListener !== "function"
+    || typeof onEnded !== "function") return () => {};
+  track.addEventListener("ended", onEnded, { once: true });
+  return () => track.removeEventListener("ended", onEnded);
+}
+
 export function createNegotiationWatchdog({
   timerApi = globalThis,
   timeoutMs = VIEWER_NEGOTIATION_TIMEOUT_MS,
@@ -115,11 +123,14 @@ export function useViewerMedia({
   const generationRef = useRef(0);
   const streamRef = useRef(null);
   const negotiationRef = useRef(null);
+  const trackEndedCleanupRef = useRef(null);
 
   const stopTransport = useCallback(() => {
     generationRef.current += 1;
     negotiationRef.current?.watchdog.cancel();
     negotiationRef.current = null;
+    trackEndedCleanupRef.current?.();
+    trackEndedCleanupRef.current = null;
     pendingIceRef.current = [];
     const peer = peerRef.current;
     peerRef.current = null;
@@ -224,6 +235,10 @@ export function useViewerMedia({
       };
       peer.ontrack = (event) => {
         if (generation !== generationRef.current || event.track.kind !== "video") return;
+        trackEndedCleanupRef.current?.();
+        trackEndedCleanupRef.current = bindViewerVideoTrackEnded(event.track, () => {
+          fail("远程视频轨道已结束，已回退到骨架");
+        });
         const nextStream = event.streams[0] || new MediaStream([event.track]);
         streamRef.current = nextStream;
         setStream(nextStream);
