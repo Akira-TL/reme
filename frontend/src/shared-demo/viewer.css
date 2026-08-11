@@ -580,6 +580,11 @@ button, input { font: inherit; }
   background: #ef861f;
 }
 
+.reme-rhythm-track > button.is-demo::after {
+  border-style: dashed;
+  border-color: #fff2df;
+}
+
 .reme-rhythm-track > button:focus-visible {
   outline: 2px solid rgba(255, 102, 28, 0.48);
   outline-offset: -3px;
@@ -703,6 +708,22 @@ button, input { font: inherit; }
   height: 100%;
   object-fit: contain;
   background: #151515;
+}
+
+.reme-recording-source-badge {
+  position: absolute;
+  z-index: 2;
+  top: 11px;
+  left: 11px;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.48);
+  border-radius: 999px;
+  color: #fffaf4;
+  background: rgba(41, 31, 24, 0.76);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  font-size: 9px;
+  font-weight: 760;
+  backdrop-filter: blur(8px);
 }
 
 .reme-recording-stage > p {

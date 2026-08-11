@@ -49,8 +49,9 @@ function recordingMarkers(day, recordings) {
       endTimeLabel: formatRemeTime(recording.endedAtMs),
       position,
       width: Math.max(0.2, Math.min(100 - position, unclampedWidth)),
-      title: recording.sceneLabel || "家中录像",
+      title: recording.title || recording.sceneLabel || "家中录像",
       playbackUrl: recording.playbackUrl,
+      isDemo: recording.source === "mock_fixture" || recording.isDemo === true,
       recording,
     });
   }
@@ -62,13 +63,32 @@ function recordingMarkers(day, recordings) {
 export function buildRemeActivityRhythm(day, recordings = []) {
   const markers = recordingMarkers(day, recordings);
   const recordingCount = markers.length;
+  const demoCount = markers.filter((marker) => marker.isDemo).length;
+  const localCount = recordingCount - demoCount;
+  const demoOnly = demoCount > 0 && localCount === 0;
+  const mixed = demoCount > 0 && localCount > 0;
+  const recordingLabel = demoOnly
+    ? `${demoCount} 段演示录像`
+    : mixed
+      ? `${localCount} 段本机 · ${demoCount} 段演示`
+      : recordingCount === 1 ? "1 段录像" : `${recordingCount} 段录像`;
   return Object.freeze({
     recordingCount,
-    recordingLabel: recordingCount === 1 ? "1 段录像" : `${recordingCount} 段录像`,
-    coverageLabel: recordingCount > 0 ? "本机可回看" : "暂无录像",
+    demoCount,
+    localCount,
+    hasDemoRecordings: demoCount > 0,
+    recordingLabel,
+    coverageLabel: demoOnly
+      ? "演示可回看"
+      : mixed ? "本机与演示可回看" : recordingCount > 0 ? "本机可回看" : "暂无录像",
     coverageStatus: recordingCount > 0 ? "complete" : "unavailable",
     markers: Object.freeze(markers),
-    sourceLabel: "本机录像",
-    sourceNote: "只保存在启动采集的这台浏览器，不经 Relay 或 MiMo。",
+    sourceLabel: demoOnly ? "演示录像" : mixed ? "本机 + 演示" : "本机录像",
+    playbackLabel: demoOnly ? "演示素材 · 可播放" : mixed ? "本机与演示素材 · 可播放" : "本机可播放",
+    sourceNote: demoOnly
+      ? "演示素材，不代表真实家庭记录；浴室不提供录像。"
+      : mixed
+        ? "本机片段只留在当前浏览器；演示素材会明确标注。"
+        : "只保存在启动采集的这台浏览器，不经 Relay 或 MiMo。",
   });
 }

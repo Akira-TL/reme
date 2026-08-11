@@ -26,6 +26,10 @@ IndexedDB；家属端可在不经过 Relay 和 MiMo 的情况下读取并播放�
 另行决定本地媒体服务、授权、传输、加密、留存和删除机制，不能把录像字节
 塞进当前 Relay 的结构化历史合同。
 
+页面中的内置演示 MP4 是另一层展示 fixture：它验证“时间线点击后确实进入并
+播放对应视频”的产品交互，但不参与 IndexedDB Gate，也不能用来证明真实采集、
+检测或跨设备回看成立。演示片段必须有真实媒体字节、明确来源标签，并排除浴室。
+
 ## Result
 
 ### Deterministic gates
@@ -62,3 +66,14 @@ IndexedDB；家属端可在不经过 Relay 和 MiMo 的情况下读取并播放�
 - **No-go**：不同设备之间没有共享 IndexedDB；当前结果不能宣称远端家属可回放。
 - 生产下一步必须先决定本地媒体服务、身份授权和保留删除政策，不扩展当前
   Relay 去存录像字节。
+
+### Packaged mock media gate
+
+- 三段预先制作的 Reme 演示素材被裁切、静音并转码为 `960×540` H.264 MP4；
+  页面使用真实 `<video>` 解码，不使用静态图片冒充播放。
+- Mock 录像清单与日期排布集中在 `remeMockRecordings.js`，每条记录显式包含
+  `source: mock_fixture` 和 `isDemo: true`。
+- `/family` 在 `390×844` 下可从当天时间带进入播放器、切换片段并自动播放；
+  页面 `innerWidth` 与 `scrollWidth` 均为 390。
+- 证据：`evidence/15-mock-recordings-390x844.png`、
+  `evidence/16-mock-player-390x844.png`。

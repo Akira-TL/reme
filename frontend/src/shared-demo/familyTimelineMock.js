@@ -397,7 +397,7 @@ function dateKeyForDay(day) {
 }
 
 function timestamp(day, hour, minute) {
-  return new Date(2026, 7, day, hour, minute, 0, 0).getTime();
+  return Date.parse(`${dateKeyForDay(day)}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+08:00`);
 }
 
 function isBeforeRealtimeCutoff(day, hour) {
@@ -675,6 +675,34 @@ const ALL_FAMILY_TIMELINE_MOCK_EVENTS = [
     uncertainty: "high",
   }),
   mockAssessment({
+    day: 9,
+    daypartId: "evening",
+    hour: 23,
+    minute: 47,
+    title: "夜间出现快速姿态变化，已经启动安全确认",
+    basis: "Mock 转变脚本显示由站立快速变为低位姿态；演示数据不能证明真实跌倒识别能力。",
+    suggestedAction: "先询问本人；若无回应，再按确定性规则通知家属",
+    progress: "本人已回应，演示记录已整理",
+    response: { hour: 23, minute: 49, title: "本人回应：刚才滑了一下，现在已经坐好了" },
+    statusLabel: "已确认",
+    tone: "warning",
+    uncertainty: "high",
+    checkInPrompt: "刚才动作有些快，您现在还好吗？需要我联系家人吗？",
+    material: {
+      label: "夜间安全确认 · 演示记录",
+      summary: "演示脚本记录到快速姿态变化；本人回应已经坐好。该条仅展示问询、回看与家属记录的产品闭环。",
+      evidence: "Mock 转变事件 + 本人演示回应 + 21 秒演示录像",
+      deliveryStatus: "已整理到演示记录",
+      attachmentLabel: "夜间安全确认演示片段",
+      durationSeconds: 21,
+      facts: [
+        "23:47 Mock 快速姿态变化",
+        "23:47 Reme 启动安全问询",
+        "23:49 本人演示回应已坐好",
+      ],
+    },
+  }),
+  mockAssessment({
     day: 10,
     daypartId: "morning",
     hour: 10,
@@ -723,10 +751,9 @@ const ALL_FAMILY_TIMELINE_MOCK_EVENTS = [
 ];
 
 export const FAMILY_TIMELINE_MOCK_EVENTS = Object.freeze(
-  ALL_FAMILY_TIMELINE_MOCK_EVENTS.filter((event) => {
-    const date = new Date(event.timestampMs);
-    return isBeforeRealtimeCutoff(date.getDate(), date.getHours());
-  }),
+  ALL_FAMILY_TIMELINE_MOCK_EVENTS.filter((event) => (
+    event.timestampMs < FAMILY_TIMELINE_REALTIME_CUTOFF_MS
+  )),
 );
 
 function mockMoment(day, daypartId, template, templateIndex) {
@@ -772,7 +799,7 @@ function buildMockDay(day) {
       .map(({ template, templateIndex }) => mockMoment(day, daypart.id, template, templateIndex));
     const entries = [
       ...moments,
-      ...careEvents.filter((event) => daypartIdForHour(new Date(event.timestampMs).getHours()) === daypart.id),
+      ...careEvents.filter((event) => event.daypartId === daypart.id),
     ]
       .sort((left, right) => left.timestampMs - right.timestampMs || left.id.localeCompare(right.id));
     return Object.freeze({

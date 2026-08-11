@@ -97,6 +97,7 @@ import {
 import { buildRemeActivityRhythm } from "./remeActivityRhythm.js";
 import { useRemeHistory } from "./remeHistory.js";
 import { useRemeLocalRecordings } from "./remeLocalRecordings.js";
+import { getRemeMockRecordings } from "./remeMockRecordings.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
   buildWeekDays,
@@ -183,6 +184,17 @@ function formatTime(timestampMs) {
   return new Date(timestampMs).toLocaleTimeString("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Asia/Shanghai",
+  });
+}
+
+function formatRecordingTime(timestampMs) {
+  if (!Number.isFinite(timestampMs)) return "—";
+  return new Date(timestampMs).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
     timeZone: "Asia/Shanghai",
   });
 }
@@ -1008,6 +1020,7 @@ function RemeActivityRhythm({ day, recordings, loading, error, onOpenRecording }
             <button
               type="button"
               key={marker.id}
+              className={marker.isDemo ? "is-demo" : ""}
               style={{ left: `${marker.position}%`, width: `${marker.width}%` }}
               aria-label={`播放 ${marker.timeLabel} 至 ${marker.endTimeLabel} 的${marker.title}`}
               onClick={() => onOpenRecording(marker.id)}
@@ -1023,7 +1036,7 @@ function RemeActivityRhythm({ day, recordings, loading, error, onOpenRecording }
         <article className="reme-rhythm-highlight is-playable">
           <span><PlayCircleRoundedIcon /></span>
           <div>
-            <small>{rhythm.recordingLabel} · 本机可播放</small>
+            <small>{rhythm.recordingLabel} · {rhythm.playbackLabel}</small>
             <b>点击橙色录像段进入播放器</b>
           </div>
         </article>
@@ -1058,6 +1071,7 @@ function recordingDurationLabel(durationMs) {
 
 function RemeRecordingPlayback({ day, recordings, recording, onBack, onSelectRecording }) {
   const [playbackError, setPlaybackError] = useState("");
+  const isDemoRecording = recording.source === "mock_fixture" || recording.isDemo === true;
   const rhythm = useMemo(
     () => buildRemeActivityRhythm(day, recordings),
     [day, recordings],
@@ -1069,8 +1083,8 @@ function RemeRecordingPlayback({ day, recordings, recording, onBack, onSelectRec
           <ChevronLeftRoundedIcon />
         </IconButton>
         <div>
-          <small>{day.dateKey} · {recording.sceneLabel}</small>
-          <h1>{formatTime(recording.startedAtMs)} 的录像</h1>
+          <small>{day.dateKey} · {isDemoRecording ? "演示录像" : "本机录像"} · {recording.sceneLabel}</small>
+          <h1>{recording.title || `${formatTime(recording.startedAtMs)} 的录像`}</h1>
         </div>
         <span>{recordingDurationLabel(recording.durationMs)}</span>
       </header>
@@ -1086,6 +1100,7 @@ function RemeRecordingPlayback({ day, recordings, recording, onBack, onSelectRec
           onCanPlay={() => setPlaybackError("")}
           onError={() => setPlaybackError("这段录像暂时无法解码，请返回后重试。")}
         />
+        {isDemoRecording && <span className="reme-recording-source-badge">演示片段 · 非真实家庭记录</span>}
         {playbackError && <p role="alert">{playbackError}</p>}
       </section>
 
@@ -1100,7 +1115,7 @@ function RemeRecordingPlayback({ day, recordings, recording, onBack, onSelectRec
             <button
               type="button"
               key={marker.id}
-              className={marker.id === recording.id ? "is-selected" : ""}
+              className={`${marker.id === recording.id ? "is-selected" : ""} ${marker.isDemo ? "is-demo" : ""}`}
               style={{ left: `${marker.position}%`, width: `${marker.width}%` }}
               aria-label={`播放 ${marker.timeLabel} 至 ${marker.endTimeLabel} 的${marker.title}`}
               aria-pressed={marker.id === recording.id}
@@ -1114,9 +1129,11 @@ function RemeRecordingPlayback({ day, recordings, recording, onBack, onSelectRec
       </section>
 
       <section className="reme-recording-details">
-        <div><span>录像时间</span><b>{formatTime(recording.startedAtMs)}–{formatTime(recording.endedAtMs)}</b></div>
-        <div><span>保存位置</span><b>这台设备 · 本机浏览器</b></div>
-        <p><LockRoundedIcon />录像不经过 Relay 或 MiMo；清除浏览器站点数据后将无法回看。</p>
+        <div><span>录像时间</span><b>{formatRecordingTime(recording.startedAtMs)}–{formatRecordingTime(recording.endedAtMs)}</b></div>
+        <div><span>{isDemoRecording ? "素材类型" : "保存位置"}</span><b>{isDemoRecording ? "内置演示录像" : "这台设备 · 本机浏览器"}</b></div>
+        <p><LockRoundedIcon />{isDemoRecording
+          ? "片段来自预先制作的 Reme 演示素材，只用于展示回看交互，不代表真实家庭历史。"
+          : "录像不经过 Relay 或 MiMo；清除浏览器站点数据后将无法回看。"}</p>
       </section>
     </main>
   );
@@ -1140,7 +1157,14 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
   const [expandedDayparts, setExpandedDayparts] = useState(() => new Set(["early", "morning"]));
   const [activeRecordingId, setActiveRecordingId] = useState(null);
   const localRecordings = useRemeLocalRecordings(day.dateKey);
-  const activeRecording = localRecordings.recordings.find((item) => item.id === activeRecordingId)
+  const mockRecordings = useMemo(() => getRemeMockRecordings(day.dateKey), [day.dateKey]);
+  const recordings = useMemo(() => [
+    ...mockRecordings,
+    ...localRecordings.recordings,
+  ].sort((left, right) => (
+    left.startedAtMs - right.startedAtMs || left.id.localeCompare(right.id)
+  )), [localRecordings.recordings, mockRecordings]);
+  const activeRecording = recordings.find((item) => item.id === activeRecordingId)
     || null;
   const displayDay = day;
   const summaryStateName = summary
@@ -1183,7 +1207,7 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
     return (
       <RemeRecordingPlayback
         day={day}
-        recordings={localRecordings.recordings}
+        recordings={recordings}
         recording={activeRecording}
         onBack={() => setActiveRecordingId(null)}
         onSelectRecording={setActiveRecordingId}
@@ -1196,7 +1220,7 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
       <RemeDateStrip selectedDateKey={day.dateKey} onSelectDate={onSelectDate} days={dates} />
       <RemeActivityRhythm
         day={day}
-        recordings={localRecordings.recordings}
+        recordings={recordings}
         loading={localRecordings.loading}
         error={localRecordings.error}
         onOpenRecording={setActiveRecordingId}

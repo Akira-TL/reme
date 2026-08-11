@@ -67,3 +67,25 @@ test("Reme recording rhythm does not invent out-of-day or missing clips", () => 
   assert.equal(rhythm.recordingLabel, "0 段录像");
   assert.deepEqual(rhythm.markers, []);
 });
+
+test("Reme recording rhythm labels packaged mock video without presenting it as local history", () => {
+  const day = { dateKey: DATE_KEY, sourceMode: "mock" };
+  const rhythm = buildRemeActivityRhythm(day, [{
+    id: "mock-clip",
+    startedAtMs: timestamp("11:36"),
+    endedAtMs: timestamp("11:37"),
+    sceneLabel: "厨房时光",
+    title: "餐桌前的厨房时光",
+    playbackUrl: "/mock-recordings/kitchen-sharing.mp4",
+    source: "mock_fixture",
+    isDemo: true,
+  }]);
+  assert.equal(rhythm.sourceLabel, "演示录像");
+  assert.equal(rhythm.playbackLabel, "演示素材 · 可播放");
+  assert.equal(rhythm.recordingLabel, "1 段演示录像");
+  assert.equal(rhythm.coverageLabel, "演示可回看");
+  assert.equal(rhythm.hasDemoRecordings, true);
+  assert.equal(rhythm.markers[0].isDemo, true);
+  assert.equal(rhythm.markers[0].title, "餐桌前的厨房时光");
+  assert.match(rhythm.sourceNote, /不代表真实家庭记录/);
+});

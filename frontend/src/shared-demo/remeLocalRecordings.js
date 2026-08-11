@@ -198,6 +198,9 @@ function projectRecording(record) {
     sceneId: record.scene_id,
     sceneLabel: record.scene_label,
     blob: record.blob,
+    source: "local_recording",
+    sourceLabel: "本机录像",
+    isDemo: false,
   });
 }
 

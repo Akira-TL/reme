@@ -14,6 +14,15 @@ import {
   isFamilyTimelineMockDate,
 } from "./familyTimelineMock.js";
 
+function shanghaiHour(timestampMs) {
+  const hour = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(timestampMs).find((part) => part.type === "hour")?.value;
+  return Number(hour);
+}
+
 test("mock care history stops after the morning of August 10", () => {
   const dates = [...new Set(FAMILY_TIMELINE_MOCK_EVENTS.map((event) => event.dateKey))];
   assert.deepEqual(dates, [
@@ -29,10 +38,10 @@ test("mock care history stops after the morning of August 10", () => {
   assert.equal(FAMILY_TIMELINE_MOCK_END_DATE, dates.at(-1));
   for (const date of dates) {
     const count = FAMILY_TIMELINE_MOCK_EVENTS.filter((event) => event.dateKey === date).length;
-    assert.ok(count >= 1 && count <= 3);
+    assert.ok(count >= 1 && count <= 4);
   }
   const august10Events = FAMILY_TIMELINE_MOCK_EVENTS.filter((event) => event.dateKey === "2026-08-10");
-  assert.ok(august10Events.every((event) => new Date(event.timestampMs).getHours() < 12));
+  assert.ok(august10Events.every((event) => shanghaiHour(event.timestampMs) < 12));
 });
 
 test("every mock care card is explicit, bounded, and privacy safe", () => {
@@ -106,7 +115,7 @@ test("full mock days cover 24 hours and August 10 stops at noon", () => {
       assert.match(entry.label, /Mock/);
       const section = day.sections.find((candidate) => candidate.entries.includes(entry));
       const [startHour, endHour] = daypartHours[section.id];
-      const hour = new Date(entry.timestampMs).getHours();
+      const hour = shanghaiHour(entry.timestampMs);
       assert.ok(hour >= startHour && hour < endHour, `${entry.id} should be inside ${section.id}`);
       if (entry.kind === "device") {
         assert.equal(entry.sourceChannel, "mock_device_event");
@@ -153,6 +162,13 @@ test("August 9 keeps the approved care thread and adds the cooking share-to-daug
   assert.equal(cookingShare.familyMaterial?.deliveryStatus, "已发给女儿");
   assert.equal(cookingShare.familyMaterial?.attachment?.durationSeconds, 18);
   assert.equal(cookingShare.familyMaterial?.facts.length, 3);
+
+  const nightSafety = entries.find((entry) => entry.id === "mock:2026-08-09:2347");
+  assert.ok(nightSafety);
+  assert.match(nightSafety.title, /安全确认/);
+  assert.match(nightSafety.detail, /不能证明真实跌倒识别能力/);
+  assert.equal(nightSafety.familyMaterial?.attachment?.durationSeconds, 21);
+  assert.equal(nightSafety.familyMaterial?.facts.length, 3);
   assert.equal(getFamilyTimelineMockDay("2026-08-12"), null);
 });
 
