@@ -1,0 +1,17 @@
+FROM node:24-bookworm-slim
+
+ENV HOME=/tmp/wrangler-home
+
+WORKDIR /app
+
+COPY --chown=node:node demo-relay/package.json demo-relay/package-lock.json ./
+RUN npm ci
+COPY --chown=node:node demo-relay/ ./
+COPY deploy/vps/relay-entrypoint.mjs /usr/local/bin/relay-entrypoint.mjs
+
+EXPOSE 8787
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=12 \
+  CMD node -e "fetch('http://127.0.0.1:8787/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
+CMD ["node", "/usr/local/bin/relay-entrypoint.mjs"]

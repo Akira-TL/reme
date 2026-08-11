@@ -1,0 +1,38 @@
+# Append this block to the existing Caddyfile after the containers are healthy.
+# It keeps all browser HTTP/WebSocket traffic on one trusted HTTPS origin.
+reme.maniforld.com {
+    request_body {
+        max_size 8MB
+    }
+
+    handle_path /_reme/runtime/* {
+        reverse_proxy reme-backend:8770
+    }
+
+    handle_path /_reme/relay/* {
+        reverse_proxy reme-relay:8787
+    }
+
+    handle {
+        reverse_proxy reme-frontend:8080
+    }
+
+    encode gzip zstd
+
+    header {
+        Content-Security-Policy "default-src 'self'; base-uri 'none'; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
+        Permissions-Policy "camera=(self), microphone=(self), geolocation=()"
+        Referrer-Policy "no-referrer"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        -Server
+    }
+
+    log {
+        output file /data/caddy/reme-roadshow-access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}
