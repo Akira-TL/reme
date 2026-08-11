@@ -418,57 +418,113 @@ button, input { font: inherit; }
   padding-top: 1px;
 }
 
-.reme-week-strip {
-  padding: 7px 8px 13px;
+.reme-history-calendar {
+  padding: 12px 14px 10px;
   border: 1px solid #ecdccf;
   border-radius: 20px;
   background: #fffdfb;
 }
 
-.reme-week-days {
+.reme-history-calendar > header {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 3px;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 8px;
 }
 
-.reme-week-days button {
-  position: relative;
+.reme-history-calendar > header > div {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 8px;
   min-width: 0;
-  min-height: 62px;
-  padding: 6px 1px;
-  border: 0;
-  border-radius: 15px;
-  color: #6e6b69;
+  color: #332f2c;
+}
+
+.reme-history-calendar > header > div > svg { color: var(--reme-coral); font-size: 21px; }
+.reme-history-calendar > header > div span { min-width: 0; text-align: left; }
+.reme-history-calendar > header > div b,
+.reme-history-calendar > header > div small { display: block; }
+.reme-history-calendar > header > div b { font-size: 15px; line-height: 1.15; }
+.reme-history-calendar > header > div small { margin-top: 2px; color: #9b8f86; font-size: 8px; }
+.reme-history-calendar > header .MuiIconButton-root { width: 36px; height: 36px; color: #766b63; }
+
+.reme-calendar-weekdays,
+.reme-calendar-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.reme-calendar-weekdays { margin-top: 8px; }
+.reme-calendar-weekdays span { padding: 4px 0; color: #a2978f; font-size: 8px; font-weight: 750; text-align: center; }
+
+.reme-calendar-days button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  color: #514b47;
   background: transparent;
   cursor: pointer;
 }
 
-.reme-week-days button:hover { background: #fff3eb; }
-.reme-week-days button.is-selected { color: #fff; background: var(--reme-coral); }
-.reme-week-days button > span { font-size: 10px; line-height: 1; white-space: nowrap; }
-.reme-week-days button > b { font-size: 20px; line-height: 1; }
-.reme-week-days button > small {
+.reme-calendar-days button:not(.is-selected):hover:not(:disabled) { border-color: #f2d7c5; background: #fff5ef; }
+.reme-calendar-days button.is-outside { opacity: 0.38; }
+.reme-calendar-days button:disabled { opacity: 0.22; cursor: not-allowed; }
+.reme-calendar-days button.is-today { border-color: #f4b793; }
+.reme-calendar-days button.is-selected {
+  color: #fff;
+  border-color: var(--reme-coral);
+  background: var(--reme-coral);
+  box-shadow: 0 6px 14px rgba(255, 79, 23, 0.2);
+}
+.reme-calendar-days button > b { font-size: 13px; line-height: 1; }
+.reme-calendar-days button > small {
   position: absolute;
-  top: 5px;
+  top: 3px;
   right: 5px;
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  color: #38725c;
-  background: #e7f5ee;
+  color: #ba5d29;
   font-size: 7px;
   font-weight: 800;
 }
-.reme-week-days button.is-hybrid > small { color: #a04a1d; background: #ffe7d8; }
-.reme-week-days button.is-selected > small { color: var(--reme-coral); background: rgb(255 255 255 / 90%); }
-.reme-week-days button > svg { position: absolute; bottom: -10px; color: var(--reme-coral); font-size: 10px; }
+.reme-calendar-days button > svg { position: absolute; bottom: 3px; color: #ed7c2d; font-size: 7px; }
+.reme-calendar-days button.has-real-record > svg { color: #4a9a74; }
+.reme-calendar-days button.is-selected > small,
+.reme-calendar-days button.is-selected > svg { color: #fff; }
+
+.reme-history-calendar > footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 10px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid #f0e7df;
+}
+.reme-history-calendar > footer p { display: flex; flex-wrap: wrap; gap: 9px; margin: 0; }
+.reme-history-calendar > footer p span { display: inline-flex; align-items: center; gap: 3px; color: #82766e; font-size: 8px; }
+.reme-history-calendar > footer p svg { font-size: 7px; }
+.reme-history-calendar > footer p .is-mock svg { color: #ed7c2d; }
+.reme-history-calendar > footer p .is-real svg { color: #4a9a74; }
+.reme-history-calendar > footer > span { grid-column: 1; color: #9c8f86; font-size: 8px; }
+.reme-history-calendar > footer > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  padding: 6px 9px;
+  border: 1px solid #eed8c8;
+  border-radius: 999px;
+  color: #b85a25;
+  background: #fff8f3;
+  font-size: 8px;
+  font-weight: 760;
+  cursor: pointer;
+}
 
 .reme-day-rhythm {
   margin-top: 12px;
@@ -1757,8 +1813,11 @@ html, body, #root {
   .viewer-app.is-family-surface.is-timeline-tab .viewer-header h1 { font-size: 25px; }
   .viewer-app.is-family-surface.is-timeline-tab .viewer-header p { font-size: 10px; }
 
-  .reme-week-strip { padding-top: 5px; padding-bottom: 11px; }
-  .reme-week-days button { min-height: 53px; }
+  .reme-history-calendar { padding: 9px 10px 8px; border-radius: 18px; }
+  .reme-calendar-weekdays,
+  .reme-calendar-days { gap: 3px; }
+  .reme-calendar-days button { min-height: 39px; border-radius: 11px; }
+  .reme-history-calendar > footer { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; }
   .reme-day-rhythm { margin-top: 10px; padding: 14px; border-radius: 18px; }
   .reme-day-rhythm > header h2 { font-size: 18px; }
   .reme-day-rhythm > p { font-size: 10px; }

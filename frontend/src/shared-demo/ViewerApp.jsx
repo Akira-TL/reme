@@ -90,20 +90,25 @@ import {
   shouldShowFamilyStage,
 } from "./familyHomePresentation.js";
 import {
-  FAMILY_TIMELINE_DISPLAY_END_DATE,
+  FAMILY_TIMELINE_MOCK_DAYS,
   FAMILY_TIMELINE_MOCK_END_DATE,
-  isFamilyTimelineDisplayDate,
+  FAMILY_TIMELINE_MOCK_START_DATE,
+  FAMILY_TIMELINE_REALTIME_START_DATE,
+  getFamilyTimelineMockDay,
+  isFamilyTimelineMockDate,
 } from "./familyTimelineMock.js";
 import { buildRemeActivityRhythm } from "./remeActivityRhythm.js";
-import { useRemeHistory } from "./remeHistory.js";
-import { useRemeLocalRecordings } from "./remeLocalRecordings.js";
+import { remeRecordingDateKey, useRemeLocalRecordings } from "./remeLocalRecordings.js";
 import { getRemeMockRecordings } from "./remeMockRecordings.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
+  buildCalendarMonth,
   buildWeekDays,
   dateKeyFromTimestamp,
   filterTimelineEventsByDate,
+  monthKeyFromDateKey,
   shiftDateKey,
+  shiftMonthKey,
   timelineDateHeading,
   timelineDateLongHeading,
 } from "./timelineDates.js";
@@ -453,6 +458,38 @@ function HomePage({
     relay,
     activeGrant,
   });
+  const homeDateKey = remeRecordingDateKey(localNowMs) || dateKeyFromTimestamp(localNowMs);
+  const homeDay = useMemo(
+    () => getFamilyTimelineMockDay(homeDateKey) || Object.freeze({ dateKey: homeDateKey }),
+    [homeDateKey],
+  );
+  const localRecordings = useRemeLocalRecordings(homeDateKey, familySurface);
+  const mockRecordings = useMemo(
+    () => familySurface ? getRemeMockRecordings(homeDateKey) : [],
+    [familySurface, homeDateKey],
+  );
+  const recordings = useMemo(() => [
+    ...mockRecordings,
+    ...localRecordings.recordings,
+  ].sort((left, right) => (
+    left.startedAtMs - right.startedAtMs || left.id.localeCompare(right.id)
+  )), [localRecordings.recordings, mockRecordings]);
+  const [activeRecordingId, setActiveRecordingId] = useState(null);
+  const activeRecording = recordings.find((item) => item.id === activeRecordingId) || null;
+
+  if (familySurface && activeRecording) {
+    return (
+      <RemeRecordingPlayback
+        day={homeDay}
+        recordings={recordings}
+        recording={activeRecording}
+        onBack={() => setActiveRecordingId(null)}
+        onSelectRecording={setActiveRecordingId}
+        backLabel="返回首页"
+      />
+    );
+  }
+
   return (
     <main className="viewer-page viewer-home-page">
       {familySurface && <StatusCard snapshot={snapshot} relay={relay} decision={decision} familySurface />}
@@ -495,6 +532,17 @@ function HomePage({
           <div><small>本人已授权</small><b>外婆分享了厨房里的生活片段</b><p>授权只属于当前事件；过期或切换场景后自动关闭。</p></div>
           <CheckCircleRoundedIcon className="care-moment-check" />
         </article>
+      )}
+      {familySurface && (
+        <RemeActivityRhythm
+          day={homeDay}
+          recordings={recordings}
+          loading={localRecordings.loading}
+          error={localRecordings.error}
+          onOpenRecording={setActiveRecordingId}
+          eyebrow="REME · 首页回看"
+          title="今天录像回看"
+        />
       )}
       {familySurface && (
         <FamilyRecentUpdates
@@ -970,30 +1018,87 @@ function RemeDaypartSection({ section, filter, expanded, onToggle }) {
   );
 }
 
-function RemeDateStrip({ selectedDateKey, onSelectDate, days }) {
+function RemeHistoryCalendar({ selectedDateKey, onSelectDate, nowMs, realDateKeys = [] }) {
+  const selectedMonthKey = monthKeyFromDateKey(selectedDateKey);
+  const [visibleMonthKey, setVisibleMonthKey] = useState(
+    () => selectedMonthKey || monthKeyFromDateKey(dateKeyFromTimestamp(nowMs)),
+  );
+  const markedDateKeys = useMemo(() => [
+    ...FAMILY_TIMELINE_MOCK_DAYS.map((day) => day.dateKey),
+    ...realDateKeys,
+  ], [realDateKeys]);
+  const calendar = useMemo(
+    () => buildCalendarMonth(visibleMonthKey, selectedDateKey, nowMs, markedDateKeys),
+    [markedDateKeys, nowMs, selectedDateKey, visibleMonthKey],
+  );
+  const todayKey = dateKeyFromTimestamp(nowMs);
+  const mockRangeLabel = `${Number(FAMILY_TIMELINE_MOCK_START_DATE.slice(5, 7))}月${Number(FAMILY_TIMELINE_MOCK_START_DATE.slice(8, 10))}–${Number(FAMILY_TIMELINE_MOCK_END_DATE.slice(8, 10))}日演示`;
+  const realtimeStartLabel = `${Number(FAMILY_TIMELINE_REALTIME_START_DATE.slice(5, 7))}月${Number(FAMILY_TIMELINE_REALTIME_START_DATE.slice(8, 10))}日`;
+  const changeMonth = (offset) => {
+    const nextMonth = shiftMonthKey(calendar.monthKey, offset);
+    if (nextMonth && (offset < 0 || calendar.canGoNext)) setVisibleMonthKey(nextMonth);
+  };
+  const selectDate = (dateKey) => {
+    const nextMonthKey = monthKeyFromDateKey(dateKey);
+    if (nextMonthKey) setVisibleMonthKey(nextMonthKey);
+    onSelectDate(dateKey);
+  };
+
   return (
-    <section className="reme-week-strip" aria-label="Reme 记录日期">
-      <div className="reme-week-days">
-        {days.map((day) => (
+    <section className="reme-history-calendar" aria-label="完整关怀记录日历">
+      <header>
+        <IconButton onClick={() => changeMonth(-1)} aria-label="查看上一个月">
+          <ChevronLeftRoundedIcon />
+        </IconButton>
+        <div><CalendarMonthRoundedIcon /><span><b>{calendar.label}</b><small>完整日历</small></span></div>
+        <IconButton onClick={() => changeMonth(1)} disabled={!calendar.canGoNext} aria-label="查看下一个月">
+          <ChevronRightRoundedIcon />
+        </IconButton>
+      </header>
+      <div className="reme-calendar-weekdays" aria-hidden="true">
+        {calendar.weekdays.map((weekday) => <span key={weekday}>{weekday}</span>)}
+      </div>
+      <div className="reme-calendar-days">
+        {calendar.days.map((day) => {
+          const mockDate = isFamilyTimelineMockDate(day.key);
+          const hasRealRecord = !mockDate && realDateKeys.includes(day.key);
+          const sourceLabel = mockDate ? "演示记录" : hasRealRecord ? "有真实记录" : "没有记录";
+          return (
           <button
             type="button"
-            key={day.dateKey}
-            className={`${day.dateKey === selectedDateKey ? "is-selected" : ""} is-${day.sourceMode}`}
-            aria-pressed={day.dateKey === selectedDateKey}
-            aria-label={`周${day.weekday} ${day.day}日${day.sourceMode === "mock" ? "，演示记录" : ""}`}
-            onClick={() => onSelectDate(day.dateKey)}
+            key={day.key}
+            className={`${day.selected ? "is-selected" : ""} ${day.today ? "is-today" : ""} ${day.inMonth ? "" : "is-outside"} ${mockDate ? "is-mock" : ""} ${hasRealRecord ? "has-real-record" : ""}`}
+            disabled={day.disabled}
+            aria-pressed={day.selected}
+            aria-current={day.today ? "date" : undefined}
+            aria-label={`${day.month}月${day.day}日，${sourceLabel}${day.today ? "，今天" : ""}`}
+            onClick={() => selectDate(day.key)}
           >
-            <span>周{day.weekday}</span>
             <b>{day.day}</b>
-            {day.dateKey === selectedDateKey && <FiberManualRecordRoundedIcon />}
+            {day.today && <small>今</small>}
+            {(mockDate || hasRealRecord) && <FiberManualRecordRoundedIcon aria-hidden="true" />}
           </button>
-        ))}
+          );
+        })}
       </div>
+      <footer>
+        <p><span className="is-mock"><FiberManualRecordRoundedIcon />{mockRangeLabel}</span><span className="is-real"><FiberManualRecordRoundedIcon />真实记录</span></p>
+        <span>{realtimeStartLabel}起只显示真实数据</span>
+        {selectedDateKey !== todayKey && <button type="button" onClick={() => selectDate(todayKey)}>回到今天</button>}
+      </footer>
     </section>
   );
 }
 
-function RemeActivityRhythm({ day, recordings, loading, error, onOpenRecording }) {
+function RemeActivityRhythm({
+  day,
+  recordings,
+  loading,
+  error,
+  onOpenRecording,
+  eyebrow = "REME · 一天回看",
+  title = "当天录像回看",
+}) {
   const rhythm = useMemo(
     () => buildRemeActivityRhythm(day, recordings),
     [day, recordings],
@@ -1006,8 +1111,8 @@ function RemeActivityRhythm({ day, recordings, loading, error, onOpenRecording }
     >
       <header>
         <div>
-          <small>REME · 一天回看</small>
-          <h2 id="reme-day-rhythm-title">当天录像回看</h2>
+          <small>{eyebrow}</small>
+          <h2 id="reme-day-rhythm-title">{title}</h2>
         </div>
         <span>{rhythm.sourceLabel}</span>
       </header>
@@ -1069,7 +1174,14 @@ function recordingDurationLabel(durationMs) {
   return remainder > 0 ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`;
 }
 
-function RemeRecordingPlayback({ day, recordings, recording, onBack, onSelectRecording }) {
+function RemeRecordingPlayback({
+  day,
+  recordings,
+  recording,
+  onBack,
+  onSelectRecording,
+  backLabel = "返回关怀记录",
+}) {
   const [playbackError, setPlaybackError] = useState("");
   const isDemoRecording = recording.source === "mock_fixture" || recording.isDemo === true;
   const rhythm = useMemo(
@@ -1079,7 +1191,7 @@ function RemeRecordingPlayback({ day, recordings, recording, onBack, onSelectRec
   return (
     <main className="viewer-page timeline-page reme-recording-playback">
       <header className="reme-recording-topbar">
-        <IconButton type="button" onClick={onBack} aria-label="返回关怀记录">
+        <IconButton type="button" onClick={onBack} aria-label={backLabel}>
           <ChevronLeftRoundedIcon />
         </IconButton>
         <div>
@@ -1147,25 +1259,14 @@ const MIMO_DIARY_UNCERTAINTY_COPY = Object.freeze({
 
 function mimoDiaryUnavailableCopy(summaryState) {
   if (summaryState?.error_code === "timeline_not_ready") {
-    return "今天的记录还没有整理完成，下面会先显示已经收到的内容。";
+    return "这一天的记录还没有整理完成，下面会先显示已经收到的内容。";
   }
-  return "今天的记录暂时还不能整理成摘要，下面的逐条记录仍可查看。";
+  return "这一天的记录暂时还不能整理成摘要，下面的逐条记录仍可查看。";
 }
 
-function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
+function RemeTimeline({ day, onSelectDate, summaryState, summary, nowMs, realDateKeys }) {
   const [filter, setFilter] = useState("all");
   const [expandedDayparts, setExpandedDayparts] = useState(() => new Set(["early", "morning"]));
-  const [activeRecordingId, setActiveRecordingId] = useState(null);
-  const localRecordings = useRemeLocalRecordings(day.dateKey);
-  const mockRecordings = useMemo(() => getRemeMockRecordings(day.dateKey), [day.dateKey]);
-  const recordings = useMemo(() => [
-    ...mockRecordings,
-    ...localRecordings.recordings,
-  ].sort((left, right) => (
-    left.startedAtMs - right.startedAtMs || left.id.localeCompare(right.id)
-  )), [localRecordings.recordings, mockRecordings]);
-  const activeRecording = recordings.find((item) => item.id === activeRecordingId)
-    || null;
   const displayDay = day;
   const summaryStateName = summary
     ? "live"
@@ -1173,7 +1274,7 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
   const liveSummary = summary;
   const summaryHeadline = liveSummary
     ? liveSummary.headline
-    : summaryStateName === "loading" ? "正在整理今天的动态…" : "今天还没有可用摘要";
+    : summaryStateName === "loading" ? "正在整理这一天的动态…" : "这一天还没有可用摘要";
   const summaryCopy = liveSummary
     ? liveSummary.summary
     : summaryStateName === "loading"
@@ -1203,29 +1304,14 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
     });
   };
 
-  if (activeRecording) {
-    return (
-      <RemeRecordingPlayback
-        day={day}
-        recordings={recordings}
-        recording={activeRecording}
-        onBack={() => setActiveRecordingId(null)}
-        onSelectRecording={setActiveRecordingId}
-      />
-    );
-  }
-
   return (
     <main className="viewer-page timeline-page reme-timeline-page">
-      <RemeDateStrip selectedDateKey={day.dateKey} onSelectDate={onSelectDate} days={dates} />
-      <RemeActivityRhythm
-        day={day}
-        recordings={recordings}
-        loading={localRecordings.loading}
-        error={localRecordings.error}
-        onOpenRecording={setActiveRecordingId}
+      <RemeHistoryCalendar
+        selectedDateKey={day.dateKey}
+        onSelectDate={onSelectDate}
+        nowMs={nowMs}
+        realDateKeys={realDateKeys}
       />
-
       <section
         className="reme-mimo-summary"
         aria-labelledby="reme-day-summary-title"
@@ -1234,7 +1320,7 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
         data-summary-schema={liveSummary?.schema_version || "pending"}
       >
           <div className="reme-mimo-summary-heading">
-            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>Reme 今日摘要</b></span>
+            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>Reme 本日摘要</b></span>
             <span className={`reme-mimo-summary-status is-${summaryStateName}`}><FiberManualRecordRoundedIcon />{summaryStatus}</span>
           </div>
           <h2 id="reme-day-summary-title">{summaryHeadline}</h2>
@@ -1296,61 +1382,50 @@ function TimelinePage({
   selectedDateKey,
   onSelectDate,
   nowMs,
-  remeHistory,
   familySurface,
 }) {
   const todayKey = dateKeyFromTimestamp(nowMs);
-  const selectableThrough = todayKey > FAMILY_TIMELINE_DISPLAY_END_DATE
-    ? todayKey
-    : FAMILY_TIMELINE_DISPLAY_END_DATE;
-  const weekDays = buildWeekDays(selectedDateKey, nowMs, selectableThrough);
+  const weekDays = buildWeekDays(selectedDateKey, nowMs, todayKey);
   const interrupted = Boolean(
     relay.unavailableReason
       || !relay.monitorOnline
       || relay.connection !== "connected",
   );
-  const backendRemeDate = remeHistory.dates.some((day) => day.dateKey === selectedDateKey);
-  if (familySurface && backendRemeDate && remeHistory.day?.dateKey === selectedDateKey) {
-    return (
-      <RemeTimeline
-        key={`${remeHistory.day.dateKey}:${remeHistory.day.revision}`}
-        day={remeHistory.day}
-        onSelectDate={onSelectDate}
-        dates={remeHistory.dates}
-        summaryState={remeHistory.summaryState}
-        summary={remeHistory.summary}
-      />
-    );
-  }
-  if (familySurface && (backendRemeDate || isFamilyTimelineDisplayDate(selectedDateKey))) {
-    return (
-      <main className="viewer-page timeline-page reme-timeline-page">
-        <RemeDateStrip
-          selectedDateKey={selectedDateKey}
-          onSelectDate={onSelectDate}
-          days={remeHistory.dates}
-        />
-        <section className="timeline-empty-state" role={remeHistory.error ? "alert" : "status"}>
-          <span>{remeHistory.error ? <EventBusyRoundedIcon /> : <RefreshRoundedIcon />}</span>
-          <h2>{remeHistory.error ? "关怀记录暂时不可用" : "正在读取关怀记录"}</h2>
-          <p>{remeHistory.error
-            ? "今天的记录暂时无法获取，恢复后会自动更新。"
-            : "正在整理日期、生活记录和今日摘要。"}</p>
-        </section>
-      </main>
-    );
-  }
   const liveEvents = filterTimelineEventsByDate(timeline.events, selectedDateKey);
   const events = [...liveEvents]
     .sort((left, right) => right.timestampMs - left.timestampMs || left.id.localeCompare(right.id));
-  const canGoForward = shiftDateKey(selectedDateKey, 7) <= selectableThrough;
+  const realDateKeys = [...new Set(timeline.events
+    .map((event) => event.dateKey || dateKeyFromTimestamp(event.timestampMs))
+    .filter(Boolean))];
+  const mockDay = familySurface ? getFamilyTimelineMockDay(selectedDateKey) : null;
+  if (mockDay) {
+    return (
+      <RemeTimeline
+        key={mockDay.dateKey}
+        day={mockDay}
+        onSelectDate={onSelectDate}
+        summaryState={null}
+        summary={null}
+        nowMs={nowMs}
+        realDateKeys={realDateKeys}
+      />
+    );
+  }
+  const canGoForward = shiftDateKey(selectedDateKey, 7) <= todayKey;
   const changeWeek = (offset) => {
     const candidate = shiftDateKey(selectedDateKey, offset * 7);
-    onSelectDate(candidate > selectableThrough ? selectableThrough : candidate);
+    onSelectDate(candidate > todayKey ? todayKey : candidate);
   };
   return (
-    <main className="viewer-page timeline-page">
-      <section className="timeline-calendar" aria-label="选择时间线日期">
+    <main className={`viewer-page timeline-page ${familySurface ? "reme-timeline-page" : ""}`}>
+      {familySurface ? (
+        <RemeHistoryCalendar
+          selectedDateKey={selectedDateKey}
+          onSelectDate={onSelectDate}
+          nowMs={nowMs}
+          realDateKeys={realDateKeys}
+        />
+      ) : <section className="timeline-calendar" aria-label="选择时间线日期">
         <div className="timeline-week-controls">
           <IconButton onClick={() => changeWeek(-1)} aria-label="查看上一周"><ChevronLeftRoundedIcon /></IconButton>
           <div><CalendarMonthRoundedIcon /><span>{timelineDateHeading(selectedDateKey, nowMs)}</span></div>
@@ -1372,7 +1447,7 @@ function TimelinePage({
             </button>
           ))}
         </div>
-      </section>
+      </section>}
 
       <section className="timeline-care-intro" aria-label="主动关怀说明">
         <span><AutoAwesomeRoundedIcon /></span>
@@ -1402,12 +1477,12 @@ function TimelinePage({
           <span><EventBusyRoundedIcon /></span>
           <h2>{selectedDateKey === todayKey
             ? interrupted ? "家中端暂未连接" : "等待可靠的关怀判断"
-            : "这一天没有可用记录"}</h2>
+            : "这一天没有收到真实记录"}</h2>
           <p>{selectedDateKey === todayKey
             ? interrupted
               ? "恢复同步后，新的关怀判断会继续出现在这里。"
               : "发现可靠事件后，MiMo 或确定性安全规则才会生成一条有来源的判断。"
-            : "跨天历史服务尚未接入，因此不会用演示文案填充真实时间线。"}</p>
+            : "这里只显示真实事件；没有收到数据时不会用演示内容补空。"}</p>
         </section>
       )}
     </main>
@@ -1755,13 +1830,9 @@ export function ViewerApp({ surface = "family" }) {
     viewerId,
   } = relay;
   const [activeTab, setActiveTab] = useState("home");
-  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => {
-    const currentDateKey = dateKeyFromTimestamp(Date.now());
-    if (!familySurface) return currentDateKey;
-    return isFamilyTimelineDisplayDate(currentDateKey)
-      ? currentDateKey
-      : FAMILY_TIMELINE_MOCK_END_DATE;
-  });
+  const [selectedTimelineDate, setSelectedTimelineDate] = useState(
+    () => dateKeyFromTimestamp(Date.now()),
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [issueError, setIssueError] = useState("");
   const [familyConfirmFailure, setFamilyConfirmFailure] = useState(null);
@@ -1774,11 +1845,6 @@ export function ViewerApp({ surface = "family" }) {
     createFamilyTimelineState,
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const remeHistory = useRemeHistory({
-    selectedDateKey: selectedTimelineDate,
-    revisionHint: relay.remeDayRevisions?.[selectedTimelineDate] || null,
-    enabled: familySurface && activeTab === "timeline",
-  });
   const [highPrivacyEnabled, setHighPrivacyEnabled] = useStoredBoolean("reme.viewer.highPrivacy.v2", false);
   const [notificationsEnabled, setNotificationsEnabled] = useStoredBoolean("reme.viewer.notifications", true);
 
@@ -2133,7 +2199,6 @@ export function ViewerApp({ surface = "family" }) {
             selectedDateKey={selectedTimelineDate}
             onSelectDate={setSelectedTimelineDate}
             nowMs={nowMs}
-            remeHistory={remeHistory}
             familySurface={familySurface}
           />
         )}
