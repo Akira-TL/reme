@@ -1,6 +1,7 @@
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
+import { getPublicRuntimeConfig } from "./config/publicRuntimeConfig.js";
 import { resolveAppRoute } from "./routing/appRoute.js";
 import "./routing/routeShell.css";
 import { theme } from "./theme";
@@ -41,6 +42,24 @@ const notFound = (
   </main>
 );
 
+function resolveRuntimeConfigError() {
+  try {
+    getPublicRuntimeConfig();
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : "公开运行配置无法读取";
+  }
+}
+
+const runtimeConfigError = resolveRuntimeConfigError();
+const invalidRuntimeConfig = runtimeConfigError ? (
+  <main data-app-role="configuration-error" role="alert">
+    <p>CONFIGURATION ERROR</p>
+    <h1>Reme 公开运行配置无效</h1>
+    <span>{runtimeConfigError}</span>
+  </main>
+) : null;
+
 const route = resolveCurrentRoute();
 const RouteApp = route.type === "app" ? ROUTE_APPS[route.app] : null;
 if (route.type === "app") document.title = ROUTE_TITLES[route.app];
@@ -48,10 +67,10 @@ if (route.type === "app") document.title = ROUTE_TITLES[route.app];
 createRoot(document.getElementById("root")).render(
   <ThemeProvider theme={theme}>
     <CssBaseline />
-    {RouteApp ? (
+    {invalidRuntimeConfig || (RouteApp ? (
       <Suspense fallback={routeLoading}>
         <RouteApp />
       </Suspense>
-    ) : notFound}
+    ) : notFound)}
   </ThemeProvider>,
 );

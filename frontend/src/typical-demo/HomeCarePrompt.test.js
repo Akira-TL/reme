@@ -51,7 +51,7 @@ test("未开始或链路离线时不把静态场景文案当作实时事实", ()
 
   assert.equal(notStarted.title, "可靠事件才触发关怀");
   assert.equal(notStarted.kicker, "下游 · 事件关怀");
-  assert.equal(notStarted.message, "视频数据先在本地转为姿态和事件；只有可靠事件才进入问询与家庭同步。");
+  assert.equal(notStarted.message, "视频数据先由本机统一 Backend 转为姿态和事件；只有可靠事件才进入问询与家庭同步。");
   assert.equal(unavailable.title, "关怀能力暂不可用");
   assert.equal(unavailable.message, "当前没有可靠的实时关怀结果，请检查本机媒体源和运行时连接。");
 });

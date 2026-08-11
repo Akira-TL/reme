@@ -214,6 +214,11 @@ state ACK、pose offered/in-flight/ACK、协议错误、WebRTC mode/status/peer/
 - 本机开发可使用 `localhost`/`127.0.0.1` 获取安全上下文例外。
 - 局域网手机访问摄像头、麦克风、Worker 与 WebRTC 时应使用 HTTPS。
 - 环境变量只提供服务地址和非秘密配置；长期 TURN 密钥不得进入 Vite 客户端变量。
+- 静态部署可在应用模块之前加载 `/reme-config.js`，仅覆盖公开的 Backend/Relay URL
+  与 MiMo 显示元数据。该对象必须完整匹配允许字段；未知字段、凭证字段和远程明文
+  `http/ws` 地址一律拒绝，并显示配置错误，不能静默回退。
+- 配置远程 perception/camera-input URL 会让 Home JPEG 发往该地址；静态前端部署位置
+  不会改变这一事实，也不能把统一 Backend 的感知部分伪装成本地运行。
 - `/home`、`/family`、`/debug` 的服务端 fallback 必须返回同一 SPA 入口。
 
 黑客松允许的例外（公开演示房间、有限 Viewer、短期授权）必须在 UI 和文档中明确，

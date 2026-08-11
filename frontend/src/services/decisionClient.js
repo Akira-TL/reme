@@ -1,4 +1,4 @@
-const DEFAULT_HTTP_URL = "http://127.0.0.1:8770";
+import { getPublicRuntimeConfig } from "../config/publicRuntimeConfig.js";
 
 export const RESPONSE_SCHEMA = "reme-interaction-response/v0-experiment";
 
@@ -13,7 +13,7 @@ const RESPONSE_SOURCE_RULES = Object.freeze({
 });
 
 export function getDecisionUrls() {
-  const httpBase = (import.meta.env.VITE_REME_DECISION_HTTP_URL || DEFAULT_HTTP_URL).replace(/\/$/, "");
+  const httpBase = getPublicRuntimeConfig().decisionHttpUrl.replace(/\/$/, "");
   const wsBase = httpBase.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
   return { httpBase, wsUrl: `${wsBase}/ws` };
 }

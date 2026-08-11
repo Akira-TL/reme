@@ -14,7 +14,8 @@ body,
 }
 
 [data-app-role="loading"],
-[data-app-role="not-found"] {
+[data-app-role="not-found"],
+[data-app-role="configuration-error"] {
   display: grid;
   min-height: 100dvh;
   place-content: center;
@@ -39,4 +40,23 @@ body,
   background: #ff5a00;
   font-weight: 750;
   text-decoration: none;
+}
+
+[data-app-role="configuration-error"] p {
+  margin: 0;
+  color: #b42318;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+[data-app-role="configuration-error"] h1 {
+  margin: 0;
+  font-size: clamp(24px, 6vw, 42px);
+}
+
+[data-app-role="configuration-error"] span {
+  max-width: 44rem;
+  color: #756d65;
+  overflow-wrap: anywhere;
 }

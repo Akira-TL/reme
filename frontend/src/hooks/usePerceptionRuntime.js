@@ -19,6 +19,7 @@ import {
 import { sendBoundedCameraFrame } from "./cameraInputBuffer.js";
 import { createCameraCapturePacer } from "./cameraCapturePacer.js";
 import { createCameraFrameEncoder } from "./cameraFrameEncoder.js";
+import { createCaptureRateTracker } from "./captureRateTracker.js";
 
 const CAMERA_FPS = 10;
 const CAMERA_INPUT_WIDTH = 384;
@@ -122,6 +123,7 @@ export function usePerceptionRuntime({
     let eventsSocket = null;
     let inputSocket = null;
     let captureController = null;
+    const captureRateTracker = createCaptureRateTracker();
     let pollTimer = 0;
     let encoding = false;
     sessionRef.current = sessionId;
@@ -189,9 +191,15 @@ export function usePerceptionRuntime({
         return;
       }
       frameIndexRef.current += 1;
-      setRuntime((current) => current.inputBackpressure
-        ? { ...current, inputBackpressure: false }
-        : current);
+      const captureStats = captureRateTracker.record(timestampMs);
+      setRuntime((current) => {
+        if (!captureStats && !current.inputBackpressure) return current;
+        return {
+          ...current,
+          ...(captureStats || {}),
+          inputBackpressure: false,
+        };
+      });
     }
 
     function captureFrame() {
@@ -375,11 +383,29 @@ export function usePerceptionRuntime({
     };
   }, [enabled, retryGeneration, videoElement]);
 
+  const exposedRuntime = enabled ? runtime : {
+    state: "stopped",
+    reason: "会话已停止",
+    activityState: "offline",
+    sessionId: null,
+    acceptedInputs: [],
+    captureTransport: null,
+    droppedInputFrames: 0,
+    inputBackpressure: false,
+    observedInputFps: null,
+    sentInputFrames: 0,
+    latestFrameIndex: null,
+    frameAgeMs: null,
+    personDetected: null,
+    landmarkQuality: null,
+    effectiveModels: null,
+  };
+
   return {
-    runtime,
-    landmarkFrame,
-    posture,
-    transition,
+    runtime: exposedRuntime,
+    landmarkFrame: enabled ? landmarkFrame : null,
+    posture: enabled ? posture : null,
+    transition: enabled ? transition : null,
     retry,
     triggerDebugScenario,
   };

@@ -1,0 +1,27 @@
+# Append this as a separate site block to the existing Caddyfile. Do not replace
+# the unrelated {$DOMAIN:localhost}, hyxs.art, or ps.maniforld.com blocks.
+reme.maniforld.com {
+    request_body {
+        max_size 8MB
+    }
+
+    reverse_proxy reme-frontend:8080
+    encode gzip zstd
+
+    header {
+        Content-Security-Policy "default-src 'self'; base-uri 'none'; connect-src 'self' https://relay.reme.maniforld.com wss://relay.reme.maniforld.com http://127.0.0.1:8770 ws://127.0.0.1:8770 http://localhost:8770 ws://localhost:8770; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; media-src 'self' blob:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:"
+        Permissions-Policy "camera=(self), microphone=(self), geolocation=()"
+        Referrer-Policy "no-referrer"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        -Server
+    }
+
+    log {
+        output file /data/caddy/reme-frontend-access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}

@@ -67,7 +67,25 @@ test("product HTML does not preload a role surface before pathname resolution", 
     const routeFile = manifest[key].file;
     assert.equal(html.includes(routeFile), false, routeFile);
   }
+  assert.match(html, /<script src="\/reme-config\.js"><\/script>/);
+  assert.ok(
+    html.indexOf("/reme-config.js") < html.indexOf("type=\"module\""),
+    "public runtime config must load before the app module",
+  );
   assert.ok(frontendRoot.endsWith("/frontend/"));
+});
+
+test("production build exposes only the non-secret runtime config hook", async () => {
+  const source = await readFile(new URL("reme-config.js", distRoot), "utf8");
+  assert.match(source, /__REME_PUBLIC_CONFIG__/);
+  for (const forbidden of [
+    "MIMO_API_KEY",
+    "RUNTIME_INGEST_TOKEN",
+    "REME_TURN_SHARED_SECRET",
+    "password",
+  ]) {
+    assert.equal(source.includes(forbidden), false, forbidden);
+  }
 });
 
 test("Vercel exposes one product origin with the three canonical paths", () => {

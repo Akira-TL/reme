@@ -975,7 +975,7 @@ export function TypicalDemoApp({ surface = "debug" }) {
             <h1>{debugInterface ? "Reme ABC 工程验收" : "Reme 家中采集端"}</h1>
             <p>{debugInterface
               ? "同屏核对本机感知、MiMo 决策、家属呈现与失败状态"
-              : "面向全屋智能统一采集数据；当前演示接入本机视频，并在本地转为姿态与事件"}</p>
+              : "面向全屋智能统一采集数据；当前演示接入本机视频，并由本机统一 Backend 转为姿态与事件"}</p>
           </div>
           {debugInterface && <b className="debug-surface-badge">DEBUG · 非产品界面</b>}
         </div>

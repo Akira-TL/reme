@@ -3,11 +3,13 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import { Button, IconButton } from "@mui/material";
 import { useEffect, useState } from "react";
 import { describePosture } from "../adapters/perception";
+import { getPublicRuntimeConfig } from "../config/publicRuntimeConfig.js";
 import { probeRtcRelayCandidates } from "../shared-demo/rtcRelayProbe.js";
 import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
-const MIMO_MODEL = import.meta.env.VITE_REME_MIMO_MODEL || "mimo-v2.5";
-const MIMO_CONFIGURED = import.meta.env.VITE_REME_MIMO_CONFIGURED === "true";
+const PUBLIC_RUNTIME_CONFIG = getPublicRuntimeConfig();
+const MIMO_MODEL = PUBLIC_RUNTIME_CONFIG.mimoModel;
+const MIMO_CONFIGURED = PUBLIC_RUNTIME_CONFIG.mimoConfigured;
 
 const SESSION_LABELS = {
   offline: "会话离线",
@@ -32,6 +34,10 @@ function percent(value) {
 
 function number(value, suffix = "") {
   return Number.isFinite(value) ? `${Math.round(value)}${suffix}` : "—";
+}
+
+function decimal(value, suffix = "") {
+  return Number.isFinite(value) ? `${value.toFixed(1)}${suffix}` : "—";
 }
 
 function enabledLabel(value) {
@@ -219,7 +225,9 @@ export function RuntimeDebugPanel({ camera, live, monitor, scene, mediaProducer,
               <DebugValue label="场景" value={scene.id} />
               <DebugValue label="摄像头" value={`${cameraHealth.state} · ${cameraHealth.label}`} />
               <DebugValue label="姿态服务" value={`${modelHealth.state} · ${modelHealth.label}`} />
-              <DebugValue label="浏览器上传" value="JPEG · 10 FPS" />
+              <DebugValue label="浏览器上传目标" value="384px JPEG · 10 FPS" />
+              <DebugValue label="实测上传 FPS" value={decimal(runtime.observedInputFps, " FPS")} />
+              <DebugValue label="已发送帧" value={runtime.sentInputFrames ?? 0} />
               <DebugValue label="采集 transport" value={runtime.captureTransport || "not-started"} />
               <DebugValue label="输入丢帧" value={runtime.droppedInputFrames ?? 0} />
               <DebugValue label="输入背压" value={runtime.inputBackpressure ? "active" : "clear"} />

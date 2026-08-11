@@ -65,6 +65,22 @@ VITE_REME_DECISION_HTTP_URL=http://127.0.0.1:8770
 VITE_REME_RELAY_URL=http://127.0.0.1:8787
 ```
 
+### SSH/VPS public runtime configuration
+
+The static build loads `/reme-config.js` before the application module. A VPS
+may mount a complete `globalThis.__REME_PUBLIC_CONFIG__` object to change only
+public Backend/Relay URLs without rebuilding. See `deploy/vps/README.md` and
+`deploy/vps/reme-config.example.js`.
+
+The file accepts exactly six non-secret fields. Never place MiMo keys, TURN
+shared secrets, runtime-ingest tokens, cookies, or credentials in it. Leaving
+the hook as `null` preserves the existing `VITE_*` values and local Backend
+defaults.
+
+The current owner Backend is unified A+B. A remote perception/camera-input URL
+means routine JPEGs leave the Home device; the frontend cannot hide that fact.
+Keep loopback URLs when the accepted local raw-video boundary is required.
+
 完整启动器会根据端口、public host 和 TLS 参数，把这些浏览器值覆盖为 `http(s)://<frontend>/_reme/runtime` 与 `/_reme/relay/` 同源地址。`VITE_*` 会被打入 bundle，只能存放公开信息；MiMo、TURN、Cloudflare 和其他 secret 禁止写入 `VITE_*`。
 
 只看页面时可以运行：

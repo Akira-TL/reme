@@ -1,11 +1,12 @@
-const DEFAULT_HTTP_URL = "http://127.0.0.1:8770";
+import { getPublicRuntimeConfig } from "../config/publicRuntimeConfig.js";
 
 export function getPerceptionUrls() {
-  const httpBase = (import.meta.env.VITE_REME_PERCEPTION_HTTP_URL || DEFAULT_HTTP_URL).replace(/\/$/, "");
+  const config = getPublicRuntimeConfig();
+  const httpBase = config.perceptionHttpUrl.replace(/\/$/, "");
   const wsBase = httpBase.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
   return {
     httpBase,
-    inputWs: import.meta.env.VITE_REME_PERCEPTION_INPUT_WS_URL || `${wsBase}/ws/camera-input`,
+    inputWs: config.perceptionInputWsUrl || `${wsBase}/ws/camera-input`,
     eventsWs: (sessionId) => `${wsBase}/ws/events?session_id=${encodeURIComponent(sessionId)}`,
   };
 }

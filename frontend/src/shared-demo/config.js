@@ -1,3 +1,5 @@
+import { getPublicRuntimeConfig } from "../config/publicRuntimeConfig.js";
+
 const LOCAL_RELAY_PROXY_PATH = "/_reme/relay/";
 
 export function resolveRelayEndpointUrl(relayUrl, pathname) {
@@ -12,7 +14,7 @@ export function resolveRelayEndpointUrl(relayUrl, pathname) {
 }
 
 export function relayHttpBase() {
-  const configured = import.meta.env?.VITE_REME_RELAY_URL?.trim();
+  const configured = getPublicRuntimeConfig().relayUrl?.trim();
   const fallback = new URL(LOCAL_RELAY_PROXY_PATH, window.location.origin);
   return resolveRelayEndpointUrl(configured || fallback.href, "");
 }
@@ -24,7 +26,7 @@ export function relayWebSocketUrl(pathname = "ws/viewer") {
 }
 
 export function relayAvailabilityCopy() {
-  return import.meta.env?.VITE_REME_RELAY_URL?.trim()
+  return getPublicRuntimeConfig().relayUrl?.trim()
     ? "Relay 已配置；公网发布仍需短期 TURN 凭证"
     : "同源 Relay；未配置 TURN 时仅保证本机或局域网媒体";
 }

@@ -1,0 +1,35 @@
+name: reme-frontend
+
+services:
+  web:
+    image: ${REME_FRONTEND_IMAGE:-reme-frontend:local}
+    build:
+      context: ../..
+      dockerfile: deploy/vps/Dockerfile.frontend
+    container_name: reme-frontend
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    volumes:
+      - ${REME_FRONTEND_CONFIG_FILE:-./reme-config.example.js}:/usr/share/nginx/html/reme-config.js:ro
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+networks:
+  proxy:
+    external: true
+    name: ${REME_PROXY_NETWORK:-zhixia-biaoshu_frontend}

@@ -127,7 +127,7 @@ export function deriveHomeCarePrompt(
       ? "关怀已就绪"
       : "关怀能力暂不可用";
   const fallbackMessage = !started
-    ? "视频数据先在本地转为姿态和事件；只有可靠事件才进入问询与家庭同步。"
+    ? "视频数据先由本机统一 Backend 转为姿态和事件；只有可靠事件才进入问询与家庭同步。"
     : liveAvailable
       ? "系统正在安静等待可靠事件，需要时才会出现。"
       : "当前没有可靠的实时关怀结果，请检查本机媒体源和运行时连接。";
