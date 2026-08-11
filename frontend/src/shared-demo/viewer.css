@@ -1507,3 +1507,288 @@ html, body, #root {
   white-space: nowrap;
   border: 0;
 }
+
+/* Family is a care surface. The persistent engineering banner remains on demo/debug only. */
+.viewer-app.is-family-surface,
+.viewer-app.is-family-surface.is-timeline-tab {
+  padding-top: calc(12px + env(safe-area-inset-top));
+}
+
+.viewer-app.is-family-surface.has-family-grant,
+.viewer-app.is-family-surface.is-timeline-tab.has-family-grant {
+  padding-top: calc(82px + env(safe-area-inset-top));
+}
+
+.viewer-app.is-family-surface .family-grant-banner {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  width: min(760px, calc(100vw - 24px));
+  min-height: 58px;
+  padding: 9px 13px;
+  color: #9f2525;
+}
+
+.viewer-app.is-family-surface .family-grant-banner > svg {
+  font-size: 24px;
+}
+
+.viewer-app.is-family-surface .family-grant-banner b,
+.viewer-app.is-family-surface .family-grant-banner small {
+  display: block;
+}
+
+.viewer-app.is-family-surface .family-grant-banner b {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.viewer-app.is-family-surface .family-grant-banner small {
+  margin-top: 2px;
+  color: #7f5d58;
+  font-size: 11px;
+}
+
+.viewer-app.is-family-surface .family-grant-banner strong {
+  justify-self: end;
+  padding: 7px 9px;
+  border-radius: 10px;
+  color: #9f2525;
+  background: #ffe1de;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.viewer-app.is-family-surface .viewer-home-page > .viewer-stage {
+  margin-top: 14px;
+}
+
+.family-recent-updates {
+  margin-top: 16px;
+  padding: 17px;
+  border: 1px solid #eee2d8;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 9px 24px rgba(67, 48, 34, 0.05);
+}
+
+.family-recent-updates > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.family-recent-updates h2,
+.family-recent-updates p {
+  margin: 0;
+}
+
+.family-recent-updates h2 {
+  font-size: 18px;
+}
+
+.family-recent-updates header p {
+  margin-top: 3px;
+  color: #7b736c;
+  font-size: 11px;
+}
+
+.family-recent-updates header .MuiButton-root {
+  flex: 0 0 auto;
+  min-height: 44px;
+  color: #a64d1b;
+  font-size: 12px;
+}
+
+.family-recent-updates header .MuiButton-endIcon > svg {
+  font-size: 14px;
+}
+
+.family-recent-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.family-recent-list article {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: #faf8f6;
+}
+
+.family-recent-list article > span {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  color: #d35d1a;
+  background: #fff0e5;
+}
+
+.family-recent-list article.is-danger > span {
+  color: #b92b2b;
+  background: #ffe5e2;
+}
+
+.family-recent-list article.is-success > span {
+  color: #287d39;
+  background: #e6f4e8;
+}
+
+.family-recent-list b,
+.family-recent-list small {
+  display: block;
+}
+
+.family-recent-list b {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.family-recent-list small {
+  margin-top: 3px;
+  color: #766f69;
+  font-size: 11px;
+}
+
+.family-recent-list time {
+  color: #8a817a;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.family-recent-empty {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  color: #5f5a55;
+  background: #faf8f6;
+}
+
+.family-recent-empty > svg {
+  justify-self: center;
+  color: #d26729;
+}
+
+.family-recent-empty b,
+.family-recent-empty span {
+  display: block;
+}
+
+.family-recent-empty b {
+  font-size: 12px;
+}
+
+.family-recent-empty span {
+  margin-top: 3px;
+  color: #7a736d;
+  font-size: 11px;
+}
+
+.family-privacy-note,
+.family-settings-disclosure {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px solid #eee6df;
+  color: #725f51;
+}
+
+.family-privacy-note > svg,
+.family-settings-disclosure > svg {
+  margin-top: 1px;
+  color: #d35d1a;
+  font-size: 19px;
+}
+
+.family-privacy-note b,
+.family-privacy-note small,
+.family-settings-disclosure b,
+.family-settings-disclosure span {
+  display: block;
+}
+
+.family-privacy-note b,
+.family-settings-disclosure b {
+  font-size: 11px;
+}
+
+.family-privacy-note small,
+.family-settings-disclosure span {
+  margin-top: 3px;
+  color: #746c66;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.family-settings-disclosure {
+  margin: 16px 2px 0;
+  padding: 14px;
+  border: 1px solid #efdacb;
+  border-radius: 16px;
+  background: #fff9f4;
+}
+
+.family-settings-disclosure p {
+  margin: 0;
+}
+
+@media (max-width: 560px) {
+  .viewer-app.is-family-surface,
+  .viewer-app.is-family-surface.is-timeline-tab {
+    padding-top: calc(8px + env(safe-area-inset-top));
+  }
+
+  .viewer-app.is-family-surface.has-family-grant,
+  .viewer-app.is-family-surface.is-timeline-tab.has-family-grant {
+    padding-top: calc(80px + env(safe-area-inset-top));
+  }
+
+  .viewer-app.is-family-surface .family-grant-banner {
+    top: calc(7px + env(safe-area-inset-top));
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    gap: 8px;
+    width: calc(100vw - 14px);
+    min-height: 58px;
+    padding: 8px 10px;
+  }
+
+  .family-recent-updates {
+    padding: 15px;
+    border-radius: 18px;
+  }
+}
+
+@media (max-width: 360px) {
+  .viewer-app.is-family-surface .family-grant-banner strong {
+    grid-column: 2 / 4;
+    justify-self: start;
+  }
+
+  .viewer-app.is-family-surface.has-family-grant,
+  .viewer-app.is-family-surface.is-timeline-tab.has-family-grant {
+    padding-top: calc(108px + env(safe-area-inset-top));
+  }
+
+  .family-recent-list article {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .family-recent-list time {
+    grid-column: 2;
+  }
+}

@@ -83,6 +83,13 @@ import {
   reduceFamilyTimeline,
 } from "./familyTimeline.js";
 import {
+  familyGrantBannerCopy,
+  familyUnavailableCardCopy,
+  familyUpdateCopy,
+  selectFamilyHomeEvents,
+  shouldShowFamilyStage,
+} from "./familyHomePresentation.js";
+import {
   FAMILY_TIMELINE_DISPLAY_END_DATE,
   FAMILY_TIMELINE_MOCK_END_DATE,
   isFamilyTimelineDisplayDate,
@@ -197,7 +204,7 @@ function captureCopy(status, familySurface = false) {
 function unavailableCopy(relay, familySurface = false) {
   if (relay.latestProtocolError && relay.unavailableReason === "protocol_invalid") {
     return familySurface
-      ? `公开演示连接校验失败：${relay.latestProtocolError}`
+      ? "家中设备连接异常，正在等待恢复"
       : `协议校验失败：${relay.latestProtocolError}`;
   }
   const copy = familySurface ? FAMILY_UNAVAILABLE_COPY : UNAVAILABLE_COPY;
@@ -225,8 +232,34 @@ function useStoredBoolean(key, fallback) {
   return [value, setValue];
 }
 
-function ConnectionBanner({ relay, grant, nowMs, familySurface = false, rtcError = null }) {
+function ConnectionBanner({
+  relay,
+  grant,
+  nowMs,
+  familySurface = false,
+  rtcError = null,
+  highPrivacyEnabled = false,
+}) {
   const remaining = grant ? secondsRemaining(grant.expires_at_ms, nowMs) : 0;
+  if (familySurface) {
+    const copy = familyGrantBannerCopy({
+      grant,
+      viewerCount: relay.viewerCount,
+      nowMs,
+      highPrivacyEnabled,
+    });
+    if (!copy) return null;
+    return (
+      <aside className="public-room-banner family-grant-banner is-live" role="status">
+        <VideocamRoundedIcon />
+        <div>
+          <b>{copy.title}</b>
+          <small>{copy.expiry}</small>
+        </div>
+        <strong>{copy.audience}</strong>
+      </aside>
+    );
+  }
   return (
     <aside className={`public-room-banner ${grant ? "is-live" : ""}`}>
       <span className="viewer-sr-only" role="status">
@@ -235,21 +268,17 @@ function ConnectionBanner({ relay, grant, nowMs, familySurface = false, rtcError
       <div className="public-room-label">
         <GroupsRoundedIcon />
         <span>
-          <b>{familySurface ? "公开演示连接" : "固定公开演示房间"}</b>
-          <small>{familySurface ? "无账号验证 · 任何拿到链接的人可加入" : "任何打开 Viewer 的人都可加入"}</small>
+          <b>固定公开演示房间</b>
+          <small>任何打开 Viewer 的人都可加入</small>
         </span>
       </div>
       <div className="public-room-stats">
         <span>
-          {familySurface
-            ? <><b>{relay.viewerCount}</b> 个在线访问端</>
-            : <><b>{relay.viewerCount}</b> / {relay.maxViewers} 在线</>}
+          <><b>{relay.viewerCount}</b> / {relay.maxViewers} 在线</>
         </span>
         <span className={grant ? "is-video-live" : ""}>
           {grant
-            ? familySurface
-              ? `临时原画 ${remaining}s · 全部在线 Viewer 可见`
-              : `原画开放 ${remaining}s · 全部 Viewer 可见`
+            ? `原画开放 ${remaining}s · 全部 Viewer 可见`
             : relay.unavailableReason
               ? "当前权威状态不可用"
               : rtcError
@@ -268,26 +297,31 @@ function StatusCard({ snapshot, relay, decision, familySurface = false }) {
   const presentationKind = familyCarePresentationKind(decision);
   const runtime = snapshot?.state.runtime;
   const capture = snapshot?.state.capture;
+  const familyUnavailable = familyUnavailableCardCopy(relay.unavailableReason);
   const status = (() => {
     if (relay.unavailableReason
       && presentationKind === "alarm") return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
-      title: "紧急告警仍待处理 · 现场传输不可用",
-      body: `${careMessage || "后端已发布权威紧急告警"}；${unavailableCopy(relay, familySurface)}。告警不会因浏览器离线而被取消。`,
+      title: familySurface ? "紧急提醒仍待处理" : "紧急告警仍待处理 · 现场传输不可用",
+      body: familySurface
+        ? `${careMessage || "检测到需要立即关注的安全事件。"} 家中现场暂时无法连接，提醒仍会保持。`
+        : `${careMessage || "后端已发布权威紧急告警"}；${unavailableCopy(relay, familySurface)}。告警不会因浏览器离线而被取消。`,
     };
     if (relay.unavailableReason) return {
       tone: "offline",
       Icon: HealthAndSafetyRoundedIcon,
-      title: "当前状态不可用",
-      body: `${unavailableCopy(relay, familySurface)}；不会继续把上一次“正常”状态显示为最新事实。`,
+      title: familySurface ? familyUnavailable.title : "当前状态不可用",
+      body: familySurface
+        ? familyUnavailable.body
+        : `${unavailableCopy(relay, familySurface)}；不会继续把上一次“正常”状态显示为最新事实。`,
     };
     if (!relay.monitorOnline) return {
       tone: "offline",
       Icon: ShieldRoundedIcon,
-      title: familySurface ? "等待家中端上线" : "等待家中 Monitor 上线",
+      title: familySurface ? "正在等待家中设备连接" : "等待家中 Monitor 上线",
       body: familySurface
-        ? "连接恢复前不展示旧骨架、旧原画或旧处理结果。"
+        ? "连接恢复后会自动显示新的关怀状态。"
         : "连接恢复前不展示旧骨架、旧原画或旧控制结果。",
     };
     if (presentationKind === "alarm") return {
@@ -327,32 +361,48 @@ function StatusCard({ snapshot, relay, decision, familySurface = false }) {
     if (["degraded", "error", "offline"].includes(runtime?.status)) return {
       tone: "warning",
       Icon: HealthAndSafetyRoundedIcon,
-      title: RUNTIME_COPY[runtime?.status] || "能力暂不可用",
-      body: runtime?.detail || "故障状态保持可见，不使用模拟结果替代感知事实。",
+      title: familySurface
+        ? "部分关怀能力暂时不可用"
+        : RUNTIME_COPY[runtime?.status] || "能力暂不可用",
+      body: familySurface
+        ? "系统正在尝试恢复，在得到可靠信息前不会给出正常结论。"
+        : runtime?.detail || "故障状态保持可见，不使用模拟结果替代感知事实。",
     };
     if (runtime?.status !== "ready") return {
       tone: "offline",
       Icon: HealthAndSafetyRoundedIcon,
-      title: RUNTIME_COPY[runtime?.status] || "正在等待本地感知",
-      body: runtime?.detail || "本地能力尚未给出可靠结果，不显示正常结论。",
+      title: familySurface
+        ? "正在连接家中设备"
+        : RUNTIME_COPY[runtime?.status] || "正在等待本地感知",
+      body: familySurface
+        ? "得到可靠信息后，这里会自动更新。"
+        : runtime?.detail || "本地能力尚未给出可靠结果，不显示正常结论。",
     };
     if (capture?.status !== "active") return {
       tone: capture?.status === "error" ? "warning" : "offline",
       Icon: VideocamRoundedIcon,
-      title: captureCopy(capture?.status, familySurface) || "正在等待可靠输入",
-      body: capture?.error || "现场输入尚未就绪，不显示正常结论。",
+      title: familySurface
+        ? "正在等待新的现场状态"
+        : captureCopy(capture?.status, familySurface) || "正在等待可靠输入",
+      body: familySurface
+        ? "家中设备暂时没有提供可靠信息，页面不会沿用旧结论。"
+        : capture?.error || "现场输入尚未就绪，不显示正常结论。",
     };
     if (!truth.quietStateReady) return {
       tone: "offline",
       Icon: HealthAndSafetyRoundedIcon,
-      title: "正在等待权威状态",
-      body: "当前信息不足，不显示正常结论或现场空间。",
+      title: familySurface ? "正在等待新的关怀状态" : "正在等待权威状态",
+      body: familySurface
+        ? "得到可靠信息后，这里会自动更新。"
+        : "当前信息不足，不显示正常结论或现场空间。",
     };
     return {
       tone: "normal",
       Icon: CheckCircleRoundedIcon,
-      title: "关怀链路运行中",
-      body: "当前未收到需要行动的权威事件；这不等于对现场安全作出保证。",
+      title: familySurface ? "目前没有需要你处理的事" : "关怀链路运行中",
+      body: familySurface
+        ? "Reme 正在留意值得关心的变化；发现需要处理的事情时会明确提醒你。"
+        : "当前未收到需要行动的权威事件；这不等于对现场安全作出保证。",
     };
   })();
   const StatusIcon = status.Icon;
@@ -377,27 +427,39 @@ function HomePage({
   familySurface = false,
   familyAcknowledgementControl = null,
   decision = null,
+  timelineEvents = [],
+  onOpenTimeline = null,
 }) {
-  const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
+  const truth = deriveFamilyTruth(snapshot, relay);
+  const sceneId = truth.sceneId;
   const mediaAuthorization = familyMediaAuthorization(relay.familyEvent);
+  const showStage = !familySurface || shouldShowFamilyStage({
+    snapshot,
+    relay,
+    activeGrant,
+  });
   return (
     <main className="viewer-page viewer-home-page">
-      <SkeletonStage
-        sceneId={sceneId}
-        pose={pose}
-        lastDetectedPose={lastDetectedPose}
-        runtimeSessionId={snapshot?.runtime_session_id || null}
-        videoRef={media.videoRef}
-        mediaStatus={media.status}
-        revealVideo={Boolean(activeGrant && !highPrivacyEnabled)}
-        highPrivacyEnabled={highPrivacyEnabled}
-        grant={activeGrant}
-        localNowMs={localNowMs}
-        relayConnected={relay.connection === "connected" && relay.monitorOnline && !relay.unavailableReason}
-        runtimeStatus={snapshot?.state.runtime.status}
-        onRetryPlayback={media.retryPlayback}
-      />
-      {activeGrant && (
+      {familySurface && <StatusCard snapshot={snapshot} relay={relay} decision={decision} familySurface />}
+      {familySurface && familyAcknowledgementControl}
+      {showStage && (
+        <SkeletonStage
+          sceneId={sceneId}
+          pose={pose}
+          lastDetectedPose={lastDetectedPose}
+          runtimeSessionId={snapshot?.runtime_session_id || null}
+          videoRef={media.videoRef}
+          mediaStatus={media.status}
+          revealVideo={Boolean(activeGrant && !highPrivacyEnabled)}
+          highPrivacyEnabled={highPrivacyEnabled}
+          grant={activeGrant}
+          localNowMs={localNowMs}
+          relayConnected={relay.connection === "connected" && relay.monitorOnline && !relay.unavailableReason}
+          runtimeStatus={snapshot?.state.runtime.status}
+          onRetryPlayback={media.retryPlayback}
+        />
+      )}
+      {activeGrant && !familySurface && (
         <div className={`grant-disclosure ${highPrivacyEnabled ? "is-hidden-locally" : ""}`}>
           <VideocamRoundedIcon />
           <div>
@@ -408,8 +470,8 @@ function HomePage({
           </div>
         </div>
       )}
-      <StatusCard snapshot={snapshot} relay={relay} decision={decision} familySurface={familySurface} />
-      {familyAcknowledgementControl}
+      {!familySurface && <StatusCard snapshot={snapshot} relay={relay} decision={decision} />}
+      {!familySurface && familyAcknowledgementControl}
       {sceneId === "kitchen"
         && mediaAuthorization?.status === "active"
         && mediaAuthorization.scope === "kitchen_moment" && (
@@ -420,15 +482,10 @@ function HomePage({
         </article>
       )}
       {familySurface && (
-        <div className="family-home-dashboard">
-          <DashboardContent
-            relay={relay}
-            snapshot={snapshot}
-            activeGrant={activeGrant}
-            nowMs={relayNowMs}
-            familySurface
-          />
-        </div>
+        <FamilyRecentUpdates
+          events={timelineEvents}
+          onOpenTimeline={onOpenTimeline}
+        />
       )}
     </main>
   );
@@ -488,6 +545,67 @@ const TIMELINE_ICONS = Object.freeze({
   consent: PrivacyTipRoundedIcon,
   acknowledgement: CheckCircleRoundedIcon,
 });
+
+function FamilyRecentUpdates({ events, onOpenTimeline }) {
+  const recentEvents = selectFamilyHomeEvents(events);
+  return (
+    <section
+      className="family-recent-updates"
+      aria-labelledby="family-recent-updates-title"
+      data-testid="family-recent-updates"
+    >
+      <header>
+        <div>
+          <h2 id="family-recent-updates-title">最近动态</h2>
+          <p>只记录值得家人关注的变化</p>
+        </div>
+        <Button
+          size="small"
+          variant="text"
+          endIcon={<ArrowForwardIosRoundedIcon />}
+          onClick={onOpenTimeline}
+        >
+          查看全部
+        </Button>
+      </header>
+      {recentEvents.length > 0 ? (
+        <div className="family-recent-list">
+          {recentEvents.map((event) => {
+            const EventIcon = TIMELINE_ICONS[event.kind] || FavoriteRoundedIcon;
+            return (
+              <article className={`is-${event.tone || "neutral"}`} key={event.id}>
+                <span><EventIcon /></span>
+                <div>
+                  <b>{event.title}</b>
+                  <small>{event.statusLabel || event.label || "关怀更新"}</small>
+                </div>
+                <time
+                  dateTime={Number.isFinite(event.timestampMs)
+                    ? new Date(event.timestampMs).toISOString()
+                    : undefined}
+                >
+                  {formatTime(event.timestampMs)}
+                </time>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="family-recent-empty" role="status">
+          <FavoriteRoundedIcon />
+          <div><b>暂时没有新的关怀事项</b><span>需要你处理的变化会出现在这里。</span></div>
+        </div>
+      )}
+      <aside className="family-privacy-note">
+        <LockRoundedIcon />
+        <span>
+          <b>日常保持隐私画面</b>
+          <small>本页是无账号验证的公开演示；清晰画面只会在本人授权或紧急事件中限时开放。</small>
+        </span>
+      </aside>
+    </section>
+  );
+}
 
 const TIMELINE_ALARM_TRIGGER_COPY = Object.freeze({
   elder_report: "本人明确求助",
@@ -1195,6 +1313,52 @@ function SettingsPage({
   setNotificationsEnabled,
   familySurface = false,
 }) {
+  if (familySurface) {
+    return (
+      <main className="viewer-page settings-page">
+        <section className="home-profile-card">
+          <span><HomeRoundedIcon /></span>
+          <div>
+            <h2>外婆家</h2>
+            <p>家庭关怀与隐私设置</p>
+            <b className={relay.monitorOnline ? "is-online" : "is-offline"}>
+              <i /> {relay.monitorOnline ? "家中设备在线" : "家中设备暂时离线"}
+            </b>
+          </div>
+        </section>
+        <section className="settings-group">
+          <h2>隐私保护</h2>
+          <div className="settings-card">
+            <SettingsRow
+              icon={PrivacyTipRoundedIcon}
+              title="高隐私显示"
+              detail="开启后，即使现场已经合法授权，本页也继续隐藏清晰画面"
+              action={<Switch checked={highPrivacyEnabled} onChange={(event) => setHighPrivacyEnabled(event.target.checked)} slotProps={{ input: { "aria-label": "高隐私显示" } }} />}
+            />
+            <SettingsRow icon={LockRoundedIcon} title="日常隐私画面" detail="默认只显示匿名骨架、关怀结论和必要提醒" action={<b className="setting-state is-on">已开启</b>} />
+            <SettingsRow icon={VideocamRoundedIcon} title="清晰画面" detail="仅在本人授权或紧急事件中限时开放，到期自动关闭" action={<b className="setting-state">限时</b>} />
+            <SettingsRow icon={AutoAwesomeRoundedIcon} title="辅助判断" detail="只有确有需要时才选取单帧或短片，不会连续上传" action={<b className="setting-state">按需</b>} />
+          </div>
+        </section>
+        <section className="settings-group">
+          <h2>关怀提醒</h2>
+          <div className="settings-card">
+            <SettingsRow
+              icon={NotificationsActiveRoundedIcon}
+              title="风险提醒"
+              detail="控制本页的声音、震动与闪烁"
+              action={<Switch checked={notificationsEnabled} onChange={(event) => setNotificationsEnabled(event.target.checked)} slotProps={{ input: { "aria-label": "风险提醒" } }} />}
+            />
+            <SettingsRow icon={ShieldRoundedIcon} title="紧急提醒" detail="安全事件一旦升级会持续显示，远程操作不能降低或取消" action={<b className="setting-state is-on">保持开启</b>} />
+          </div>
+        </section>
+        <aside className="family-settings-disclosure">
+          <GroupsRoundedIcon />
+          <p><b>公开演示说明</b><span>本页暂未使用账号验证；清晰画面开放时，所有当前在线访问端都能看到。</span></p>
+        </aside>
+      </main>
+    );
+  }
   return (
     <main className="viewer-page settings-page">
       <section className="home-profile-card">
@@ -1703,29 +1867,38 @@ export function ViewerApp({ surface = "family" }) {
     return result;
   };
 
+  const familyHeaderUpdate = familyUpdateCopy({
+    snapshot,
+    familyEvent: relay.familyEvent,
+    relay,
+    nowMs: relayNowMs,
+  });
+
   const pageHeader = (() => {
     if (activeTab === "home") return {
-      title: familySurface ? "家" : "外婆家",
-      subtitle: relay.unavailableReason
-        ? `${familySurface ? "家属端" : "Viewer"} · 当前状态不可用，等待恢复`
-        : `${SCENE_COPY[sceneId]?.label || "家庭关怀"} · ${relay.connection === "connected" ? (familySurface ? "家属端已连接" : "Relay 已连接") : "正在重连"}`,
+      title: "外婆家",
+      subtitle: familySurface
+        ? familyHeaderUpdate
+        : relay.unavailableReason
+          ? "Viewer · 当前状态不可用，等待恢复"
+          : `${SCENE_COPY[sceneId]?.label || "家庭关怀"} · ${relay.connection === "connected" ? "Relay 已连接" : "正在重连"}`,
     };
     if (activeTab === "timeline") return {
-      title: familySurface ? "reme" : "主动关怀",
+      title: familySurface ? "关怀记录" : "主动关怀",
       subtitle: familySurface
-        ? `remember me · ${timelineDateLongHeading(selectedTimelineDate)}`
+        ? `外婆 · ${timelineDateLongHeading(selectedTimelineDate)}`
         : `外婆 · ${timelineDateHeading(selectedTimelineDate, nowMs)} · MiMo 关怀时间线`,
     };
     if (activeTab === "dashboard") return {
       title: "关怀看板",
       subtitle: familySurface ? "外婆 · 家属端关怀摘要" : "外婆 · 本次公开演示",
     };
-    return { title: "设置", subtitle: "管理本页显示与提醒" };
+    return { title: "设置", subtitle: familySurface ? "管理提醒与隐私" : "管理本页显示与提醒" };
   })();
 
   return (
     <div
-      className={`viewer-app ${familySurface ? "is-family-surface" : "is-demo-surface"} ${activeTab === "timeline" ? "is-timeline-tab" : ""} ${alertEffects.flashActive ? "is-flashing" : ""}`}
+      className={`viewer-app ${familySurface ? "is-family-surface" : "is-demo-surface"} ${familySurface && activeGrant ? "has-family-grant" : ""} ${activeTab === "timeline" ? "is-timeline-tab" : ""} ${alertEffects.flashActive ? "is-flashing" : ""}`}
       data-app-role={familySurface ? "family" : "viewer-demo"}
     >
       <div className="alert-flash-layer" aria-hidden="true" />
@@ -1735,6 +1908,7 @@ export function ViewerApp({ surface = "family" }) {
         nowMs={relayNowMs}
         familySurface={familySurface}
         rtcError={rtc.error}
+        highPrivacyEnabled={highPrivacyEnabled}
       />
       <div className="viewer-shell">
         <header className="viewer-header">
@@ -1747,7 +1921,7 @@ export function ViewerApp({ surface = "family" }) {
           )}
         </header>
 
-        {relay.unavailableReason && activeTab !== "timeline" && (
+        {!familySurface && relay.unavailableReason && activeTab !== "timeline" && (
           <aside className="viewer-state-unavailable" role="alert">
             <HealthAndSafetyRoundedIcon />
             <div><b>现场传输状态不可用</b><span>{unavailableCopy(relay, familySurface)}；后端已发布的关怀事件仍单独保留。</span></div>
@@ -1767,6 +1941,8 @@ export function ViewerApp({ surface = "family" }) {
             relayNowMs={relayNowMs}
             familySurface={familySurface}
             decision={careDecision}
+            timelineEvents={timeline.events}
+            onOpenTimeline={() => setActiveTab("timeline")}
             familyAcknowledgementControl={familySurface ? (
               <>
                 <FamilyActionCard
@@ -1812,8 +1988,8 @@ export function ViewerApp({ surface = "family" }) {
 
         <BottomNavigation className="viewer-bottom-nav" showLabels value={activeTab} onChange={(_, value) => setActiveTab(value)}>
           {familySurface ? [
-            <BottomNavigationAction key="home" label="家" value="home" icon={<HomeRoundedIcon />} />,
-            <BottomNavigationAction key="timeline" label="reme" value="timeline" icon={<FavoriteRoundedIcon />} />,
+            <BottomNavigationAction key="home" label="首页" value="home" icon={<HomeRoundedIcon />} />,
+            <BottomNavigationAction key="timeline" label="关怀记录" value="timeline" icon={<FavoriteRoundedIcon />} />,
             <BottomNavigationAction key="settings" label="设置" value="settings" icon={<SettingsRoundedIcon />} />,
           ] : [
             <BottomNavigationAction key="home" label="首页" value="home" icon={<HomeRoundedIcon />} />,
