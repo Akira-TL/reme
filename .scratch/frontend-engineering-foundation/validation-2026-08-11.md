@@ -9,8 +9,9 @@ additional frontend integration defects, both fixed in `872ae75`.
 
 This result is intentionally bounded. The in-app Browser exposed no usable
 camera during this run, so current-run camera FPS, background capture, live
-PoseFrame rendering, and successful source switching are not claimed. TURN and
-cross-network WebRTC were also not tested.
+PoseFrame rendering, and successful source switching are not claimed. A later
+same-day appendix tested the deployed TURN path and found the CloudCone managed
+firewall blocker described below; cross-network WebRTC is not claimed as passed.
 
 ## Scope and environment
 
@@ -212,8 +213,24 @@ These are deliberately reported as unmeasured rather than converted into pass:
    instrumentation;
 4. explicit real-browser authorization-mismatch and negotiation-failure
    injection;
-5. TURN reachability, cross-network media, and a physical mobile-device matrix.
+5. TURN relay-candidate and cross-network media acceptance after CloudCone opens
+   `3478/TCP+UDP` and `49160:49200/UDP`, plus a physical mobile-device matrix.
 
 ## Code commit covered by this validation
 
 - `872ae75 fix(frontend): close browser authority lifecycle gaps`
+
+## Same-day cross-network appendix
+
+The public Relay now issues exact, short-lived coturn credentials and the public
+frontend consumes them. A Debug-only native WebRTC probe was added with three
+deterministic tests. The final frontend gates passed with 221/221 tests, clean
+lint, a successful Vite production build, and 5/5 route-build tests.
+
+The in-app Browser first exposed a stale Vercel production-environment snapshot
+as `RTC 配置不可用（404）`; after synchronizing the existing
+`VITE_REME_RELAY_URL` and redeploying, it reported `turn_configured`. It then
+reported no UDP or TCP relay candidate. A simultaneous server packet capture saw
+no traffic, and a temporary Cloudflare edge TCP probe confirmed that CloudCone
+drops 3478 before the VM despite the guest's ACCEPT policy. The full evidence and
+required firewall rules are in `../cross-network-turn/validation.md`.

@@ -1,8 +1,9 @@
 import BugReportRoundedIcon from "@mui/icons-material/BugReportRounded";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import { Button, IconButton } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { describePosture } from "../adapters/perception";
+import { probeRtcRelayCandidates } from "../shared-demo/rtcRelayProbe.js";
 import { describeSkeletonSource, getCameraHealth, getModelHealth } from "./runtimeStatus";
 
 const MIMO_MODEL = import.meta.env.VITE_REME_MIMO_MODEL || "mimo-v2.5";
@@ -46,10 +47,25 @@ function DebugValue({ label, value, wide = false }) {
   );
 }
 
+function probeTransportLabel(probe, transport) {
+  if (probe.status === "idle") return "未运行";
+  if (["waiting_for_config", "probing"].includes(probe.status)) return "探测中";
+  const result = probe.transports?.find((item) => item.requestedTransport === transport);
+  if (!result) return probe.status;
+  return result.reachable
+    ? `relay candidate × ${result.candidates.length} · ${result.completion}`
+    : `无 relay candidate · ${result.completion}${result.reason ? ` · ${result.reason}` : ""}`;
+}
+
 export function RuntimeDebugPanel({ camera, live, monitor, scene, mediaProducer, rtc }) {
+  const search = new URLSearchParams(window.location.search);
   const [open, setOpen] = useState(
-    () => new URLSearchParams(window.location.search).get("debug") === "1",
+    () => search.get("debug") === "1",
   );
+  const [turnProbeRequest, setTurnProbeRequest] = useState(
+    () => (search.get("turnProbe") === "1" ? 1 : 0),
+  );
+  const [turnProbeResult, setTurnProbeResult] = useState(null);
   const runtime = live.runtime || {};
   const posture = live.posture;
   const transition = live.transition;
@@ -60,6 +76,60 @@ export function RuntimeDebugPanel({ camera, live, monitor, scene, mediaProducer,
   const voice = live.voice || {};
   const cameraHealth = getCameraHealth(camera);
   const modelHealth = getModelHealth(camera);
+  const rtcConfiguration = rtc?.configuration;
+  const rtcError = rtc?.error;
+
+  let turnProbe = turnProbeResult?.value || {
+    allReachable: false,
+    status: "idle",
+    transports: [],
+  };
+  if (turnProbeRequest > 0 && rtcConfiguration?.mode !== "turn_configured") {
+    turnProbe = {
+      allReachable: false,
+      status: rtcError ? "rtc_config_unavailable" : "waiting_for_config",
+      transports: [],
+    };
+  } else if (
+    turnProbeRequest > 0
+    && (
+      turnProbeResult?.request !== turnProbeRequest
+      || turnProbeResult?.configuration !== rtcConfiguration
+    )
+  ) {
+    turnProbe = { allReachable: false, status: "probing", transports: [] };
+  }
+
+  useEffect(() => {
+    if (!open || turnProbeRequest < 1 || rtcConfiguration?.mode !== "turn_configured") {
+      return undefined;
+    }
+    const controller = new AbortController();
+    probeRtcRelayCandidates(rtcConfiguration, { signal: controller.signal })
+      .then((result) => {
+        if (!controller.signal.aborted) {
+          setTurnProbeResult({
+            configuration: rtcConfiguration,
+            request: turnProbeRequest,
+            value: result,
+          });
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setTurnProbeResult({
+            configuration: rtcConfiguration,
+            request: turnProbeRequest,
+            value: {
+              allReachable: false,
+              status: "probe_failed",
+              transports: [],
+            },
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [open, rtcConfiguration, turnProbeRequest]);
 
   const rawSnapshot = {
     c: {
@@ -95,6 +165,7 @@ export function RuntimeDebugPanel({ camera, live, monitor, scene, mediaProducer,
       media_peer_count: mediaProducer?.peerCount ?? 0,
       rtc_mode: rtc?.configuration?.mode || "unavailable",
       rtc_error: rtc?.error || null,
+      turn_probe: turnProbe,
     },
     b: {
       connection: decisionRuntime.connection,
@@ -129,6 +200,14 @@ export function RuntimeDebugPanel({ camera, live, monitor, scene, mediaProducer,
               <small>UNIFIED RUNTIME DEBUG</small>
               <h2>后端实时状态</h2>
             </div>
+            <Button
+              size="small"
+              variant="outlined"
+              disabled={turnProbe.status === "probing"}
+              onClick={() => setTurnProbeRequest((value) => value + 1)}
+            >
+              探测 TURN
+            </Button>
             <IconButton onClick={() => setOpen(false)} aria-label="关闭调试面板" size="small">
               <CloseRoundedIcon />
             </IconButton>
@@ -176,6 +255,8 @@ export function RuntimeDebugPanel({ camera, live, monitor, scene, mediaProducer,
               <DebugValue label="Relay WebSocket" value={monitor?.status || "unconfigured"} />
               <DebugValue label="Relay 协议错误" value={monitor?.lastProtocolError || "—"} wide />
               <DebugValue label="WebRTC 模式" value={rtc?.configuration?.mode || "unavailable"} />
+              <DebugValue label="TURN UDP 候选" value={probeTransportLabel(turnProbe, "udp")} wide />
+              <DebugValue label="TURN TCP 候选" value={probeTransportLabel(turnProbe, "tcp")} wide />
               <DebugValue label="WebRTC producer" value={mediaProducer?.status || "idle"} />
               <DebugValue label="WebRTC peers" value={mediaProducer?.peerCount ?? 0} />
               <DebugValue label="WebRTC 最近原因" value={mediaProducer?.lastReason || rtc?.error || "—"} wide />

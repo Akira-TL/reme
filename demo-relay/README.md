@@ -22,10 +22,34 @@ preview ports `5173`, `4173`, and `4174` on `localhost` and `127.0.0.1`. Add an
 explicit LAN origin before opening the frontend from a phone; do not replace the
 allowlist with `*`.
 
-This local stage provides signalling only and deliberately has no TURN
-credential service. Cross-NAT clear video must be shown as unavailable/LAN-only
-until the separately approved deployment phase configures short-lived TURN
-credentials.
+Local development provides signalling only unless the optional coturn bindings
+are supplied. The checked-in production bindings point at the separately
+deployed demo coturn service, while `REME_TURN_SHARED_SECRET` remains a Worker
+secret and is never committed. Cross-NAT clear video must still be shown as
+unavailable/LAN-only whenever `/api/rtc-config` fails or reports a mode other
+than `turn_configured`.
+
+## Production TURN configuration
+
+The fixed demo deployment uses coturn REST authentication. Wrangler config may
+contain only the non-secret STUN/TURN URLs and credential TTL:
+
+```text
+REME_STUN_URLS=stun:<turn-host>:3478
+REME_TURN_URLS=turn:<turn-host>:3478?transport=udp,turn:<turn-host>:3478?transport=tcp
+REME_TURN_CREDENTIAL_TTL_SECONDS=600
+```
+
+Set the long-lived HMAC key only through `wrangler secret put
+REME_TURN_SHARED_SECRET`. The browser receives a derived temporary username and
+credential from `/api/rtc-config`; it never receives this shared secret. The
+current server has no TURN/TLS listener, so networks that permit only HTTPS are
+not claimed as supported. `mode=turn_configured` proves only that Relay issued a
+complete ephemeral configuration; it is not a reachability claim. The current
+CloudCone edge-firewall blocker and the required narrow port rules are recorded
+in `.scratch/cross-network-turn/validation.md`; do not claim cross-network media
+until the native Browser relay-candidate probe passes after those rules are
+applied.
 
 ## HTTP and WebSocket entrypoints
 
