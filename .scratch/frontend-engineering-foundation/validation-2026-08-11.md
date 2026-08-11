@@ -234,3 +234,54 @@ reported no UDP or TCP relay candidate. A simultaneous server packet capture saw
 no traffic, and a temporary Cloudflare edge TCP probe confirmed that CloudCone
 drops 3478 before the VM despite the guest's ACCEPT policy. The full evidence and
 required firewall rules are in `../cross-network-turn/validation.md`.
+
+## Same-day frontend pose-authority appendix
+
+The screenshot follow-up asked whether the frontend was still running a second
+pose model and whether Home should acquire the same skeleton as Family. Static
+and in-app Browser inspection confirmed that the current runtime already has one
+pose authority:
+
+- Home sends bounded JPEG to the local Backend and receives `frame_landmarks`;
+- Home draws those Backend landmarks locally and strictly adapts the same result
+  to `reme-pose-frame-17/v1` for Relay;
+- Family connects to Relay and only draws that PoseFrame;
+- neither browser route imports or requests MoveNet, MediaPipe, LiteRT, WASM,
+  `.task`, or `.tflite` assets.
+
+Home intentionally does not round-trip its local display through Relay. That
+would add Relay/network availability to the Home skeleton path without changing
+the Backend authority that both displays already share.
+
+The follow-up removed unused 33-to-17 mapping and synthetic demo-pose helpers,
+removed the obsolete browser-WASM CSP/cache configuration, and added
+`verify:no-browser-pose` as a `predev`, `pretest`, and `prebuild` gate. The gate
+rejects browser pose dependencies, inference APIs, browser-authored
+`landmarks_frame`, and model/runtime assets under `frontend/public`.
+
+Two ignored local legacy directories (`frontend/public/mediapipe` and
+`frontend/public/litert`, 71 MB total) were not referenced by source but would
+have been copied by a local Vite build. They were moved, not deleted, to
+`/private/tmp/reme-legacy-browser-pose-assets.uZb7tX/`; the subsequent production
+build contained no `.wasm`, `.task`, or `.tflite` files.
+
+Final command results for this appendix:
+
+| Command | Result |
+| --- | --- |
+| `npm run verify:no-browser-pose` | PASS |
+| `npm run typecheck:contracts` | PASS |
+| `npm test` | PASS, 221/221 |
+| `npm run lint` | PASS |
+| `npm run build` | PASS, 1053 modules; no browser model assets |
+| `npm run test:route-build` | PASS, 5/5 after granting the required loopback-listener permission; the sandboxed attempt returned `EPERM` |
+
+The in-app Browser used local ports `4274` (Vite), `8870` (Backend), and `8887`
+(Relay). After reload, `/home` rendered `Reme 家中采集端`, `/family` rendered
+the Family surface, and CDP recorded zero model/WASM requests on both. Family
+opened only the expected Relay Viewer WebSocket and RTC-config request. No
+camera permission was requested, so this appendix does not claim live-pose FPS,
+camera capability, or a newly observed PoseFrame. Local RTC config returned 503
+because the current environment had TURN URLs without the matching shared
+secret; TURN and cross-network media remain explicitly unpassed. All temporary
+services were stopped after the audit.

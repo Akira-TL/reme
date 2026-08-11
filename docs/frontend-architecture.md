@@ -47,6 +47,12 @@ Backend 是以下事实的唯一权威：姿态/跌倒解释、CareDecision、�
 行动卡、FamilyEvent、MediaAuthorization。前端不得根据关键点、时间或 UI 状态
 推断跌倒，不得用浏览器计时器触发安全升级，也不得自行生成告警或授权。
 
+架构图中的 **A 明确指 Home 设备上的统一 Backend 进程，不是 Home 浏览器前端**。
+Home 与 Family 都只消费 A 产出的同一组有序 17 点关键点：Home 为降低本机延迟，
+直接消费 Backend `frame_landmarks`；Family 消费该结果经严格适配并由 Relay 转发的
+`reme-pose-frame-17/v1`。两端传输入口不同，但权威来源相同，任何一端都不运行
+MoveNet、MediaPipe、LiteRT，也不补造姿态帧。
+
 Relay 是房间、租约、ACK、有界发布队列和 WebRTC 信令的传输权威。Relay JSON
 不得携带 JPEG、视频、音频、Blob、data URL 或任何帧历史。
 
@@ -79,18 +85,21 @@ domain/adapters (纯状态与合同映射)
 
 ## 6. 居家端媒体与感知链
 
-首选采集链保持不变：
+首选采集与骨架分发链保持不变：
 
 ```text
-MediaStreamTrackProcessor
-  → Worker
-  → OffscreenCanvas
+Home 浏览器（只采集/编码）
+  MediaStreamTrackProcessor → Worker → OffscreenCanvas
   → 384px JPEG（目标 10 FPS）
-  → Backend :8770
-  → MoveNet / 姿态事件
-  → Relay 结构化 PoseFrame
-  → Family Canvas
+  → Home 本机 Backend :8770（A：MoveNet / 姿态 / 时序）
+  → 权威 frame_landmarks
+       ├─→ Home Canvas（只绘制）
+       └─→ reme-pose-frame-17/v1 → Relay → Family Canvas（只绘制）
 ```
+
+“与家属端使用同一骨架”指同一个 Backend 结果与同一个 17 点语义合同，不要求 Home
+把本机显示绕行 Relay。让 Home 也经 Relay 回读会无谓增加云端/网络依赖，并不能提高
+权威一致性。
 
 当 TrackProcessor/Worker/OffscreenCanvas 不可用时可降级到主线程 Canvas pacer，
 但降级必须在 `/debug` 可见。发送端使用 WebSocket `bufferedAmount` 进行背压；

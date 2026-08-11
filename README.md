@@ -22,6 +22,10 @@ Monitor /
 
 正式本地入口 `scripts/demo/start-local-demo.sh` 在一个前台启动器中管理三个进程：统一后端、固定公开 Relay 和 Vite 前端。感知到决策仍在后端进程内传递；浏览器和 Viewer 不加载 MoveNet、MediaPipe、LiteRT 或重复模型权重。
 
+Home 直接绘制统一后端返回的 `frame_landmarks`，并把同一结果严格适配为
+`reme-pose-frame-17/v1` 交给 Relay；Family 只接收并绘制这份 PoseFrame。两端是同一
+Backend 权威骨架的不同传输入口，不是两套姿态推理。
+
 ## 桌面本机启动
 
 环境要求：Python 3.11+、`uv`、Node.js 和 npm。

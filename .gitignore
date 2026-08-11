@@ -63,7 +63,7 @@ frontend/test-results/
 # Claude Code local state (agent worktrees, session settings)
 .claude/
 
-# MediaPipe wasm 由 predev/prebuild 从 node_modules 拷贝（模型 .task 入库）
+# 已淘汰的浏览器姿态资产仅作本机历史残留忽略；当前前端门禁会拒绝加载/构建它们。
 frontend/public/mediapipe/wasm/
 frontend/public/litert/wasm/
 
