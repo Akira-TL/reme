@@ -125,3 +125,53 @@ Still not measured or claimed:
   the new public origin;
 - live acknowledge-alarm, action-card confirmation, and Backend/Relay ACK;
 - real MiMo request/response from the roadshow browser flow.
+
+## Family local-visual parity update
+
+The public Family surface was updated after the initial roadshow cutover so it
+uses the exact locally accepted UI from `codex/family-home-simplify@400487d5`.
+The four post-foundation frontend commits were replayed on top of
+`origin/lbx-frontend@ea806be4`. The one source commit that also carried a
+Backend history fixture and Backend tests was split: only its frontend and
+local validation files were retained. The final authority check remained
+empty:
+
+```text
+git diff --name-status origin/lbx-frontend -- backend demo-relay
+```
+
+Fresh gates on the integrated frontend passed:
+
+| Command | Result |
+| --- | --- |
+| `npm ci` | pass; 219 packages |
+| `npm run typecheck:contracts` | pass |
+| `npm test` | pass; 248/248 |
+| `npm run lint` | pass |
+| `npm run build` | pass; Vite 8.2.0, 1,059 modules |
+| `npm run test:route-build` | pass; 6/6; required loopback bind outside the filesystem sandbox |
+
+The locally integrated build produced the same Family stylesheet as the
+accepted `400487d5` build (`FamilyApp-BtRVm0bV.css`, SHA-1
+`2009422319c8d86573158ce33183f590979bfb4b`). In the in-app browser the local
+production preview rendered the accepted orange Reme visual language, complete
+August calendar, explicit August 4-11 demo markers, 30 August 11 life records,
+activity/device/care filters, recording playback card, and the three-item
+Family navigation.
+
+Only `reme-frontend` was rebuilt and recreated on the VPS. `reme-backend`,
+`reme-relay`, Caddy, and all persistent volumes were left running. After the
+update all three services were healthy. The public Family assets downloaded
+through `https://reme.maniforld.com` matched both the local build and the
+running container byte for byte:
+
+| Asset | SHA-256 |
+| --- | --- |
+| `FamilyApp-BtRVm0bV.css` | `375344bb2aa7e915422576c93578c9f1a295875f193728fa9555edd5093adce2` |
+| `FamilyApp-iHzxmgWH.js` | `b560962ca6b5d369c748d6f985b8e93c6daba6217b08ff7788ae469104725412` |
+
+`/family`, Backend health, and Relay health each returned HTTPS 200 with TLS
+verification success after the replacement. The frontend container started at
+`2026-08-11T17:20:12Z`; the unchanged Backend and Relay retained their earlier
+start times, confirming that the visual update did not restart authority
+services.
