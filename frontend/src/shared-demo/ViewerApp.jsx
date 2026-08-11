@@ -94,7 +94,9 @@ import {
   FAMILY_TIMELINE_MOCK_END_DATE,
   isFamilyTimelineDisplayDate,
 } from "./familyTimelineMock.js";
+import { buildRemeActivityRhythm } from "./remeActivityRhythm.js";
 import { useRemeHistory } from "./remeHistory.js";
+import { useRemeLocalRecordings } from "./remeLocalRecordings.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
   buildWeekDays,
@@ -181,6 +183,7 @@ function formatTime(timestampMs) {
   return new Date(timestampMs).toLocaleTimeString("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Asia/Shanghai",
   });
 }
 
@@ -965,11 +968,11 @@ function RemeDateStrip({ selectedDateKey, onSelectDate, days }) {
             key={day.dateKey}
             className={`${day.dateKey === selectedDateKey ? "is-selected" : ""} is-${day.sourceMode}`}
             aria-pressed={day.dateKey === selectedDateKey}
+            aria-label={`周${day.weekday} ${day.day}日${day.sourceMode === "mock" ? "，演示记录" : ""}`}
             onClick={() => onSelectDate(day.dateKey)}
           >
             <span>周{day.weekday}</span>
             <b>{day.day}</b>
-            <small>Mock</small>
             {day.dateKey === selectedDateKey && <FiberManualRecordRoundedIcon />}
           </button>
         ))}
@@ -978,21 +981,144 @@ function RemeDateStrip({ selectedDateKey, onSelectDate, days }) {
   );
 }
 
-function RemeSourceBoundary({ day }) {
-  const coverage = day.coverageStatus === "complete"
-    ? `${day.coverageHours} 小时覆盖`
-    : day.coverageStatus === "partial"
-      ? `${day.coverageHours} 小时 · 部分覆盖`
-      : "数据不可用";
+function RemeActivityRhythm({ day, recordings, loading, error, onOpenRecording }) {
+  const rhythm = useMemo(
+    () => buildRemeActivityRhythm(day, recordings),
+    [day, recordings],
+  );
   return (
-    <aside className="reme-source-boundary is-mock">
-      <SensorsRoundedIcon />
-      <div>
-        <b>Backend 演示历史 · 明确标注 Mock</b>
-        <span>时间线来自 Relay 的 Backend-owned fixture，不从前端 bundle 生成，也不冒充真实家庭历史。</span>
+    <section
+      className={`reme-day-rhythm is-${rhythm.coverageStatus}`}
+      aria-labelledby="reme-day-rhythm-title"
+      data-testid="reme-activity-rhythm"
+    >
+      <header>
+        <div>
+          <small>REME · 一天回看</small>
+          <h2 id="reme-day-rhythm-title">当天录像回看</h2>
+        </div>
+        <span>{rhythm.sourceLabel}</span>
+      </header>
+      <p>橙色段就是已保存的录像，点击直接播放当时画面。</p>
+
+      <div className="reme-rhythm-visual">
+        <div className="reme-rhythm-track">
+          <span className="reme-rhythm-coverage" />
+          {rhythm.markers.map((marker) => (
+            <button
+              type="button"
+              key={marker.id}
+              style={{ left: `${marker.position}%`, width: `${marker.width}%` }}
+              aria-label={`播放 ${marker.timeLabel} 至 ${marker.endTimeLabel} 的${marker.title}`}
+              onClick={() => onOpenRecording(marker.id)}
+            />
+          ))}
+        </div>
+        <div className="reme-rhythm-ticks" aria-hidden="true">
+          <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+        </div>
       </div>
-      <strong>{coverage}</strong>
-    </aside>
+
+      {rhythm.markers.length > 0 ? (
+        <article className="reme-rhythm-highlight is-playable">
+          <span><PlayCircleRoundedIcon /></span>
+          <div>
+            <small>{rhythm.recordingLabel} · 本机可播放</small>
+            <b>点击橙色录像段进入播放器</b>
+          </div>
+        </article>
+      ) : (
+        <div className="reme-rhythm-empty" role="status">
+          <VideocamRoundedIcon />
+          <span>
+            <b>{loading ? "正在读取本机录像" : "这一天没有本机录像"}</b>
+            <small>{error
+              ? "当前浏览器无法读取录像存储。"
+              : "没有录像本体就不显示橙色入口。"}</small>
+          </span>
+        </div>
+      )}
+
+      <footer>
+        <span><FiberManualRecordRoundedIcon />{rhythm.coverageLabel}</span>
+        <span><FiberManualRecordRoundedIcon />{rhythm.recordingLabel}</span>
+        <span><LockRoundedIcon />{rhythm.sourceNote}</span>
+      </footer>
+    </section>
+  );
+}
+
+function recordingDurationLabel(durationMs) {
+  const seconds = Math.max(1, Math.round(durationMs / 1_000));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder > 0 ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`;
+}
+
+function RemeRecordingPlayback({ day, recordings, recording, onBack, onSelectRecording }) {
+  const [playbackError, setPlaybackError] = useState("");
+  const rhythm = useMemo(
+    () => buildRemeActivityRhythm(day, recordings),
+    [day, recordings],
+  );
+  return (
+    <main className="viewer-page timeline-page reme-recording-playback">
+      <header className="reme-recording-topbar">
+        <IconButton type="button" onClick={onBack} aria-label="返回关怀记录">
+          <ChevronLeftRoundedIcon />
+        </IconButton>
+        <div>
+          <small>{day.dateKey} · {recording.sceneLabel}</small>
+          <h1>{formatTime(recording.startedAtMs)} 的录像</h1>
+        </div>
+        <span>{recordingDurationLabel(recording.durationMs)}</span>
+      </header>
+
+      <section className="reme-recording-stage" aria-label="本机录像播放器">
+        <video
+          key={recording.id}
+          src={recording.playbackUrl}
+          controls
+          autoPlay
+          playsInline
+          preload="metadata"
+          onCanPlay={() => setPlaybackError("")}
+          onError={() => setPlaybackError("这段录像暂时无法解码，请返回后重试。")}
+        />
+        {playbackError && <p role="alert">{playbackError}</p>}
+      </section>
+
+      <section className="reme-recording-timeline" aria-labelledby="reme-recording-timeline-title">
+        <div>
+          <small>当天录像</small>
+          <h2 id="reme-recording-timeline-title">选择其他时间</h2>
+        </div>
+        <div className="reme-rhythm-track">
+          <span className="reme-rhythm-coverage" />
+          {rhythm.markers.map((marker) => (
+            <button
+              type="button"
+              key={marker.id}
+              className={marker.id === recording.id ? "is-selected" : ""}
+              style={{ left: `${marker.position}%`, width: `${marker.width}%` }}
+              aria-label={`播放 ${marker.timeLabel} 至 ${marker.endTimeLabel} 的${marker.title}`}
+              aria-pressed={marker.id === recording.id}
+              onClick={() => onSelectRecording(marker.id)}
+            />
+          ))}
+        </div>
+        <div className="reme-rhythm-ticks" aria-hidden="true">
+          <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
+        </div>
+      </section>
+
+      <section className="reme-recording-details">
+        <div><span>录像时间</span><b>{formatTime(recording.startedAtMs)}–{formatTime(recording.endedAtMs)}</b></div>
+        <div><span>保存位置</span><b>这台设备 · 本机浏览器</b></div>
+        <p><LockRoundedIcon />录像不经过 Relay 或 MiMo；清除浏览器站点数据后将无法回看。</p>
+      </section>
+    </main>
   );
 }
 
@@ -1003,24 +1129,19 @@ const MIMO_DIARY_UNCERTAINTY_COPY = Object.freeze({
 });
 
 function mimoDiaryUnavailableCopy(summaryState) {
-  if (summaryState?.error_code === "mimo_invalid_output") {
-    return "MiMo 返回内容未通过 Backend JSON 结构校验，本次结果未采用。";
-  }
-  if (summaryState?.error_code === "mimo_not_configured") {
-    return "Backend 尚未配置 MiMo，本日摘要明确标记为不可用。";
-  }
-  if (summaryState?.error_code === "mimo_timeout") {
-    return "MiMo 本日摘要生成超时，当前不显示固定替代摘要。";
-  }
   if (summaryState?.error_code === "timeline_not_ready") {
-    return "本日时间线尚未准备完成，暂不生成摘要。";
+    return "今天的记录还没有整理完成，下面会先显示已经收到的内容。";
   }
-  return "Backend 当前没有可用的 MiMo 本日摘要；页面不会回退到前端固定文案。";
+  return "今天的记录暂时还不能整理成摘要，下面的逐条记录仍可查看。";
 }
 
 function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
   const [filter, setFilter] = useState("all");
   const [expandedDayparts, setExpandedDayparts] = useState(() => new Set(["early", "morning"]));
+  const [activeRecordingId, setActiveRecordingId] = useState(null);
+  const localRecordings = useRemeLocalRecordings(day.dateKey);
+  const activeRecording = localRecordings.recordings.find((item) => item.id === activeRecordingId)
+    || null;
   const displayDay = day;
   const summaryStateName = summary
     ? "live"
@@ -1028,15 +1149,15 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
   const liveSummary = summary;
   const summaryHeadline = liveSummary
     ? liveSummary.headline
-    : summaryStateName === "loading" ? "正在生成本日动态摘要…" : "本日动态摘要暂不可用";
+    : summaryStateName === "loading" ? "正在整理今天的动态…" : "今天还没有可用摘要";
   const summaryCopy = liveSummary
     ? liveSummary.summary
     : summaryStateName === "loading"
-      ? "Backend 正在使用结构化时间线生成 MiMo 摘要。"
+      ? "Reme 正在根据已经收到的结构化记录整理重点。"
       : mimoDiaryUnavailableCopy(summaryState);
   const summaryStatus = summaryStateName === "live"
-    ? "Backend MiMo"
-    : summaryStateName === "loading" ? "正在生成" : "摘要不可用";
+    ? "已整理"
+    : summaryStateName === "loading" ? "整理中" : "暂不可用";
 
   const selectFilter = (nextFilter) => {
     setFilter(nextFilter);
@@ -1058,10 +1179,28 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
     });
   };
 
+  if (activeRecording) {
+    return (
+      <RemeRecordingPlayback
+        day={day}
+        recordings={localRecordings.recordings}
+        recording={activeRecording}
+        onBack={() => setActiveRecordingId(null)}
+        onSelectRecording={setActiveRecordingId}
+      />
+    );
+  }
+
   return (
     <main className="viewer-page timeline-page reme-timeline-page">
       <RemeDateStrip selectedDateKey={day.dateKey} onSelectDate={onSelectDate} days={dates} />
-      <RemeSourceBoundary day={day} />
+      <RemeActivityRhythm
+        day={day}
+        recordings={localRecordings.recordings}
+        loading={localRecordings.loading}
+        error={localRecordings.error}
+        onOpenRecording={setActiveRecordingId}
+      />
 
       <section
         className="reme-mimo-summary"
@@ -1071,7 +1210,7 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
         data-summary-schema={liveSummary?.schema_version || "pending"}
       >
           <div className="reme-mimo-summary-heading">
-            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>MiMo 本日动态摘要</b></span>
+            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>Reme 今日摘要</b></span>
             <span className={`reme-mimo-summary-status is-${summaryStateName}`}><FiberManualRecordRoundedIcon />{summaryStatus}</span>
           </div>
           <h2 id="reme-day-summary-title">{summaryHeadline}</h2>
@@ -1087,22 +1226,22 @@ function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
           <div className="reme-mimo-summary-footer">
             {liveSummary ? (
               <time dateTime={new Date(liveSummary.generated_at_ms).toISOString()}>生成于 {formatTime(liveSummary.generated_at_ms)}</time>
-            ) : <span>未使用 Mock 摘要</span>}
+            ) : <span>逐条记录仍可查看</span>}
             <span>{liveSummary
-              ? `已吸收 ${liveSummary.input_event_count} 条 Backend 结构化演示记录 · ${liveSummary.model} · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty] || "不确定性未知"}`
-              : `Backend 时间线 revision ${day.revision} · ${day.totalCount} 条稳定统计记录`}</span>
+              ? `基于 ${liveSummary.input_event_count} 条结构化记录整理 · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty] || "可能遗漏细节"}`
+              : `${day.totalCount} 条生活记录`}</span>
           </div>
       </section>
 
       <section className="reme-day-summary" aria-label="今日记录统计">
         <div className="reme-day-statistics">
-          <span>{day.coverageStatus === "complete" ? "24 小时演示覆盖" : "部分演示覆盖"}</span>
+          <span>{day.coverageStatus === "complete" ? "全天关怀覆盖" : "部分时段可用"}</span>
           <p><b>{displayDay.totalCount}</b> 个生活片段</p>
         </div>
         <div className="reme-source-mix" aria-label="记录来源">
-          <span><DirectionsWalkRoundedIcon /><b>{displayDay.activityCount}</b> 人体与空间</span>
-          <span><SensorsRoundedIcon /><b>{displayDay.deviceCount}</b> 全屋设备</span>
-          <span><FavoriteRoundedIcon /><b>{displayDay.careCount}</b> 主动关怀</span>
+          <span><DirectionsWalkRoundedIcon /><b>{displayDay.activityCount}</b> 活动</span>
+          <span><SensorsRoundedIcon /><b>{displayDay.deviceCount}</b> 设备</span>
+          <span><FavoriteRoundedIcon /><b>{displayDay.careCount}</b> 关怀</span>
         </div>
         <div className="reme-timeline-filter" role="group" aria-label="筛选时间线记录">
           <button type="button" className={filter === "all" ? "is-selected" : ""} aria-pressed={filter === "all"} onClick={() => selectFilter("all")}>全部 <b>{displayDay.totalCount}</b></button>
@@ -1169,10 +1308,10 @@ function TimelinePage({
         />
         <section className="timeline-empty-state" role={remeHistory.error ? "alert" : "status"}>
           <span>{remeHistory.error ? <EventBusyRoundedIcon /> : <RefreshRoundedIcon />}</span>
-          <h2>{remeHistory.error ? "Reme 历史暂不可用" : "正在读取 Backend 历史"}</h2>
+          <h2>{remeHistory.error ? "关怀记录暂时不可用" : "正在读取关怀记录"}</h2>
           <p>{remeHistory.error
-            ? "页面不会回退到 Frontend 固定 Mock；请检查 Relay History API 与 fixture loader。"
-            : "正在从 Relay 获取日期索引、日时间线与 MiMo 摘要状态。"}</p>
+            ? "今天的记录暂时无法获取，恢复后会自动更新。"
+            : "正在整理日期、生活记录和今日摘要。"}</p>
         </section>
       </main>
     );

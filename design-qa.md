@@ -78,3 +78,48 @@ No actionable P0/P1/P2 findings remain.
 - [P3] If a later authenticated history service returns very long generated diary text, add an explicit “展开日记” secondary block rather than allowing the event summary itself to become a long paragraph.
 
 final result: passed
+
+## 2026-08-11 本机录像回看更正
+
+### Comparison target
+
+- User source overview: `.scratch/family-activity-rhythm/evidence/reference-aor-overview.png`.
+- User source focused strip: `.scratch/family-activity-rhythm/evidence/reference-activity-strip.png`.
+- Empty implementation: `.scratch/family-activity-rhythm/evidence/13-recording-empty-390x844.png`.
+- Playable implementation: `.scratch/family-activity-rhythm/evidence/14-recording-player-390x844.png`.
+- Viewport: `390×844`; browser reported `innerWidth=390`, `scrollWidth=390`.
+
+The correction changes the strip's product meaning. Orange is no longer a
+structured activity-summary marker. It is a real, locally stored video segment;
+clicking it enters the corresponding player inside the existing `/family`
+experience. The implementation keeps the source's mint recording rail, orange
+segment, time ticks and direct playback relationship while using Reme's existing
+warm surfaces, type and bottom navigation.
+
+### Interaction evidence
+
+- A native MediaRecorder WebM was written to the production IndexedDB schema.
+- Reloading `/family` surfaced exactly one orange segment from that Blob.
+- Clicking the segment opened a native `<video controls autoplay>` with a blob URL
+  and rendered the recorded frame.
+- The back button restored the same day and recording timeline.
+- QA storage and the temporary seed page were removed after verification.
+
+### Findings
+
+- [P1 fixed] The first iteration used activity timestamps as clickable markers,
+  which implied recording playback without any recording asset. The strip now
+  rejects metadata-only records and only renders a segment when a playable Blob
+  exists.
+- [P1 bounded] Same-browser IndexedDB is not cross-device family playback. The UI
+  says “本机录像” and “这台设备 · 本机浏览器”; the feasibility result explicitly
+  remains no-go for a remote-playback claim.
+- [P2 fixed] Removing the selection bubble left unnecessary vertical space above
+  the rail. The rail now sits directly below its instruction and preserves a
+  44px focus/tap target for short clips.
+- [P2 fixed] Empty history previously risked looking like a disabled feature.
+  The card now states that no orange segment is shown without a real video body.
+
+No actionable P0/P1/P2 visual findings remain for the same-browser prototype.
+
+final result: passed for same-browser recording playback; cross-device playback not claimed
