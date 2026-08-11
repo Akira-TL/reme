@@ -20,11 +20,13 @@ class InstallCaddyRoadshowSiteTests(unittest.TestCase):
             original = "example.com {\n    respond 200\n}\n"
             caddyfile.write_text(original, encoding="utf-8")
             site.write_text("reme.maniforld.com {\n    respond 200\n}\n", encoding="utf-8")
+            original_inode = caddyfile.stat().st_ino
 
             backup = MODULE.install(caddyfile=caddyfile, site_file=site)
             self.assertIsNotNone(backup)
             self.assertEqual(backup.read_text(encoding="utf-8"), original)
             self.assertIn(MODULE.START, caddyfile.read_text(encoding="utf-8"))
+            self.assertEqual(caddyfile.stat().st_ino, original_inode)
             self.assertIsNone(MODULE.install(caddyfile=caddyfile, site_file=site))
 
     def test_check_does_not_write(self) -> None:
@@ -47,6 +49,35 @@ class InstallCaddyRoadshowSiteTests(unittest.TestCase):
             caddyfile.write_text("reme.maniforld.com { respond 404 }\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unmanaged"):
                 MODULE.install(caddyfile=caddyfile, site_file=site)
+
+    def test_updates_only_an_explicitly_managed_block_and_preserves_inode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            caddyfile = root / "Caddyfile"
+            site = root / "site"
+            original = (
+                "example.com { respond 200 }\n\n"
+                f"{MODULE.START}\n"
+                "reme.maniforld.com { respond 404 }\n"
+                f"{MODULE.END}\n"
+            )
+            caddyfile.write_text(original, encoding="utf-8")
+            site.write_text("reme.maniforld.com { respond 200 }\n", encoding="utf-8")
+            original_inode = caddyfile.stat().st_ino
+
+            with self.assertRaisesRegex(ValueError, "differs"):
+                MODULE.install(caddyfile=caddyfile, site_file=site)
+
+            backup = MODULE.install(
+                caddyfile=caddyfile,
+                site_file=site,
+                update_managed=True,
+            )
+            self.assertIsNotNone(backup)
+            self.assertEqual(backup.read_text(encoding="utf-8"), original)
+            self.assertIn("respond 200", caddyfile.read_text(encoding="utf-8"))
+            self.assertNotIn("respond 404", caddyfile.read_text(encoding="utf-8"))
+            self.assertEqual(caddyfile.stat().st_ino, original_inode)
 
 
 if __name__ == "__main__":

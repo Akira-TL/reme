@@ -105,6 +105,7 @@ def build_configs(
     mimo_key = require_secret(mimo.get("MIMO_API_KEY", ""), "MIMO_API_KEY")
     turn_secret = require_secret(read_coturn_secret(coturn_config), "coturn REST secret")
     accepted_origin = require_https_origin(origin)
+    internal_relay_origin = f"http://{urlsplit(accepted_origin).netloc}"
     accepted_ip = str(ipaddress.IPv4Address(public_ip))
 
     existing = parse_assignment_file(existing_relay_env) if existing_relay_env.is_file() else {}
@@ -123,7 +124,10 @@ def build_configs(
         "PYTHONUNBUFFERED": "1",
     })
     relay = dotenv({
-        "ALLOWED_ORIGINS": accepted_origin,
+        # Wrangler local workerd normalizes the browser Origin to the same host
+        # on its plain-HTTP Docker listener after Caddy terminates TLS. Relay is
+        # not published on the host, so allow only these two exact forms.
+        "ALLOWED_ORIGINS": f"{accepted_origin},{internal_relay_origin}",
         "RUNTIME_INGEST_TOKEN": runtime_token,
         "REME_STUN_URLS": f"stun:{accepted_ip}:3478",
         "REME_TURN_URLS": (

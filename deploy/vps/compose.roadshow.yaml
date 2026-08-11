@@ -62,6 +62,32 @@ services:
       retries: 12
       start_period: 30s
 
+  history-loader:
+    image: ${REME_BACKEND_IMAGE:-reme-backend:roadshow}
+    container_name: reme-history-loader
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    env_file:
+      - ${REME_BACKEND_ENV_FILE:-/etc/reme/backend.env}
+    command:
+      - python
+      - -m
+      - reme.runtime.history.demo_loader
+      - --skip-summaries
+    depends_on:
+      relay:
+        condition: service_healthy
+    tmpfs:
+      - /tmp
+    volumes:
+      - backend-artifacts:/app/artifacts
+    networks:
+      - proxy
+
   relay:
     image: ${REME_RELAY_IMAGE:-reme-relay:roadshow}
     build:

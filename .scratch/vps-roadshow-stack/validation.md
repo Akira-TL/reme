@@ -14,7 +14,7 @@
 | --- | --- |
 | `git fetch origin` | pass; owner ref remains `d590eaa7`, frontend remote remains `d27a21b3` before this change |
 | `git diff --name-status origin/develop/akira -- backend demo-relay` | pass; empty |
-| `python3 -m unittest deploy/vps/test_configure_roadshow_secrets.py deploy/vps/test_install_caddy_roadshow_site.py` | pass; 7 tests after the final test split |
+| `python3 -m unittest deploy/vps/test_configure_roadshow_secrets.py deploy/vps/test_install_caddy_roadshow_site.py` | pass; 8 tests, including bind-mount inode preservation and explicit managed-block update |
 | `uv run ruff check backend tests deploy/vps` | pass |
 | `node --check deploy/vps/relay-entrypoint.mjs` | pass |
 | `npm ci` in `frontend/` | pass; 219 packages |
@@ -56,25 +56,72 @@ the VPS runtime.
 - Caddy full-config validation passed and the isolated Reme block was reloaded.
   Backup:
   `/opt/biaoshu-mono/infra/caddy/Caddyfile.before-reme-roadshow-20260811T145045Z`.
+- The first installer write atomically replaced the host Caddyfile inode, so the
+  already-running single-file bind mount continued to expose the old file. The
+  live config was synchronized without restarting unrelated sites, and the
+  installer now stages the candidate but overwrites the existing inode in
+  place. The final mounted `/etc/caddy/Caddyfile` validates and reloads.
+- `reme-history-loader` now mirrors local launcher startup by waiting for a
+  healthy Relay and running the owner Backend's versioned fixture loader with
+  `--skip-summaries`. It exited 0 and published revisions for 2026-08-04 through
+  2026-08-11 without printing credentials or calling MiMo.
+- Local workerd normalizes the public HTTPS browser Origin to the same-host HTTP
+  form after TLS termination. The generated Relay allowlist now contains only
+  those two exact origins. Relay remained private to the Docker network; after
+  recreation, public same-origin health returned 200 and Viewer WebSocket
+  handshakes returned 101 instead of 403.
 
-## Pending public acceptance
+## Public DNS and HTTPS acceptance
 
-Public DNS still resolves through the old Vercel CNAME
-`459ace11b47bcf46.vercel-dns-017.com`. Caddy cannot obtain the
-`reme.maniforld.com` certificate until that record is replaced with the VPS A
-record `74.48.114.52`.
+Cloudflare DNS was changed in the signed-in in-app dashboard:
 
-The existing Wrangler OAuth token has Zone read permission but no DNS write
-permission. The in-app Cloudflare dashboard is at the sign-in page. Therefore
-the DNS mutation and trusted-HTTPS browser acceptance are not claimed.
+- `reme.maniforld.com`: DNS-only A `74.48.114.52`, TTL 10 minutes;
+- `monitor.reme.maniforld.com`: unchanged DNS-only CNAME
+  `459ace11b47bcf46.vercel-dns-017.com`;
+- no unrelated DNS record was edited.
 
-Not yet measured or claimed:
+After the old recursive cache expired, ordinary curl resolved the public host
+to `74.48.114.52` and returned HTTP 200 with TLS verification result 0. Caddy
+stored a Let's Encrypt certificate under its persistent data directory. Direct
+same-origin checks returned:
 
-- `/home`, `/family`, and `/debug` against the new public VPS origin;
+| URL | Result |
+| --- | --- |
+| `/home` | 200 `text/html` |
+| `/family` | 200 `text/html` |
+| `/debug?debug=1&turnProbe=1` | 200 `text/html` |
+| `/_reme/runtime/api/health` | 200, Backend `status: ok` |
+| `/_reme/relay/health` | 200, Relay room `shared-live-demo` |
+| `/_reme/runtime/api/runtime/capabilities` | 200, owner runtime contract |
+
+## In-app browser acceptance
+
+- Environment: Codex in-app Google Chrome 151.0.0.0 on macOS 26.5.2; public
+  origin `https://reme.maniforld.com`.
+- `/home`: title `Reme · 居家端`; first paint rendered the Home capture role,
+  showed media not started and waiting for Backend keypoints, and had zero
+  console errors. No camera or microphone permission was requested.
+- `/family`: title `Reme · 家属端`; after the Relay allowlist fix the UI reported
+  the public demo connection as connected, showed three current browser tabs,
+  and Caddy recorded `reme-viewer-v2` WebSocket status 101. The `reme` tab loaded
+  the Backend-owned, explicitly Mock-labelled Aug 4-11 history; Aug 11 displayed
+  six life segments and 24-hour coverage. Zero console errors were recorded.
+- `/debug`: title `Reme · 调试前端`; first paint and the runtime panel rendered.
+  It exposed frame age, sent/dropped frames, capture transport, backpressure,
+  Relay state/pose offered/in-flight/ACK, protocol error, WebRTC state, MiMo
+  status, and raw bounded debug JSON. Zero console errors were recorded.
+- The TURN probe observed one UDP `relay` candidate and no TCP relay candidate.
+  This proves only the reported UDP candidate gathering in this browser, not
+  two-device media transport or TURN TCP capability.
+
+Still not measured or claimed:
+
 - physical camera/microphone permission and at least five seconds of foreground
   capture FPS;
 - background-tab FPS;
-- two real devices, actual relay ICE candidates, or TURN media transport;
+- source-generation restart/leak behavior with a physical camera;
+- two real devices or actual TURN media transport;
 - WebRTC authorized-video success/failure and all privacy fail-closed cases on
   the new public origin;
+- live acknowledge-alarm, action-card confirmation, and Backend/Relay ACK;
 - real MiMo request/response from the roadshow browser flow.

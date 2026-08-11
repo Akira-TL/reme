@@ -36,7 +36,10 @@ class ConfigureRoadshowSecretsTests(unittest.TestCase):
             self.assertIn('MIMO_API_KEY="test-mimo-key"', backend_content)
             self.assertNotIn("test-turn-secret", backend_content)
             self.assertIn('REME_TURN_SHARED_SECRET="test-turn-secret"', relay_content)
-            self.assertIn('ALLOWED_ORIGINS="https://reme.example"', relay_content)
+            self.assertIn(
+                'ALLOWED_ORIGINS="https://reme.example,http://reme.example"',
+                relay_content,
+            )
             backend = root / "backend.env"
             backend.write_text(backend_content, encoding="utf-8")
             relay.write_text(relay_content, encoding="utf-8")

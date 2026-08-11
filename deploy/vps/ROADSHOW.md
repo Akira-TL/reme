@@ -62,7 +62,12 @@ REME_MODELS_DIR=/opt/reme-runtime/models \
 
 No Reme HTTP port is published on the host. The existing Caddy container
 reaches `reme-frontend:8080`, `reme-backend:8770`, and `reme-relay:8787` through
-the shared Docker network.
+the shared Docker network. After Relay becomes healthy, the one-shot
+`reme-history-loader` container runs the repository owner's
+`reme.runtime.history.demo_loader --skip-summaries`. This mirrors local startup:
+it publishes the versioned, explicitly labeled mock history fixture to Relay
+without making a MiMo API request. Family never generates or falls back to this
+fixture in the browser.
 
 Append `Caddyfile.roadshow` as its own site block, then validate before reload:
 
@@ -80,6 +85,10 @@ docker exec biaoshu-caddy caddy validate --config /etc/caddy/Caddyfile
 docker exec biaoshu-caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
+For a later deployment-owned block update, review the diff and pass
+`--update-managed`. The installer still refuses unmanaged hosts and malformed
+or duplicated markers.
+
 The installer refuses an unmanaged conflicting host, appends only the isolated
 Reme block, and writes a timestamped backup before changing the existing file.
 The local Relay process runs as root inside the container only so it can read
@@ -87,6 +96,11 @@ the root-owned bind-mounted env file and copy it into tmpfs. Every Linux
 capability is dropped, the root filesystem is read-only, and no host port is
 published. The container is a trusted single-tenant roadshow runtime, not a
 hardened multi-tenant Worker sandbox.
+
+The Relay origin allowlist contains exactly the public HTTPS origin and the
+same-host HTTP form that local workerd sees after Caddy terminates TLS. The
+Relay has no published host port; do not replace this pair with `*` or add an
+unrelated origin.
 
 ## DNS cutover
 
@@ -103,10 +117,14 @@ its persistent volumes while investigating.
 docker inspect --format '{{.State.Health.Status}}' reme-frontend
 docker inspect --format '{{.State.Health.Status}}' reme-backend
 docker inspect --format '{{.State.Health.Status}}' reme-relay
+docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' reme-history-loader
 docker exec biaoshu-caddy wget -qO- http://reme-backend:8770/api/health
 docker exec biaoshu-caddy wget -qO- http://reme-relay:8787/health
 docker exec biaoshu-caddy wget -qO- http://reme-frontend:8080/healthz
 ```
+
+The expected loader result is `exited 0`. Its logs list only published fixture
+dates and revisions; they must not print the runtime token or MiMo key.
 
 After DNS and Caddy TLS are active, verify `/home`, `/family`, and `/debug` in
 the browser. Do not claim TURN transport, two-device media, physical-device
