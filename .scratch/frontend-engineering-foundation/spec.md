@@ -1,8 +1,9 @@
 # Frontend Engineering Foundation
 
-- Status: implementation complete; local browser validation pending
+- Status: implementation and local in-app Browser validation complete; physical-device follow-ups recorded
 - Owner: Frontend
 - Date: 2026-08-10
+- Last validated: 2026-08-11
 - Baseline: `origin/develop/akira@d590eaa7`
 
 ## Goal
@@ -142,18 +143,23 @@ into a full TypeScript migration.
 2. New protocol/display tests prove exact validation, stale-session isolation,
    bounded publication, display-only hold, interpolation refusal across
    sessions, and cleanup.
-3. Playwright passes for the three canonical routes and the selected authority,
-   canvas, ACK, and privacy flows.
+3. The shared Playwright suite remains available for the three canonical routes
+   and selected authority, canvas, ACK, and privacy flows. For the 2026-08-11
+   local handoff, the user explicitly selected the in-app Browser instead of
+   installing or running Playwright; that real-browser evidence is recorded
+   separately and does not claim unrun Playwright results.
 4. `npm run lint`, `npm run build`, and `npm run test:route-build` pass.
 5. Browser evidence records observed behavior separately from unmeasured target
    FPS or physical-device gates.
-6. Changes are committed as separate refactor and quality/docs commits, then
-   fast-forward pushed to `origin/lbx-frontend` as explicitly requested.
+6. Changes are committed as separate refactor, quality, fix, and validation
+   commits. They remain local until the user reviews them; no push is performed.
 
 ## Validation handoff
 
-The baseline commands above ran before the final E2E/docs batch. Per the user’s
-instruction on 2026-08-10, no further test, build, or browser commands are run
-in this workspace. The final diff is intentionally marked **local validation
-pending** and the exact commands and physical-browser checks live in
-`handoff.md`.
+The full frontend gate set was rerun after the final 2026-08-11 code fixes:
+contract typecheck, 218 Node tests, lint, build, and 5/5 route-build assertions
+all pass. In-app Browser acceptance completed the authoritative action-card ACK
+path and rechecked route, debug, and bathroom fail-closed behavior. See
+`validation-2026-08-10.md` and `validation-2026-08-11.md` for exact evidence and
+explicitly unmeasured physical gates. Playwright was not run in the latter pass
+at the user's request, and its shared files were retained.
