@@ -1,6 +1,6 @@
 # Cross-network TURN deployment spec
 
-Status: blocked on CloudCone edge-firewall access
+Status: validated for TURN/UDP; Browser TURN/TCP candidate remains unobserved
 Date: 2026-08-11
 Owner: frontend integration
 
@@ -72,20 +72,30 @@ and trusted certificate can add `turns:` without changing the HTTP contract.
 6. Public `/home`, `/family`, and `/debug` load from the deployed frontend with
    no first-screen white page; hardware/FPS claims remain unmade unless measured.
 
-## Current blocker
+## Deployment closure
 
-The SSH deployment and all application contracts are complete, but CloudCone's
-managed edge firewall drops every tested non-web port before packets reach the
-VM. The guest has `INPUT ACCEPT`, UFW is inactive, and a packet capture observed
-no port-3478 packets during an external allocation attempt. A Cloudflare edge
-TCP probe reached port 22 in 68 ms but timed out on 3456, 3478, 5349, 8080,
-8088, 8443, and 9000.
+After the user authenticated the CloudCone console on 2026-08-11, the following
+rules were added and applied to public network interface `#0`, all with source
+`0.0.0.0/0` and command `ACCEPT`:
 
-Completing acceptance gate 4 requires an authenticated CloudCone console session
-to add these narrowly scoped rules to the server's public network interface:
+- destination `3478`, protocol TCP;
+- destination `3478`, protocol UDP;
+- destination `49160:49200`, protocol UDP.
 
-- TCP and UDP destination port `3478`, source any;
-- UDP destination range `49160:49200`, source any.
+The Codex in-app Browser then gathered one real UDP `relay` ICE candidate on two
+consecutive manual probes against the production frontend. A simultaneous
+server capture observed the UDP request/response exchange on port 3478. Public
+TCP connection establishment to port 3478 and the coturn TCP listener both
+passed, but this Browser completed ICE gathering without a TCP relay candidate
+and emitted no TCP TURN exchange during the capture. TURN/TCP therefore remains
+unverified rather than being inferred from the open port.
 
-No existing 22/80/443 service will be multiplexed or reconfigured as a shortcut.
-That would risk unrelated workloads and still would not open the UDP relay range.
+Acceptance gate 4 is passed for the supported UDP transport, which is sufficient
+to demonstrate cross-network relay-candidate gathering. It is not evidence for
+two-peer media, a physical device, TURN/TCP fallback, TURN/TLS on 443, or an
+HTTPS-only network.
+
+The CloudCone console also displayed a provider-required IPv4 migration before
+2026-09-01 from `74.48.114.52` to `148.135.34.65`. No migration action was taken
+in this work item because it would start the provider's 72-hour cutover window
+and requires coordinated updates to coturn and Relay bindings.

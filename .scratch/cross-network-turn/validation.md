@@ -1,7 +1,7 @@
 # Cross-network TURN validation
 
 Date: 2026-08-11
-Status: BLOCKED — CloudCone managed firewall drops the TURN and relay ports
+Status: PASS for TURN/UDP relay-candidate gathering; TURN/TCP candidate unverified
 
 This file records only commands and browser observations actually completed in
 this deployment batch. Secret values are intentionally omitted. A configured
@@ -39,21 +39,23 @@ Actual results:
 | `turnutils_uclient` REST credential over UDP | PASS, same host | 12/12 messages, 0 lost. |
 | `turnutils_uclient -t` REST credential over TCP | PASS, same host | 12/12 messages, 0 lost. |
 | `iptables -S INPUT`, `nft list ruleset`, `ufw status verbose` | PASS as diagnosis | VM INPUT policy is ACCEPT and UFW is inactive; Docker forwarding rules do not govern the host-bound coturn listener. |
-| 90-second metadata-only `tcpdump` on port 3478 during Browser retry | FAIL at edge | 0 packets captured; the request never reached the VM. |
-| Temporary Cloudflare Worker `connect()` from the edge | FAIL at edge | Port 22 connected in 68 ms. Ports 3456, 3478, 5349, 8080, 8088, 8443, and 9000 timed out. The fixed-target probe Worker was deleted afterward. |
+| Pre-fix 90-second metadata-only `tcpdump` on port 3478 during Browser retry | FAIL at edge | 0 packets captured before the managed-firewall rules were added. |
+| Pre-fix temporary Cloudflare Worker `connect()` from the edge | FAIL at edge | Port 22 connected in 68 ms while 3478 and the other sampled non-web ports timed out. The fixed-target probe Worker was deleted afterward. |
+| CloudCone managed firewall | PASS | Applied exact ACCEPT rules on interface #0 for 3478/TCP, 3478/UDP, and 49160:49200/UDP from 0.0.0.0/0; the console returned `Firewall rules applied successfully`. Existing 22/80/443 rules were not changed. |
+| Public TCP connection to 3478 after apply | PASS | `curl --connect-timeout 5 --max-time 7 -v telnet://74.48.114.52:3478` established TCP before timing out waiting for application bytes, as expected for a raw TURN listener without a request. |
+| Post-fix metadata-only `tcpdump` during Browser probe | PASS for UDP | 14 packets captured, 15 seen by the filter, 0 kernel drops; bidirectional UDP request/response traffic was observed between the Browser public address and `74.48.114.52:3478`. No TCP TURN exchange was observed. |
 
 The CloudCone console documentation identifies its managed Cloud Firewall as the
-place to add/apply public-interface TCP/UDP rules. The Codex in-app Browser
-reached only the CloudCone login screen; it had no authenticated session. No API
-credential exists in the local or server configuration. Consequently the agent
-could not safely add the rules without user login.
+place to add/apply public-interface TCP/UDP rules. After the user authenticated,
+the three required rules were added and applied through the console. No
+CloudCone API credential was created or stored.
 
-Required CloudCone rules:
-
-1. ACCEPT source any, destination `3478`, protocol TCP;
-2. ACCEPT source any, destination `3478`, protocol UDP;
-3. ACCEPT source any, destination `49160:49200`, protocol UDP;
-4. apply the rules to the server's public network interface.
+The same console displayed a provider-required IPv4 migration before 2026-09-01:
+new IPv4 `148.135.34.65`, gateway `148.135.34.1`, netmask `255.255.255.128`.
+Neither automatic nor manual migration was started because clicking the provider
+action begins a 72-hour old-address retirement window. TURN currently remains on
+`74.48.114.52`; migration needs a coordinated coturn listener, firewall, Relay
+binding, deployment, and Browser revalidation.
 
 ## Relay deployment
 
@@ -125,14 +127,19 @@ this deployment pass.
 - `/family`: rendered the Family role and skeleton/offline fallback.
 - `/debug`: rendered the engineering role and required counters.
 - Corrected production RTC configuration: `turn_configured`.
-- TURN UDP probe: `无 relay candidate · timeout · ice_gathering_timeout`.
-- TURN TCP probe: `无 relay candidate · complete`.
-- Server packet capture during a manual retry: no port-3478 packets arrived.
+- TURN UDP probe, first post-firewall run: `relay candidate × 1 · complete`.
+- TURN UDP probe, second consecutive run: `relay candidate × 1 · complete`.
+- The raw Debug result recorded candidate type `relay`, candidate protocol
+  `udp`, gathering state `complete`, and URL
+  `turn:74.48.114.52:3478?transport=udp`; no credentials were exposed.
+- TURN TCP probe on both runs: `无 relay candidate · complete`.
+- A simultaneous server capture observed 14 bidirectional UDP packets on port
+  3478 with 0 kernel drops. It observed no TCP TURN exchange.
 
-Therefore browser relay-candidate acceptance is **not passed**. The UI fails
-closed to skeleton as designed, but cross-network clear video is unavailable
-until the CloudCone firewall rules are applied and the same Browser probe is
-rerun.
+Therefore Browser relay-candidate acceptance is **passed for TURN/UDP**. The TCP
+listener and public TCP connection both pass, but a TURN/TCP relay candidate was
+not observed and is not claimed. Candidate gathering does not prove two-peer
+media or event-authorized clear video; those remain separate unmeasured gates.
 
 ## Cleanup and unmeasured claims
 
@@ -141,6 +148,7 @@ rerun.
   Persistent secret material remains only in coturn's protected configuration,
   the Worker secret store, and the protected Backend environment file.
 - No Playwright test suite or Playwright browser install was used in this batch.
-- TURN/TLS on 443, HTTPS-only networks, two-peer media flow, a physical mobile
-  device, camera FPS, background FPS, source switching, TURN bandwidth, and
-  device capability are not claimed as passed.
+- TURN/TCP relay-candidate gathering, TURN/TLS on 443, HTTPS-only networks,
+  two-peer media flow, a physical mobile device, camera FPS, background FPS,
+  source switching, relay-range media traffic, TURN bandwidth, and device
+  capability are not claimed as passed.
