@@ -98,8 +98,16 @@ import {
   isFamilyTimelineMockDate,
 } from "./familyTimelineMock.js";
 import { buildRemeActivityRhythm } from "./remeActivityRhythm.js";
+import {
+  selectRemeDiarySummaryForDisplay,
+  useRemeHistory,
+} from "./remeHistory.js";
 import { remeRecordingDateKey, useRemeLocalRecordings } from "./remeLocalRecordings.js";
-import { getRemeMockRecordings } from "./remeMockRecordings.js";
+import {
+  buildRemeRecordingDateOptions,
+  defaultRemeRecordingDateKey,
+  getRemeMockRecordings,
+} from "./remeMockRecordings.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
   buildCalendarMonth,
@@ -458,7 +466,15 @@ function HomePage({
     relay,
     activeGrant,
   });
-  const homeDateKey = remeRecordingDateKey(localNowMs) || dateKeyFromTimestamp(localNowMs);
+  const currentRecordingDateKey = remeRecordingDateKey(localNowMs)
+    || dateKeyFromTimestamp(localNowMs);
+  const [homeDateKey, setHomeDateKey] = useState(
+    () => defaultRemeRecordingDateKey(currentRecordingDateKey),
+  );
+  const recordingDateOptions = useMemo(
+    () => buildRemeRecordingDateOptions(currentRecordingDateKey),
+    [currentRecordingDateKey],
+  );
   const homeDay = useMemo(
     () => getFamilyTimelineMockDay(homeDateKey) || Object.freeze({ dateKey: homeDateKey }),
     [homeDateKey],
@@ -537,11 +553,17 @@ function HomePage({
         <RemeActivityRhythm
           day={homeDay}
           recordings={recordings}
+          dateOptions={recordingDateOptions}
+          selectedDateKey={homeDateKey}
+          onSelectDate={(dateKey) => {
+            setActiveRecordingId(null);
+            setHomeDateKey(dateKey);
+          }}
           loading={localRecordings.loading}
           error={localRecordings.error}
           onOpenRecording={setActiveRecordingId}
           eyebrow="REME · 首页回看"
-          title="今天录像回看"
+          title="录像回看"
         />
       )}
       {familySurface && (
@@ -1093,6 +1115,9 @@ function RemeHistoryCalendar({ selectedDateKey, onSelectDate, nowMs, realDateKey
 function RemeActivityRhythm({
   day,
   recordings,
+  dateOptions = [],
+  selectedDateKey = null,
+  onSelectDate = null,
   loading,
   error,
   onOpenRecording,
@@ -1114,7 +1139,30 @@ function RemeActivityRhythm({
           <small>{eyebrow}</small>
           <h2 id="reme-day-rhythm-title">{title}</h2>
         </div>
-        <span>{rhythm.sourceLabel}</span>
+        <div className="reme-rhythm-header-actions">
+          {onSelectDate && dateOptions.length > 0 && (
+            <select
+              aria-label="选择录像日期"
+              value={selectedDateKey || ""}
+              onChange={(event) => onSelectDate(event.target.value)}
+            >
+              {dateOptions.map((option) => {
+                const localCount = option.dateKey === selectedDateKey
+                  ? recordings.filter((recording) => !recording.isDemo).length
+                  : 0;
+                const count = option.mockRecordingCount + localCount;
+                const month = Number(option.dateKey.slice(5, 7));
+                const date = Number(option.dateKey.slice(8, 10));
+                return (
+                  <option key={option.dateKey} value={option.dateKey}>
+                    {month}月{date}日{option.isToday ? " · 今天" : ""}{count > 0 ? ` · ${count}段` : ""}
+                  </option>
+                );
+              })}
+            </select>
+          )}
+          <span>{rhythm.sourceLabel}</span>
+        </div>
       </header>
       <p>橙色段就是已保存的录像，点击直接播放当时画面。</p>
 
@@ -1274,15 +1322,15 @@ function RemeTimeline({ day, onSelectDate, summaryState, summary, nowMs, realDat
   const liveSummary = summary;
   const summaryHeadline = liveSummary
     ? liveSummary.headline
-    : summaryStateName === "loading" ? "正在整理这一天的动态…" : "这一天还没有可用摘要";
+    : summaryStateName === "loading" ? "正在整理这一天的动态…" : "摘要暂不可用";
   const summaryCopy = liveSummary
     ? liveSummary.summary
     : summaryStateName === "loading"
       ? "Reme 正在根据已经收到的结构化记录整理重点。"
       : mimoDiaryUnavailableCopy(summaryState);
   const summaryStatus = summaryStateName === "live"
-    ? "已整理"
-    : summaryStateName === "loading" ? "整理中" : "暂不可用";
+    ? "MiMo 已生成"
+    : summaryStateName === "loading" ? "MiMo 生成中" : "MiMo 暂不可用";
 
   const selectFilter = (nextFilter) => {
     setFilter(nextFilter);
@@ -1318,9 +1366,10 @@ function RemeTimeline({ day, onSelectDate, summaryState, summary, nowMs, realDat
         aria-live="polite"
         aria-atomic="true"
         data-summary-schema={liveSummary?.schema_version || "pending"}
+        data-summary-source={liveSummary ? "mimo" : "unavailable"}
       >
           <div className="reme-mimo-summary-heading">
-            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>Reme 本日摘要</b></span>
+            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>MiMo 日常总结</b><small>行为 · Mock</small></span>
             <span className={`reme-mimo-summary-status is-${summaryStateName}`}><FiberManualRecordRoundedIcon />{summaryStatus}</span>
           </div>
           <h2 id="reme-day-summary-title">{summaryHeadline}</h2>
@@ -1336,10 +1385,12 @@ function RemeTimeline({ day, onSelectDate, summaryState, summary, nowMs, realDat
           <div className="reme-mimo-summary-footer">
             {liveSummary ? (
               <time dateTime={new Date(liveSummary.generated_at_ms).toISOString()}>生成于 {formatTime(liveSummary.generated_at_ms)}</time>
-            ) : <span>逐条记录仍可查看</span>}
+            ) : <span>行为来源 · Mock 演示数据</span>}
             <span>{liveSummary
-              ? `基于 ${liveSummary.input_event_count} 条结构化记录整理 · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty] || "可能遗漏细节"}`
-              : `${day.totalCount} 条生活记录`}</span>
+              ? `基于 ${liveSummary.input_event_count} 条 Mock 结构化生活记录，由 MiMo 生成 · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty] || "可能遗漏细节"}`
+              : summaryStateName === "loading"
+                ? "摘要来源 · Backend 正在调用 MiMo"
+                : "摘要暂不可用 · 未使用固定摘要替代"}</span>
           </div>
       </section>
 
@@ -1379,6 +1430,7 @@ function RemeTimeline({ day, onSelectDate, summaryState, summary, nowMs, realDat
 function TimelinePage({
   timeline,
   relay,
+  remeHistory,
   selectedDateKey,
   onSelectDate,
   nowMs,
@@ -1399,13 +1451,21 @@ function TimelinePage({
     .filter(Boolean))];
   const mockDay = familySurface ? getFamilyTimelineMockDay(selectedDateKey) : null;
   if (mockDay) {
+    const summaryState = remeHistory?.summaryState?.date === selectedDateKey
+      ? remeHistory.summaryState
+      : null;
+    const summary = selectRemeDiarySummaryForDisplay({
+      summaryState,
+      dayState: remeHistory?.dayState,
+      displayDay: mockDay,
+    });
     return (
       <RemeTimeline
         key={mockDay.dateKey}
         day={mockDay}
         onSelectDate={onSelectDate}
-        summaryState={null}
-        summary={null}
+        summaryState={summaryState}
+        summary={summary}
         nowMs={nowMs}
         realDateKeys={realDateKeys}
       />
@@ -1833,6 +1893,11 @@ export function ViewerApp({ surface = "family" }) {
   const [selectedTimelineDate, setSelectedTimelineDate] = useState(
     () => dateKeyFromTimestamp(Date.now()),
   );
+  const remeHistory = useRemeHistory({
+    selectedDateKey: selectedTimelineDate,
+    revisionHint: relay.remeDayRevisions[selectedTimelineDate] || null,
+    enabled: familySurface,
+  });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [issueError, setIssueError] = useState("");
   const [familyConfirmFailure, setFamilyConfirmFailure] = useState(null);
@@ -2196,6 +2261,7 @@ export function ViewerApp({ surface = "family" }) {
           <TimelinePage
             timeline={timeline}
             relay={relay}
+            remeHistory={remeHistory}
             selectedDateKey={selectedTimelineDate}
             onSelectDate={setSelectedTimelineDate}
             nowMs={nowMs}

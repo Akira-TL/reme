@@ -93,3 +93,20 @@ export function getRemeMockRecordings(dateKey) {
 }
 
 export const REME_MOCK_RECORDING_DATES = Object.freeze(Object.keys(MOCK_RECORDING_SCHEDULE));
+
+export function defaultRemeRecordingDateKey(currentDateKey) {
+  if (getRemeMockRecordings(currentDateKey).length > 0) return currentDateKey;
+  return REME_MOCK_RECORDING_DATES.at(-1) || currentDateKey;
+}
+
+export function buildRemeRecordingDateOptions(currentDateKey) {
+  const dateKeys = new Set(REME_MOCK_RECORDING_DATES);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(currentDateKey || "")) dateKeys.add(currentDateKey);
+  return Object.freeze([...dateKeys]
+    .sort((left, right) => right.localeCompare(left))
+    .map((dateKey) => Object.freeze({
+      dateKey,
+      isToday: dateKey === currentDateKey,
+      mockRecordingCount: getRemeMockRecordings(dateKey).length,
+    })));
+}

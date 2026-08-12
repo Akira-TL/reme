@@ -561,7 +561,33 @@ button, input { font: inherit; }
   letter-spacing: -0.02em;
 }
 
-.reme-day-rhythm > header > span {
+.reme-rhythm-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.reme-rhythm-header-actions > select {
+  max-width: 126px;
+  min-height: 29px;
+  padding: 5px 24px 5px 8px;
+  border: 1px solid #e8d6c9;
+  border-radius: 999px;
+  color: #5f5148;
+  background: #fff;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.reme-rhythm-header-actions > select:focus-visible {
+  outline: 2px solid rgba(255, 102, 28, 0.48);
+  outline-offset: 2px;
+}
+
+.reme-rhythm-header-actions > span {
   flex: 0 0 auto;
   padding: 5px 8px;
   border-radius: 999px;
@@ -1820,6 +1846,8 @@ html, body, #root {
   .reme-history-calendar > footer { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; }
   .reme-day-rhythm { margin-top: 10px; padding: 14px; border-radius: 18px; }
   .reme-day-rhythm > header h2 { font-size: 18px; }
+  .reme-rhythm-header-actions { align-items: flex-end; flex-direction: column; }
+  .reme-rhythm-header-actions > select { max-width: 118px; }
   .reme-day-rhythm > p { font-size: 10px; }
   .reme-rhythm-visual { margin-right: 1px; margin-left: 1px; }
   .reme-rhythm-highlight { grid-template-columns: 36px minmax(0, 1fr); gap: 8px; padding: 8px 9px; }

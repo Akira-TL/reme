@@ -11,8 +11,10 @@ can use its camera and display the family view.
 
 ## Safety boundary
 
-The deployment does not modify `backend/` or `demo-relay/`. Verify before every
-release:
+The deployment does not modify Backend or Relay runtime code/contracts. It
+supplies a versioned roadshow-only Mock history fixture through the Backend
+loader's existing `--fixture` seam so its grouped `occurrence_count` totals
+match the rich Family timeline. Verify runtime code before every release:
 
 ```bash
 git diff --name-status origin/develop/akira -- backend demo-relay
@@ -64,10 +66,22 @@ No Reme HTTP port is published on the host. The existing Caddy container
 reaches `reme-frontend:8080`, `reme-backend:8770`, and `reme-relay:8787` through
 the shared Docker network. After Relay becomes healthy, the one-shot
 `reme-history-loader` container runs the repository owner's
-`reme.runtime.history.demo_loader --skip-summaries`. This mirrors local startup:
-it publishes the versioned, explicitly labeled mock history fixture to Relay
-without making a MiMo API request. Family never generates or falls back to this
-fixture in the browser.
+`reme.runtime.history.demo_loader`. It validates and publishes the versioned,
+explicitly labeled Mock fixture, then calls MiMo through Backend and publishes
+the validated summary state to Relay. The MiMo Key stays in the Backend env;
+Family never receives it and never generates or falls back to fixed summary
+copy in the browser. Summary cache data stays in the `backend-artifacts` volume
+and is keyed by the normalized timeline revision/input hash, so an unchanged
+release does not call MiMo again on every page visit.
+
+The roadshow fixture defaults to
+`deploy/vps/fixtures/reme-aug-2026-family-summary-v2.json`. Override it only
+with another reviewed `reme-history-fixture/v1` file:
+
+```bash
+REME_HISTORY_FIXTURE_FILE=/absolute/path/to/reviewed-fixture.json \
+  docker compose -f deploy/vps/compose.roadshow.yaml up -d --build
+```
 
 Append `Caddyfile.roadshow` as its own site block, then validate before reload:
 
@@ -123,8 +137,9 @@ docker exec biaoshu-caddy wget -qO- http://reme-relay:8787/health
 docker exec biaoshu-caddy wget -qO- http://reme-frontend:8080/healthz
 ```
 
-The expected loader result is `exited 0`. Its logs list only published fixture
-dates and revisions; they must not print the runtime token or MiMo key.
+The expected loader result is `exited 0`. Its logs list published fixture and
+summary dates, revisions, and `ready`/`unavailable` status only; they must not
+print the runtime token, MiMo key, prompt, or completion.
 
 After DNS and Caddy TLS are active, verify `/home`, `/family`, and `/debug` in
 the browser. Do not claim TURN transport, two-device media, physical-device

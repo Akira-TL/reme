@@ -510,6 +510,17 @@ export function projectRemeDiarySummary(state) {
   });
 }
 
+export function selectRemeDiarySummaryForDisplay({ summaryState, dayState, displayDay }) {
+  if (!summaryState || !dayState || !displayDay) return null;
+  if (summaryState.date !== displayDay.dateKey
+    || dayState.date !== displayDay.dateKey
+    || summaryState.input_timeline_revision !== dayState.revision
+    || summaryState.status !== "ready") return null;
+  const summary = projectRemeDiarySummary(summaryState);
+  if (!summary || summary.input_event_count !== displayDay.totalCount) return null;
+  return summary;
+}
+
 export function useRemeHistory({ selectedDateKey, revisionHint = null, enabled = true }) {
   const [dateIndex, setDateIndex] = useState(null);
   const [dayState, setDayState] = useState(null);

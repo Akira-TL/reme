@@ -77,7 +77,8 @@ services:
       - python
       - -m
       - reme.runtime.history.demo_loader
-      - --skip-summaries
+      - --fixture
+      - /run/reme/reme-family-history.json
     depends_on:
       relay:
         condition: service_healthy
@@ -85,6 +86,7 @@ services:
       - /tmp
     volumes:
       - backend-artifacts:/app/artifacts
+      - ${REME_HISTORY_FIXTURE_FILE:-./fixtures/reme-aug-2026-family-summary-v2.json}:/run/reme/reme-family-history.json:ro
     networks:
       - proxy
 

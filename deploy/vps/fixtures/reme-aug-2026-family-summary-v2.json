@@ -1,0 +1,164 @@
+{
+  "schema_version": "reme-history-fixture/v1",
+  "dataset_id": "reme-aug-2026-demo-v1",
+  "mode": "mock_fixture",
+  "timezone": "Asia/Shanghai",
+  "revision": 2,
+  "coverage": [
+    {"date":"2026-08-04","status":"complete","start_at_ms":1785772800000,"end_at_ms":1785859199999,"observed_hours":24,"missing_intervals":[]},
+    {"date":"2026-08-05","status":"complete","start_at_ms":1785859200000,"end_at_ms":1785945599999,"observed_hours":24,"missing_intervals":[]},
+    {"date":"2026-08-06","status":"complete","start_at_ms":1785945600000,"end_at_ms":1786031999999,"observed_hours":24,"missing_intervals":[]},
+    {"date":"2026-08-07","status":"complete","start_at_ms":1786032000000,"end_at_ms":1786118399999,"observed_hours":24,"missing_intervals":[]},
+    {"date":"2026-08-08","status":"complete","start_at_ms":1786118400000,"end_at_ms":1786204799999,"observed_hours":24,"missing_intervals":[]},
+    {"date":"2026-08-09","status":"complete","start_at_ms":1786204800000,"end_at_ms":1786291199999,"observed_hours":24,"missing_intervals":[]},
+    {"date":"2026-08-10","status":"complete","start_at_ms":1786291200000,"end_at_ms":1786377599999,"observed_hours":24,"missing_intervals":[]},
+    {"date":"2026-08-11","status":"complete","start_at_ms":1786377600000,"end_at_ms":1786463999999,"observed_hours":24,"missing_intervals":[]}
+  ],
+  "events": [
+    {
+      "event_id":"evt-pose-20260804-0810","kind":"activity","occurred_at_ms":1785802200000,"recorded_at_ms":1785802200900,
+      "room":"living","fact_type":"posture_activity","fact":"从卧室方向起身后在客厅短距离移动","detail":"只描述匿名姿态与空间变化，不推断具体意图。","occurrence_count":28,"related":[],
+      "source":{"type":"pose_observation","mode":"mock_fixture","confidence":null}
+    },
+    {
+      "event_id":"evt-device-20260804-light-1205","kind":"device","occurred_at_ms":1785816300000,"recorded_at_ms":1785816300400,
+      "room":"living","device":{"device_id":"demo-light-living","device_type":"light","capability":"power"},"action":"turned_on","value":{"power":"on"},"fact":"客厅灯开启","occurrence_count":3,
+      "source":{"type":"smart_home_event","mode":"mock_fixture","adapter":"demo_fixture"}
+    },
+    {
+      "event_id":"care-20260804-1542","kind":"care_thread","thread_id":"thread-20260804-1542","occurred_at_ms":1785829320000,"recorded_at_ms":1785829560000,"status":"closed",
+      "assessment":{"title":"静坐间隔出现变化，MiMo 先进行非诊断性问候","basis":"Mock 姿态窗口相对同一时段基线出现变化，原因仍不确定。","suggested_action":"以本人回应为准，继续安静观察","uncertainty":"medium","source":"mimo","baseline":{"version":"mock-baseline-v1","comparison_period":"same_daypart","sample_count":7},"visual_context":{"sent_to_mimo":false,"type":null,"sample_count":null}},
+      "check_in":{"asked_at_ms":1785829320000,"prompt":"今天感觉怎么样？需要我帮你联系家里人吗？"},
+      "response":{"received_at_ms":1785829500000,"status":"received","summary":"本人回应正在休息，目前不需要帮助。","consent_scope":null},
+      "material":null,"delivery":null,"source":{"mode":"mock_fixture"}
+    },
+
+    {
+      "event_id":"evt-pose-20260805-0810","kind":"activity","occurred_at_ms":1785888600000,"recorded_at_ms":1785888600900,
+      "room":"living","fact_type":"posture_activity","fact":"上午客厅出现连续坐姿与数次短时起身","detail":"只描述姿态窗口，不据此判断健康、睡眠或情绪。","occurrence_count":27,"related":[],
+      "source":{"type":"pose_observation","mode":"mock_fixture","confidence":null}
+    },
+    {
+      "event_id":"evt-device-20260805-fridge-1205","kind":"device","occurred_at_ms":1785902700000,"recorded_at_ms":1785902700400,
+      "room":"kitchen","device":{"device_id":"demo-fridge-1","device_type":"refrigerator","capability":"door_state"},"action":"door_opened","value":{"door":"open"},"fact":"冰箱门打开","occurrence_count":2,
+      "source":{"type":"smart_home_event","mode":"mock_fixture","adapter":"demo_fixture"}
+    },
+    {
+      "event_id":"care-20260805-1542","kind":"care_thread","thread_id":"thread-20260805-1542","occurred_at_ms":1785915720000,"recorded_at_ms":1785915960000,"status":"closed",
+      "assessment":{"title":"午后活动间隔拉长，MiMo 轻声确认","basis":"Mock 活动窗口出现较长静止间隔，无法据此判断当时在做什么。","suggested_action":"等待本人回应，不对原因定性","uncertainty":"high","source":"mimo","baseline":{"version":"mock-baseline-v1","comparison_period":"same_daypart","sample_count":7},"visual_context":{"sent_to_mimo":false,"type":null,"sample_count":null}},
+      "check_in":{"asked_at_ms":1785915720000,"prompt":"下午好，刚才安静了一会儿，需要我做什么吗？"},
+      "response":{"received_at_ms":1785915900000,"status":"received","summary":"本人回应正在看电视，目前不需要帮助。","consent_scope":null},
+      "material":null,"delivery":null,"source":{"mode":"mock_fixture"}
+    },
+
+    {
+      "event_id":"evt-pose-20260806-0810","kind":"activity","occurred_at_ms":1785975000000,"recorded_at_ms":1785975000900,
+      "room":"living","fact_type":"posture_activity","fact":"清晨到上午出现坐姿、站立与短距离移动片段","detail":"只描述匿名姿态变化。","occurrence_count":27,"related":[],
+      "source":{"type":"pose_observation","mode":"mock_fixture","confidence":null}
+    },
+    {
+      "event_id":"evt-device-20260806-speaker-1205","kind":"device","occurred_at_ms":1785989100000,"recorded_at_ms":1785989100400,
+      "room":"living","device":{"device_id":"demo-speaker-1","device_type":"speaker","capability":"playback"},"action":"play_started","value":{"content_type":"radio"},"fact":"客厅音响开始播放广播","occurrence_count":1,
+      "source":{"type":"smart_home_event","mode":"mock_fixture","adapter":"demo_fixture"}
+    },
+    {
+      "event_id":"care-20260806-1542","kind":"care_thread","thread_id":"thread-20260806-1542","occurred_at_ms":1786002120000,"recorded_at_ms":1786002360000,"status":"closed",
+      "assessment":{"title":"上午坐姿片段较集中，MiMo 保持低打扰问候","basis":"Mock 窗口中坐姿比例略有变化，仍不能判断具体原因。","suggested_action":"轻声确认后继续观察","uncertainty":"medium","source":"mimo","baseline":{"version":"mock-baseline-v1","comparison_period":"same_daypart","sample_count":7},"visual_context":{"sent_to_mimo":false,"type":null,"sample_count":null}},
+      "check_in":{"asked_at_ms":1786002120000,"prompt":"今天上午还顺利吗？有需要就告诉我。"},
+      "response":{"received_at_ms":1786002300000,"status":"received","summary":"本人回应一切正常。","consent_scope":null},
+      "material":null,"delivery":null,"source":{"mode":"mock_fixture"}
+    },
+
+    {
+      "event_id":"evt-pose-20260807-0810","kind":"activity","occurred_at_ms":1786061400000,"recorded_at_ms":1786061400900,
+      "room":"kitchen","fact_type":"posture_activity","fact":"厨房出现站立与台面附近短距离移动","detail":"只描述姿态与空间变化，不推断菜品或进食结果。","occurrence_count":26,"related":[],
+      "source":{"type":"pose_observation","mode":"mock_fixture","confidence":null}
+    },
+    {
+      "event_id":"evt-device-20260807-hood-1205","kind":"device","occurred_at_ms":1786075500000,"recorded_at_ms":1786075500400,
+      "room":"kitchen","device":{"device_id":"demo-hood-1","device_type":"range_hood","capability":"power"},"action":"turned_on","value":{"power":"on"},"fact":"烟机开启","occurrence_count":1,
+      "source":{"type":"smart_home_event","mode":"mock_fixture","adapter":"demo_fixture"}
+    },
+    {
+      "event_id":"care-20260807-1542","kind":"care_thread","thread_id":"thread-20260807-1542","occurred_at_ms":1786088520000,"recorded_at_ms":1786088760000,"status":"closed",
+      "assessment":{"title":"厨房活动结束后出现较长安静间隔，MiMo 进行问候","basis":"仅依据 Mock 匿名活动片段与设备事件，不把烟机开启解释为已经完成做饭。","suggested_action":"确认本人是否需要帮助","uncertainty":"medium","source":"mimo","baseline":{"version":"mock-baseline-v1","comparison_period":"same_daypart","sample_count":7},"visual_context":{"sent_to_mimo":false,"type":null,"sample_count":null}},
+      "check_in":{"asked_at_ms":1786088520000,"prompt":"刚才忙了一阵，现在需要我帮忙吗？"},
+      "response":{"received_at_ms":1786088700000,"status":"received","summary":"本人回应不用帮忙，准备休息。","consent_scope":null},
+      "material":null,"delivery":null,"source":{"mode":"mock_fixture"}
+    },
+
+    {
+      "event_id":"evt-pose-20260808-0810","kind":"activity","occurred_at_ms":1786147800000,"recorded_at_ms":1786147800900,
+      "room":"living","fact_type":"posture_activity","fact":"上午客厅出现短距离走动与坐姿片段","detail":"只描述匿名姿态变化。","occurrence_count":25,"related":[],
+      "source":{"type":"pose_observation","mode":"mock_fixture","confidence":null}
+    },
+    {
+      "event_id":"evt-device-20260808-ac-1205","kind":"device","occurred_at_ms":1786161900000,"recorded_at_ms":1786161900400,
+      "room":"living","device":{"device_id":"demo-ac-living","device_type":"air_conditioner","capability":"target_temperature"},"action":"turned_on","value":{"power":"on","target_celsius":26},"fact":"客厅空调开启并设置为 26℃","occurrence_count":1,
+      "source":{"type":"smart_home_event","mode":"mock_fixture","adapter":"demo_fixture"}
+    },
+    {
+      "event_id":"care-20260808-1542","kind":"care_thread","thread_id":"thread-20260808-1542","occurred_at_ms":1786174920000,"recorded_at_ms":1786175160000,"status":"closed",
+      "assessment":{"title":"午后起身间隔比 Mock 基线稍长，MiMo 主动问候","basis":"Mock 同时段活动间隔出现变化，但样本只用于比赛演示。","suggested_action":"以本人回应为准","uncertainty":"medium","source":"mimo","baseline":{"version":"mock-baseline-v1","comparison_period":"same_daypart","sample_count":7},"visual_context":{"sent_to_mimo":false,"type":null,"sample_count":null}},
+      "check_in":{"asked_at_ms":1786174920000,"prompt":"下午休息得怎么样？需要我提醒家里人吗？"},
+      "response":{"received_at_ms":1786175100000,"status":"received","summary":"本人回应正在乘凉，不需要通知家里人。","consent_scope":null},
+      "material":null,"delivery":null,"source":{"mode":"mock_fixture"}
+    },
+
+    {
+      "event_id":"evt-pose-20260809-0810","kind":"activity","occurred_at_ms":1786234200000,"recorded_at_ms":1786234200900,
+      "room":"kitchen","fact_type":"posture_activity","fact":"厨房灶台与水槽附近出现站立和短距离移动","detail":"只描述匿名姿态与空间变化，菜名必须来自本人确认或有能力的设备来源。","occurrence_count":36,"related":[{"occurred_at_ms":1786246200000,"fact":"移动到餐桌附近"}],
+      "source":{"type":"pose_observation","mode":"mock_fixture","confidence":null}
+    },
+    {
+      "event_id":"evt-device-20260809-fridge-1042","kind":"device","occurred_at_ms":1786243320000,"recorded_at_ms":1786243320400,
+      "room":"kitchen","device":{"device_id":"demo-fridge-1","device_type":"refrigerator","capability":"inventory_event"},"action":"items_removed","value":{"items":["番茄","鸡蛋"]},"fact":"冰箱取出番茄和鸡蛋","occurrence_count":1,
+      "source":{"type":"smart_home_event","mode":"mock_fixture","adapter":"demo_fixture"}
+    },
+    {
+      "event_id":"care-20260809-1136","kind":"care_thread","thread_id":"thread-20260809-1136","occurred_at_ms":1786246560000,"recorded_at_ms":1786246800000,"status":"delivered",
+      "assessment":{"title":"午饭准备形成多源记录，MiMo 邀请本人确认是否分享","basis":"冰箱、烟机/灶具和匿名姿态形成多源记录；菜名只采用本人确认。","suggested_action":"先询问本人是否愿意分享","uncertainty":"low","source":"mimo","baseline":{"version":"mock-baseline-v1","comparison_period":"same_daypart","sample_count":7},"visual_context":{"sent_to_mimo":false,"type":null,"sample_count":null}},
+      "check_in":{"asked_at_ms":1786246560000,"prompt":"午饭做好了吗？要不要把今天的菜告诉女儿？"},
+      "response":{"received_at_ms":1786246740000,"status":"received","summary":"本人确认菜品并同意分享给女儿。","consent_scope":"family_material_share"},
+      "material":{"material_id":"material-20260809-lunch","status":"ready","label":"今日午饭 · 家庭分享","summary":"本人确认今天准备了两道菜，并同意与女儿分享。","facts":[{"event_id":"evt-device-20260809-fridge-1042","text":"10:42 冰箱取出番茄和鸡蛋"}],"attachment":{"type":"skeleton_clip","status":"metadata_only","duration_seconds":18,"privacy_mode":"skeleton","asset_id":null},"generated_by":"mimo"},
+      "delivery":{"recipient_label":"女儿","status":"mock_delivered","delivered_at_ms":1786246800000,"transport_receipt_id":null},
+      "source":{"mode":"mock_fixture"}
+    },
+
+    {
+      "event_id":"evt-pose-20260810-0810","kind":"activity","occurred_at_ms":1786320600000,"recorded_at_ms":1786320600900,
+      "room":"living","fact_type":"posture_activity","fact":"上午客厅出现起身、短距离移动和坐姿片段","detail":"只描述匿名姿态变化。","occurrence_count":27,"related":[],
+      "source":{"type":"pose_observation","mode":"mock_fixture","confidence":null}
+    },
+    {
+      "event_id":"evt-device-20260810-lock-1205","kind":"device","occurred_at_ms":1786334700000,"recorded_at_ms":1786334700400,
+      "room":"entry","device":{"device_id":"demo-lock-1","device_type":"door_lock","capability":"lock_state"},"action":"unlocked","value":{"lock":"unlocked"},"fact":"门锁解锁","occurrence_count":1,
+      "source":{"type":"smart_home_event","mode":"mock_fixture","adapter":"demo_fixture"}
+    },
+    {
+      "event_id":"care-20260810-1542","kind":"care_thread","thread_id":"thread-20260810-1542","occurred_at_ms":1786347720000,"recorded_at_ms":1786347960000,"status":"closed",
+      "assessment":{"title":"午后活动片段减少，MiMo 进行低打扰确认","basis":"Mock 同时段活动片段数量减少；单个门锁事件不用于判断具体成员已出门或回家。","suggested_action":"轻声询问本人情况","uncertainty":"high","source":"mimo","baseline":{"version":"mock-baseline-v1","comparison_period":"same_daypart","sample_count":7},"visual_context":{"sent_to_mimo":false,"type":null,"sample_count":null}},
+      "check_in":{"asked_at_ms":1786347720000,"prompt":"下午好，今天还顺利吗？"},
+      "response":{"received_at_ms":1786347900000,"status":"received","summary":"本人回应一切正常。","consent_scope":null},
+      "material":null,"delivery":null,"source":{"mode":"mock_fixture"}
+    },
+
+    {
+      "event_id":"evt-pose-20260811-0810","kind":"activity","occurred_at_ms":1786407000000,"recorded_at_ms":1786407000900,
+      "room":"living","fact_type":"posture_activity","fact":"上午客厅出现坐姿和短距离移动片段","detail":"只描述匿名姿态变化。","occurrence_count":28,"related":[],
+      "source":{"type":"pose_observation","mode":"mock_fixture","confidence":null}
+    },
+    {
+      "event_id":"evt-device-20260811-water-1205","kind":"device","occurred_at_ms":1786421100000,"recorded_at_ms":1786421100400,
+      "room":"bathroom","device":{"device_id":"demo-water-heater-1","device_type":"water_heater","capability":"water_use_scene"},"action":"water_use_started","value":{"scene":"water_use"},"fact":"热水器进入用水场景","occurrence_count":1,
+      "source":{"type":"smart_home_event","mode":"mock_fixture","adapter":"demo_fixture"}
+    },
+    {
+      "event_id":"care-20260811-1542","kind":"care_thread","thread_id":"thread-20260811-1542","occurred_at_ms":1786434120000,"recorded_at_ms":1786434360000,"status":"closed",
+      "assessment":{"title":"午后出现较长安静间隔，MiMo 进行问候","basis":"Mock 匿名活动窗口出现变化；热水器用水场景不能单独证明本人已经沐浴。","suggested_action":"只询问本人是否需要帮助","uncertainty":"medium","source":"mimo","baseline":{"version":"mock-baseline-v1","comparison_period":"same_daypart","sample_count":7},"visual_context":{"sent_to_mimo":false,"type":null,"sample_count":null}},
+      "check_in":{"asked_at_ms":1786434120000,"prompt":"下午好，需要我帮你做什么吗？"},
+      "response":{"received_at_ms":1786434300000,"status":"received","summary":"本人回应目前不需要帮助。","consent_scope":null},
+      "material":null,"delivery":null,"source":{"mode":"mock_fixture"}
+    }
+  ]
+}

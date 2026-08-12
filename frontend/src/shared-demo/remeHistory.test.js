@@ -8,6 +8,7 @@ import {
   parseRemeTimelineDay,
   projectRemeDiarySummary,
   projectRemeTimelineDay,
+  selectRemeDiarySummaryForDisplay,
 } from "./remeHistory.js";
 import { createViewerState, reduceViewerState } from "./viewerState.js";
 
@@ -180,6 +181,56 @@ test("date index and Backend diary summary use the frozen P0 schemas", () => {
   const summary = projectRemeDiarySummary(state);
   assert.equal(summary.schema_version, "reme-diary-summary-state/v1");
   assert.equal(summary.headline, "上午完成午饭准备与一次家庭分享");
+});
+
+test("Family displays only a MiMo summary for the same day revision and Mock count", () => {
+  const dayState = parseRemeTimelineDay(dayPayload());
+  const summaryState = parseRemeDiarySummaryState({
+    schema_version: "reme-diary-summary-state/v1",
+    dataset_id: DATASET,
+    mode: "mock_fixture",
+    date: "2026-08-09",
+    revision: 2,
+    input_timeline_revision: 3,
+    status: "ready",
+    updated_at_ms: 1_786_333_200_000,
+    error_code: null,
+    summary: {
+      headline: "真实 MiMo 摘要",
+      summary: "只基于 Backend 已校验的 Mock 结构化记录。",
+      highlights: [],
+      care_note: "",
+      uncertainty: "medium",
+      source: "mimo",
+      model: "mimo-v2.5",
+      generated_at_ms: 1_786_333_197_000,
+      input_event_count: 4,
+      latency_ms: 9080.4,
+      attempts: 1,
+    },
+  });
+  const displayDay = { dateKey: "2026-08-09", totalCount: 4 };
+
+  assert.equal(selectRemeDiarySummaryForDisplay({
+    summaryState,
+    dayState,
+    displayDay,
+  }).headline, "真实 MiMo 摘要");
+  assert.equal(selectRemeDiarySummaryForDisplay({
+    summaryState,
+    dayState,
+    displayDay: { ...displayDay, totalCount: 30 },
+  }), null);
+  assert.equal(selectRemeDiarySummaryForDisplay({
+    summaryState: { ...summaryState, input_timeline_revision: 2 },
+    dayState,
+    displayDay,
+  }), null);
+  assert.equal(selectRemeDiarySummaryForDisplay({
+    summaryState: { ...summaryState, date: "2026-08-10" },
+    dayState,
+    displayDay,
+  }), null);
 });
 
 test("viewer v2 accepts reme_day_revision independently from room authority", () => {

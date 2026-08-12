@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildRemeRecordingDateOptions,
+  defaultRemeRecordingDateKey,
   getRemeMockRecordings,
   REME_MOCK_RECORDING_DATES,
 } from "./remeMockRecordings.js";
@@ -48,4 +50,28 @@ test("August 9 contains living, kitchen and night safety demo recordings", () =>
   ]);
   assert.equal(getRemeMockRecordings("2026-08-11").length, 2);
   assert.deepEqual(getRemeMockRecordings("2026-08-12"), []);
+});
+
+test("recording history defaults to the newest playable demo day and keeps today compact", () => {
+  assert.equal(defaultRemeRecordingDateKey("2026-08-12"), "2026-08-11");
+  assert.equal(defaultRemeRecordingDateKey("2026-08-09"), "2026-08-09");
+
+  const options = buildRemeRecordingDateOptions("2026-08-12");
+  assert.deepEqual(options.map((option) => option.dateKey), [
+    "2026-08-12",
+    "2026-08-11",
+    "2026-08-10",
+    "2026-08-09",
+    "2026-08-08",
+    "2026-08-07",
+    "2026-08-06",
+    "2026-08-05",
+    "2026-08-04",
+  ]);
+  assert.deepEqual(options[0], {
+    dateKey: "2026-08-12",
+    isToday: true,
+    mockRecordingCount: 0,
+  });
+  assert.equal(options[1].mockRecordingCount, 2);
 });
