@@ -1,6 +1,11 @@
 export const FAMILY_TIMELINE_MOCK_START_DATE = "2026-08-04";
 export const FAMILY_TIMELINE_MOCK_END_DATE = "2026-08-11";
-export const FAMILY_TIMELINE_REALTIME_START_DATE = "2026-08-12";
+export const FAMILY_TIMELINE_DISPLAY_END_DATE = "2026-08-11";
+export const FAMILY_TIMELINE_REALTIME_CUTOFF = "2026-08-12T00:00:00+08:00";
+export const FAMILY_TIMELINE_REALTIME_CUTOFF_MS = Date.parse(FAMILY_TIMELINE_REALTIME_CUTOFF);
+
+const MOCK_CUTOFF_DAY = 12;
+const MOCK_CUTOFF_HOUR = 0;
 
 const WEEKDAY_COPY = Object.freeze(["日", "一", "二", "三", "四", "五", "六"]);
 
@@ -395,6 +400,18 @@ function timestamp(day, hour, minute) {
   return Date.parse(`${dateKeyForDay(day)}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+08:00`);
 }
 
+function isBeforeRealtimeCutoff(day, hour) {
+  return day < MOCK_CUTOFF_DAY || (day === MOCK_CUTOFF_DAY && hour < MOCK_CUTOFF_HOUR);
+}
+
+function daypartIdForHour(hour) {
+  if (hour < 6) return "night";
+  if (hour < 10) return "early";
+  if (hour < 12) return "morning";
+  if (hour < 18) return "afternoon";
+  return "evening";
+}
+
 function mockResponse({ day, hour, minute, title }) {
   const dateKey = dateKeyForDay(day);
   return Object.freeze({
@@ -486,7 +503,7 @@ function mockAssessment({
   });
 }
 
-export const FAMILY_TIMELINE_MOCK_EVENTS = Object.freeze([
+const ALL_FAMILY_TIMELINE_MOCK_EVENTS = [
   mockAssessment({
     day: 4,
     daypartId: "morning",
@@ -703,7 +720,14 @@ export const FAMILY_TIMELINE_MOCK_EVENTS = Object.freeze([
     progress: "没有待处理事项",
     uncertainty: "high",
   }),
-]);
+];
+
+export const FAMILY_TIMELINE_MOCK_EVENTS = Object.freeze(
+  ALL_FAMILY_TIMELINE_MOCK_EVENTS.filter((event) => {
+    const date = new Date(event.timestampMs);
+    return isBeforeRealtimeCutoff(date.getDate(), date.getHours());
+  }),
+);
 
 function mockMoment(day, daypartId, template, templateIndex) {
   const dateKey = dateKeyForDay(day);
@@ -737,10 +761,15 @@ function mockMoment(day, daypartId, template, templateIndex) {
 function buildMockDay(day) {
   const dateKey = dateKeyForDay(day);
   const careEvents = FAMILY_TIMELINE_MOCK_EVENTS.filter((event) => event.dateKey === dateKey);
+  const templates = Object.values(DAILY_MOMENTS[day]).flat();
   const sections = FAMILY_TIMELINE_MOCK_DAYPARTS.map((daypart) => {
-    const moments = DAILY_MOMENTS[day][daypart.id].map((template, templateIndex) => (
-      mockMoment(day, daypart.id, template, templateIndex)
-    ));
+    const moments = templates
+      .map((template, templateIndex) => ({ template, templateIndex }))
+      .filter(({ template }) => (
+        isBeforeRealtimeCutoff(day, template.hour)
+        && daypartIdForHour(template.hour) === daypart.id
+      ))
+      .map(({ template, templateIndex }) => mockMoment(day, daypart.id, template, templateIndex));
     const entries = [
       ...moments,
       ...careEvents.filter((event) => event.daypartId === daypart.id),
@@ -763,9 +792,11 @@ function buildMockDay(day) {
     day,
     weekday: WEEKDAY_COPY[date.getDay()],
     source: "mock_fixture",
+    fixtureOwner: "frontend_bundle",
     sourceMode: "mock",
     coverageHours: 24,
     coverageStatus: "complete",
+    revision: 0,
     totalCount: sections.reduce((total, section) => total + section.count, 0),
     activityCount: sections.reduce((total, section) => total + section.activityCount, 0),
     deviceCount: sections.reduce((total, section) => total + section.deviceCount, 0),
@@ -778,6 +809,19 @@ export const FAMILY_TIMELINE_MOCK_DAYS = Object.freeze(
   Array.from({ length: 8 }, (_, dayIndex) => buildMockDay(4 + dayIndex)),
 );
 
+export const FAMILY_TIMELINE_DISPLAY_DAYS = Object.freeze(
+  Array.from({ length: 8 }, (_, dayIndex) => {
+    const day = 4 + dayIndex;
+    const date = new Date(2026, 7, day, 12, 0, 0, 0);
+    return Object.freeze({
+      dateKey: dateKeyForDay(day),
+      day,
+      weekday: WEEKDAY_COPY[date.getDay()],
+      sourceMode: "mock",
+    });
+  }),
+);
+
 export function getFamilyTimelineMockDay(dateKey) {
   return FAMILY_TIMELINE_MOCK_DAYS.find((day) => day.dateKey === dateKey) || null;
 }
@@ -785,4 +829,9 @@ export function getFamilyTimelineMockDay(dateKey) {
 export function isFamilyTimelineMockDate(dateKey) {
   return dateKey >= FAMILY_TIMELINE_MOCK_START_DATE
     && dateKey <= FAMILY_TIMELINE_MOCK_END_DATE;
+}
+
+export function isFamilyTimelineDisplayDate(dateKey) {
+  return dateKey >= FAMILY_TIMELINE_MOCK_START_DATE
+    && dateKey <= FAMILY_TIMELINE_DISPLAY_END_DATE;
 }

@@ -8,9 +8,119 @@ import {
   createRecvOnlyOffer,
   hasLiveVideoTrack,
   normalizeIceCandidate,
+  summarizeViewerMediaStats,
   VIEWER_DISCONNECT_GRACE_MS,
   VIEWER_NEGOTIATION_TIMEOUT_MS,
 } from "./useViewerMedia.js";
+
+test("Viewer stats expose the selected TURN pair and non-zero inbound video", () => {
+  const report = new Map([
+    ["transport-1", {
+      id: "transport-1",
+      type: "transport",
+      selectedCandidatePairId: "pair-1",
+    }],
+    ["pair-1", {
+      id: "pair-1",
+      type: "candidate-pair",
+      state: "succeeded",
+      nominated: true,
+      localCandidateId: "local-1",
+      remoteCandidateId: "remote-1",
+      bytesReceived: 9123,
+      bytesSent: 456,
+      currentRoundTripTime: 0.042,
+    }],
+    ["local-1", {
+      id: "local-1",
+      type: "local-candidate",
+      candidateType: "relay",
+      protocol: "udp",
+      relayProtocol: "udp",
+    }],
+    ["remote-1", {
+      id: "remote-1",
+      type: "remote-candidate",
+      candidateType: "srflx",
+      protocol: "udp",
+    }],
+    ["video-1", {
+      id: "video-1",
+      type: "inbound-rtp",
+      kind: "video",
+      bytesReceived: 8192,
+      framesReceived: 63,
+      framesDecoded: 61,
+      framesDropped: 2,
+      packetsReceived: 128,
+      packetsLost: 1,
+      jitter: 0.003,
+    }],
+    ["audio-1", {
+      id: "audio-1",
+      type: "inbound-rtp",
+      kind: "audio",
+      bytesReceived: 999,
+    }],
+  ]);
+
+  assert.deepEqual(summarizeViewerMediaStats(report, 1234), {
+    status: "sampled",
+    sampledAtMs: 1234,
+    selectedCandidatePair: {
+      id: "pair-1",
+      state: "succeeded",
+      transport: "turn",
+      protocol: "udp",
+      relayProtocol: "udp",
+      localCandidateType: "relay",
+      remoteCandidateType: "srflx",
+      bytesReceived: 9123,
+      bytesSent: 456,
+      currentRoundTripTime: 0.042,
+    },
+    inboundVideo: {
+      bytesReceived: 8192,
+      framesReceived: 63,
+      framesDecoded: 61,
+      framesDropped: 2,
+      packetsReceived: 128,
+      packetsLost: 1,
+      jitter: 0.003,
+    },
+    error: null,
+  });
+});
+
+test("Viewer stats combine multiple video SSRCs and leave absent metrics explicit", () => {
+  const summary = summarizeViewerMediaStats([
+    {
+      id: "pair-legacy",
+      type: "candidate-pair",
+      selected: true,
+      state: "succeeded",
+      localCandidateId: "host",
+      remoteCandidateId: "remote",
+    },
+    { id: "host", type: "local-candidate", candidateType: "host", protocol: "tcp" },
+    { id: "remote", type: "remote-candidate", candidateType: "host", protocol: "tcp" },
+    { id: "video-a", type: "inbound-rtp", mediaType: "video", bytesReceived: 4, framesDecoded: 1 },
+    { id: "video-b", type: "inbound-rtp", kind: "video", bytesReceived: 6, framesDecoded: 2 },
+  ], 2000);
+
+  assert.equal(summary.selectedCandidatePair.transport, "direct");
+  assert.equal(summary.selectedCandidatePair.protocol, "tcp");
+  assert.equal(summary.selectedCandidatePair.bytesReceived, null);
+  assert.deepEqual(summary.inboundVideo, {
+    bytesReceived: 10,
+    framesReceived: null,
+    framesDecoded: 3,
+    framesDropped: null,
+    packetsReceived: null,
+    packetsLost: null,
+    jitter: null,
+  });
+});
 
 test("Viewer removes the remote track listener on cleanup and fails closed on ended", () => {
   const listeners = new Map();

@@ -42,7 +42,6 @@ import { useFallLiveLink } from "./useFallLiveLink";
 import { useLiveVideoSource } from "./useLiveVideoSource";
 import { useMonitorMediaProducer } from "./useMonitorMediaProducer";
 import { useMonitorRelay } from "./useMonitorRelay";
-import { useRemeLocalRecorder } from "./useRemeLocalRecorder.js";
 import { useRtcConfiguration } from "../shared-demo/useRtcConfiguration.js";
 
 const SCENE_ICONS = {
@@ -238,22 +237,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
     sourceStatus,
     source: sourceDescriptor,
   } = media;
-  const localRecorder = useRemeLocalRecorder({
-    enabled: Boolean(
-      !debugInterface
-      && demoStarted
-      && media.ready
-      && media.backendSkeletonActive
-      && media.recordingStream
-      && liveRuntime?.sessionId
-      && sceneId !== "bathroom",
-    ),
-    stream: media.recordingStream,
-    sceneId,
-    sceneLabel: scene.room,
-    runtimeSessionId: liveRuntime?.sessionId || null,
-    sourceGeneration: media.sourceGeneration,
-  });
 
   const bindCaptureVideo = useCallback((node) => {
     videoRef.current = node;
@@ -1042,29 +1025,6 @@ export function TypicalDemoApp({ surface = "debug" }) {
         onRevokeControl={revokeRemoteControl}
         nowMs={grantClockMs}
       />
-
-      {!debugInterface && demoStarted && (
-        <section
-          className={`local-recording-status is-${sceneId === "bathroom" ? "paused" : localRecorder.status}`}
-          role="status"
-          aria-live="polite"
-        >
-          <span><VideocamRoundedIcon /></span>
-          <div>
-            <b>{sceneId === "bathroom"
-              ? "浴室不保存录像"
-              : ["recording", "saving"].includes(localRecorder.status)
-                ? "本机录像片段正在保存"
-                : localRecorder.status === "error" || localRecorder.status === "unsupported"
-                  ? "本机录像暂不可用"
-                  : "正在等待录像流"}</b>
-            <p>{sceneId === "bathroom"
-              ? "隐私场景只保留必要的姿态状态。"
-              : localRecorder.error || "匿名骨架短片只保存在这台浏览器，家属端的录像时间线可直接回看。"}</p>
-          </div>
-          <em>{localRecorder.savedCount} 段</em>
-        </section>
-      )}
 
       {debugInterface && (
         <nav className="scene-tabs" aria-label="选择典型演示场景">

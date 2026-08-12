@@ -3,7 +3,100 @@ import { createMediaSignal } from "./protocol.js";
 
 export const VIEWER_NEGOTIATION_TIMEOUT_MS = 7_000;
 export const VIEWER_DISCONNECT_GRACE_MS = 2_000;
+export const VIEWER_MEDIA_STATS_INTERVAL_MS = 1_000;
 const LOCAL_RTC_CONFIGURATION = Object.freeze({ iceServers: Object.freeze([]) });
+
+const EMPTY_MEDIA_DIAGNOSTICS = Object.freeze({
+  status: "idle",
+  sampledAtMs: null,
+  selectedCandidatePair: null,
+  inboundVideo: null,
+  error: null,
+});
+
+function statsEntries(report) {
+  if (!report) return [];
+  if (typeof report.values === "function") return [...report.values()];
+  if (typeof report.forEach === "function") {
+    const entries = [];
+    report.forEach((value) => entries.push(value));
+    return entries;
+  }
+  return Array.isArray(report) ? report : [];
+}
+
+function sumNumeric(entries, key) {
+  const values = entries
+    .map((entry) => entry?.[key])
+    .filter((value) => Number.isFinite(value));
+  return values.length > 0 ? values.reduce((total, value) => total + value, 0) : null;
+}
+
+function selectedCandidatePair(entries, byId) {
+  const transport = entries.find((entry) => (
+    entry?.type === "transport" && entry.selectedCandidatePairId
+  ));
+  if (transport) {
+    const selected = byId.get(transport.selectedCandidatePairId);
+    if (selected) return selected;
+  }
+  return entries.find((entry) => (
+    entry?.type === "candidate-pair"
+    && entry.selected === true
+    && entry.state === "succeeded"
+  )) || entries.find((entry) => (
+    entry?.type === "candidate-pair"
+    && entry.nominated === true
+    && entry.state === "succeeded"
+  )) || null;
+}
+
+export function summarizeViewerMediaStats(report, sampledAtMs = Date.now()) {
+  const entries = statsEntries(report);
+  const byId = new Map(entries
+    .filter((entry) => typeof entry?.id === "string")
+    .map((entry) => [entry.id, entry]));
+  const pair = selectedCandidatePair(entries, byId);
+  const localCandidate = pair ? byId.get(pair.localCandidateId) || null : null;
+  const remoteCandidate = pair ? byId.get(pair.remoteCandidateId) || null : null;
+  const inboundVideo = entries.filter((entry) => (
+    entry?.type === "inbound-rtp"
+    && entry.isRemote !== true
+    && (entry.kind === "video" || entry.mediaType === "video")
+  ));
+  const localCandidateType = localCandidate?.candidateType || null;
+  const remoteCandidateType = remoteCandidate?.candidateType || null;
+  const relaySelected = localCandidateType === "relay" || remoteCandidateType === "relay";
+
+  return Object.freeze({
+    status: "sampled",
+    sampledAtMs: Number.isFinite(sampledAtMs) ? sampledAtMs : null,
+    selectedCandidatePair: pair ? Object.freeze({
+      id: pair.id || null,
+      state: pair.state || null,
+      transport: relaySelected ? "turn" : "direct",
+      protocol: localCandidate?.protocol || remoteCandidate?.protocol || null,
+      relayProtocol: localCandidate?.relayProtocol || remoteCandidate?.relayProtocol || null,
+      localCandidateType,
+      remoteCandidateType,
+      bytesReceived: Number.isFinite(pair.bytesReceived) ? pair.bytesReceived : null,
+      bytesSent: Number.isFinite(pair.bytesSent) ? pair.bytesSent : null,
+      currentRoundTripTime: Number.isFinite(pair.currentRoundTripTime)
+        ? pair.currentRoundTripTime
+        : null,
+    }) : null,
+    inboundVideo: inboundVideo.length > 0 ? Object.freeze({
+      bytesReceived: sumNumeric(inboundVideo, "bytesReceived"),
+      framesReceived: sumNumeric(inboundVideo, "framesReceived"),
+      framesDecoded: sumNumeric(inboundVideo, "framesDecoded"),
+      framesDropped: sumNumeric(inboundVideo, "framesDropped"),
+      packetsReceived: sumNumeric(inboundVideo, "packetsReceived"),
+      packetsLost: sumNumeric(inboundVideo, "packetsLost"),
+      jitter: sumNumeric(inboundVideo, "jitter"),
+    }) : null,
+    error: null,
+  });
+}
 
 export function hasLiveVideoTrack(stream) {
   const tracks = typeof stream?.getVideoTracks === "function"
@@ -117,6 +210,7 @@ export function useViewerMedia({
   const [status, setStatus] = useState(grant ? "authorized" : "idle");
   const [error, setError] = useState(null);
   const [stream, setStream] = useState(null);
+  const [diagnostics, setDiagnostics] = useState(EMPTY_MEDIA_DIAGNOSTICS);
   const peerRef = useRef(null);
   const pendingIceRef = useRef([]);
   const videoRef = useRef(null);
@@ -163,6 +257,7 @@ export function useViewerMedia({
     if (!grant || !roomSessionId || !viewerId || typeof RTCPeerConnection === "undefined") {
       resetTimer = window.setTimeout(() => {
         setStream(null);
+        setDiagnostics(EMPTY_MEDIA_DIAGNOSTICS);
         setStatus(grant && typeof RTCPeerConnection === "undefined" ? "failed" : "idle");
         setError(grant && typeof RTCPeerConnection === "undefined"
           ? "此浏览器不支持 WebRTC，已保持骨架模式"
@@ -175,6 +270,8 @@ export function useViewerMedia({
     let offerStarted = false;
     let answerReceived = false;
     let disconnectWatchdog = null;
+    let statsTimer = 0;
+    let statsInFlight = false;
 
     function clearDisconnectWatchdog() {
       disconnectWatchdog?.cancel();
@@ -199,6 +296,7 @@ export function useViewerMedia({
       clearDisconnectWatchdog();
       setError(message);
       setStatus("failed");
+      setDiagnostics(EMPTY_MEDIA_DIAGNOSTICS);
       stopTransport();
       setStream(null);
     }
@@ -273,6 +371,30 @@ export function useViewerMedia({
       return peer;
     }
 
+    async function sampleMediaStats(peer) {
+      if (
+        statsInFlight
+        || generation !== generationRef.current
+        || peerRef.current !== peer
+        || typeof peer.getStats !== "function"
+      ) return;
+      statsInFlight = true;
+      try {
+        const report = await peer.getStats();
+        if (generation !== generationRef.current || peerRef.current !== peer) return;
+        setDiagnostics(summarizeViewerMediaStats(report));
+      } catch {
+        if (generation !== generationRef.current || peerRef.current !== peer) return;
+        setDiagnostics(Object.freeze({
+          ...EMPTY_MEDIA_DIAGNOSTICS,
+          status: "error",
+          error: "浏览器无法读取 WebRTC 接收统计",
+        }));
+      } finally {
+        statsInFlight = false;
+      }
+    }
+
     async function drainIce(peer) {
       const pending = pendingIceRef.current;
       pendingIceRef.current = [];
@@ -310,9 +432,15 @@ export function useViewerMedia({
     }
 
     const peer = createPeer();
+    void sampleMediaStats(peer);
+    statsTimer = window.setInterval(
+      () => void sampleMediaStats(peer),
+      VIEWER_MEDIA_STATS_INTERVAL_MS,
+    );
     resetTimer = window.setTimeout(() => {
       if (generation !== generationRef.current) return;
       setStream(null);
+      setDiagnostics(EMPTY_MEDIA_DIAGNOSTICS);
       setError(null);
       setStatus("connecting");
       offerStarted = true;
@@ -331,6 +459,7 @@ export function useViewerMedia({
     const unsubscribe = subscribeMediaSignals(handleSignal);
     return () => {
       window.clearTimeout(resetTimer);
+      window.clearInterval(statsTimer);
       clearDisconnectWatchdog();
       unsubscribe();
       stopTransport();
@@ -375,5 +504,5 @@ export function useViewerMedia({
     }
   }, [markLive]);
 
-  return { error, retryPlayback, status, stream, videoRef };
+  return { diagnostics, error, retryPlayback, status, stream, videoRef };
 }

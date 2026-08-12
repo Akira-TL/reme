@@ -152,33 +152,6 @@ button { font: inherit; }
 .monitor-confirmation-queue article span { display: block; overflow: hidden; margin-top: 2px; color: #8b837a; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 .monitor-confirmation-queue article .MuiButton-root { min-width: auto; padding: 3px 7px; border-radius: 8px; font-size: 8px; white-space: nowrap; }
 
-.local-recording-status {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  max-width: 1500px;
-  min-height: 54px;
-  margin: 0 auto 12px;
-  padding: 8px 12px;
-  border: 1px solid #d8e7de;
-  border-radius: 16px;
-  background: #f7fcf9;
-}
-.local-recording-status > span { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; color: #267a54; background: #dff2e8; }
-.local-recording-status > span svg { font-size: 20px; }
-.local-recording-status b,
-.local-recording-status p { display: block; }
-.local-recording-status b { font-size: 11px; }
-.local-recording-status p { margin: 2px 0 0; color: #6e7771; font-size: 8px; line-height: 1.45; }
-.local-recording-status em { padding: 4px 8px; border-radius: 999px; color: #267a54; background: #e7f5ed; font-size: 8px; font-style: normal; font-weight: 800; }
-.local-recording-status.is-error,
-.local-recording-status.is-unsupported { border-color: #efc9bb; background: #fff8f5; }
-.local-recording-status.is-error > span,
-.local-recording-status.is-unsupported > span { color: #b64c27; background: #ffe6dc; }
-.local-recording-status.is-paused { border-color: #e3ddd7; background: #faf8f6; }
-.local-recording-status.is-paused > span { color: #7a716b; background: #ece8e4; }
-
 .scene-tabs {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

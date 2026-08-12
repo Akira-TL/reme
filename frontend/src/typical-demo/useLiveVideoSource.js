@@ -171,7 +171,6 @@ export function useLiveVideoSource({
   const [sourceState, setSourceState] = useState(() => initialSourceState(capabilities));
   const [cameraDevices, setCameraDevices] = useState([]);
   const [mediaStreams, setMediaStreams] = useState({ local: null, remote: null });
-  const [recordingStream, setRecordingStream] = useState(null);
   const [aspectRatio, setAspectRatio] = useState(DEFAULT_RENDER_WIDTH / DEFAULT_RENDER_HEIGHT);
   const [personDetected, setPersonDetected] = useState(false);
   const [backendSkeletonActive, setBackendSkeletonActive] = useState(false);
@@ -192,7 +191,6 @@ export function useLiveVideoSource({
   const backendReceivedAtRef = useRef(0);
   const deviceRenderCanvasRef = useRef(null);
   const phoneRenderCanvasRef = useRef(null);
-  const recordingRenderCanvasRef = useRef(null);
   const deviceViewModeRef = useRef(deviceViewMode);
   const phoneViewModeRef = useRef(phoneViewMode);
   const skeletonColorRef = useRef(skeletonColor);
@@ -584,31 +582,14 @@ export function useLiveVideoSource({
   useEffect(() => {
     const deviceRenderCanvas = document.createElement("canvas");
     const phoneRenderCanvas = document.createElement("canvas");
-    const recordingRenderCanvas = document.createElement("canvas");
     deviceRenderCanvasRef.current = deviceRenderCanvas;
     phoneRenderCanvasRef.current = phoneRenderCanvas;
-    recordingRenderCanvasRef.current = recordingRenderCanvas;
     deviceRenderCanvas.width = DEFAULT_RENDER_WIDTH;
     deviceRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
     phoneRenderCanvas.width = DEFAULT_RENDER_WIDTH;
     phoneRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
-    recordingRenderCanvas.width = DEFAULT_RENDER_WIDTH;
-    recordingRenderCanvas.height = DEFAULT_RENDER_HEIGHT;
     const deviceContext = deviceRenderCanvas.getContext("2d");
     const phoneContext = phoneRenderCanvas.getContext("2d");
-    const recordingContext = recordingRenderCanvas.getContext("2d");
-    const captureMethod = getCaptureStreamMethod(recordingRenderCanvas);
-    let localRecordingStream = null;
-    if (captureMethod) {
-      try {
-        localRecordingStream = recordingRenderCanvas[captureMethod](12);
-      } catch {
-        localRecordingStream = null;
-      }
-    }
-    const recordingStreamTimer = window.setTimeout(() => {
-      setRecordingStream(localRecordingStream);
-    }, 0);
 
     function drawMode(context, mode, points, video, mirror) {
       const width = context.canvas.width;
@@ -656,8 +637,6 @@ export function useLiveVideoSource({
         deviceRenderCanvas.height = renderSize.height;
         phoneRenderCanvas.width = renderSize.width;
         phoneRenderCanvas.height = renderSize.height;
-        recordingRenderCanvas.width = renderSize.width;
-        recordingRenderCanvas.height = renderSize.height;
       }
 
       drawMode(
@@ -674,13 +653,6 @@ export function useLiveVideoSource({
         video,
         mirrorRef.current,
       );
-      drawMode(
-        recordingContext,
-        "skeleton",
-        displayLandmarks,
-        video,
-        mirrorRef.current,
-      );
 
       if (backendActive !== backendActiveRef.current) {
         backendActiveRef.current = backendActive;
@@ -693,11 +665,7 @@ export function useLiveVideoSource({
     }
 
     renderFrameRef.current = requestAnimationFrame(render);
-    return () => {
-      window.clearTimeout(recordingStreamTimer);
-      cancelAnimationFrame(renderFrameRef.current);
-      for (const track of localRecordingStream?.getTracks?.() || []) track.stop();
-    };
+    return () => cancelAnimationFrame(renderFrameRef.current);
   }, []);
 
   const ready = sourceState.status === "ready";
@@ -717,7 +685,6 @@ export function useLiveVideoSource({
     availableSources: sourceCatalog,
     localStream: mediaStreams.local,
     remoteStream: mediaStreams.remote,
-    recordingStream,
     getRemoteStream,
     refreshCameraDevices,
     selectSource,

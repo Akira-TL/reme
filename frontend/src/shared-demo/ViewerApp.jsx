@@ -83,32 +83,19 @@ import {
   reduceFamilyTimeline,
 } from "./familyTimeline.js";
 import {
-  familyGrantBannerCopy,
-  familyUnavailableCardCopy,
-  familyUpdateCopy,
-  selectFamilyHomeEvents,
-  shouldShowFamilyStage,
-} from "./familyHomePresentation.js";
-import {
-  FAMILY_TIMELINE_MOCK_DAYS,
+  FAMILY_TIMELINE_DISPLAY_DAYS,
+  FAMILY_TIMELINE_DISPLAY_END_DATE,
   FAMILY_TIMELINE_MOCK_END_DATE,
-  FAMILY_TIMELINE_MOCK_START_DATE,
-  FAMILY_TIMELINE_REALTIME_START_DATE,
   getFamilyTimelineMockDay,
-  isFamilyTimelineMockDate,
+  isFamilyTimelineDisplayDate,
 } from "./familyTimelineMock.js";
-import { buildRemeActivityRhythm } from "./remeActivityRhythm.js";
-import { remeRecordingDateKey, useRemeLocalRecordings } from "./remeLocalRecordings.js";
-import { getRemeMockRecordings } from "./remeMockRecordings.js";
+import { useRemeHistory } from "./remeHistory.js";
 import { SkeletonStage } from "./SkeletonStage.jsx";
 import {
-  buildCalendarMonth,
   buildWeekDays,
   dateKeyFromTimestamp,
   filterTimelineEventsByDate,
-  monthKeyFromDateKey,
   shiftDateKey,
-  shiftMonthKey,
   timelineDateHeading,
   timelineDateLongHeading,
 } from "./timelineDates.js";
@@ -193,17 +180,6 @@ function formatTime(timestampMs) {
   });
 }
 
-function formatRecordingTime(timestampMs) {
-  if (!Number.isFinite(timestampMs)) return "—";
-  return new Date(timestampMs).toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    timeZone: "Asia/Shanghai",
-  });
-}
-
 function shortId(value) {
   if (!value) return "—";
   return value.length > 14 ? `…${value.slice(-12)}` : value;
@@ -224,7 +200,7 @@ function captureCopy(status, familySurface = false) {
 function unavailableCopy(relay, familySurface = false) {
   if (relay.latestProtocolError && relay.unavailableReason === "protocol_invalid") {
     return familySurface
-      ? "家中设备连接异常，正在等待恢复"
+      ? `公开演示连接校验失败：${relay.latestProtocolError}`
       : `协议校验失败：${relay.latestProtocolError}`;
   }
   const copy = familySurface ? FAMILY_UNAVAILABLE_COPY : UNAVAILABLE_COPY;
@@ -252,34 +228,8 @@ function useStoredBoolean(key, fallback) {
   return [value, setValue];
 }
 
-function ConnectionBanner({
-  relay,
-  grant,
-  nowMs,
-  familySurface = false,
-  rtcError = null,
-  highPrivacyEnabled = false,
-}) {
+function ConnectionBanner({ relay, grant, nowMs, familySurface = false, rtcError = null }) {
   const remaining = grant ? secondsRemaining(grant.expires_at_ms, nowMs) : 0;
-  if (familySurface) {
-    const copy = familyGrantBannerCopy({
-      grant,
-      viewerCount: relay.viewerCount,
-      nowMs,
-      highPrivacyEnabled,
-    });
-    if (!copy) return null;
-    return (
-      <aside className="public-room-banner family-grant-banner is-live" role="status">
-        <VideocamRoundedIcon />
-        <div>
-          <b>{copy.title}</b>
-          <small>{copy.expiry}</small>
-        </div>
-        <strong>{copy.audience}</strong>
-      </aside>
-    );
-  }
   return (
     <aside className={`public-room-banner ${grant ? "is-live" : ""}`}>
       <span className="viewer-sr-only" role="status">
@@ -288,17 +238,21 @@ function ConnectionBanner({
       <div className="public-room-label">
         <GroupsRoundedIcon />
         <span>
-          <b>固定公开演示房间</b>
-          <small>任何打开 Viewer 的人都可加入</small>
+          <b>{familySurface ? "公开演示连接" : "固定公开演示房间"}</b>
+          <small>{familySurface ? "无账号验证 · 任何拿到链接的人可加入" : "任何打开 Viewer 的人都可加入"}</small>
         </span>
       </div>
       <div className="public-room-stats">
         <span>
-          <><b>{relay.viewerCount}</b> / {relay.maxViewers} 在线</>
+          {familySurface
+            ? <><b>{relay.viewerCount}</b> 个在线访问端</>
+            : <><b>{relay.viewerCount}</b> / {relay.maxViewers} 在线</>}
         </span>
         <span className={grant ? "is-video-live" : ""}>
           {grant
-            ? `原画开放 ${remaining}s · 全部 Viewer 可见`
+            ? familySurface
+              ? `临时原画 ${remaining}s · 全部在线 Viewer 可见`
+              : `原画开放 ${remaining}s · 全部 Viewer 可见`
             : relay.unavailableReason
               ? "当前权威状态不可用"
               : rtcError
@@ -317,31 +271,26 @@ function StatusCard({ snapshot, relay, decision, familySurface = false }) {
   const presentationKind = familyCarePresentationKind(decision);
   const runtime = snapshot?.state.runtime;
   const capture = snapshot?.state.capture;
-  const familyUnavailable = familyUnavailableCardCopy(relay.unavailableReason);
   const status = (() => {
     if (relay.unavailableReason
       && presentationKind === "alarm") return {
       tone: "danger",
       Icon: EmergencyRoundedIcon,
-      title: familySurface ? "紧急提醒仍待处理" : "紧急告警仍待处理 · 现场传输不可用",
-      body: familySurface
-        ? `${careMessage || "检测到需要立即关注的安全事件。"} 家中现场暂时无法连接，提醒仍会保持。`
-        : `${careMessage || "后端已发布权威紧急告警"}；${unavailableCopy(relay, familySurface)}。告警不会因浏览器离线而被取消。`,
+      title: "紧急告警仍待处理 · 现场传输不可用",
+      body: `${careMessage || "后端已发布权威紧急告警"}；${unavailableCopy(relay, familySurface)}。告警不会因浏览器离线而被取消。`,
     };
     if (relay.unavailableReason) return {
       tone: "offline",
       Icon: HealthAndSafetyRoundedIcon,
-      title: familySurface ? familyUnavailable.title : "当前状态不可用",
-      body: familySurface
-        ? familyUnavailable.body
-        : `${unavailableCopy(relay, familySurface)}；不会继续把上一次“正常”状态显示为最新事实。`,
+      title: "当前状态不可用",
+      body: `${unavailableCopy(relay, familySurface)}；不会继续把上一次“正常”状态显示为最新事实。`,
     };
     if (!relay.monitorOnline) return {
       tone: "offline",
       Icon: ShieldRoundedIcon,
-      title: familySurface ? "正在等待家中设备连接" : "等待家中 Monitor 上线",
+      title: familySurface ? "等待家中端上线" : "等待家中 Monitor 上线",
       body: familySurface
-        ? "连接恢复后会自动显示新的关怀状态。"
+        ? "连接恢复前不展示旧骨架、旧原画或旧处理结果。"
         : "连接恢复前不展示旧骨架、旧原画或旧控制结果。",
     };
     if (presentationKind === "alarm") return {
@@ -381,48 +330,32 @@ function StatusCard({ snapshot, relay, decision, familySurface = false }) {
     if (["degraded", "error", "offline"].includes(runtime?.status)) return {
       tone: "warning",
       Icon: HealthAndSafetyRoundedIcon,
-      title: familySurface
-        ? "部分关怀能力暂时不可用"
-        : RUNTIME_COPY[runtime?.status] || "能力暂不可用",
-      body: familySurface
-        ? "系统正在尝试恢复，在得到可靠信息前不会给出正常结论。"
-        : runtime?.detail || "故障状态保持可见，不使用模拟结果替代感知事实。",
+      title: RUNTIME_COPY[runtime?.status] || "能力暂不可用",
+      body: runtime?.detail || "故障状态保持可见，不使用模拟结果替代感知事实。",
     };
     if (runtime?.status !== "ready") return {
       tone: "offline",
       Icon: HealthAndSafetyRoundedIcon,
-      title: familySurface
-        ? "正在连接家中设备"
-        : RUNTIME_COPY[runtime?.status] || "正在等待本地感知",
-      body: familySurface
-        ? "得到可靠信息后，这里会自动更新。"
-        : runtime?.detail || "本地能力尚未给出可靠结果，不显示正常结论。",
+      title: RUNTIME_COPY[runtime?.status] || "正在等待本地感知",
+      body: runtime?.detail || "本地能力尚未给出可靠结果，不显示正常结论。",
     };
     if (capture?.status !== "active") return {
       tone: capture?.status === "error" ? "warning" : "offline",
       Icon: VideocamRoundedIcon,
-      title: familySurface
-        ? "正在等待新的现场状态"
-        : captureCopy(capture?.status, familySurface) || "正在等待可靠输入",
-      body: familySurface
-        ? "家中设备暂时没有提供可靠信息，页面不会沿用旧结论。"
-        : capture?.error || "现场输入尚未就绪，不显示正常结论。",
+      title: captureCopy(capture?.status, familySurface) || "正在等待可靠输入",
+      body: capture?.error || "现场输入尚未就绪，不显示正常结论。",
     };
     if (!truth.quietStateReady) return {
       tone: "offline",
       Icon: HealthAndSafetyRoundedIcon,
-      title: familySurface ? "正在等待新的关怀状态" : "正在等待权威状态",
-      body: familySurface
-        ? "得到可靠信息后，这里会自动更新。"
-        : "当前信息不足，不显示正常结论或现场空间。",
+      title: "正在等待权威状态",
+      body: "当前信息不足，不显示正常结论或现场空间。",
     };
     return {
       tone: "normal",
       Icon: CheckCircleRoundedIcon,
-      title: familySurface ? "目前没有需要你处理的事" : "关怀链路运行中",
-      body: familySurface
-        ? "Reme 正在留意值得关心的变化；发现需要处理的事情时会明确提醒你。"
-        : "当前未收到需要行动的权威事件；这不等于对现场安全作出保证。",
+      title: "关怀链路运行中",
+      body: "当前未收到需要行动的权威事件；这不等于对现场安全作出保证。",
     };
   })();
   const StatusIcon = status.Icon;
@@ -447,71 +380,27 @@ function HomePage({
   familySurface = false,
   familyAcknowledgementControl = null,
   decision = null,
-  timelineEvents = [],
-  onOpenTimeline = null,
 }) {
-  const truth = deriveFamilyTruth(snapshot, relay);
-  const sceneId = truth.sceneId;
+  const sceneId = deriveFamilyTruth(snapshot, relay).sceneId;
   const mediaAuthorization = familyMediaAuthorization(relay.familyEvent);
-  const showStage = !familySurface || shouldShowFamilyStage({
-    snapshot,
-    relay,
-    activeGrant,
-  });
-  const homeDateKey = remeRecordingDateKey(localNowMs) || dateKeyFromTimestamp(localNowMs);
-  const homeDay = useMemo(
-    () => getFamilyTimelineMockDay(homeDateKey) || Object.freeze({ dateKey: homeDateKey }),
-    [homeDateKey],
-  );
-  const localRecordings = useRemeLocalRecordings(homeDateKey, familySurface);
-  const mockRecordings = useMemo(
-    () => familySurface ? getRemeMockRecordings(homeDateKey) : [],
-    [familySurface, homeDateKey],
-  );
-  const recordings = useMemo(() => [
-    ...mockRecordings,
-    ...localRecordings.recordings,
-  ].sort((left, right) => (
-    left.startedAtMs - right.startedAtMs || left.id.localeCompare(right.id)
-  )), [localRecordings.recordings, mockRecordings]);
-  const [activeRecordingId, setActiveRecordingId] = useState(null);
-  const activeRecording = recordings.find((item) => item.id === activeRecordingId) || null;
-
-  if (familySurface && activeRecording) {
-    return (
-      <RemeRecordingPlayback
-        day={homeDay}
-        recordings={recordings}
-        recording={activeRecording}
-        onBack={() => setActiveRecordingId(null)}
-        onSelectRecording={setActiveRecordingId}
-        backLabel="返回首页"
-      />
-    );
-  }
-
   return (
     <main className="viewer-page viewer-home-page">
-      {familySurface && <StatusCard snapshot={snapshot} relay={relay} decision={decision} familySurface />}
-      {familySurface && familyAcknowledgementControl}
-      {showStage && (
-        <SkeletonStage
-          sceneId={sceneId}
-          pose={pose}
-          lastDetectedPose={lastDetectedPose}
-          runtimeSessionId={snapshot?.runtime_session_id || null}
-          videoRef={media.videoRef}
-          mediaStatus={media.status}
-          revealVideo={Boolean(activeGrant && !highPrivacyEnabled)}
-          highPrivacyEnabled={highPrivacyEnabled}
-          grant={activeGrant}
-          localNowMs={localNowMs}
-          relayConnected={relay.connection === "connected" && relay.monitorOnline && !relay.unavailableReason}
-          runtimeStatus={snapshot?.state.runtime.status}
-          onRetryPlayback={media.retryPlayback}
-        />
-      )}
-      {activeGrant && !familySurface && (
+      <SkeletonStage
+        sceneId={sceneId}
+        pose={pose}
+        lastDetectedPose={lastDetectedPose}
+        runtimeSessionId={snapshot?.runtime_session_id || null}
+        videoRef={media.videoRef}
+        mediaStatus={media.status}
+        revealVideo={Boolean(activeGrant && !highPrivacyEnabled)}
+        highPrivacyEnabled={highPrivacyEnabled}
+        grant={activeGrant}
+        localNowMs={localNowMs}
+        relayConnected={relay.connection === "connected" && relay.monitorOnline && !relay.unavailableReason}
+        runtimeStatus={snapshot?.state.runtime.status}
+        onRetryPlayback={media.retryPlayback}
+      />
+      {activeGrant && (
         <div className={`grant-disclosure ${highPrivacyEnabled ? "is-hidden-locally" : ""}`}>
           <VideocamRoundedIcon />
           <div>
@@ -522,8 +411,8 @@ function HomePage({
           </div>
         </div>
       )}
-      {!familySurface && <StatusCard snapshot={snapshot} relay={relay} decision={decision} />}
-      {!familySurface && familyAcknowledgementControl}
+      <StatusCard snapshot={snapshot} relay={relay} decision={decision} familySurface={familySurface} />
+      {familyAcknowledgementControl}
       {sceneId === "kitchen"
         && mediaAuthorization?.status === "active"
         && mediaAuthorization.scope === "kitchen_moment" && (
@@ -534,21 +423,15 @@ function HomePage({
         </article>
       )}
       {familySurface && (
-        <RemeActivityRhythm
-          day={homeDay}
-          recordings={recordings}
-          loading={localRecordings.loading}
-          error={localRecordings.error}
-          onOpenRecording={setActiveRecordingId}
-          eyebrow="REME · 首页回看"
-          title="今天录像回看"
-        />
-      )}
-      {familySurface && (
-        <FamilyRecentUpdates
-          events={timelineEvents}
-          onOpenTimeline={onOpenTimeline}
-        />
+        <div className="family-home-dashboard">
+          <DashboardContent
+            relay={relay}
+            snapshot={snapshot}
+            activeGrant={activeGrant}
+            nowMs={relayNowMs}
+            familySurface
+          />
+        </div>
       )}
     </main>
   );
@@ -608,67 +491,6 @@ const TIMELINE_ICONS = Object.freeze({
   consent: PrivacyTipRoundedIcon,
   acknowledgement: CheckCircleRoundedIcon,
 });
-
-function FamilyRecentUpdates({ events, onOpenTimeline }) {
-  const recentEvents = selectFamilyHomeEvents(events);
-  return (
-    <section
-      className="family-recent-updates"
-      aria-labelledby="family-recent-updates-title"
-      data-testid="family-recent-updates"
-    >
-      <header>
-        <div>
-          <h2 id="family-recent-updates-title">最近动态</h2>
-          <p>只记录值得家人关注的变化</p>
-        </div>
-        <Button
-          size="small"
-          variant="text"
-          endIcon={<ArrowForwardIosRoundedIcon />}
-          onClick={onOpenTimeline}
-        >
-          查看全部
-        </Button>
-      </header>
-      {recentEvents.length > 0 ? (
-        <div className="family-recent-list">
-          {recentEvents.map((event) => {
-            const EventIcon = TIMELINE_ICONS[event.kind] || FavoriteRoundedIcon;
-            return (
-              <article className={`is-${event.tone || "neutral"}`} key={event.id}>
-                <span><EventIcon /></span>
-                <div>
-                  <b>{event.title}</b>
-                  <small>{event.statusLabel || event.label || "关怀更新"}</small>
-                </div>
-                <time
-                  dateTime={Number.isFinite(event.timestampMs)
-                    ? new Date(event.timestampMs).toISOString()
-                    : undefined}
-                >
-                  {formatTime(event.timestampMs)}
-                </time>
-              </article>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="family-recent-empty" role="status">
-          <FavoriteRoundedIcon />
-          <div><b>暂时没有新的关怀事项</b><span>需要你处理的变化会出现在这里。</span></div>
-        </div>
-      )}
-      <aside className="family-privacy-note">
-        <LockRoundedIcon />
-        <span>
-          <b>日常保持隐私画面</b>
-          <small>本页是无账号验证的公开演示；清晰画面只会在本人授权或紧急事件中限时开放。</small>
-        </span>
-      </aside>
-    </section>
-  );
-}
 
 const TIMELINE_ALARM_TRIGGER_COPY = Object.freeze({
   elder_report: "本人明确求助",
@@ -1018,236 +840,47 @@ function RemeDaypartSection({ section, filter, expanded, onToggle }) {
   );
 }
 
-function RemeHistoryCalendar({ selectedDateKey, onSelectDate, nowMs, realDateKeys = [] }) {
-  const selectedMonthKey = monthKeyFromDateKey(selectedDateKey);
-  const [visibleMonthKey, setVisibleMonthKey] = useState(
-    () => selectedMonthKey || monthKeyFromDateKey(dateKeyFromTimestamp(nowMs)),
-  );
-  const markedDateKeys = useMemo(() => [
-    ...FAMILY_TIMELINE_MOCK_DAYS.map((day) => day.dateKey),
-    ...realDateKeys,
-  ], [realDateKeys]);
-  const calendar = useMemo(
-    () => buildCalendarMonth(visibleMonthKey, selectedDateKey, nowMs, markedDateKeys),
-    [markedDateKeys, nowMs, selectedDateKey, visibleMonthKey],
-  );
-  const todayKey = dateKeyFromTimestamp(nowMs);
-  const mockRangeLabel = `${Number(FAMILY_TIMELINE_MOCK_START_DATE.slice(5, 7))}月${Number(FAMILY_TIMELINE_MOCK_START_DATE.slice(8, 10))}–${Number(FAMILY_TIMELINE_MOCK_END_DATE.slice(8, 10))}日演示`;
-  const realtimeStartLabel = `${Number(FAMILY_TIMELINE_REALTIME_START_DATE.slice(5, 7))}月${Number(FAMILY_TIMELINE_REALTIME_START_DATE.slice(8, 10))}日`;
-  const changeMonth = (offset) => {
-    const nextMonth = shiftMonthKey(calendar.monthKey, offset);
-    if (nextMonth && (offset < 0 || calendar.canGoNext)) setVisibleMonthKey(nextMonth);
-  };
-  const selectDate = (dateKey) => {
-    const nextMonthKey = monthKeyFromDateKey(dateKey);
-    if (nextMonthKey) setVisibleMonthKey(nextMonthKey);
-    onSelectDate(dateKey);
-  };
-
+function RemeDateStrip({ selectedDateKey, onSelectDate, days }) {
   return (
-    <section className="reme-history-calendar" aria-label="完整关怀记录日历">
-      <header>
-        <IconButton onClick={() => changeMonth(-1)} aria-label="查看上一个月">
-          <ChevronLeftRoundedIcon />
-        </IconButton>
-        <div><CalendarMonthRoundedIcon /><span><b>{calendar.label}</b><small>完整日历</small></span></div>
-        <IconButton onClick={() => changeMonth(1)} disabled={!calendar.canGoNext} aria-label="查看下一个月">
-          <ChevronRightRoundedIcon />
-        </IconButton>
-      </header>
-      <div className="reme-calendar-weekdays" aria-hidden="true">
-        {calendar.weekdays.map((weekday) => <span key={weekday}>{weekday}</span>)}
-      </div>
-      <div className="reme-calendar-days">
-        {calendar.days.map((day) => {
-          const mockDate = isFamilyTimelineMockDate(day.key);
-          const hasRealRecord = !mockDate && realDateKeys.includes(day.key);
-          const sourceLabel = mockDate ? "演示记录" : hasRealRecord ? "有真实记录" : "没有记录";
-          return (
+    <section className="reme-week-strip" aria-label="Reme 记录日期">
+      <div className="reme-week-days">
+        {days.map((day) => (
           <button
             type="button"
-            key={day.key}
-            className={`${day.selected ? "is-selected" : ""} ${day.today ? "is-today" : ""} ${day.inMonth ? "" : "is-outside"} ${mockDate ? "is-mock" : ""} ${hasRealRecord ? "has-real-record" : ""}`}
-            disabled={day.disabled}
-            aria-pressed={day.selected}
-            aria-current={day.today ? "date" : undefined}
-            aria-label={`${day.month}月${day.day}日，${sourceLabel}${day.today ? "，今天" : ""}`}
-            onClick={() => selectDate(day.key)}
+            key={day.dateKey}
+            className={`${day.dateKey === selectedDateKey ? "is-selected" : ""} is-${day.sourceMode}`}
+            aria-pressed={day.dateKey === selectedDateKey}
+            onClick={() => onSelectDate(day.dateKey)}
           >
+            <span>周{day.weekday}</span>
             <b>{day.day}</b>
-            {day.today && <small>今</small>}
-            {(mockDate || hasRealRecord) && <FiberManualRecordRoundedIcon aria-hidden="true" />}
+            <small>Mock</small>
+            {day.dateKey === selectedDateKey && <FiberManualRecordRoundedIcon />}
           </button>
-          );
-        })}
+        ))}
       </div>
-      <footer>
-        <p><span className="is-mock"><FiberManualRecordRoundedIcon />{mockRangeLabel}</span><span className="is-real"><FiberManualRecordRoundedIcon />真实记录</span></p>
-        <span>{realtimeStartLabel}起只显示真实数据</span>
-        {selectedDateKey !== todayKey && <button type="button" onClick={() => selectDate(todayKey)}>回到今天</button>}
-      </footer>
     </section>
   );
 }
 
-function RemeActivityRhythm({
-  day,
-  recordings,
-  loading,
-  error,
-  onOpenRecording,
-  eyebrow = "REME · 一天回看",
-  title = "当天录像回看",
-}) {
-  const rhythm = useMemo(
-    () => buildRemeActivityRhythm(day, recordings),
-    [day, recordings],
-  );
+function RemeSourceBoundary({ day }) {
+  const frontendFixture = day.fixtureOwner === "frontend_bundle";
+  const coverage = day.coverageStatus === "complete"
+    ? `${day.coverageHours} 小时覆盖`
+    : day.coverageStatus === "partial"
+      ? `${day.coverageHours} 小时 · 部分覆盖`
+      : "数据不可用";
   return (
-    <section
-      className={`reme-day-rhythm is-${rhythm.coverageStatus}`}
-      aria-labelledby="reme-day-rhythm-title"
-      data-testid="reme-activity-rhythm"
-    >
-      <header>
-        <div>
-          <small>{eyebrow}</small>
-          <h2 id="reme-day-rhythm-title">{title}</h2>
-        </div>
-        <span>{rhythm.sourceLabel}</span>
-      </header>
-      <p>橙色段就是已保存的录像，点击直接播放当时画面。</p>
-
-      <div className="reme-rhythm-visual">
-        <div className="reme-rhythm-track">
-          <span className="reme-rhythm-coverage" />
-          {rhythm.markers.map((marker) => (
-            <button
-              type="button"
-              key={marker.id}
-              className={marker.isDemo ? "is-demo" : ""}
-              style={{ left: `${marker.position}%`, width: `${marker.width}%` }}
-              aria-label={`播放 ${marker.timeLabel} 至 ${marker.endTimeLabel} 的${marker.title}`}
-              onClick={() => onOpenRecording(marker.id)}
-            />
-          ))}
-        </div>
-        <div className="reme-rhythm-ticks" aria-hidden="true">
-          <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
-        </div>
+    <aside className="reme-source-boundary is-mock">
+      <SensorsRoundedIcon />
+      <div>
+        <b>{frontendFixture ? "本地完整演示历史 · 明确标注 Mock" : "Backend 演示历史 · 明确标注 Mock"}</b>
+        <span>{frontendFixture
+          ? "8 月 4–11 日使用当前 lbx-frontend 内置的完整演示记录；8 月 12 日起才进入实时数据范围。"
+          : "时间线来自 Relay 的 Backend-owned fixture，不冒充真实家庭历史。"}</span>
       </div>
-
-      {rhythm.markers.length > 0 ? (
-        <article className="reme-rhythm-highlight is-playable">
-          <span><PlayCircleRoundedIcon /></span>
-          <div>
-            <small>{rhythm.recordingLabel} · {rhythm.playbackLabel}</small>
-            <b>点击橙色录像段进入播放器</b>
-          </div>
-        </article>
-      ) : (
-        <div className="reme-rhythm-empty" role="status">
-          <VideocamRoundedIcon />
-          <span>
-            <b>{loading ? "正在读取本机录像" : "这一天没有本机录像"}</b>
-            <small>{error
-              ? "当前浏览器无法读取录像存储。"
-              : "没有录像本体就不显示橙色入口。"}</small>
-          </span>
-        </div>
-      )}
-
-      <footer>
-        <span><FiberManualRecordRoundedIcon />{rhythm.coverageLabel}</span>
-        <span><FiberManualRecordRoundedIcon />{rhythm.recordingLabel}</span>
-        <span><LockRoundedIcon />{rhythm.sourceNote}</span>
-      </footer>
-    </section>
-  );
-}
-
-function recordingDurationLabel(durationMs) {
-  const seconds = Math.max(1, Math.round(durationMs / 1_000));
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return remainder > 0 ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`;
-}
-
-function RemeRecordingPlayback({
-  day,
-  recordings,
-  recording,
-  onBack,
-  onSelectRecording,
-  backLabel = "返回关怀记录",
-}) {
-  const [playbackError, setPlaybackError] = useState("");
-  const isDemoRecording = recording.source === "mock_fixture" || recording.isDemo === true;
-  const rhythm = useMemo(
-    () => buildRemeActivityRhythm(day, recordings),
-    [day, recordings],
-  );
-  return (
-    <main className="viewer-page timeline-page reme-recording-playback">
-      <header className="reme-recording-topbar">
-        <IconButton type="button" onClick={onBack} aria-label={backLabel}>
-          <ChevronLeftRoundedIcon />
-        </IconButton>
-        <div>
-          <small>{day.dateKey} · {isDemoRecording ? "演示录像" : "本机录像"} · {recording.sceneLabel}</small>
-          <h1>{recording.title || `${formatTime(recording.startedAtMs)} 的录像`}</h1>
-        </div>
-        <span>{recordingDurationLabel(recording.durationMs)}</span>
-      </header>
-
-      <section className="reme-recording-stage" aria-label="本机录像播放器">
-        <video
-          key={recording.id}
-          src={recording.playbackUrl}
-          controls
-          autoPlay
-          playsInline
-          preload="metadata"
-          onCanPlay={() => setPlaybackError("")}
-          onError={() => setPlaybackError("这段录像暂时无法解码，请返回后重试。")}
-        />
-        {isDemoRecording && <span className="reme-recording-source-badge">演示片段 · 非真实家庭记录</span>}
-        {playbackError && <p role="alert">{playbackError}</p>}
-      </section>
-
-      <section className="reme-recording-timeline" aria-labelledby="reme-recording-timeline-title">
-        <div>
-          <small>当天录像</small>
-          <h2 id="reme-recording-timeline-title">选择其他时间</h2>
-        </div>
-        <div className="reme-rhythm-track">
-          <span className="reme-rhythm-coverage" />
-          {rhythm.markers.map((marker) => (
-            <button
-              type="button"
-              key={marker.id}
-              className={`${marker.id === recording.id ? "is-selected" : ""} ${marker.isDemo ? "is-demo" : ""}`}
-              style={{ left: `${marker.position}%`, width: `${marker.width}%` }}
-              aria-label={`播放 ${marker.timeLabel} 至 ${marker.endTimeLabel} 的${marker.title}`}
-              aria-pressed={marker.id === recording.id}
-              onClick={() => onSelectRecording(marker.id)}
-            />
-          ))}
-        </div>
-        <div className="reme-rhythm-ticks" aria-hidden="true">
-          <span>00</span><span>06</span><span>12</span><span>18</span><span>24</span>
-        </div>
-      </section>
-
-      <section className="reme-recording-details">
-        <div><span>录像时间</span><b>{formatRecordingTime(recording.startedAtMs)}–{formatRecordingTime(recording.endedAtMs)}</b></div>
-        <div><span>{isDemoRecording ? "素材类型" : "保存位置"}</span><b>{isDemoRecording ? "内置演示录像" : "这台设备 · 本机浏览器"}</b></div>
-        <p><LockRoundedIcon />{isDemoRecording
-          ? "片段来自预先制作的 Reme 演示素材，只用于展示回看交互，不代表真实家庭历史。"
-          : "录像不经过 Relay 或 MiMo；清除浏览器站点数据后将无法回看。"}</p>
-      </section>
-    </main>
+      <strong>{coverage}</strong>
+    </aside>
   );
 }
 
@@ -1258,31 +891,45 @@ const MIMO_DIARY_UNCERTAINTY_COPY = Object.freeze({
 });
 
 function mimoDiaryUnavailableCopy(summaryState) {
-  if (summaryState?.error_code === "timeline_not_ready") {
-    return "这一天的记录还没有整理完成，下面会先显示已经收到的内容。";
+  if (summaryState?.error_code === "mimo_invalid_output") {
+    return "MiMo 返回内容未通过 Backend JSON 结构校验，本次结果未采用。";
   }
-  return "这一天的记录暂时还不能整理成摘要，下面的逐条记录仍可查看。";
+  if (summaryState?.error_code === "mimo_not_configured") {
+    return "Backend 尚未配置 MiMo，本日摘要明确标记为不可用。";
+  }
+  if (summaryState?.error_code === "mimo_timeout") {
+    return "MiMo 本日摘要生成超时，当前不显示固定替代摘要。";
+  }
+  if (summaryState?.error_code === "timeline_not_ready") {
+    return "本日时间线尚未准备完成，暂不生成摘要。";
+  }
+  return "Backend 当前没有可用的 MiMo 本日摘要；页面不会回退到前端固定文案。";
 }
 
-function RemeTimeline({ day, onSelectDate, summaryState, summary, nowMs, realDateKeys }) {
+function RemeTimeline({ day, onSelectDate, dates, summaryState, summary }) {
   const [filter, setFilter] = useState("all");
   const [expandedDayparts, setExpandedDayparts] = useState(() => new Set(["early", "morning"]));
   const displayDay = day;
+  const frontendFixture = day.fixtureOwner === "frontend_bundle";
   const summaryStateName = summary
     ? "live"
     : summaryState?.status === "generating" ? "loading" : "unavailable";
   const liveSummary = summary;
   const summaryHeadline = liveSummary
     ? liveSummary.headline
-    : summaryStateName === "loading" ? "正在整理这一天的动态…" : "这一天还没有可用摘要";
+    : frontendFixture
+      ? "完整演示记录已加载"
+      : summaryStateName === "loading" ? "正在生成本日动态摘要…" : "本日动态摘要暂不可用";
   const summaryCopy = liveSummary
     ? liveSummary.summary
-    : summaryStateName === "loading"
-      ? "Reme 正在根据已经收到的结构化记录整理重点。"
+    : frontendFixture
+      ? "当前展示完整固定 Mock，不以 Backend 的精简演示历史覆盖这些生活片段。"
+      : summaryStateName === "loading"
+      ? "Backend 正在使用结构化时间线生成 MiMo 摘要。"
       : mimoDiaryUnavailableCopy(summaryState);
   const summaryStatus = summaryStateName === "live"
-    ? "已整理"
-    : summaryStateName === "loading" ? "整理中" : "暂不可用";
+    ? "Backend MiMo"
+    : frontendFixture ? "固定 Mock" : summaryStateName === "loading" ? "正在生成" : "摘要不可用";
 
   const selectFilter = (nextFilter) => {
     setFilter(nextFilter);
@@ -1306,12 +953,9 @@ function RemeTimeline({ day, onSelectDate, summaryState, summary, nowMs, realDat
 
   return (
     <main className="viewer-page timeline-page reme-timeline-page">
-      <RemeHistoryCalendar
-        selectedDateKey={day.dateKey}
-        onSelectDate={onSelectDate}
-        nowMs={nowMs}
-        realDateKeys={realDateKeys}
-      />
+      <RemeDateStrip selectedDateKey={day.dateKey} onSelectDate={onSelectDate} days={dates} />
+      <RemeSourceBoundary day={day} />
+
       <section
         className="reme-mimo-summary"
         aria-labelledby="reme-day-summary-title"
@@ -1320,7 +964,7 @@ function RemeTimeline({ day, onSelectDate, summaryState, summary, nowMs, realDat
         data-summary-schema={liveSummary?.schema_version || "pending"}
       >
           <div className="reme-mimo-summary-heading">
-            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>Reme 本日摘要</b></span>
+            <span className="reme-mimo-summary-label"><AutoAwesomeRoundedIcon /><b>MiMo 本日动态摘要</b></span>
             <span className={`reme-mimo-summary-status is-${summaryStateName}`}><FiberManualRecordRoundedIcon />{summaryStatus}</span>
           </div>
           <h2 id="reme-day-summary-title">{summaryHeadline}</h2>
@@ -1336,22 +980,24 @@ function RemeTimeline({ day, onSelectDate, summaryState, summary, nowMs, realDat
           <div className="reme-mimo-summary-footer">
             {liveSummary ? (
               <time dateTime={new Date(liveSummary.generated_at_ms).toISOString()}>生成于 {formatTime(liveSummary.generated_at_ms)}</time>
-            ) : <span>逐条记录仍可查看</span>}
+            ) : <span>{frontendFixture ? "未调用 MiMo" : "未使用 Mock 摘要"}</span>}
             <span>{liveSummary
-              ? `基于 ${liveSummary.input_event_count} 条结构化记录整理 · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty] || "可能遗漏细节"}`
-              : `${day.totalCount} 条生活记录`}</span>
+              ? `已吸收 ${liveSummary.input_event_count} 条 Backend 结构化演示记录 · ${liveSummary.model} · ${MIMO_DIARY_UNCERTAINTY_COPY[liveSummary.uncertainty] || "不确定性未知"}`
+              : frontendFixture
+                ? `${day.totalCount} 条完整本地演示记录`
+                : `Backend 时间线 revision ${day.revision} · ${day.totalCount} 条稳定统计记录`}</span>
           </div>
       </section>
 
       <section className="reme-day-summary" aria-label="今日记录统计">
         <div className="reme-day-statistics">
-          <span>{day.coverageStatus === "complete" ? "全天关怀覆盖" : "部分时段可用"}</span>
+          <span>{day.coverageStatus === "complete" ? "24 小时演示覆盖" : "部分演示覆盖"}</span>
           <p><b>{displayDay.totalCount}</b> 个生活片段</p>
         </div>
         <div className="reme-source-mix" aria-label="记录来源">
-          <span><DirectionsWalkRoundedIcon /><b>{displayDay.activityCount}</b> 活动</span>
-          <span><SensorsRoundedIcon /><b>{displayDay.deviceCount}</b> 设备</span>
-          <span><FavoriteRoundedIcon /><b>{displayDay.careCount}</b> 关怀</span>
+          <span><DirectionsWalkRoundedIcon /><b>{displayDay.activityCount}</b> 人体与空间</span>
+          <span><SensorsRoundedIcon /><b>{displayDay.deviceCount}</b> 全屋设备</span>
+          <span><FavoriteRoundedIcon /><b>{displayDay.careCount}</b> 主动关怀</span>
         </div>
         <div className="reme-timeline-filter" role="group" aria-label="筛选时间线记录">
           <button type="button" className={filter === "all" ? "is-selected" : ""} aria-pressed={filter === "all"} onClick={() => selectFilter("all")}>全部 <b>{displayDay.totalCount}</b></button>
@@ -1382,50 +1028,74 @@ function TimelinePage({
   selectedDateKey,
   onSelectDate,
   nowMs,
+  remeHistory,
   familySurface,
 }) {
   const todayKey = dateKeyFromTimestamp(nowMs);
-  const weekDays = buildWeekDays(selectedDateKey, nowMs, todayKey);
+  const selectableThrough = todayKey > FAMILY_TIMELINE_DISPLAY_END_DATE
+    ? todayKey
+    : FAMILY_TIMELINE_DISPLAY_END_DATE;
+  const weekDays = buildWeekDays(selectedDateKey, nowMs, selectableThrough);
   const interrupted = Boolean(
     relay.unavailableReason
       || !relay.monitorOnline
       || relay.connection !== "connected",
   );
-  const liveEvents = filterTimelineEventsByDate(timeline.events, selectedDateKey);
-  const events = [...liveEvents]
-    .sort((left, right) => right.timestampMs - left.timestampMs || left.id.localeCompare(right.id));
-  const realDateKeys = [...new Set(timeline.events
-    .map((event) => event.dateKey || dateKeyFromTimestamp(event.timestampMs))
-    .filter(Boolean))];
-  const mockDay = familySurface ? getFamilyTimelineMockDay(selectedDateKey) : null;
-  if (mockDay) {
+  const backendRemeDate = remeHistory.dates.some((day) => day.dateKey === selectedDateKey);
+  const frontendMockDay = familySurface ? getFamilyTimelineMockDay(selectedDateKey) : null;
+  if (frontendMockDay) {
     return (
       <RemeTimeline
-        key={mockDay.dateKey}
-        day={mockDay}
+        key={`frontend:${frontendMockDay.dateKey}`}
+        day={frontendMockDay}
         onSelectDate={onSelectDate}
+        dates={FAMILY_TIMELINE_DISPLAY_DAYS}
         summaryState={null}
         summary={null}
-        nowMs={nowMs}
-        realDateKeys={realDateKeys}
       />
     );
   }
-  const canGoForward = shiftDateKey(selectedDateKey, 7) <= todayKey;
-  const changeWeek = (offset) => {
-    const candidate = shiftDateKey(selectedDateKey, offset * 7);
-    onSelectDate(candidate > todayKey ? todayKey : candidate);
-  };
-  return (
-    <main className={`viewer-page timeline-page ${familySurface ? "reme-timeline-page" : ""}`}>
-      {familySurface ? (
-        <RemeHistoryCalendar
+  if (familySurface && backendRemeDate && remeHistory.day?.dateKey === selectedDateKey) {
+    return (
+      <RemeTimeline
+        key={`${remeHistory.day.dateKey}:${remeHistory.day.revision}`}
+        day={remeHistory.day}
+        onSelectDate={onSelectDate}
+        dates={remeHistory.dates}
+        summaryState={remeHistory.summaryState}
+        summary={remeHistory.summary}
+      />
+    );
+  }
+  if (familySurface && (backendRemeDate || isFamilyTimelineDisplayDate(selectedDateKey))) {
+    return (
+      <main className="viewer-page timeline-page reme-timeline-page">
+        <RemeDateStrip
           selectedDateKey={selectedDateKey}
           onSelectDate={onSelectDate}
-          nowMs={nowMs}
-          realDateKeys={realDateKeys}
+          days={remeHistory.dates}
         />
-      ) : <section className="timeline-calendar" aria-label="选择时间线日期">
+        <section className="timeline-empty-state" role={remeHistory.error ? "alert" : "status"}>
+          <span>{remeHistory.error ? <EventBusyRoundedIcon /> : <RefreshRoundedIcon />}</span>
+          <h2>{remeHistory.error ? "Reme 历史暂不可用" : "正在读取 Backend 历史"}</h2>
+          <p>{remeHistory.error
+            ? "页面不会回退到 Frontend 固定 Mock；请检查 Relay History API 与 fixture loader。"
+            : "正在从 Relay 获取日期索引、日时间线与 MiMo 摘要状态。"}</p>
+        </section>
+      </main>
+    );
+  }
+  const liveEvents = filterTimelineEventsByDate(timeline.events, selectedDateKey);
+  const events = [...liveEvents]
+    .sort((left, right) => right.timestampMs - left.timestampMs || left.id.localeCompare(right.id));
+  const canGoForward = shiftDateKey(selectedDateKey, 7) <= selectableThrough;
+  const changeWeek = (offset) => {
+    const candidate = shiftDateKey(selectedDateKey, offset * 7);
+    onSelectDate(candidate > selectableThrough ? selectableThrough : candidate);
+  };
+  return (
+    <main className="viewer-page timeline-page">
+      <section className="timeline-calendar" aria-label="选择时间线日期">
         <div className="timeline-week-controls">
           <IconButton onClick={() => changeWeek(-1)} aria-label="查看上一周"><ChevronLeftRoundedIcon /></IconButton>
           <div><CalendarMonthRoundedIcon /><span>{timelineDateHeading(selectedDateKey, nowMs)}</span></div>
@@ -1447,7 +1117,7 @@ function TimelinePage({
             </button>
           ))}
         </div>
-      </section>}
+      </section>
 
       <section className="timeline-care-intro" aria-label="主动关怀说明">
         <span><AutoAwesomeRoundedIcon /></span>
@@ -1477,12 +1147,12 @@ function TimelinePage({
           <span><EventBusyRoundedIcon /></span>
           <h2>{selectedDateKey === todayKey
             ? interrupted ? "家中端暂未连接" : "等待可靠的关怀判断"
-            : "这一天没有收到真实记录"}</h2>
+            : "这一天没有可用记录"}</h2>
           <p>{selectedDateKey === todayKey
             ? interrupted
               ? "恢复同步后，新的关怀判断会继续出现在这里。"
               : "发现可靠事件后，MiMo 或确定性安全规则才会生成一条有来源的判断。"
-            : "这里只显示真实事件；没有收到数据时不会用演示内容补空。"}</p>
+            : "跨天历史服务尚未接入，因此不会用演示文案填充真实时间线。"}</p>
         </section>
       )}
     </main>
@@ -1545,58 +1215,21 @@ function SettingsRow({ icon: Icon, title, detail, action, muted = false }) {
 
 function SettingsPage({
   relay,
+  media,
   highPrivacyEnabled,
   setHighPrivacyEnabled,
   notificationsEnabled,
   setNotificationsEnabled,
   familySurface = false,
 }) {
-  if (familySurface) {
-    return (
-      <main className="viewer-page settings-page">
-        <section className="home-profile-card">
-          <span><HomeRoundedIcon /></span>
-          <div>
-            <h2>外婆家</h2>
-            <p>家庭关怀与隐私设置</p>
-            <b className={relay.monitorOnline ? "is-online" : "is-offline"}>
-              <i /> {relay.monitorOnline ? "家中设备在线" : "家中设备暂时离线"}
-            </b>
-          </div>
-        </section>
-        <section className="settings-group">
-          <h2>隐私保护</h2>
-          <div className="settings-card">
-            <SettingsRow
-              icon={PrivacyTipRoundedIcon}
-              title="高隐私显示"
-              detail="开启后，即使现场已经合法授权，本页也继续隐藏清晰画面"
-              action={<Switch checked={highPrivacyEnabled} onChange={(event) => setHighPrivacyEnabled(event.target.checked)} slotProps={{ input: { "aria-label": "高隐私显示" } }} />}
-            />
-            <SettingsRow icon={LockRoundedIcon} title="日常隐私画面" detail="默认只显示匿名骨架、关怀结论和必要提醒" action={<b className="setting-state is-on">已开启</b>} />
-            <SettingsRow icon={VideocamRoundedIcon} title="清晰画面" detail="仅在本人授权或紧急事件中限时开放，到期自动关闭" action={<b className="setting-state">限时</b>} />
-            <SettingsRow icon={AutoAwesomeRoundedIcon} title="辅助判断" detail="只有确有需要时才选取单帧或短片，不会连续上传" action={<b className="setting-state">按需</b>} />
-          </div>
-        </section>
-        <section className="settings-group">
-          <h2>关怀提醒</h2>
-          <div className="settings-card">
-            <SettingsRow
-              icon={NotificationsActiveRoundedIcon}
-              title="风险提醒"
-              detail="控制本页的声音、震动与闪烁"
-              action={<Switch checked={notificationsEnabled} onChange={(event) => setNotificationsEnabled(event.target.checked)} slotProps={{ input: { "aria-label": "风险提醒" } }} />}
-            />
-            <SettingsRow icon={ShieldRoundedIcon} title="紧急提醒" detail="安全事件一旦升级会持续显示，远程操作不能降低或取消" action={<b className="setting-state is-on">保持开启</b>} />
-          </div>
-        </section>
-        <aside className="family-settings-disclosure">
-          <GroupsRoundedIcon />
-          <p><b>公开演示说明</b><span>本页暂未使用账号验证；清晰画面开放时，所有当前在线访问端都能看到。</span></p>
-        </aside>
-      </main>
-    );
-  }
+  const candidatePair = media.diagnostics.selectedCandidatePair;
+  const inboundVideo = media.diagnostics.inboundVideo;
+  const candidateDetail = candidatePair
+    ? `${candidatePair.transport === "turn" ? "TURN" : "直连"}/${candidatePair.relayProtocol || candidatePair.protocol || "未知协议"} · ${candidatePair.localCandidateType || "?"} → ${candidatePair.remoteCandidateType || "?"}`
+    : media.diagnostics.error || "尚未选中媒体链路";
+  const inboundDetail = inboundVideo
+    ? `${inboundVideo.bytesReceived ?? 0} bytes · ${inboundVideo.framesDecoded ?? 0} 帧已解码 · ${inboundVideo.framesReceived ?? 0} 帧已接收`
+    : "尚未收到事件期原画数据";
   return (
     <main className="viewer-page settings-page">
       <section className="home-profile-card">
@@ -1637,6 +1270,8 @@ function SettingsPage({
         <div className="settings-card compact-settings-card">
           <SettingsRow icon={DashboardRoundedIcon} title={familySurface ? "演示会话" : "房间会话"} detail={shortId(relay.roomSessionId)} action={<span />} muted={!relay.roomSessionId} />
           <SettingsRow icon={VideocamRoundedIcon} title="事件期媒体" detail={familySurface ? "演示媒体；未配置 TURN 时仅限本机或局域网" : relayAvailabilityCopy()} action={<span />} />
+          <SettingsRow icon={SensorsRoundedIcon} title="ICE 选中链路" detail={candidateDetail} action={<span />} muted={!candidatePair} />
+          <SettingsRow icon={DashboardRoundedIcon} title="原画接收统计" detail={inboundDetail} action={<span />} muted={!inboundVideo} />
         </div>
       </section>
     </main>
@@ -1830,9 +1465,13 @@ export function ViewerApp({ surface = "family" }) {
     viewerId,
   } = relay;
   const [activeTab, setActiveTab] = useState("home");
-  const [selectedTimelineDate, setSelectedTimelineDate] = useState(
-    () => dateKeyFromTimestamp(Date.now()),
-  );
+  const [selectedTimelineDate, setSelectedTimelineDate] = useState(() => {
+    const currentDateKey = dateKeyFromTimestamp(Date.now());
+    if (!familySurface) return currentDateKey;
+    return isFamilyTimelineDisplayDate(currentDateKey)
+      ? currentDateKey
+      : FAMILY_TIMELINE_MOCK_END_DATE;
+  });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [issueError, setIssueError] = useState("");
   const [familyConfirmFailure, setFamilyConfirmFailure] = useState(null);
@@ -1845,6 +1484,11 @@ export function ViewerApp({ surface = "family" }) {
     createFamilyTimelineState,
   );
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const remeHistory = useRemeHistory({
+    selectedDateKey: selectedTimelineDate,
+    revisionHint: relay.remeDayRevisions?.[selectedTimelineDate] || null,
+    enabled: familySurface && activeTab === "timeline",
+  });
   const [highPrivacyEnabled, setHighPrivacyEnabled] = useStoredBoolean("reme.viewer.highPrivacy.v2", false);
   const [notificationsEnabled, setNotificationsEnabled] = useStoredBoolean("reme.viewer.notifications", true);
 
@@ -2096,39 +1740,34 @@ export function ViewerApp({ surface = "family" }) {
     return result;
   };
 
-  const familyHeaderUpdate = familyUpdateCopy({
-    snapshot,
-    familyEvent: relay.familyEvent,
-    relay,
-    nowMs: relayNowMs,
-  });
-
   const pageHeader = (() => {
     if (activeTab === "home") return {
-      title: "外婆家",
-      subtitle: familySurface
-        ? familyHeaderUpdate
-        : relay.unavailableReason
-          ? "Viewer · 当前状态不可用，等待恢复"
-          : `${SCENE_COPY[sceneId]?.label || "家庭关怀"} · ${relay.connection === "connected" ? "Relay 已连接" : "正在重连"}`,
+      title: familySurface ? "家" : "外婆家",
+      subtitle: relay.unavailableReason
+        ? `${familySurface ? "家属端" : "Viewer"} · 当前状态不可用，等待恢复`
+        : `${SCENE_COPY[sceneId]?.label || "家庭关怀"} · ${relay.connection === "connected" ? (familySurface ? "家属端已连接" : "Relay 已连接") : "正在重连"}`,
     };
     if (activeTab === "timeline") return {
-      title: familySurface ? "关怀记录" : "主动关怀",
+      title: familySurface ? "reme" : "主动关怀",
       subtitle: familySurface
-        ? `外婆 · ${timelineDateLongHeading(selectedTimelineDate)}`
+        ? `remember me · ${timelineDateLongHeading(selectedTimelineDate)}`
         : `外婆 · ${timelineDateHeading(selectedTimelineDate, nowMs)} · MiMo 关怀时间线`,
     };
     if (activeTab === "dashboard") return {
       title: "关怀看板",
       subtitle: familySurface ? "外婆 · 家属端关怀摘要" : "外婆 · 本次公开演示",
     };
-    return { title: "设置", subtitle: familySurface ? "管理提醒与隐私" : "管理本页显示与提醒" };
+    return { title: "设置", subtitle: "管理本页显示与提醒" };
   })();
 
   return (
     <div
-      className={`viewer-app ${familySurface ? "is-family-surface" : "is-demo-surface"} ${familySurface && activeGrant ? "has-family-grant" : ""} ${activeTab === "timeline" ? "is-timeline-tab" : ""} ${alertEffects.flashActive ? "is-flashing" : ""}`}
+      className={`viewer-app ${familySurface ? "is-family-surface" : "is-demo-surface"} ${activeTab === "timeline" ? "is-timeline-tab" : ""} ${alertEffects.flashActive ? "is-flashing" : ""}`}
       data-app-role={familySurface ? "family" : "viewer-demo"}
+      data-media-transport={media.diagnostics.selectedCandidatePair?.transport || "unavailable"}
+      data-media-protocol={media.diagnostics.selectedCandidatePair?.relayProtocol || media.diagnostics.selectedCandidatePair?.protocol || "unavailable"}
+      data-media-bytes-received={media.diagnostics.inboundVideo?.bytesReceived ?? 0}
+      data-media-frames-decoded={media.diagnostics.inboundVideo?.framesDecoded ?? 0}
     >
       <div className="alert-flash-layer" aria-hidden="true" />
       <ConnectionBanner
@@ -2137,7 +1776,6 @@ export function ViewerApp({ surface = "family" }) {
         nowMs={relayNowMs}
         familySurface={familySurface}
         rtcError={rtc.error}
-        highPrivacyEnabled={highPrivacyEnabled}
       />
       <div className="viewer-shell">
         <header className="viewer-header">
@@ -2150,7 +1788,7 @@ export function ViewerApp({ surface = "family" }) {
           )}
         </header>
 
-        {!familySurface && relay.unavailableReason && activeTab !== "timeline" && (
+        {relay.unavailableReason && activeTab !== "timeline" && (
           <aside className="viewer-state-unavailable" role="alert">
             <HealthAndSafetyRoundedIcon />
             <div><b>现场传输状态不可用</b><span>{unavailableCopy(relay, familySurface)}；后端已发布的关怀事件仍单独保留。</span></div>
@@ -2170,8 +1808,6 @@ export function ViewerApp({ surface = "family" }) {
             relayNowMs={relayNowMs}
             familySurface={familySurface}
             decision={careDecision}
-            timelineEvents={timeline.events}
-            onOpenTimeline={() => setActiveTab("timeline")}
             familyAcknowledgementControl={familySurface ? (
               <>
                 <FamilyActionCard
@@ -2199,6 +1835,7 @@ export function ViewerApp({ surface = "family" }) {
             selectedDateKey={selectedTimelineDate}
             onSelectDate={setSelectedTimelineDate}
             nowMs={nowMs}
+            remeHistory={remeHistory}
             familySurface={familySurface}
           />
         )}
@@ -2206,6 +1843,7 @@ export function ViewerApp({ surface = "family" }) {
         {activeTab === "settings" && (
           <SettingsPage
             relay={relay}
+            media={media}
             highPrivacyEnabled={highPrivacyEnabled}
             setHighPrivacyEnabled={setHighPrivacyEnabled}
             notificationsEnabled={notificationsEnabled}
@@ -2216,8 +1854,8 @@ export function ViewerApp({ surface = "family" }) {
 
         <BottomNavigation className="viewer-bottom-nav" showLabels value={activeTab} onChange={(_, value) => setActiveTab(value)}>
           {familySurface ? [
-            <BottomNavigationAction key="home" label="首页" value="home" icon={<HomeRoundedIcon />} />,
-            <BottomNavigationAction key="timeline" label="关怀记录" value="timeline" icon={<FavoriteRoundedIcon />} />,
+            <BottomNavigationAction key="home" label="家" value="home" icon={<HomeRoundedIcon />} />,
+            <BottomNavigationAction key="timeline" label="reme" value="timeline" icon={<FavoriteRoundedIcon />} />,
             <BottomNavigationAction key="settings" label="设置" value="settings" icon={<SettingsRoundedIcon />} />,
           ] : [
             <BottomNavigationAction key="home" label="首页" value="home" icon={<HomeRoundedIcon />} />,

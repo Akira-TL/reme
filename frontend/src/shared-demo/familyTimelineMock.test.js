@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  FAMILY_TIMELINE_DISPLAY_DAYS,
+  FAMILY_TIMELINE_DISPLAY_END_DATE,
   FAMILY_TIMELINE_MOCK_DAYS,
   FAMILY_TIMELINE_MOCK_DAYPARTS,
   FAMILY_TIMELINE_MOCK_END_DATE,
   FAMILY_TIMELINE_MOCK_EVENTS,
-  FAMILY_TIMELINE_REALTIME_START_DATE,
+  FAMILY_TIMELINE_REALTIME_CUTOFF,
   FAMILY_TIMELINE_MOCK_START_DATE,
   getFamilyTimelineMockDay,
+  isFamilyTimelineDisplayDate,
   isFamilyTimelineMockDate,
 } from "./familyTimelineMock.js";
 
-test("mock care history covers the original eight days from August 4 through August 11", () => {
+test("mock care history covers every date from August 4 through August 11", () => {
   const dates = [...new Set(FAMILY_TIMELINE_MOCK_EVENTS.map((event) => event.dateKey))];
   assert.deepEqual(dates, [
     "2026-08-04",
@@ -58,7 +61,7 @@ test("every mock care card is explicit, bounded, and privacy safe", () => {
   }
 });
 
-test("all eight original mock days cover 24 hours with varied activity, devices, and care", () => {
+test("full mock days cover all eight 24-hour dates", () => {
   assert.equal(FAMILY_TIMELINE_MOCK_DAYS.length, 8);
   assert.deepEqual(FAMILY_TIMELINE_MOCK_DAYPARTS.map((daypart) => daypart.id), [
     "night",
@@ -71,9 +74,9 @@ test("all eight original mock days cover 24 hours with varied activity, devices,
   const totals = new Set();
   for (const day of FAMILY_TIMELINE_MOCK_DAYS) {
     assert.equal(day.source, "mock_fixture");
+    assert.equal(day.fixtureOwner, "frontend_bundle");
     assert.equal(day.sourceMode, "mock");
     assert.equal(day.coverageHours, 24);
-    assert.equal(day.coverageStatus, "complete");
     assert.ok(day.totalCount >= 27);
     assert.ok(day.activityCount >= 11);
     assert.ok(day.deviceCount >= 13);
@@ -95,7 +98,7 @@ test("all eight original mock days cover 24 hours with varied activity, devices,
   assert.ok(totals.size >= 5, "daily counts should not look copied from one template");
 });
 
-test("the eight-day story includes sleep, bathing, movement, and Xiaomi whole-home events", () => {
+test("the bounded mock story includes sleep, bathing, movement, and Xiaomi whole-home events", () => {
   const titles = FAMILY_TIMELINE_MOCK_DAYS
     .flatMap((day) => day.sections)
     .flatMap((section) => section.entries)
@@ -131,7 +134,6 @@ test("August 9 keeps the approved care thread and adds the cooking share-to-daug
   assert.equal(cookingShare.familyMaterial?.deliveryStatus, "已发给女儿");
   assert.equal(cookingShare.familyMaterial?.attachment?.durationSeconds, 18);
   assert.equal(cookingShare.familyMaterial?.facts.length, 3);
-
   assert.equal(getFamilyTimelineMockDay("2026-08-12"), null);
 });
 
@@ -143,8 +145,25 @@ test("mock range detection is inclusive and bounded", () => {
   assert.equal(isFamilyTimelineMockDate("2026-08-12"), false);
 });
 
-test("August 12 starts the real-only range after the original eight-day mock window", () => {
-  assert.equal(FAMILY_TIMELINE_REALTIME_START_DATE, "2026-08-12");
-  assert.ok(getFamilyTimelineMockDay("2026-08-11"));
-  assert.equal(getFamilyTimelineMockDay(FAMILY_TIMELINE_REALTIME_START_DATE), null);
+test("the eight display dates remain explicit Mock before realtime starts", () => {
+  assert.equal(FAMILY_TIMELINE_REALTIME_CUTOFF, "2026-08-12T00:00:00+08:00");
+  assert.equal(FAMILY_TIMELINE_DISPLAY_END_DATE, "2026-08-11");
+  assert.deepEqual(
+    FAMILY_TIMELINE_DISPLAY_DAYS.map(({ dateKey, sourceMode }) => [dateKey, sourceMode]),
+    [
+      ["2026-08-04", "mock"],
+      ["2026-08-05", "mock"],
+      ["2026-08-06", "mock"],
+      ["2026-08-07", "mock"],
+      ["2026-08-08", "mock"],
+      ["2026-08-09", "mock"],
+      ["2026-08-10", "mock"],
+      ["2026-08-11", "mock"],
+    ],
+  );
+  assert.equal(isFamilyTimelineDisplayDate("2026-08-03"), false);
+  assert.equal(isFamilyTimelineDisplayDate("2026-08-10"), true);
+  assert.equal(isFamilyTimelineDisplayDate("2026-08-11"), true);
+  assert.equal(isFamilyTimelineDisplayDate("2026-08-12"), false);
+  assert.equal(getFamilyTimelineMockDay("2026-08-11")?.totalCount, 30);
 });
