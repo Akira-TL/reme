@@ -334,7 +334,7 @@ function projectActivity(item, dateKey) {
   return {
     id: item.event_id,
     kind: "activity",
-    label: "Backend Mock 生活片段",
+    label: "演示生活片段",
     title: item.fact,
     detail: item.detail,
     icon: activityIcon(item.room, item.fact_type),
@@ -352,7 +352,7 @@ function projectDevice(item, dateKey) {
   return {
     id: item.event_id,
     kind: "device",
-    label: "Backend Mock 设备事实",
+    label: "演示设备记录",
     title: item.fact,
     detail: `结构化设备事实 · ${item.device.capability || item.action}`,
     icon: deviceIcon(item.device.device_type),
