@@ -226,3 +226,65 @@ fresh post-deploy in-app-browser navigation to the public origin timed out in
 the browser-control bridge, so this section does not claim a separate public
 DOM assertion; public byte parity plus the local production-browser assertion
 are recorded independently.
+
+## Final correction: select the latest Family UI by frontend lineage
+
+The preceding correction incorrectly treated the later commit time of
+`lbx-frontend@1df057b9` as evidence that its frontend tree was newer. It was a
+later roadshow/runtime commit on a separate lineage, but its frontend tree had
+removed the richer Family home, recording timeline, packaged demo recordings,
+month calendar, and presentation helpers. The user correctly reported that the
+deployed page was still not the latest lbx frontend.
+
+The actual latest Family UI lineage is
+`codex/family-home-simplify@400487d5`, integrated with the later runtime/deploy
+frontend additions at `5fc1338e`. Commit `7c6dc3a4` reverses the erroneous
+`c8ab476b` frontend replacement and makes the complete `frontend/` tree byte
+identical to `5fc1338e`. Backend and Relay remain untouched.
+
+This restored tree includes:
+
+- the Family home with `今天录像回看`;
+- bottom navigation `首页 / 关怀记录 / 设置`;
+- the full August month calendar;
+- August 4-11 fixed Mock counts `32/30/29/28/27/38/29/30`;
+- Shanghai-time event and recording display;
+- playable, explicitly labelled demo MP4 recordings and local-recording
+  support;
+- August 12 as the real-only boundary.
+
+Fresh validation passed:
+
+| Command | Result |
+| --- | --- |
+| `npm ci` | pass; 219 packages |
+| `npm run typecheck:contracts` | pass |
+| `npm test` | pass; 248/248 |
+| `npm run lint` | pass |
+| `npm run build` | pass; Vite 8.2.0, 1,059 modules |
+| `npm run test:route-build` | pass; 6/6 |
+
+The local production build was inspected in the Codex in-app browser. Its
+Family home rendered `今天录像回看` and the three-item navigation. The care
+history rendered the full month calendar and August 11 showed 30 life segments;
+the care-history page did not duplicate the home recording card.
+
+The VPS release `/opt/reme-frontend/releases/20260812-7c6dc3a4-family` was
+copied from the previous active release, only `frontend/` was synchronized,
+and compose again ran only `build frontend` plus `up -d --no-deps frontend`.
+After replacement:
+
+- frontend: healthy, started `2026-08-12T02:32:19Z`;
+- Backend: healthy, unchanged start `2026-08-11T17:52:48Z`;
+- Relay: healthy, unchanged start `2026-08-11T17:52:48Z`;
+- public `/home`, `/family`, and `/debug?debug=1&turnProbe=1`: HTTP 200;
+- public Backend and Relay health: HTTP 200;
+- public `FamilyApp-iHzxmgWH.js`: SHA-256
+  `b560962ca6b5d369c748d6f985b8e93c6daba6217b08ff7788ae469104725412`;
+- public `FamilyApp-BtRVm0bV.css`: SHA-256
+  `375344bb2aa7e915422576c93578c9f1a295875f193728fa9555edd5093adce2`.
+
+The public hashes match the running container. Fresh public browser navigation
+again timed out in browser control, so no separate public DOM interaction is
+claimed. This final section supersedes both earlier Family visual-baseline
+sections.
