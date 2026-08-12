@@ -175,3 +175,54 @@ verification success after the replacement. The frontend container started at
 `2026-08-11T17:20:12Z`; the unchanged Backend and Relay retained their earlier
 start times, confirming that the visual update did not restart authority
 services.
+
+## Correction: restore the actual `lbx-frontend` Family surface
+
+The preceding "Family local-visual parity update" used
+`codex/family-home-simplify@400487d5` as its visual baseline. That was not the
+user's current `lbx-frontend` surface and is superseded by this section.
+
+Commit `c8ab476b` restores the complete frontend tree from the locally validated
+`lbx-frontend@1df057b9`, then applies only three intentional Family history
+changes: the August 4-11 fixed Mock takes precedence over the Backend's compact
+six-count fixture, August 11 returns to 30 life segments, and visible event
+times are formatted in `Asia/Shanghai`. Backend and Relay files remained
+unchanged.
+
+Fresh gates passed:
+
+| Command | Result |
+| --- | --- |
+| `npm ci` | pass; 219 packages |
+| `npm run typecheck:contracts` | pass |
+| `npm test` | pass; 232/232 |
+| `npm run lint` | pass |
+| `npm run build` | pass; Vite 8.2.0, 1,055 modules |
+| `npm run test:route-build` | pass; 6/6; loopback bind required the approved unsandboxed run |
+
+The generated fixed Mock counts are `32, 30, 29, 28, 27, 38, 29, 30` for
+August 4 through August 11. In the Codex in-app browser, the local production
+build rendered all eight Mock-labelled dates; August 11 showed 30 life
+segments, 15 device facts, and 2 care events. Its first expanded morning rows
+displayed `06:22`, `06:34`, and `06:46`, confirming the Shanghai timezone fix.
+
+The VPS release `/opt/reme-frontend/releases/20260811-c8ab476b-family` was
+copied from the active `a0b80506` release so its newer Backend/Relay/deployment
+files stayed intact. Only `frontend/` was synchronized, and compose ran only
+`build frontend` plus `up -d --no-deps frontend`. After replacement:
+
+- frontend: healthy, started `2026-08-12T02:08:25Z`;
+- Backend: healthy, unchanged start `2026-08-11T17:52:48Z`;
+- Relay: healthy, unchanged start `2026-08-11T17:52:48Z`;
+- public `/home`, `/family`, and `/debug?debug=1&turnProbe=1`: HTTP 200;
+- public Backend and Relay health: HTTP 200;
+- public `FamilyApp-BI7pI1S_.js`: SHA-256
+  `c49d03d94b52b16ca2f7dd2be710012c15d2c9c326b4eb52d05ea3533720455f`;
+- public `FamilyApp-DsrjwS_V.css`: SHA-256
+  `fa64d88a939b321ac8ceaa0fa0a18dc82111ffa4bf5ae3db94f3587953763262`.
+
+The public JS/CSS hashes matched the running frontend container exactly. A
+fresh post-deploy in-app-browser navigation to the public origin timed out in
+the browser-control bridge, so this section does not claim a separate public
+DOM assertion; public byte parity plus the local production-browser assertion
+are recorded independently.
